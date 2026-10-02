@@ -350,12 +350,13 @@ func TestReceiptShowsBackupPath(t *testing.T) {
 	}
 }
 
-// TestAskOptionsStructured（M4-3 ①）：need_ask 候选为结构化 [{id,label}]。
+// TestAskOptionsStructured（M4-3 ① → Codex 2026-10-02 改版）：候选按意图动态生成，形状 [{id,label}]。
 func TestAskOptionsStructured(t *testing.T) {
-	// 直接验证候选集形状
-	opts := intentCandidates()
-	if len(opts) < 2 || len(opts) > 4 {
-		t.Fatalf("候选数应 2-4, got %d", len(opts))
+	// EDIT 歧义候选 = refer 目标文件（结构化 [{id,label}]）
+	opts := optionsForIntent(&contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85},
+		[]refer.Option{{ID: "file-a.go", Label: "file-a.go"}, {ID: "file-b.go", Label: "file-b.go"}})
+	if len(opts) != 2 {
+		t.Fatalf("EDIT 候选应为 refer 文件数, got %d", len(opts))
 	}
 	for _, o := range opts {
 		if o.ID == "" || o.Label == "" {
@@ -473,7 +474,7 @@ func TestCommitRefusedNoExec(t *testing.T) {
 
 // TestAskOptionsIncludeReferCandidates（M4-5）：意图候选 + refer 候选合并去重。
 func TestAskOptionsIncludeReferCandidates(t *testing.T) {
-	base := intentCandidates()
+	base := optionsForIntent(&contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85}, nil)
 	referOpts := []refer.Option{
 		{ID: "dict:那个", Label: "词典：那个 → notes"},
 		{ID: "rec:orders.go", Label: "最近实体：orders.go"},
@@ -559,5 +560,63 @@ func TestColloquialQuestionNoReferAsk(t *testing.T) {
 	}
 	if out.Ask != "" {
 		t.Fatalf("含问句特征的口语陈述不应触发指代 Ask，got ask=%q", out.Ask)
+	}
+}
+
+// TestCodexNineRegressions — Codex/gpt-6-luna 外部诊断（2026-10-02）9 项回归清单。
+// 覆盖：陈述引用抑制 / 操作指代仍 Ask / 裸指代真歧义 / 元指令不 Ask / 既有正例不回归。
+func TestCodexNineRegressions(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		wantAsk string // 子串断言；"" 表示断言 Ask 为空
+	}{
+		{"1-本实例不弹那个指哪个", "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来", "指的是哪个"},
+		{"2-陈述引用不Ask", "我那个前端的问题又不过来", "指的是哪个"},
+		{"3-操作指代仍Ask", "把那个前端文件改一下", "指的是哪个"},
+		{"4-把上次那个改成蓝色操作指代", "把上次那个改成蓝色", "那个"},
+		{"5-EDIT真歧义候选无固定项", "把那个前端文件改一下", "指的是哪个"},
+		{"6-QUERY裸指代真歧义", "查一下这个", "指的是哪个"},
+		{"7-NOTE真歧义Ask", "记一下 这个", ""},
+		{"8-元指令控制组不Ask", "我想开始认真测一下，接下来把项目推进起来", ""},
+		{"9a-修那个正例", "修那个", "指的是哪个"},
+		{"9b-改那个文件正例", "改那个文件", "指的是哪个"},
+		{"9c-打开上次那个正例", "打开上次那个", "指的是哪个"},
+	}
+	for _, c := range cases {
+		o := testOptions(t, nil)
+		out, err := Run(context.Background(), o, c.text)
+		if err != nil {
+			t.Fatalf("[%s] Run err: %v", c.name, err)
+		}
+		if c.wantAsk == "" {
+			if out.Ask != "" {
+				t.Errorf("[%s] 预期不 Ask，got ask=%q", c.name, out.Ask)
+			}
+		} else if !strings.Contains(out.Ask, c.wantAsk) {
+			t.Errorf("[%s] 预期 ask 含 %q，got ask=%q", c.name, c.wantAsk, out.Ask)
+		}
+		// 固定候选不得出现（Codex：options 按意图生成，不塞"改文件/查代码/记想法/提交"）
+		for _, oo := range out.Options {
+			if oo.ID == "edit" || oo.ID == "query" || oo.ID == "note" || oo.ID == "commit" {
+				t.Errorf("[%s] options 出现固定候选 id=%s（应为按意图动态生成）", c.name, oo.ID)
+			}
+		}
+	}
+}
+
+// TestCodexOptionsForIntent — EDIT 歧义候选只含 refer 目标文件（Codex 第 5 项）。
+func TestCodexOptionsForIntent(t *testing.T) {
+	it := contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85}
+	opts := optionsForIntent(&it, []refer.Option{{ID: "file-a.go", Label: "file-a.go"}})
+	if len(opts) != 1 || opts[0].ID != "file-a.go" {
+		t.Fatalf("EDIT 候选应为 refer 文件，got %+v", opts)
+	}
+	if opts := optionsForIntent(&it, nil); len(opts) != 0 {
+		t.Fatalf("EDIT 无 refer 候选时应为 nil，got %+v", opts)
+	}
+	q := contract.Intent{Intent: contract.IntentQuery, Confidence: 0.9}
+	if opts := optionsForIntent(&q, nil); len(opts) != 0 {
+		t.Fatalf("QUERY 无候选时应为 nil，got %+v", opts)
 	}
 }

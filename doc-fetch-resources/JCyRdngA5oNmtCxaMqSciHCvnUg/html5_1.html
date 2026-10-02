@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="use-iframe" content="true">
+<meta name="html-box-height-mode" content="viewport">
+<meta name="description" content="VoxSign iOS 对话界面模拟：仿豆包/Grok 的对话交互，你说→界面显示→Harness 响应→执行→回执，可点击推进">
+<title>VoxSign iOS 对话界面模拟</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif; background:#EDEFF2; color:#1F2329; }
+  .wrap { max-width:480px; margin:0 auto; background:#F7F8FA; min-height:100vh; display:flex; flex-direction:column; }
+  .statusbar { background:#F7F8FA; color:#1F2329; font-size:11px; padding:8px 18px 4px; display:flex; justify-content:space-between; font-weight:600; }
+  .apphead { background:#F7F8FA; padding:6px 14px 10px; display:flex; align-items:center; gap:10px; border-bottom:0.5px solid #E4E9EF; }
+  .avatar { width:32px; height:32px; border-radius:9px; background:linear-gradient(135deg,#2B6CB0,#1E3A5F); display:flex; align-items:center; justify-content:center; color:#fff; font-size:15px; font-weight:700; }
+  .apphead .t { flex:1; }
+  .apphead .t h1 { font-size:15px; font-weight:700; }
+  .apphead .t p { font-size:10.5px; color:#646A73; margin-top:1px; }
+  .badge { font-size:10px; color:#1B4E8F; background:#EAF2FC; border:1px solid #BBD6F0; padding:2px 8px; border-radius:10px; font-weight:600; }
+  .conv { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:14px; }
+  .row { display:flex; gap:8px; align-items:flex-end; animation:fade .4s; }
+  .row.me { justify-content:flex-end; }
+  .row .who { font-size:9.5px; color:#646A73; margin-bottom:3px; font-weight:600; }
+  .bub { max-width:86%; padding:10px 13px; border-radius:16px; font-size:14px; line-height:1.6; }
+  .row.me .bub { background:#2B6CB0; color:#fff; border-bottom-right-radius:5px; }
+  .row.hs .bub { background:#fff; border:0.5px solid #E4E9EF; border-bottom-left-radius:5px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+  .wave { display:inline-flex; gap:2px; align-items:center; height:12px; margin-right:6px; }
+  .wave i { width:3px; background:#fff; border-radius:2px; animation:wb .9s infinite; }
+  .wave i:nth-child(1){height:6px} .wave i:nth-child(2){height:11px;animation-delay:.15s} .wave i:nth-child(3){height:8px;animation-delay:.3s} .wave i:nth-child(4){height:12px;animation-delay:.45s}
+  @keyframes wb { 0%,100%{transform:scaleY(.6)} 50%{transform:scaleY(1.2)} }
+  @keyframes fade { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:none} }
+  .tags { display:flex; gap:5px; margin-top:7px; flex-wrap:wrap; }
+  .tag { font-size:10px; padding:2px 8px; border-radius:9px; font-weight:600; }
+  .tag.b { background:#EAF2FC; color:#1B4E8F; } .tag.g { background:#F6FBF8; color:#14532D; } .tag.o { background:#FDF1E7; color:#8A4B12; }
+  .card { background:#F8FAFC; border:0.5px solid #E4E9EF; border-radius:12px; padding:10px 12px; margin-top:8px; }
+  .card .ct { font-size:11px; font-weight:700; color:#1E3A5F; margin-bottom:6px; }
+  .step { font-size:12px; color:#3B434F; padding:3px 0; display:flex; align-items:center; gap:6px; }
+  .step .dot { width:6px; height:6px; border-radius:50%; background:#DEE3E8; flex:none; }
+  .step.done .dot { background:#4C8C6A; }
+  .step.run .dot { background:#2B6CB0; animation:pulse 1s infinite; }
+  .step.run { color:#1B4E8F; font-weight:600; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .rcpt { background:#fff; border:1px solid #B7DCC8; border-radius:12px; padding:10px 12px; margin-top:8px; }
+  .rcpt h4 { font-size:11px; color:#14532D; margin-bottom:6px; }
+  .rcpt .l { font-size:12px; color:#3B434F; line-height:1.8; }
+  .rcpt .l b { color:#1F2329; }
+  .sysline { align-self:center; font-size:11px; color:#9C2B2B; background:#FDECEC; border:1px solid #E4A6A6; padding:4px 12px; border-radius:12px; font-weight:600; }
+  .inputbar { background:#F7F8FA; border-top:0.5px solid #E4E9EF; padding:9px 14px; display:flex; gap:9px; align-items:center; }
+  .field { flex:1; background:#fff; border:0.5px solid #E4E9EF; border-radius:20px; padding:9px 14px; font-size:13px; color:#646A73; }
+  .mic { width:38px; height:38px; border-radius:50%; background:#2B6CB0; display:flex; align-items:center; justify-content:center; flex:none; cursor:pointer; }
+  .mic.on { background:#D97706; }
+  .mic svg { width:17px; height:17px; fill:#fff; }
+  .ctl { display:flex; gap:8px; padding:8px 14px 12px; }
+  .btn { flex:1; padding:9px 0; border-radius:22px; font-size:13px; font-weight:600; border:0.5px solid #DEE3E8; background:#fff; color:#1F2329; cursor:pointer; }
+  .btn.pri { background:#2B6CB0; color:#fff; border-color:#2B6CB0; }
+  .hint { font-size:10px; color:#8A94A3; text-align:center; padding:0 16px 12px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="statusbar"><span>9:41</span><span>VoxSign</span><span>4G ▮▮▮</span></div>
+  <div class="apphead">
+    <div class="avatar">V</div>
+    <div class="t"><h1>VoxSign · 语音助手</h1><p>总管 · Planner / Executor / Verifier</p></div>
+    <span class="badge">在线</span>
+  </div>
+  <div class="conv" id="conv"></div>
+  <div class="ctl">
+    <button class="btn pri" id="next" onclick="next()">▶ 说下一句</button>
+    <button class="btn" onclick="reset()">⟲ 重置</button>
+  </div>
+  <div class="inputbar">
+    <div class="field" id="field">按住说话，或点键盘输入</div>
+    <div class="mic" id="mic" onclick="toggleMic()"><svg viewBox="0 0 24 24"><path d="M12 14c1.7 0 3-1.3 3-3V5c0-1.7-1.3-3-3-3S9 3.3 9 5v6c0 1.7 1.3 3 3 3zm5-3c0 2.5-2.2 4.5-5 4.5S7 13.5 7 11H5c0 3.2 2.3 5.8 5.5 6.3V20h3v-2.7c3.2-.5 5.5-3.1 5.5-6.3h-2z"/></svg></div>
+  </div>
+  <div class="hint">模拟"你已经有个 iOS App"：点「说下一句」推进真实对话，看 Harness 怎么响应。内部细节（ASR/域/风险）压缩为轻标签。</div>
+</div>
+<script>
+const TURNS = [
+  { kind:"me", txt:"继续推 M4，交互 v2 同时推进", wave:true },
+  { kind:"hs", txt:"收到：M4 六项 ＋ 交互 v2 server 落地，两条线并行。开始执行。", tags:[["b","意图=M4推进"],["b","域=project:harness"],["g","低风险·静默执行"]], card:{t:"执行中", steps:[["重试去重 #29","done"],["need_ask 续跑＋候选按钮","run"],["server 持久化","todo"],["真实 git 端到端","todo"],["摘要净口径＋回执路径","todo"]]} },
+  { kind:"hs", txt:"M4 已完成 3/6，剩余真实 git 端到端与回执路径。", rcpt:{lines:[["动作","执行 6 项 M4 任务"],["文件","voicesign-harness/（代码+测试）"],["结果","3/6 完成 · 全量测试待跑"],["撤销","可撤销（备份目录）"]]} },
+  { kind:"me", txt:"那交互 v2 呢？", wave:false },
+  { kind:"hs", txt:"三模型评审已合并定稿：可打断流式＋一屏刹车点＋角色折叠。研究 OPC 报告回来升级 v2.1。", tags:[["b","交互 v2 共识"],["o","等待研究报告"]] },
+  { kind:"me", txt:"停", wave:false, stop:true },
+  { kind:"hs", txt:"⏹ 已停止。已生效：3/6 项完成；未执行：真实 git 端到端。可继续或撤销。", stopline:true }
+];
+let step = 0;
+function convEl(){ return document.getElementById("conv"); }
+function render(){
+  const c = convEl();
+  c.innerHTML = "";
+  TURNS.slice(0,step).forEach((t,i)=>{
+    if(t.kind==="me"){
+      const w = t.wave ? `<span class="wave"><i></i><i></i><i></i><i></i></span>` : "";
+      c.innerHTML += `<div class="row me"><div class="bub">${w}${t.txt}</div></div>`;
+    } else if(t.stopline){
+      c.innerHTML += `<div class="sysline">⏹ ${t.txt}</div>`;
+    } else {
+      let html = `<div class="row hs"><div class="bub"><div class="who">VoxSign · Harness</div>${t.txt}`;
+      if(t.tags){ html += `<div class="tags">` + t.tags.map(x=>`<span class="tag ${x[0]}">${x[1]}</span>`).join("") + `</div>`; }
+      if(t.card){ html += `<div class="card"><div class="ct">⚙ ${t.card.t}</div>` + t.card.steps.map(s=>`<div class="step ${s[1]}"><span class="dot"></span>${s[0]}</div>`).join("") + `</div>`; }
+      if(t.rcpt){ html += `<div class="rcpt"><h4>✓ 回执</h4>` + t.rcpt.lines.map(l=>`<div class="l"><b>${l[0]}：</b>${l[1]}</div>`).join("") + `</div>`; }
+      html += `</div></div>`;
+      c.innerHTML += html;
+    }
+  });
+  c.scrollTop = c.scrollHeight;
+  document.getElementById("field").textContent = step===0 ? "按住说话，或点键盘输入" : (step>=TURNS.length ? "会话演示完 ✓" : "等待你说下一句…");
+}
+function next(){
+  if(step < TURNS.length){
+    step++;
+    render();
+    if(TURNS[step-1] && TURNS[step-1].kind==="me"){
+      const m = document.getElementById("mic");
+      m.classList.add("on");
+      setTimeout(()=>m.classList.remove("on"), 900);
+    }
+  }
+}
+function reset(){ step = 0; render(); }
+function toggleMic(){ const m=document.getElementById("mic"); m.classList.toggle("on"); document.getElementById("field").textContent = m.classList.contains("on") ? "录音中… 说完松手" : "按住说话，或点键盘输入"; }
+render();
+</script>
+</body>
+</html>

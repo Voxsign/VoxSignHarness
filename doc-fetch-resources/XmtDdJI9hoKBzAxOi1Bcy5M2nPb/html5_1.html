@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="use-iframe" content="true">
+<meta name="html-box-height-mode" content="auto">
+<meta name="description" content="VoxSign Harness 三环控制系统架构图：Record 永转、Control 快环、Discuss 慢环，归因回写认知闭环">
+<title></title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif; background:#fff; color:#1F2329; padding:12px; }
+  .wrap { max-width:820px; margin:0 auto; }
+  h2 { font-size:16px; color:#1F2329; margin-bottom:12px; }
+  .ring { border:1.5px solid #DEE3E8; border-radius:12px; padding:10px 12px; margin-bottom:10px; }
+  .ring-head { font-size:14px; font-weight:600; margin-bottom:6px; }
+  .ring-head .freq { font-weight:400; font-size:12px; color:#646A73; margin-left:6px; }
+  .steps { display:flex; flex-wrap:wrap; gap:6px; font-size:12px; color:#3B434F; }
+  .step { background:#F2F4F7; border:1px solid #E4E9EF; border-radius:6px; padding:4px 8px; }
+  .step.hot { background:#EAF2FC; border-color:#BBD6F0; color:#1B4E8F; }
+  .step.warn { background:#FDF1E7; border-color:#F2CDA8; color:#8A4B12; }
+  .arrow { text-align:center; color:#646A73; font-size:13px; line-height:1.4; margin:2px 0; }
+  .arrow b { color:#2B6CB0; font-weight:600; }
+  .legend { display:flex; gap:14px; font-size:12px; color:#646A73; margin-top:10px; flex-wrap:wrap; }
+  .legend span { display:flex; align-items:center; gap:4px; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .dot.a { background:#2B6CB0; } .dot.b { background:#D97706; } .dot.c { background:#059669; }
+  .note { font-size:12px; color:#646A73; margin-top:10px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>三环控制系统 · 认知闭环</h2>
+
+  <div class="ring" style="border-color:#BBD6F0;background:#F7FAFD;">
+    <div class="ring-head">Record · 永转环<span class="freq">永不停止 · 只追加不改写</span></div>
+    <div class="steps"><span class="step">语音入口（ASR 文本）</span><span class="step">每句话先落库</span><span class="step">素材库（原汁原味）</span><span class="step">轨迹 JSONL</span></div>
+  </div>
+  <div class="arrow">↓ 用户开口无条件先记录 ↓</div>
+
+  <div class="ring">
+    <div class="ring-head">Control · 快环<span class="freq">意图 → 结果 · 最快最频繁</span></div>
+    <div class="steps">
+      <span class="step hot">意图解析（8 类）</span>
+      <span class="step hot">指代消解（词典/上下文/截图）</span>
+      <span class="step hot">域选择+边界检查（交集授权·默认拒绝）</span>
+      <span class="step warn">风险分级（可逆×影响×置信）</span>
+      <span class="step warn">人工确认（不可逆永远人工）</span>
+      <span class="step">执行（模型工具循环/外部代理）</span>
+      <span class="step">独立校验（不读自报）</span>
+      <span class="step">回执 4 行</span>
+    </div>
+  </div>
+  <div class="arrow">↑ 低置信 / 跨域歧义 / 执行失败 → 升级 <b>Discuss</b></div>
+
+  <div class="ring" style="border-color:#F2CDA8;background:#FFFBF7;">
+    <div class="ring-head">Discuss · 慢环<span class="freq">不确定性 → 定义 · 把模型聊厚</span></div>
+    <div class="steps"><span class="step warn">定位不确定性类型</span><span class="step warn">提问协议（只问边界与代价）</span><span class="step warn">共识固化 → VSL 定义</span><span class="step warn">版本化 / 可回滚</span></div>
+  </div>
+  <div class="arrow">↓ 新定义让 Control 下次自动受益 ↓</div>
+
+  <div class="ring" style="border-color:#B7DCC8;background:#F6FBF8;">
+    <div class="ring-head">归因 · 闭环粘合剂<span class="freq">结果 → 认知</span></div>
+    <div class="steps"><span class="step">执行后归因：模型错 vs 执行错 vs 定义错</span><span class="step">回写认知（词典/策略/后续执行）</span><span class="step">暂缓自动回写，先人工审阅版本化</span></div>
+  </div>
+
+  <div class="legend">
+    <span><i class="dot a"></i>判断/裁决（必写伪代码）</span>
+    <span><i class="dot b"></i>风险/确认（治理门）</span>
+    <span><i class="dot c"></i>沉淀/归因（认知层）</span>
+  </div>
+  <div class="note">护城河不在三环本身，在治理层（人工确认门/独立校验/权限审计/定义版本）＋跨会话个人记忆。强模型会侵蚀意图/指代/风险分级，但不会侵蚀治理责任与个人数据。</div>
+</div>
+</body>
+</html>

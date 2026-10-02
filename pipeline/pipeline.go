@@ -223,8 +223,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	if o.Refer != nil && shouldResolveRefer(&intent) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
+			prevAsk := intent.Ask
 			intent = *resolved
 			referOpts = opts
+			// Codex 收紧（2026-10-02）：refer 新写 Ask（"指的是哪个"）时，
+			// 若歧义不阻止执行（陈述/查询有实体/记录类）→ 清掉继续执行，不因指代 Ask。
+			if intent.Ask != "" && intent.Ask != prevAsk && !clarificationBlocksExecution(&intent, referOpts) {
+				intent.Ask = ""
+			}
 		}
 	}
 	emit(trajectory.Entry{Kind: "refer", Intent: &intent})
@@ -236,8 +242,8 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		intent.Context = append(intent.Context, snap.ProjectMap...)
 		out.Intent = intent
 		out.Ask = intent.Ask
-		// M4-5：意图候选 + refer 目标候选合并（id 去重）。
-		out.Options = mergeAskOptions(intentCandidates(), referOpts)
+		// Codex 收紧（2026-10-02）：options 按澄清意图动态生成，不再塞固定"改文件/查代码/记想法/提交"。
+		out.Options = mergeAskOptions(optionsForIntent(&intent, referOpts), referOpts)
 		out.ContextBlock = snap.Block
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
 			"待澄清："+intent.Ask, "轨迹 kind=intent/refer", "下次给出具体域/对象后重试")
@@ -886,37 +892,119 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 //
 //	返回 4 个稳定意图候选 {id,label}：edit/query/note/commit。
 //	id 与 label 一一对应、稳定可测；answer 传 id 时 server 续跑据此映射为强关键词前缀。
-func intentCandidates() []AskOption {
-	return []AskOption{
-		{ID: "edit", Label: "改文件（替换/编辑）"},
-		{ID: "query", Label: "查代码/问状态"},
-		{ID: "note", Label: "记想法到笔记"},
-		{ID: "commit", Label: "提交改动（不可逆）"},
+//
+// optionsForIntent 按澄清意图动态生成候选（Codex/gpt-6-luna 诊断 2026-10-02）：
+// 不再塞固定"改文件/查代码/记想法/提交"——
+//
+//	【伪代码逻辑层】
+//	EDIT/DEBUG → refer 解析出的目标文件候选（无 → nil，不塞无关项）
+//	QUERY → 回答范围/对象（当前无安全派生源 → nil，保留简短 Ask 文本）
+//	NOTE → 笔记归属（无候选源 → nil）
+//	其余 → nil
+//	无安全候选时保留 Ask 文本即可（Codex："若无法安全地产生有效候选，保留简短 Ask 文本"）。
+//
+// 验证器：pipeline.TestCodexOptionsForIntent。
+func optionsForIntent(it *contract.Intent, referOpts []refer.Option) []AskOption {
+	switch it.Intent {
+	case contract.IntentEdit, contract.IntentDebug:
+		return referToAskOptions(referOpts)
+	default:
+		return nil
 	}
 }
 
-// shouldResolveRefer 判定是否对当前意图执行 refer 指代消解（M7，外部模型诊断方案扩展）。
+// referToAskOptions 转换 refer 目标候选为 AskOption。
+func referToAskOptions(referOpts []refer.Option) []AskOption {
+	out := make([]AskOption, 0, len(referOpts))
+	for _, o := range referOpts {
+		out = append(out, AskOption{ID: o.ID, Label: o.Label})
+	}
+	return out
+}
+
+// shouldResolveRefer 判定是否对当前意图执行 refer 指代消解（M7，外部模型诊断方案定稿）。
 //
-// 【伪代码逻辑层】（裁决逻辑，方案来源：Codex/gpt-6-luna 外部诊断 2026-10-02 + 复验补强）：
+// 【伪代码逻辑层】（裁决逻辑，方案来源：Codex/gpt-6-luna 外部诊断 2026-10-02 定稿）：
 //
-//	含口语问句特征（?？吗呢怎么如何为什么哪）→ false
-//	  （"如果这个效果好/看看效果怎么样"里的"这个/那个"是口语代词，
-//	   不是文件/笔记操作指代；即使规则误判为 NOTE 也不触发指代 Ask——22:04 真机证据）。
-//	NOTE/EDIT/COMMIT → true（真操作指代消解保持原行为）。
-//	QUERY → Confidence < 0.8（低置信保留原澄清；高置信口语代词不触发指代 Ask）。
-//	其他 → true（沿用旧行为）。
+//  1. 口语问句特征（?？吗呢怎么如何为什么哪）→ false
+//     （"如果这个效果好/看看效果怎么样"里的"这个/那个"是口语代词，不是操作指代——22:04 真机证据）。
+//
+//  2. 文件操作动词（把/将/打开/改/修/提交/删/建/换/设/存/写/跑/记/部署/上线/发布…）→ true
+//     （操作指代强信号；"打开上次那个"即使被判 QUERY 也解析）。
+//
+//  3. QUERY 高置信（>=0.8）→ 仅裸指代（"查一下这个"对象悬空）仍解析；有实体（"这个方案"）不解析。
+//
+//  4. UNKNOWN（无操作动词）→ false（陈述引用/元指令，如"我那个前端的问题又不过来"——不因指代 Ask）。
+//
+//  5. NOTE/EDIT/COMMIT/DEBUG → true（真操作指代消解保持原行为）。
+//
+//     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
 func shouldResolveRefer(it *contract.Intent) bool {
-	if strings.ContainsAny(it.CorrectedText, "?？吗呢怎么如何为什么哪") {
+	text := it.CorrectedText
+	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
 	}
+	if hasFileOpVerb(text) {
+		return true // 文件操作动词 → 操作指代（强操作信号），即使 QUERY 也解析
+	}
 	switch it.Intent {
-	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit:
-		return true
 	case contract.IntentQuery:
-		return it.Confidence < 0.8
+		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 不解析
+		if it.Confidence >= 0.8 {
+			return isBareReferent(text)
+		}
+		return true
+	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit, contract.IntentDebug:
+		return true
+	case contract.IntentUnknown:
+		// 陈述引用/元指令（"我那个前端的问题又不过来"）→ 不因指代 Ask，走分类器回问
+		return false
 	default:
 		return true
 	}
+}
+
+// fileOpVerbs 文件/记录操作动词集（Codex 诊断 2026-10-02）：命中视为"操作指代"强信号。
+var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名"}
+
+// hasAnySubstr 子串匹配（input.containsAny 为包私有，pipeline 用同语义本地实现）。
+func hasAnySubstr(text string, keywords []string) bool {
+	for _, k := range keywords {
+		if k != "" && strings.Contains(text, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFileOpVerb(text string) bool {
+	return hasAnySubstr(text, fileOpVerbs)
+}
+
+// isBareReferent 判定指代词后无实质对象（"查一下这个"/"这个呢"→裸；"这个方案"→非裸）。
+// ASR 噪音填充（"这个哈你真的开始推进起来"）后仍有实质内容 → 非裸，不触发指代 Ask。
+func isBareReferent(text string) bool {
+	for _, p := range []string{"这个", "那个"} {
+		if i := strings.Index(text, p); i >= 0 {
+			rest := text[i+len(p):]
+			trimmed := strings.Trim(rest, " ，。、！？!?；;哈呀哦嗯啊呢吗吧的")
+			return trimmed == ""
+		}
+	}
+	return false
+}
+
+// clarificationBlocksExecution 判定 refer 歧义是否阻止执行（Codex/gpt-6-luna 2026-10-02）：
+// 有候选 → 阻止（需用户选择）；文件操作动词 → 阻止（操作对象不明会出错）；
+// 查询裸指代 → 阻止（对象悬空）；其余（查询有实体/记录类）→ 不阻止（不因指代 Ask）。
+func clarificationBlocksExecution(it *contract.Intent, referOpts []refer.Option) bool {
+	if len(referOpts) > 0 {
+		return true
+	}
+	if hasFileOpVerb(it.CorrectedText) {
+		return true
+	}
+	return isBareReferent(it.CorrectedText)
 }
 
 // llmIntentFallback（M7 ①）：规则低置信/UNKNOWN 且像自然语言问句时，调 fast provider 补分类。
