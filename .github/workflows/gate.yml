@@ -3,7 +3,7 @@
 # 三个 job：
 #   gate         (阻断)   go vet + go test + gofmt 必须干净
 #   reproducible (阻断)   全新克隆可 build 可 test —— 防 .gitignore 误伤源码目录复发
-#   gap-board    (非阻断) ASR 模拟已知缺口看板，红=信号不是失败，输出进 job summary
+#   gap-board    (非阻断) ASR 模拟已知缺口看板 + LHT-0002 架构桩看板，红=信号不是失败，输出进 job summary
 #
 # 每一条命令都已在本地实跑确认过退出码，详见 PR / 任务记录中的实测证据。
 # 取舍说明见文件末尾。
@@ -194,6 +194,54 @@ jobs:
 
           # 保留真实退出码：UI 上这一步会显示为红色（信号），但
           # continue-on-error 保证 workflow 整体不被阻断。
+          exit "$status"
+
+      - name: Architecture-stub board (LHT-0002, red is a signal, not a failure)
+        id: arch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          out="$RUNNER_TEMP/arch-board.txt"
+
+          go test -tags archstub ./e2e -run TestArch -v 2>&1 | tee "$out"
+          status=${PIPESTATUS[0]}
+          pass=$(grep -c '^--- PASS' "$out")
+          fail=$(grep -c '^--- FAIL' "$out")
+          skip=$(grep -c '^--- SKIP' "$out")
+
+          {
+            echo "## Architecture-stub board (LHT-0002, non-blocking)"
+            echo ""
+            echo "Command: \`go test -tags archstub ./e2e -run TestArch -v\`"
+            echo ""
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| exit code | \`${status}\` |"
+            echo "| PASS | \`${pass}\` |"
+            echo "| FAIL (承诺未兑现) | \`${fail}\` |"
+            echo "| SKIP (缺证据，不得当通过) | \`${skip}\` |"
+            echo ""
+            echo "> 架构级不变式：红色 = 已承诺的架构性质未兑现，**不是**功能没做。"
+            echo "> SKIP 一律视为缺证据，**不得**折算为通过。"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            cat "$out"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "pass=$pass" >> "$GITHUB_OUTPUT"
+          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Architecture-stub board is RED: ${fail} FAIL / ${skip} SKIP (exit ${status}). Signal, not a failure."
+          fi
+
           exit "$status"
 
 # ============================================================================
