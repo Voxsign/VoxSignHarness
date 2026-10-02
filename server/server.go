@@ -599,6 +599,19 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 		// 评审 S7：空答案不是"澄清未收敛"，原因不同，不能混报。
 		return false
 	}
+	// 评审 P3：否定仲裁的回问文案明确让用户「说取消」，这里必须给它确定的语义，
+	// 而不是让它落进"澄清未收敛"的错误路径。
+	if isCancelAnswer(answer) {
+		_, cancel := context.WithCancel(context.Background())
+		ts.cancel = cancel
+		ts.Question = ""
+		ts.Options = nil
+		ts.Err = ""
+		s.markStatus(ts, stCanceled)
+		s.emitEvent(ts, "canceled", map[string]any{"reason": "user_canceled_at_ask"})
+		s.persist(ts)
+		return true
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 	s.markStatus(ts, stRunning)
@@ -1106,4 +1119,16 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// isCancelAnswer 报告澄清回答是否为"取消/不做"（评审 P3）。
+//
+// 否定仲裁的回问文案让用户「说取消」，这个选项必须有确定语义：
+// 干净地取消任务，而不是被当成又一轮澄清答案。
+func isCancelAnswer(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "取消", "不用了", "算了", "不做了", "不要了", "cancel", "no", "n":
+		return true
+	}
+	return false
 }

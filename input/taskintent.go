@@ -111,17 +111,39 @@ var (
 // 设计：否定词**直接支配动作**时一律转为 ASK 确认，绝不执行。
 // ---------------------------------------------------------------------------
 
-// negationMarkers 是多字否定词。刻意**不含**"不能"与裸"别"：
-//   - "不能"是"能不能"的一部分，收了会把「查一下能不能跑测试」误判为否定；
-//   - 裸"别"会命中"特别/别的/告别"，需按后随动词判断（见 bieFollowingVerbs）。
-var negationMarkers = []string{"不要", "不用", "不需要", "先别", "别再", "不要再"}
+// negationMarkers 是多字否定词（长词在前，避免"不要再"被"不要"抢先）。
+// 刻意**不含**"不能"：它是"能不能"的一部分，收了会把可行性问句判错。
+// 评审 P1 补齐：勿/请勿/切勿/无需/不再/免了 —— 原先漏收，会导致
+// 「请勿删除」「无需提交」「不再部署」仍被判成可执行动作。
+var negationMarkers = []string{
+	"不需要", "不要再", "请勿", "切勿", "无需", "不再",
+	"不要", "不用", "先别", "别再", "免了",
+}
+
+// markerIsNegation 排除"形似否定、实非否定"的上下文（评审 P2）。
+//
+//	要不要删除那个文件   → "不要"只是"要不要"的一部分，不是否定
+//	不要紧，帮我删除它   → "不要紧"= 没关系，整句是"帮我删除"
+func markerIsNegation(text string, pos int, marker string) bool {
+	if marker != "不要" {
+		return true
+	}
+	if pos > 0 && strings.HasSuffix(text[:pos], "要") {
+		return false // 要不要…
+	}
+	if strings.HasPrefix(text[pos+len("不要"):], "紧") {
+		return false // 不要紧
+	}
+	return true
+}
 
 // bieFollowingVerbs 是单字"别"后面紧跟时才认定为否定的动作动词。
-var bieFollowingVerbs = []rune("删发改动碰关停做执提交部署记看查修跑送")
+// 评审 P1 补：去/管/乱/忘（「别去删除…」「别管那个删除操作」）。
+var bieFollowingVerbs = []rune("删发改动碰关停做执提交部署记看查修跑送去管乱忘")
 
 // bieBlockPrefixes 是裸"别"前面出现时说明它属于词的一部分（不是否定）的字：
-// 特/告/分/个/差/类/级/区/性/离/作 —— 如"特别关注"里的"别"。
-var bieBlockPrefixes = []rune("特告分个差类级区性离作")
+// 特/告/分/个/差/类/级/区/性/离/作/识/辨 —— 如"特别关注""识别"里的"别"。
+var bieBlockPrefixes = []rune("特告分个差类级区性离作识辨")
 
 // hasNegation 报告文本里是否有否定，并说明该否定是否**本身就绑定了动作**。
 //
@@ -130,20 +152,36 @@ var bieBlockPrefixes = []rune("特告分个差类级区性离作")
 //     以免把「不用担心」这类寒暄变成决策点；
 //   - 裸"别"+动作动词（别删/别发/…）→ 自带动作=true，本身就是"否定+动作"的证据。
 func hasNegation(text string) (string, bool, bool) {
-	if mk, ok := containsAnyReturn(text, negationMarkers); ok {
-		return mk, false, true
+	for _, m := range negationMarkers {
+		from := 0
+		for {
+			i := strings.Index(text[from:], m)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			if markerIsNegation(text, pos, m) {
+				return m, false, true
+			}
+			from = pos + len(m)
+		}
 	}
 	runes := []rune(text)
 	for i, r := range runes {
-		if r != '别' || i+1 >= len(runes) {
+		// 单字否定前缀：别 / 勿。它们必须**紧邻动作动词**才算否定，
+		// 否则会命中"特别/识别/勿忘"这类词的一部分（评审 P1/P7）。
+		if r != '别' && r != '勿' {
 			continue
 		}
-		if bieIsWordPart(runes, i) {
+		if r == '别' && bieIsWordPart(runes, i) {
+			continue
+		}
+		if i+1 >= len(runes) {
 			continue
 		}
 		for _, v := range bieFollowingVerbs {
 			if runes[i+1] == v {
-				return "别" + string(runes[i+1]), true, true
+				return string(r) + string(runes[i+1]), true, true
 			}
 		}
 	}
