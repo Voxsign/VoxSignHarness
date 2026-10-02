@@ -117,7 +117,13 @@ func buildRequestBody(c *openaiClient, req ChatRequest) ([]byte, error) {
 			body["max_tokens"] = req.MaxTokens
 		}
 	}
-	if c.responseFormat {
+	// response_format 优先级：ChatRequest.ResponseFormat 显式覆盖 > provider 配置。
+	// 显式 false（如 QUERY 回答层要纯文本）→ 不带 json_object，避免矛盾指令下模型输出无意义 JSON 壳。
+	useJSON := c.responseFormat
+	if req.ResponseFormat != nil {
+		useJSON = *req.ResponseFormat
+	}
+	if useJSON {
 		body["response_format"] = map[string]any{"type": "json_object"}
 	}
 	// 端点专属参数透传（如 DeepSeek 的 reasoning_effort:"none"），放在最后以便覆盖。

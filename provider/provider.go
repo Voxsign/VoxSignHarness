@@ -27,6 +27,12 @@ type Provider interface {
 type ChatRequest struct {
 	Messages  []contract.Message // 完整消息历史（system/user/assistant）
 	MaxTokens int                // 0 = 不在请求体中携带 max_tokens
+	// ResponseFormat 覆盖 provider 级 response_format 设置：
+	//   true  = 本次调用强制 json_object；false = 本次调用不带 response_format；
+	//   nil   = 用 provider 配置（EffectiveResponseFormat）。
+	// 用途：QUERY 自然语言回答层要纯文本，prompt 已禁 JSON，必须关掉 json_object，
+	// 否则模型在矛盾指令下输出无意义 JSON 壳（如 {"x":0}）→ 误判降级（M7 实测 2026-10-03）。
+	ResponseFormat *bool
 }
 
 // ChatResponse 是模型调用的出参（与上游协议解耦的最小信封）。

@@ -63,6 +63,7 @@ package space
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -205,7 +206,10 @@ func Load(dir string) (*Registry, error) {
 		}
 		var m Manifest
 		if err := json.Unmarshal(data, &m); err != nil {
-			return nil, fmt.Errorf("解析 manifest %s 失败: %w", p, err)
+			// 单个 manifest 损坏只跳过该文件（防整个 Load 失败→Spaces nil→Check panic）。
+			// M7 实测 2026-10-03：perms.exec 误写 bool 触发此路径。
+			log.Printf("[space] skip malformed manifest %s: %v", p, err)
+			continue
 		}
 		if m.Name == "" {
 			m.Name = strings.TrimSuffix(e.Name(), ".space.json")

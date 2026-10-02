@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -96,8 +97,16 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 		opts.Dict = dict
 		opts.Refer = refer.New(dict)
 	}
+	// 域注册表：Load 失败（如单个 manifest 解析错误）不得让 Spaces 为 nil，
+	// 否则 pipeline space.Check 会 nil 解引用 panic（M7 实测 2026-10-03）。
+	// 失败时退回内置模板：Load("") 语义即纯内置，域边界仍生效（默认拒绝）。
 	if spaces, err := space.Load(cfg.SpacesDir()); err == nil {
 		opts.Spaces = spaces
+	} else {
+		log.Printf("[main] space.Load %s failed, falling back to builtin templates: %v", cfg.SpacesDir(), err)
+		if builtin, berr := space.Load(""); berr == nil {
+			opts.Spaces = builtin
+		}
 	}
 	// M3 #37：认知切片注入器（project-map + decisions.jsonl）。
 	opts.Ground = ground.New(cfg.Global.LogDir, opts.Spaces)

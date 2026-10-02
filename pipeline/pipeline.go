@@ -1167,6 +1167,12 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	return it
 }
 
+// noJSON 返回 false 指针：显式关闭本次调用的 response_format（QUERY 回答层要纯文本）。
+func noJSON() *bool {
+	v := false
+	return &v
+}
+
 // queryLLMAnswer（M7 ②）：QUERY 搜索后调 fast 生成自然语言回答。
 // 失败（网络/预算超限/超时）→ 返回友好降级文案（不再空壳"OK（自动执行）"）。
 //
@@ -1193,6 +1199,10 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 				{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
 			},
 			MaxTokens: 400,
+			// 回答层要纯文本：显式关掉 json_object（provider 级默认开启）。
+			// 否则模型在"不要输出 JSON"+json_object 矛盾指令下输出无意义 JSON 壳（{"x":0}），
+			// 解包失败会误判成"模型不可用"降级（M7 实测 2026-10-03）。
+			ResponseFormat: noJSON(),
 		})
 		if err != nil {
 			log.Printf("[queryLLMAnswer] fast Chat err: %v", err)
