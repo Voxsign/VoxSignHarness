@@ -131,6 +131,7 @@ func (p *Personalized) Correct(req CorrectRequest) CorrectResult {
 			Confidence: 0,   // 零置信 = 没有可信改写
 			Reason:     askNoiseReasonPrefix + " —— 整句只有填充词/指代词，无可用内容，需上层回问澄清（引擎不猜测）",
 		}}
+		res.Punctuated = raw // 无内容不恢复标点
 		res.Latency = time.Since(start)
 		return res
 	}
@@ -148,6 +149,10 @@ func (p *Personalized) Correct(req CorrectRequest) CorrectResult {
 			res.Corrections = corrs
 		}
 	}
+
+	// 标点恢复（需求 4.3 / C1 v2）：结果只写 Punctuated + PunctuationCorrections，
+	// **绝不改 Text、绝不进 Corrections**——保住 C4 的"没改 Text 不得有记录"不变式。
+	res.Punctuated, res.PunctuationCorrections = punctuate(res.Text)
 
 	// 候选支路：只建议、不改文本；非空即表示"该问人/该问外部"。
 	res.Candidates = comp.detectCandidates(runes, req.Context)

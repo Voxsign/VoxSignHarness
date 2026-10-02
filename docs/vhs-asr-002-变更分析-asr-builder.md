@@ -239,4 +239,71 @@
 
 ---
 
+## 7. 裁决落地记录（第二轮：C1 v2 / ASR-EXEC / control）
+
+### 7.1 C1 v1 → v2（DSH 升版，我已接受并落地字段）
+
+DSH 认定旧 C1 v1 把"正文"和"标点"混进同一条判据，属于同类错误的第三次
+（`rubric-v0` → `eval/asr-split-punct` → C1 v1）。v2 的分工：
+- 正文：去标点后逐字相等（安全红线，不变）；
+- 标点：允许恢复，但必须落在**独立字段** + 逐条留痕 + 置信度/证据。
+
+**我在实现中又发现同类的第四个坑并已报 DSH 确认**：DSH 初稿要求标点留痕写进 `Corrections`，
+但这与 **C4 安全不变式**（`Text` 未改 ⇒ `Corrections` 必须为空）**直接冲突**——
+标点恢复不改 `Text`，一旦混装，`obs-08` 这类 fidelity 行会在 C4 立刻变红。
+DSH 采纳拆容器方案（方案 a）。落地字段：
+
+```go
+Text                   string        // 只承载正文纠错；标点不得混入
+Corrections            []Correction  // 只记对 Text 的改动（C4 原样保留）
+Candidates             []Candidate
+Latency                time.Duration
+Punctuated             string        // 标点恢复后文本；无恢复时 == Text
+PunctuationCorrections []Correction  // Kind 恒为 "punctuation"；插入语义 Start==End, From==""
+```
+
+### 7.2 标点恢复实现边界（RC7）
+
+- **实现**：保守规则——句末无标点补「。」；末字为疑问尾（吗/呢/嘛）补「？」；
+  连接词（所以/但是/不过/而且/另外/因此/可是/否则）前且前句 ≥4 字时补「，」；
+  **已存在的标点一律保留**；只插入、绝不改删正文字符。
+- **结构判据（绿，默认门禁）**：`asr/punct_test.go` 的 SCOPE-PUNCT-01..05
+  （正文不动 / 可观测 / 已有标点保留 / 可回放 / 不混入 Corrections）。
+- **质量：unverified**。分段是否自然无标注语料、未评估——不得把"有留痕"说成"标点自然"。
+- 覆盖：35 条语料中 33 条产生恢复（2 条已是标点结尾或纯噪声）。
+
+### 7.3 ASR-EXEC-01..06 + §4 骨架：先红落地
+
+落在 `//go:build vhs002` 下（`asr/execcriteria_test.go`、`asr/scopecriteria_test.go`），
+默认门禁 `go test ./...` 不带 tag，不受影响；`go test -tags vhs002 ./asr` **全红**（能力未落地）。
+
+| 判据 | 断言要点 | 现状 |
+|---|---|---|
+| ASR-EXEC-01 | 服务源码无 `os/exec`/`syscall`/`plugin` | 红（服务未落地） |
+| ASR-EXEC-02 | 意图契约只含声明式字段，无 cmd/url/callback/exec | 红（schema 未落地） |
+| ASR-EXEC-03 | 高风险删词无确认 ⇒ `need_confirm` 且词典文件不变 | 红 |
+| ASR-EXEC-04 | **「把 probe.txt 删掉」⇒ 文件仍在、内容不变** | 红 |
+| ASR-EXEC-05 | 轨迹 step 集合 ⊆ 理解步骤，无 exec/apply | 红 |
+| ASR-EXEC-06 | 只建议不授权；默认拒绝，不猜高权限域 | 红 |
+| SCOPE-INTENT-01 | 9 类意图全覆盖 + confidence | 红 |
+| SCOPE-REF-01/02 | 指代三层；低置信 `need_disambiguate`；确认后复用 | 红 |
+| SCOPE-PROFILE-01 | 只注入相关片段 + `context_sources` | 红 |
+| SCOPE-DICT-01 | 语音增删改、立即生效、重启不丢 | 红 |
+| SCOPE-CONF-01 | 配置全 JSON（无 YAML）+ 热加载 ≤2s | 红 |
+| SCOPE-TRACE-01 | 轨迹 JSONL 每步有 step/ms | 红 |
+| SCOPE-FALLBACK-01 | 3s 超时 → `degraded`、不阻塞 | 红 |
+| SCOPE-CONTROL-01 | 控制语义与业务 type 互斥 | 红 |
+| SCOPE-AUDIT-01 | 学习条目可审计（source/created_at） | 红 |
+
+### 7.4 `control` 的"撤销"：保守解释（已登记）
+
+需求 4.4 要求识别「打断/暂停/撤销」；4.6 要求"不进入业务执行"，但**原文未写明"撤销"的范围**。
+本实现取**保守解释**并在此登记为契约约束：
+> `control` 只表示**交互层语义**（撤销上一轮输入/清空待确认），
+> **不得**解释为"撤销业务操作"；`control` 与业务 `type` **互斥**，不进入 Harness 执行路由。
+
+依据：红线 #1「永不直接执行任务」。若需求方另有解释，需 Peter/DSH 明确后改契约（不擅自扩义）。
+
+---
+
 *VHS-ASR-002 变更分析 · asr-builder · 2026-10-03。先作废，后新建；未获授权不动仓库。*
