@@ -3,7 +3,7 @@
 # 三个 job：
 #   gate         (阻断)   go vet + go test + gofmt 必须干净
 #   reproducible (阻断)   全新克隆可 build 可 test —— 防 .gitignore 误伤源码目录复发
-#   gap-board    (非阻断) ASR 模拟已知缺口看板 + LHT-0002 架构桩看板，红=信号不是失败，输出进 job summary
+#   gap-board    (非阻断) ASR 模拟缺口看板 + LHT-0002 架构桩 + VHS-ASR-001 识别桩，红=信号不是失败
 #
 # 每一条命令都已在本地实跑确认过退出码，详见 PR / 任务记录中的实测证据。
 # 取舍说明见文件末尾。
@@ -240,6 +240,52 @@ jobs:
 
           if [ "$status" -ne 0 ]; then
             echo "::warning::Architecture-stub board is RED: ${fail} FAIL / ${skip} SKIP (exit ${status}). Signal, not a failure."
+          fi
+
+          exit "$status"
+
+      - name: ASR-identification harness board (VHS-ASR-001, red is a signal)
+        id: asrboard
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          out="$RUNNER_TEMP/asr-board.txt"
+
+          go test -tags asrharness ./asr -v 2>&1 | tee "$out"
+          status=${PIPESTATUS[0]}
+          pass=$(grep -c '^--- PASS' "$out")
+          fail=$(grep -c '^--- FAIL' "$out")
+
+          {
+            echo "## ASR-identification harness board (VHS-ASR-001, non-blocking)"
+            echo ""
+            echo "Command: \`go test -tags asrharness ./asr -v\`"
+            echo ""
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| exit code | \`${status}\` |"
+            echo "| PASS | \`${pass}\` |"
+            echo "| FAIL | \`${fail}\` |"
+            echo ""
+            echo "> 判据 C1 保真 / C2 触发词近音容错 / C3 噪声不脑补 / C4 可观测 / 性能。"
+            echo "> **C1 是安全侧红线**；C3 若基线 Passthrough 也能过，说明该条无信息量。"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            cat "$out"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "pass=$pass" >> "$GITHUB_OUTPUT"
+          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::ASR harness board is RED: ${fail} FAIL (exit ${status}). Signal, not a failure."
           fi
 
           exit "$status"
