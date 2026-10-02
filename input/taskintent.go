@@ -337,6 +337,100 @@ func metaActionText(meta string) string {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 多动作检测（缺口 G5）
+//
+// 问题：「查一下库存，然后记一下结果，最后提交」只执行第一个命中的意图，
+// 其余动作**既不执行也不提示**，无声消失 —— 用户以为三件事都做了。
+//
+// 判据刻意用**顺序连接词**而不是"句子里出现两个动作词"：
+// M7 真机长句「我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进…」
+// 同时含 TEST 与 QUERY 词，却是一段口语独白，必须保持不 Ask
+// （既有回归 pipeline.TestColloquialQuestionNoReferAsk）。它没有顺序连接词。
+// ---------------------------------------------------------------------------
+
+// sequenceConnectors 是中文口述里表示"下一步"的连接词。
+var sequenceConnectors = []string{"然后", "接着", "之后", "随后", "最后", "再"}
+
+// actionIntentGroups 是参与多动作计数的意图分组（ASK 不算动作，故不含 askTriggers）。
+var actionIntentGroups = []struct {
+	intent   string
+	triggers []string
+}{
+	{contract.IntentRegisterTool, registerTriggers},
+	{contract.IntentNote, noteTriggers},
+	{contract.IntentQuery, queryTriggers},
+	{contract.IntentDebug, debugTriggers},
+	{contract.IntentTest, testTriggers},
+	{contract.IntentCommit, commitTriggers},
+	{contract.IntentDeploy, deployTriggers},
+	{contract.IntentEdit, editTriggers},
+}
+
+// clauseAction 返回单个分句命中的第一个动作意图；无则空串。
+func clauseAction(clause string) string {
+	for _, g := range actionIntentGroups {
+		if containsAny(clause, g.triggers) {
+			return g.intent
+		}
+	}
+	return ""
+}
+
+// multiActionIntents 返回按顺序连接词切分后出现的**不同**动作意图（按首次出现顺序）。
+func multiActionIntents(text string) []string {
+	parts := []string{text}
+	for _, c := range sequenceConnectors {
+		var next []string
+		for _, p := range parts {
+			next = append(next, strings.Split(p, c)...)
+		}
+		parts = next
+	}
+	seen := map[string]bool{}
+	var order []string
+	for _, p := range parts {
+		if k := clauseAction(p); k != "" && !seen[k] {
+			seen[k] = true
+			order = append(order, k)
+		}
+	}
+	return order
+}
+
+// joinIntentLabels 把动作意图列表拼成"查、记、提交"这样的中文串。
+func joinIntentLabels(kinds []string) string {
+	labels := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		labels = append(labels, intentLabel(k))
+	}
+	return strings.Join(labels, "、")
+}
+
+// intentLabel 给用户看的中文动作名。
+func intentLabel(kind string) string {
+	switch kind {
+	case contract.IntentQuery:
+		return "查"
+	case contract.IntentNote:
+		return "记"
+	case contract.IntentEdit:
+		return "改"
+	case contract.IntentDebug:
+		return "修"
+	case contract.IntentTest:
+		return "跑测试"
+	case contract.IntentCommit:
+		return "提交"
+	case contract.IntentDeploy:
+		return "部署"
+	case contract.IntentRegisterTool:
+		return "注册工具"
+	default:
+		return kind
+	}
+}
+
 // 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
 //
 //	organizeWords ∩ docWords ∩ (saveWords ∪ commitTriggers) 同时成立。
@@ -452,6 +546,22 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		ti.Ask = "你是想让我给修 bug 的思路，还是直接动手修？"
 		ti.Conflict = contract.ConflictDebugPlan
 		return ti
+	}
+
+	// 2a-pre. 多动作检测（缺口 G5）：「查一下库存，然后记一下结果，最后提交」
+	// 若只执行第一个命中的意图，其余动作会**无声消失**，用户以为都做了。
+	//
+	// 必须排在 2a（extractReplace 提前返回）**之前** —— 否则
+	// 「把报价模板改成新的公司抬头，然后跑一下测试」会先命中 EDIT 直接返回。
+	//
+	// 一次只做一件是产品的既有约束（一屏一决策点），所以这里**不猜顺序**，
+	// 直接把几件事摊开让用户选先做哪个。
+	if actions := multiActionIntents(text); len(actions) >= 2 {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictMultiAction
+		got.Ask = "这句里有两件以上的事（" + joinIntentLabels(actions) + "）。" +
+			"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+		return got
 	}
 
 	// 2a. 显式「把 X 改成/换成 Y」→ EDIT（优先于 COMMIT/DEPLOY 等触发词，如「把提交按钮改成中文」）

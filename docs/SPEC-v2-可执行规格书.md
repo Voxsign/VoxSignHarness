@@ -120,7 +120,7 @@
 }
 ```
 人话外壳：**一句口语 → 一个结构化任务书（意图+指向谁+改什么+边界+风险+做到啥算完）；ask 非空就是没听懂、不许动手。**
-必填：intent、confidence、corrected_text。枚举：intent∈八类+REGISTER_TOOL；confirm∈auto/light/strong/human；impact∈small/medium/high；conflict∈{ask_vs_op,note_vs_deploy,debug_plan,delete,negation,meta,conditional,""}。非法→UNKNOWN+ask。
+必填：intent、confidence、corrected_text。枚举：intent∈八类+REGISTER_TOOL；confirm∈auto/light/strong/human；impact∈small/medium/high；conflict∈{ask_vs_op,note_vs_deploy,debug_plan,delete,negation,meta,conditional,multi_action,""}。非法→UNKNOWN+ask。
 
 ---
 
@@ -421,6 +421,10 @@ function ClassifyTask(text) -> Intent:
     # 条件句仲裁（缺口 G6）：「如果测试通过就提交」的前提不能被忽略 → ASK(conflict=conditional)
     #   限定窗口：标记之后 12 字内须有动作词（M7 真机长句含"如果/就"但必须保持不 Ask）
     if 条件句仲裁命中: return ASK(conflict=conditional)
+    # 多动作检测（缺口 G5）：「查一下库存，然后记一下结果，最后提交」只做第一件会静默丢弃其余
+    #   判据=顺序连接词（然后/接着/最后…）切分后出现 ≥2 个**不同**动作意图；
+    #   排在 extractReplace 提前返回之前；ORCHESTRATE 任务已由计划承载故不触发
+    if 多动作检测命中: return ASK(conflict=multi_action)
     if 含 feasibleAsk(能不能/可不可以/是否可以/行不行): return ASK(conflict=ask_vs_op)
     if 含 thoughtWords(想法/备忘) 且 该词不在空间名/别名内: return NOTE(conflict=note_vs_deploy)  # 已修：想法库=实体名不触发
     if 含 statusQuestion(好了吗/改了吗…):      return QUERY
@@ -439,7 +443,7 @@ function ClassifyTask(text) -> Intent:
 1. 头部注释 §1 顺序与代码 `switch` 一致（register→delete→feasible→thought→status→debug_plan）。✅
 2. 注释 §2a 把「把 X 改成 Y」放在单类触发之前——代码确实如此（`extractReplace` 在单类 switch 前）。✅
 3. **历史 surfaced finding（已修复）**：首版「空间名子串可命中 thoughtWords」（即 #17/#18/#20 误判 NOTE）已由组织者修复——空间名/别名命中含「想法/备忘」时跳过 thoughtWords 仲裁、noteTriggers 去裸「记」。当前 §4.7 权威流水中的 thoughtWords 段已隐含该前提，断言 20/20。
-4. 仲裁产出的 `conflict` 标记取值与 contract 常量一致（ask_vs_op/note_vs_deploy/debug_plan/delete/negation/meta/conditional）。✅
+4. 仲裁产出的 `conflict` 标记取值与 contract 常量一致（ask_vs_op/note_vs_deploy/debug_plan/delete/negation/meta/conditional/multi_action）。✅
 5. **M5-1 surfaced finding（已修复）**：「在笔记里记下 M4 测试」被 TEST 词「测试」抢先误判 TEST——根因 noteTriggers 缺「记下/记个」，句尾「测试」成首个命中。修复：noteTriggers 补「记下/记个」，且 2b 单类开关 NOTE 本就先于 TEST 命中。规则：NOTE 语境词（记下/记一下/记个/记录，含笔记/想法语境）**优先于** TEST 词；句尾「测试」是被记录对象→NOTE。**例外不回归**：句子不含 NOTE 词、仅独立 TEST 触发（跑一下测试/执行测试/测试这个函数）→仍 TEST。验证器 `input.TestTriggerCollisionNoteVsTest`（正反例 + QUERY 不回归，实测 PASS）；20 样例仍 20/20。
 
 ---

@@ -205,6 +205,9 @@ const (
 	// ConflictConditional：条件句（如果…就…）被无条件执行 → ASK（缺口 G6）。
 	// 系统不替用户守条件，也不得把"有前提的动作"当无条件命令做掉。
 	ConflictConditional = "conditional"
+	// ConflictMultiAction：一句话里有两件以上的事 → ASK 选先做哪个（缺口 G5）。
+	// 产品约束是"一屏一决策点"，系统不替用户猜顺序，也不静默丢掉其余动作。
+	ConflictMultiAction = "multi_action"
 )
 
 // Intent 是输入容错层产出的结构化意图（架构文档 §5.5）：
