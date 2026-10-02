@@ -66,7 +66,7 @@ func loadCorpus(t *testing.T) []Case {
 
 // engine 是本套桩的测试对象（**接线点**，不是判据本身）。
 // P2 起接生产引擎；基线 Passthrough 单独在 TestBaselinePassthrough 里对照。
-func engine() Engine { return Passthrough{} }
+func engine() Engine { return NewEngine() }
 
 // hasTag 报告语料是否带某标签。
 func hasTag(c Case, tag string) bool {
