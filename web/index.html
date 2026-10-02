@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f2f6fc">
+<title>VoxSign</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="phone" id="phone">
+
+  <!-- 顶部：多角色折叠条（M5-3 预留） -->
+  <header class="topbar">
+    <button id="roleToggle" class="role-toggle" aria-haspopup="true" aria-expanded="false">
+      <span class="dot" id="roleDot"></span><span id="roleLabel">Planner</span><span class="caret">▾</span>
+    </button>
+    <div id="roleBar" class="role-bar hidden" role="menu">
+      <button data-role="planner"  class="role-chip active">Planner</button>
+      <button data-role="executor" class="role-chip">Executor</button>
+      <button data-role="verifier" class="role-chip">Verifier</button>
+      <span class="role-hint">M5-3 · 切换/折叠（接口未接，本地态）</span>
+    </div>
+    <span class="app-title">VoxSign</span>
+    <button id="settingsBtn" class="icon-btn" aria-label="设置">⚙</button>
+  </header>
+
+  <!-- 红色系统条（说"停"打断） -->
+  <div id="systemBar" class="system-bar hidden" role="alert">
+    <div class="sb-head">
+      <strong id="sbTitle">已按下停止</strong>
+      <button id="sbClose" class="sb-close" aria-label="关闭">✕</button>
+    </div>
+    <div id="sbActive" class="sb-line"></div>
+    <div id="sbBlocked" class="sb-line muted"></div>
+    <div id="sbActions" class="sb-actions"></div>
+  </div>
+
+  <!-- 设置面板（server 地址 + Bearer token） -->
+  <div id="settingsPanel" class="settings hidden">
+    <label class="field">Server 地址
+      <input id="serverUrl" placeholder="http://192.168.x.x:8765" autocomplete="off">
+    </label>
+    <label class="field">Bearer Token
+      <input id="serverToken" type="password" placeholder="不配则仅本机" autocomplete="off">
+    </label>
+    <div class="settings-btns">
+      <button id="saveSettings" class="btn-primary">保存</button>
+      <button id="testStatus" class="btn-ghost">测试连接</button>
+    </div>
+    <div id="statusLine" class="status-line"></div>
+  </div>
+
+  <!-- 对话流 -->
+  <main id="chat" class="chat">
+    <div class="welcome">
+      你好，说点什么。<br>
+      <span class="muted">语音优先 · 键盘兜底 · 一屏一个决策点</span>
+    </div>
+  </main>
+
+  <!-- 当前唯一决策点（确认红条 / 回问候选按钮）；为空则不占位 -->
+  <div id="decisionZone" class="decision-zone"></div>
+
+  <!-- 底部麦克风输入条 -->
+  <footer class="inputbar">
+    <button id="micBtn" class="mic" aria-label="语音输入">
+      <span class="mic-icon">🎙</span>
+      <span class="wave hidden"><i></i><i></i><i></i><i></i></span>
+    </button>
+    <input id="textInput" type="text" placeholder="说点什么，或打字…" autocomplete="off" enterkeyhint="send">
+    <button id="sendBtn" class="send" aria-label="发送">↑</button>
+  </footer>
+
+</div>
+<script src="logic.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

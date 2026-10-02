@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="use-iframe" content="true">
+  <meta name="html-box-height-mode" content="auto">
+  <meta name="description" content="AI Personal Agent 赛道行动范式光谱：从 confirm-gate 到 act-first，Instinct 站在最激进端；下方对比三种信任机制工程路线">
+  <title>行动范式光谱与信任机制路线</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #FFFFFF; color: #1F2329; width: 100%; max-width: 100%; padding: 8px 4px; }
+    .block-title { font-size: 17px; font-weight: 600; color: #1A2B4A; margin: 4px 0 12px; }
+    .spectrum { position: relative; border: 1px solid #DEE3E8; border-radius: 10px; padding: 18px 16px 20px; background: #F7F9FC; }
+    .spec-label { font-size: 14px; color: #646A73; margin-bottom: 12px; }
+    .track { display: flex; align-items: stretch; gap: 0; border-radius: 8px; overflow: hidden; }
+    .seg { flex: 1; padding: 12px 10px; text-align: center; border-right: 2px solid #FFFFFF; }
+    .seg:last-child { border-right: none; }
+    .seg-name { font-size: 15px; font-weight: 600; color: #FFFFFF; margin-bottom: 6px; }
+    .seg-sub { font-size: 13px; color: #FFFFFF; opacity: 0.92; line-height: 1.45; }
+    .g1 { background: #758092; }   /* confirm-gate 灰蓝 */
+    .g2 { background: #4E6E9E; }    /* 混合 */
+    .g3 { background: #1A2B4A; }    /* act-first 藏青 */
+    .flags { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    .flag { flex: 1; min-width: 200px; border: 1px solid #DEE3E8; border-left: 3px solid #1A2B4A; border-radius: 6px; padding: 10px 12px; background: #FFFFFF; }
+    .flag b { font-size: 14px; color: #1A2B4A; display: block; margin-bottom: 4px; }
+    .flag span { font-size: 13px; color: #646A73; line-height: 1.5; display: block; }
+    .note { margin-top: 12px; font-size: 13px; color: #646A73; line-height: 1.6; }
+    .note b { color: #1F2329; }
+  </style>
+</head>
+<body>
+  <div class="block-title">行动范式光谱：从"每步确认"到"先干再说"，Instinct 站在最激进端</div>
+  <div class="spectrum">
+    <div class="spec-label">横轴=行动自主度（证据来源：各产品官方文档/系统卡/媒体报道，2026-10-02 检索）</div>
+    <div class="track">
+      <div class="seg g1">
+        <div class="seg-name">confirm-gate（先问）</div>
+        <div class="seg-sub">OpenAI Operator<br/>Anthropic Claude<br/>状态变更前必须确认</div>
+      </div>
+      <div class="seg g2">
+        <div class="seg-name">混合（自主+关键点批准）</div>
+        <div class="seg-sub">Google Gemini<br/>Meta Muse（Secure VM 隔离）</div>
+      </div>
+      <div class="seg g3">
+        <div class="seg-name">act-first（先行动）</div>
+        <div class="seg-sub">Poke · Town · szn<br/><b>Instinct：主动到代发邮件、代签约束协议</b></div>
+      </div>
+    </div>
+    <div class="flags">
+      <div class="flag">
+        <b>① 前置式闸门 · Anthropic</b>
+        <span>逐 App 首次使用批准 + 默认黑名单（交易/银行/加密）+ 执行前 action plan 审阅。信任成本前置在每一步。</span>
+      </div>
+      <div class="flag">
+        <b>② 隔离式闸门 · Meta Muse</b>
+        <span>Muse Secure VM 隔离运行 + 付款需批准 + Stripe 支付保护。13 天 250 万下载，公开资料未见同等规模事故。</span>
+      </div>
+      <div class="flag">
+        <b>③ 裸式信任 · Instinct</b>
+        <span>云电脑缓存全量凭据 + 信任靠邀请制口碑软约束；已报道 13 起出错事件（不可逆损失/数据治理/越权）。</span>
+      </div>
+    </div>
+    <div class="note"><b>结论：</b>act-first 的成败不取决于"有没有人工确认"，而取决于是否存在另一种形式的闸门（隔离/限额/争议机制）；Instinct 是目前唯一无结构性兜底的激进者。</div>
+  </div>
+</body>
+</html>

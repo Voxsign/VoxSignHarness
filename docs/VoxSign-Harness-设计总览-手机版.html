@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>VoxSign Harness 设计总览（手机版）</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e7c66'/%3E%3Cpath d='M8 22V10h3v12H8zm6 0V10h3v12h-3zm6 0V10h3v12h-3z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1b2432; --sub:#5b6577; --line:#e4e8ef;
+    --accent:#0e7c66; --accent-soft:#e6f4ef; --warn:#a4650e; --warn-soft:#fdf3e3;
+    --blue:#1a4fa0; --blue-soft:#e9f0fb;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.65;font-size:16px;padding-bottom:56px}
+  .wrap{max-width:680px;margin:0 auto;padding:0 16px}
+  /* 顶部 */
+  header{background:linear-gradient(135deg,#0d1b2a 0%,#14344a 100%);color:#fff;padding:28px 16px 22px;border-radius:0 0 22px 22px}
+  .logo{display:flex;align-items:center;gap:8px;font-size:13px;letter-spacing:.08em;color:#9fc9bd;margin-bottom:10px}
+  .logo svg{width:22px;height:22px}
+  h1{font-size:24px;font-weight:800;letter-spacing:.02em}
+  .sub1{margin-top:6px;font-size:14.5px;color:#c8d6e0}
+  .badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .badge{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:#eaf3f0;
+    font-size:11.5px;padding:3px 9px;border-radius:999px}
+  /* 导航 */
+  nav{position:sticky;top:0;z-index:50;background:rgba(247,248,250,.94);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);margin:14px -16px 0;padding:8px 16px;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  nav a{display:inline-block;color:var(--sub);font-size:13.5px;text-decoration:none;margin-right:16px;padding:4px 0;border-bottom:2px solid transparent}
+  nav a:last-child{margin-right:0}
+  nav a:active{color:var(--accent)}
+  /* 卡片章节 */
+  section{margin-top:26px}
+  .kicker{font-size:12px;letter-spacing:.14em;color:var(--accent);font-weight:700;margin-bottom:4px}
+  h2{font-size:19px;font-weight:800;margin-bottom:10px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+  .card h3{font-size:15.5px;font-weight:700;margin-bottom:8px}
+  .card p{font-size:14.5px;color:var(--sub)}
+  .lead{font-size:15px;color:var(--ink);padding:2px 0 2px 12px;border-left:3px solid var(--accent);margin-bottom:10px}
+  /* 三域 */
+  .domains{display:grid;grid-template-columns:1fr;gap:12px}
+  .domain{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px;position:relative;overflow:hidden}
+  .domain::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .domain.rec::before{background:#0e7c66}
+  .domain.dis::before{background:#1a4fa0}
+  .domain.con::before{background:#a4650e}
+  .domain .tag{font-size:11px;font-weight:700;letter-spacing:.1em;margin-bottom:2px}
+  .domain.rec .tag{color:var(--accent)} .domain.dis .tag{color:var(--blue)} .domain.con .tag{color:var(--warn)}
+  .domain .name{font-size:17px;font-weight:800;margin-bottom:2px}
+  .domain .one{font-size:14px;color:var(--sub);font-style:italic;margin-bottom:8px}
+  .domain ul{list-style:none;font-size:13.5px;color:var(--ink)}
+  .domain li{padding:3px 0}
+  .domain li b{color:var(--ink)}
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13.5px}
+  colgroup col:first-child{width:28%}
+  th,td{padding:7px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;letter-spacing:.05em;color:var(--sub);background:#f2f4f7;font-weight:700}
+  td b{font-weight:700}
+  /* 时间轴 */
+  .timeline{display:grid;grid-template-columns:44px 1fr;gap:0;margin-top:4px}
+  .tl-node{display:flex;flex-direction:column;align-items:center}
+  .tl-dot{width:13px;height:13px;border-radius:50%;background:var(--accent);margin-top:6px;z-index:1}
+  .tl-line{width:2px;flex:1;background:var(--line);margin-top:2px}
+  .tl-body{padding:0 0 16px 12px}
+  .tl-body .t{font-size:13px;font-weight:800;color:var(--accent)}
+  .tl-body .d{font-size:14px;margin-top:2px}
+  .tl-body .n{font-size:12.5px;color:var(--sub);margin-top:3px}
+  /* 标签 */
+  .pill{display:inline-block;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:700;padding:2px 8px;border-radius:6px;margin:0 4px 6px 0}
+  .pill.w{background:var(--warn-soft);color:var(--warn)}
+  .pill.b{background:var(--blue-soft);color:var(--blue)}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px;font-weight:700;margin:6px 0}
+  .flow .ar{color:var(--accent)}
+  .note{background:var(--accent-soft);border-radius:10px;padding:10px 12px;font-size:13.5px;color:#0d5c49;margin-top:10px}
+  footer{margin-top:30px;padding:18px 16px;text-align:center;color:var(--sub);font-size:12.5px;border-top:1px solid var(--line)}
+  .next{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .next ol{padding-left:20px;font-size:14px;margin-top:8px}
+  .next li{margin-bottom:6px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo">
+      <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="#0e7c66"/><path d="M8 22V10h3v12H8zm6 0V10h3v12h-3zm6 0V10h3v12h-3z" fill="#fff"/></svg>
+      VOXSIGN HARNESS
+    </div>
+    <h1>VoxSign Harness 设计总览</h1>
+    <div class="sub1">我的生产底座 · 语音驱动开发 · Go 单二进制 · 先自用</div>
+    <div class="badges">
+      <span class="badge">北极星：人工注意力分钟</span>
+      <span class="badge">10倍效率 = 底座复利</span>
+      <span class="badge">手机说话 + 电脑干活</span>
+      <span class="badge">模型驱动</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <a href="#phi">哲学</a><a href="#vsl">交互语言 VSL</a><a href="#space">大域三域</a><a href="#arch">架构要点</a><a href="#review">评审记录</a><a href="#next">下一步</a>
+</nav>
+
+<div class="wrap">
+
+<!-- ===== 1. 设计哲学 ===== -->
+<section id="phi">
+  <div class="kicker">PHILOSOPHY</div>
+  <h2>设计哲学（定调）</h2>
+  <div class="card">
+    <div class="lead">不是造软件，是造"我的生产底座"。10 倍效率来自底座复利。</div>
+    <table>
+      <colgroup><col style="width:30%"><col style="width:70%"></colgroup>
+      <tr><th>原则</th><th>内容</th></tr>
+      <tr><td><b>认识与执行分离</b></td><td>边界 = 契约。分得越清楚越好，背后是哲学。</td></tr>
+      <tr><td><b>软件是生长问题</b></td><td>认知层（文字慢变）→ 接口层（契约版本化）→ 执行层（代码快确定）+ 生长回路。</td></tr>
+      <tr><td><b>标准化 vs 个性化</b></td><td>显性化/标准化 → 用基础设施（模型调用/ASR/权限）；个性化 → 自建服务（认知/词典/OGSM）。</td></tr>
+      <tr><td><b>先稳住再变</b></td><td>模型中心 / 翻译 / 备份先拆稳，一步稳住再动下一步。</td></tr>
+      <tr><td><b>模型优先思维</b></td><td>先有模型 → 执行 → 对比归因（模型错 vs 执行错）→ 更新模型。</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ===== 2. 交互语言 VSL ===== -->
+<section id="vsl">
+  <div class="kicker">LANGUAGE · VSL</div>
+  <h2>交互语言 VSL（v1 + v2）</h2>
+  <div class="card">
+    <div class="lead">本质：自然语言 + 规范（代指 / 域 / 决策标准）→ 让系统真的懂你。这是"新时代的模型描述语言"。</div>
+    <h3>三要素</h3>
+    <table>
+      <colgroup><col style="width:24%"><col style="width:76%"></colgroup>
+      <tr><th>要素</th><th>内容</th></tr>
+      <tr><td>词汇</td><td>域 space · 实体 entity · 契约 contract · 意图 intent（8 类）</td></tr>
+      <tr><td>语法</td><td>"在[域]里 [动作] [对象]"；对象可代指（它 / 那个）</td></tr>
+      <tr><td>共识机制</td><td>低置信回问 · 高风险强确认 · 确认后固化</td></tr>
+    </table>
+    <h3>四种共识（语言的目标）</h3>
+    <div><span class="pill">决策标准</span><span class="pill">代指对象</span><span class="pill">活动空间</span><span class="pill">执行语义</span></div>
+    <h3>v1.1 自然语言优先</h3>
+    <p>每个定义块 = 一句话人话在前（"先记录碎片，一个字不改"），结构化字段在后自动对应。</p>
+    <h3>v2 判断语义层（灵魂层）——三模型评审定稿</h3>
+    <p style="margin-bottom:8px"><b>核心认知：</b>字段罗列描述"是什么"；机器"懂"= 遇到没列举的新情况，能按你的立场做出和你一致的选择。灵魂 = 判断力，不是文案。</p>
+    <table>
+      <colgroup><col style="width:30%"><col style="width:70%"></colgroup>
+      <tr><th>强制字段</th><th>回答的问题</th></tr>
+      <tr><td>目的 purpose</td><td>为什么存在、值得维护什么</td></tr>
+      <tr><td>取舍 priority</td><td>冲突时牺牲什么、听谁的</td></tr>
+      <tr><td>反例 anti</td><td>错误判断具体长什么样</td></tr>
+      <tr><td>出错代价 cost</td><td>错一次付出多少</td></tr>
+      <tr><td>矫正触发 correct</td><td>怎么知道自己错了</td></tr>
+      <tr><td>反问方式 ask</td><td>机器怎么问你</td></tr>
+    </table>
+    <div class="note"><b>两种语言范式：</b>描述模型 = 可被推翻的信念 + 更新规则（"世界大概率是什么样"）；描述控制 = 可被验证的承诺 + 中断准则（"我有多大把握承担做错后果"）。二者通过共识连接——不能从"我理解你"跳到"你授权了"。</div>
+    <h3>双向交互（系统有角色）</h3>
+    <p>角色 = 有权质疑什么 · 必须解释什么 · 哪些决定只能你作。共识状态机：已确认 / 暂定（带置信度）/ 待问 / 已失效。<br>提问协议：不问字段问卷，问边界案例和代价——"你是在表达想法还是授权执行？""理解错了希望我往保守还是大胆错？""做错了后悔成本多少？"</p>
+    <h3>交互形态</h3>
+    <p>语音为主（≈90%，口语短句、可回问）+ 截图为辅（≈10%，截图 = 指代消解第四路信号）+ 文字精确回执。</p>
+  </div>
+</section>
+
+<!-- ===== 3. 大域三域 ===== -->
+<section id="space">
+  <div class="kicker">SPACE · HARNESS-CORE</div>
+  <h2>大域：record / discuss / control</h2>
+  <div class="lead">一句话：先记录碎片（原汁原味）→ 再讨论建模（认知变强）→ 最后控制执行（达成结果）；干完对账，结论回喂建模。</div>
+  <div class="domains">
+    <div class="domain rec">
+      <div class="tag">RECORD · 记录域</div>
+      <div class="name">碎片 → 素材</div>
+      <div class="one">"我说的每句话都先存下来，一个字不改。"</div>
+      <ul>
+        <li><b>只追加不改写</b>：原文 100% 保留、可检索可回放</li>
+        <li>ASR 原文留底，先记录、后整理</li>
+        <li><b>判断层</b>：反例=把整理稿当原话；矛盾记录不瞎选，上报问源</li>
+      </ul>
+    </div>
+    <div class="domain dis">
+      <div class="tag">DISCUSS · 讨论域（建模域）</div>
+      <div class="name">想法 → 模型</div>
+      <div class="one">"把事聊明白，模型就长厚一层。"</div>
+      <ul>
+        <li>建模 = 对世界认知的模式（OGSM/决策/项目映射），不是调用模型</li>
+        <li>讨论越多，对事情灵魂/根本目的越清楚</li>
+        <li><b>判断层</b>：立场冲突不附和、必反问；结论显式、可质疑、可追溯</li>
+      </ul>
+    </div>
+    <div class="domain con">
+      <div class="tag">CONTROL · 控制域（执行域）</div>
+      <div class="name">意图 → 结果</div>
+      <div class="one">"动手干，干完对账：是我想错了还是没干好。"</div>
+      <ul>
+        <li>执行前 space_check（默认拒绝 + 权限交集）</li>
+        <li>执行后<b>对比归因</b>：模型/预算没想明白 vs 执行没做到 → 回写讨论</li>
+        <li><b>判断层</b>：代价超预期→继续还是停；失败时不做，而非做错后道歉</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card">
+    <div class="flow">record <span class="ar">→</span> discuss <span class="ar">→</span> control <span class="ar">→</span> 对账归因 <span class="ar">→</span> 回喂建模 <span class="ar">→</span> 新碎片触发新一轮</div>
+    <p style="font-size:13.5px;color:var(--sub)">record 保证素材（模型的食物）· discuss 保证认知（模型的骨架）· control 保证结果（模型的手脚）· 对账归因是进化回路。</p>
+  </div>
+</section>
+
+<!-- ===== 4. 架构要点 ===== -->
+<section id="arch">
+  <div class="kicker">ARCHITECTURE</div>
+  <h2>架构要点</h2>
+  <div class="card">
+    <h3>域 Space（三模型评审定稿）</h3>
+    <table>
+      <colgroup><col style="width:30%"><col style="width:70%"></colgroup>
+      <tr><th>机制</th><th>内容</th></tr>
+      <tr><td>有效权限</td><td>平台 ∩ 域 ∩ 工具声明 ∩ 本次授权的<b>交集</b>；风险分级不能突破上限</td></tr>
+      <tr><td>默认拒绝</td><td>未匹配 / 跨域 / 目标不符 → 拒绝，绝不退回更宽权限</td></tr>
+      <tr><td>逃逸规则</td><td>宽松域不能掩盖单次高风险操作（push --force 永远是高风险）</td></tr>
+      <tr><td>数量控制</td><td>3–7 个域；project 参数化（scope 作参数），不按项目开域</td></tr>
+      <tr><td>漂移检测</td><td>manifest 与实际路径定期校验，漂移即失效</td></tr>
+      <tr><td>意图兜底</td><td>模型只出候选域，代码消歧；首次/高风险显式回显；未知→global 只读，绝不"猜最像的"</td></tr>
+    </table>
+    <h3>指代消解（模糊 → 精确）</h3>
+    <table>
+      <colgroup><col style="width:24%"><col style="width:76%"></colgroup>
+      <tr><th>层级</th><th>机制与例子</th></tr>
+      <tr><td>代码层</td><td>实体词典（100%）：季总→冀总(Amber)、美墅→Mansour</td></tr>
+      <tr><td>逻辑层</td><td>上下文规则："它"→上一条回执的文件；域 = 指代作用域</td></tr>
+      <tr><td>语言层</td><td>模型推断："上次报价那个客户的项目"；低置信回问</td></tr>
+      <tr><td>闭环</td><td>确认后固化词典 → 下次代码层直接命中（每次成功=少问一次+词典变厚）</td></tr>
+    </table>
+    <h3>确认策略（三信号）</h3>
+    <p style="margin-bottom:6px">可逆性（硬事实）× 影响面（静态评估）× 置信度。<b>不可逆永远人工确认</b>（硬规则，不可被学习掉）。</p>
+    <table>
+      <colgroup><col style="width:30%"><col style="width:70%"></colgroup>
+      <tr><th>组合</th><th>行为</th></tr>
+      <tr><td>可逆+小+高</td><td>自动执行 + 标待抽查</td></tr>
+      <tr><td>可逆+中</td><td>展示 diff 摘要 → 轻确认</td></tr>
+      <tr><td>可逆+高</td><td>强确认（diff 预览 + 影响分析）</td></tr>
+      <tr><td>不可逆</td><td>永远人工（无论置信度）</td></tr>
+    </table>
+    <h3>契约与自举</h3>
+    <p>verify 契约 = 独立校验器（读实际状态，不读自报）；search 契约；四元组缓存 {意图,域,权限,指代}（最后做）；<b>REGISTER_TOOL = 自举充分条件</b>（语音注册新契约）。</p>
+    <h3>双端架构</h3>
+    <p><b>手机 = 唯一交互面</b>（ASR 语音输入 + 回执 + 确认）；<b>电脑 = 远程执行引擎</b>（Go harness + 模型 + 工具 + 校验 + 沉淀）。回执一屏 4 行看懂：动作 / 文件 / 结果 / 撤销；diff 不刷屏，详情语音追问。</p>
+  </div>
+</section>
+
+<!-- ===== 5. 评审记录 ===== -->
+<section id="review">
+  <div class="kicker">REVIEW LOG</div>
+  <h2>评审记录（多模型交叉）</h2>
+  <div class="timeline">
+    <div class="tl-node"><div class="tl-dot"></div><div class="tl-line"></div></div>
+    <div class="tl-body"><div class="t">#12 域 Space 设计提案</div><div class="d">域 = 具名配置 + 稳定主键，非隔离墙</div><div class="n">Codex / Cursor / Claude 三模型评审</div></div>
+    <div class="tl-node"><div class="tl-dot"></div><div class="tl-line"></div></div>
+    <div class="tl-body"><div class="t">#13 域评审（3 模型）</div><div class="d">权限交集 · 默认拒绝 · 逃逸规则 · 3–7 域 · 漂移检测</div><div class="n">Claude 质疑"伪需求"→ 保留命名、砍类型学</div></div>
+    <div class="tl-node"><div class="tl-dot"></div><div class="tl-line"></div></div>
+    <div class="tl-body"><div class="t">#14 Claude：指代 × 域</div><div class="d">域把"指什么"和"能不能做"合一；层间置信度显式化；M2 顺序修正</div><div class="n">跨域指代显式回问；词典固化带版本+失效</div></div>
+    <div class="tl-node"><div class="tl-dot"></div><div class="tl-line"></div></div>
+    <div class="tl-body"><div class="t">#15 灵魂描述评审（3 模型）</div><div class="d">灵魂 = 判断力不是字段；六强制字段；模型=信念，控制=承诺；双向提问</div><div class="n">Codex：取舍 / Cursor：规范语义层 / Claude：意图代数</div></div>
+  </div>
+  <div class="card" style="margin-top:6px">
+    <h3>模型通道（模型中心实测可用）</h3>
+    <p style="font-size:13.5px">Codex = /v1/codex（gpt-6-astra）· Cursor = /v1/cursor（gpt-5.2）· Claude = /v1/claude（claude-sonnet-5）· 研究引擎 = trelva 入队（gpt-6-astra，4.7 万 token/300s）。</p>
+  </div>
+</section>
+
+<!-- ===== 6. 下一步 ===== -->
+<section id="next">
+  <div class="kicker">NEXT</div>
+  <h2>状态与下一步</h2>
+  <div class="next">
+    <p style="font-size:14px"><b>已完成：</b>理念定调（哲学/语言/大域/架构 16 节定稿）· M1 技术底座验收（Go 单二进制 1.6MB / 启动 16.1ms / 五平台交叉编译 / 输入容错 9.9µs / 测试全绿）· VSL v1→v2 · 设计全部上传 GitHub（分支 docs/vsl-spec-v1）。</p>
+    <ol>
+      <li>20 个真实任务方向验证（本周，用 M1 demo）</li>
+      <li>域注册表 space registry（版本化 + 漂移检测）</li>
+      <li>指代消解层（词典 + 上下文两层先上；固化带版本/失效）</li>
+      <li>执行前统一域校验 space_check（默认拒绝 + 权限交集）</li>
+      <li>风险分级器（三信号）→ verify 契约 → search 契约</li>
+      <li>四元组缓存 {意图,域,权限,指代}（最后做）</li>
+      <li>REGISTER_TOOL 契约（自举）→ 手机 API 面 → 单工对比验收</li>
+    </ol>
+    <div class="note">方法：先定义（VSL 讲清楚）→ 再落代码（硬代码按定义实现）。代码语言与描述定义语言已拆开，本次即用 VSL 定义 harness 本身。</div>
+  </div>
+</section>
+
+<footer>
+  VoxSign Harness · 设计总览（手机版）v1.0 · 2026-10-02<br>完整设计：GitHub smithpeter/VoxSign 分支 docs/vsl-spec-v1
+</footer>
+
+</div>
+</body>
+</html>

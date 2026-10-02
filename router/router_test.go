@@ -1,0 +1,103 @@
+package router
+
+import (
+	"testing"
+
+	"voicesign-harness/config"
+	"voicesign-harness/contract"
+)
+
+// 用默认配置（文档 §6.1 路由表）跑各类命中。
+
+func TestResolveByIntentFileList(t *testing.T) {
+	cfg := config.Default()
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentFileList}, "列出文件")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Name != "file" || r.Provider != "center" || r.MaxTurns != 1 {
+		t.Errorf("FILE_LIST 应命中 file→center/1, 实际 %+v", r)
+	}
+}
+
+func TestResolveByKeywordComplex(t *testing.T) {
+	cfg := config.Default()
+	// 用 UNKNOWN 意图避开 intent 路由，让「代码」关键词命中 complex
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentUnknown}, "帮我写段代码")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Name != "complex" || r.Provider != "strong" || r.MaxTurns != 2 {
+		t.Errorf("含代码应命中 complex→strong/2, 实际 %+v", r)
+	}
+}
+
+func TestResolveDefaultFallback(t *testing.T) {
+	cfg := config.Default()
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentAppLaunch}, "打开微信")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Name != "default" || r.Provider != "center" {
+		t.Errorf("应兜底到 default→center, 实际 %+v", r)
+	}
+}
+
+func TestResolveForcedRoute(t *testing.T) {
+	cfg := config.Default()
+	cfg.ForcedRoute = "time"
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentInfo}, "随便")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Name != "time" || r.Provider != config.LocalProvider || r.MaxTurns != 0 {
+		t.Errorf("强制路由 time 应 local/0, 实际 %+v", r)
+	}
+}
+
+func TestResolveForcedRouteMissing(t *testing.T) {
+	cfg := config.Default()
+	cfg.ForcedRoute = "不存在的路由"
+	if _, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentInfo}, "x"); err == nil {
+		t.Error("缺失的强制路由应报错")
+	}
+}
+
+func TestResolveForcedProviderOverride(t *testing.T) {
+	cfg := config.Default()
+	cfg.ForcedProvider = "mock" // 覆盖 file 路由原本的 center
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentFileList}, "列出")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Name != "file" || r.Provider != "mock" || r.MaxTurns != 1 {
+		t.Errorf("应命中 file 但 provider 被覆盖为 mock/1, 实际 %+v", r)
+	}
+}
+
+func TestResolveUnknownProviderErrors(t *testing.T) {
+	// 手工构造一条指向未知 provider 的路由（不走 config.Load 校验，直接测 Resolve）
+	cfg := config.Config{
+		Global: config.Global{MaxTurnsDefault: 2},
+		Providers: []config.Provider{
+			{Name: "center", Kind: config.OpenAIKind, Endpoint: "https://x", Model: "m"},
+		},
+		Routes: []config.Route{
+			{Name: "default", Provider: "ghost", Default: true},
+		},
+	}
+	if _, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentInfo}, "x"); err == nil {
+		t.Error("未知 provider 应报错")
+	}
+}
+
+func TestResolveTimeLocalMaxTurnsZero(t *testing.T) {
+	cfg := config.Default()
+	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentTime}, "现在几点")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Provider != config.LocalProvider || r.MaxTurns != 0 {
+		t.Errorf("TIME 应 local 直通 MaxTurns=0, 实际 %+v", r)
+	}
+}

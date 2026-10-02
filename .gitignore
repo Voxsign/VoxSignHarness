@@ -1,0 +1,25 @@
+# ===== secrets =====
+.env
+.env.*
+*.env
+!*.env.example
+config/.env*
+
+# ===== runtime artifacts (never publish user data) =====
+data/
+cache/
+ground/
+dist/
+bench/out/
+*.log
+
+# ===== OS / editor =====
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# ===== Go =====
+*.test
+*.prof
+coverage.out

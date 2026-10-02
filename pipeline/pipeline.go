@@ -1,0 +1,1317 @@
+// Package pipeline 是 M2 语音驱动开发的编排循环（freeze §3 pipeline）：
+// 把「ASR 文本」从原文一路串到「四行回执」，中间经过 清洗→纠错→任务分类→指代消解→
+// space_check→风险分级→确认→工具执行→独立校验→归因回写→四元缓存→四行回执。
+//
+// 本包是集成分片：space/refer/risk/verify/search/cache/tools 均为已交付只读依赖，
+// 本包【不修改】它们的规则本体，只负责按冻结签名把它们编排起来。
+// 规则语义（什么算越界 / 几类确认 / 不可逆清单）一律标注「搬 VSL」，不在本层重述。
+package pipeline
+
+// 【伪代码逻辑层】（必写模块，评审关卡产物。规则语义权威定义在 freeze §3 / SPEC v2 §2；
+//  本层只描述 Run 的 13 阶段控制流 / 各阶段拒绝路径 / 确认分支 / 异常与中断处理，不可编译。）
+//
+// 全局不变量：
+//   - 串行闸（用户拍板）：同一进程同时只允许一个 Run 在飞（Options.mu 互斥），
+//     保护用户未提交改动，绝不覆盖/删除他人文件。
+//   - start 事件 = input_raw 轨迹写入【完成】的时刻；end 事件 = 归因写入【完成】的时刻。
+//     LoopMs = end-start 墙钟（含人工等待）；NetMs = 墙钟 − confirmFn/回问等待段。
+//
+// Run(ctx, o, text) -> Outcome, error：
+//
+//   gate.lock()                              // 串行闸；ctx 取消 → 立即返回且不破坏中间态
+//   rid = "req-" + nano()
+//   write(input_raw{text}); start = now()
+//
+//   阶段② clean:     cleaned = Cleaner.Clean(text); write(input_clean)
+//   阶段③ correct:   corrected,corr = Dict.Correct(cleaned); write(input_correct)
+//   阶段④ classify:  intent = TaskClassifier(corrected); write(intent)
+//                    if intent.Ask != "": 跳到 [回问出口]
+//   阶段⑤ refer:     intent = Refer.Resolve(intent, spaceOf(intent)); write(refer)
+//                    if intent.Ask != "": 跳到 [回问出口]
+//   阶段⑥ space:     space = 默认域(intent)（NOTE→vault-notes / 只读→global / 写意图须已点名）
+//                    caps = planCaps(intent)
+//                    verdict = space.Check(Registry, {Intent, Grant:{Auth:true}, ToolCaps:caps})
+//                    write(space_check)
+//                    if !verdict.Allowed: 跳到 [拦截出口]（verdict.Reason 进结果，绝不执行）
+//   阶段⑦ risk:      imp = 机械信号（search 引用统计 + trajectory 热度；无 fs 时取 0）
+//                    decision = risk.Evaluate(intent, imp)
+//                    intent.Confirm = decision.Level（回填权威值）; write(risk)
+//   阶段⑧ confirm:   wait0 = now()
+//                    if cache.Get(quad) 命中: approved=true（不再问，决策复用）
+//                    else:
+//                      switch decision.Level:
+//                        auto:   approved=true（不打断）
+//                        light:  approved = ConfirmFn(rid, lightQuestion)
+//                        strong: if Guard.ShouldDowngrade(path): approved=true（汇总待复核，不打断）
+//                                else:            approved = ConfirmFn(rid, strongQuestion)
+//                        human:  approved = ConfirmFn(rid, humanQuestion)   // 永远问
+//                    waitMs += now()-wait0
+//                    write(confirm)
+//                    if !approved: 跳到 [未放行出口]（Confirmed=false，不执行）
+//                    cache.Set(quad, decision.Level)
+//   阶段⑨ exec:     for action in planActions(intent):
+//                        receipt = Exec.Exec(tool, args(with log_dir 注入), contract)
+//                        Receipts = append(Receipts, receipt)
+//                    write(receipts)
+//                    拒绝路径：任一 receipt.Blocked != "" → 不重试，原样进结果
+//   阶段⑩ verify:    spec = planVerify(intent, verdict)
+//                    if spec != nil: Verify = Verifier.Run(spec)
+//                    else:           Verify = {unverifiable, "M2 未定义该校验"}
+//                    write(verify)
+//   阶段⑪ attribution: cls = classifyAttribution(intent, verdict, Receipts, Verify, corr)
+//                      attr = Attribution{rid, discuss, cls, evidence, suggestion}
+//                      write(kind=attribution)  // ← end = now()
+//                      append discuss.jsonl（人可见结论，下一轮注入；不自动改词典/策略）
+//   阶段⑫ cache:   四元组已在⑧ Set；此处仅在漂移/拦截时 InvalidateSpace（不命中即跳过）
+//   阶段⑬ view:   View = renderView(intent, verdict, decision, Receipts, Verify, Ask)
+//                  write(final)
+//
+//   LoopMs = end-start; NetMs = LoopMs - waitMs
+//   return Outcome, nil
+//
+// [回问出口]   View.result="未执行（需回问：…）"; Attribution.class=context; end 照常计量
+// [拦截出口]   View.result="BOUNDARY_VIOLATION/…"; Attribution.class=context; 不执行不校验
+// [未放行出口] View.result="待确认（已拒绝/未放行）"; 不执行；Attribution.class=model
+//
+// 异常：Dict/Trace/Refer 为 nil 时对应阶段薄降级（不报错）；ctx 提前取消 → 返回 error，
+//   但已落盘的轨迹条目保留（append-only，不回滚）。
+//
+// Summary(o, since) -> string：
+//   读当日 trajectory-YYYYMMDD.jsonl，按 域 / 意图 / 失败原因 聚合；手机可读纯文本。
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"voicesign-harness/cache"
+	"voicesign-harness/config"
+	"voicesign-harness/contract"
+	"voicesign-harness/ground"
+	"voicesign-harness/input"
+	"voicesign-harness/memory"
+	"voicesign-harness/provider"
+	"voicesign-harness/refer"
+	"voicesign-harness/risk"
+	"voicesign-harness/search"
+	"voicesign-harness/space"
+	"voicesign-harness/tools"
+	"voicesign-harness/trajectory"
+	"voicesign-harness/verify"
+)
+
+// Options 是编排循环的全部依赖（冻结签名）。未导出字段为集成层实现细节（串行闸/确认疲劳防护）。
+type Options struct {
+	Cfg      *config.Config
+	Dict     *memory.Dictionary
+	Spaces   *space.Registry
+	Refer    *refer.Resolver
+	Cache    *cache.Store
+	Verifier *verify.Verifier
+	Tools    *tools.Registry
+	Exec     *tools.Executor
+
+	// ConfirmFn 阻塞等待人工放行（CLI=stdin / server=HTTP）；返回 false 表示拒绝。
+	ConfirmFn func(taskID, question string) (bool, error)
+	Trace     *trajectory.Trajectory
+
+	// Ground（M3 #37）认知切片注入器；nil 时薄降级（空 context）。
+	Ground *ground.Ground
+
+	// Providers（M7）LLM 接线层；nil 时纯规则/纯 search 路径不阻断。
+	Providers *provider.Registry
+
+	mu    *sync.Mutex
+	guard *risk.Guard
+}
+
+// AskOption 是 need_ask 回问的结构化候选（M4-3 ①：点选即续跑，机器可读）。
+type AskOption struct {
+	ID    string `json:"id"`    // 稳定候选 id（edit/query/note/commit/... 或 refer 目标 id）
+	Label string `json:"label"` // 一句话中文 label
+}
+
+// Outcome 是一次 Run 的完整产物（冻结签名）。
+type Outcome struct {
+	RequestID    string               `json:"request_id"`
+	Intent       contract.Intent      `json:"intent"`
+	Verdict      space.Verdict        `json:"verdict"`
+	Decision     risk.Decision        `json:"decision"`
+	Confirmed    bool                 `json:"confirmed"`
+	Receipts     []contract.Receipt   `json:"receipts"`
+	Verify       verify.Result        `json:"verify"`
+	Attribution  contract.Attribution `json:"attribution"`
+	View         contract.ReceiptView `json:"view"`
+	Ask          string               `json:"ask,omitempty"`
+	Options      []AskOption          `json:"options,omitempty"` // M4-3 结构化候选
+	ContextBlock string               `json:"context_block,omitempty"`
+	LoopMs       int64                `json:"loop_ms"`
+	NetMs        int64                `json:"net_ms"`
+}
+
+// discussLogName 是 discuss-log 文件名（<log_dir>/discuss.jsonl）。
+const discussLogName = "discuss.jsonl"
+
+// Run 执行完整 13 阶段编排循环。ctx 取消会中止等待人工确认，但已落盘轨迹不回滚。
+func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
+	if o.mu == nil {
+		o.mu = &sync.Mutex{}
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.guard == nil {
+		o.guard = risk.NewGuard()
+	}
+
+	out := Outcome{RequestID: newRequestID()}
+	if strings.TrimSpace(text) == "" {
+		out.Ask = "空指令，没听清，请再说一遍"
+		out.View = contract.ReceiptView{
+			Action: "（空指令）", Files: "—", Result: "未执行（需回问：" + out.Ask + "）", Undo: "—",
+		}
+		return out, nil
+	}
+
+	cleaner := input.NewCleaner(nil)
+	emit := func(e trajectory.Entry) {
+		if e.RequestID == "" {
+			e.RequestID = out.RequestID
+		}
+		o.write(e)
+	}
+
+	// ① input_raw 轨迹写入完成 → start 事件（#45）。
+	emit(trajectory.Entry{Kind: trajectory.KindInputRaw, Content: text})
+	start := time.Now()
+	var waitMs time.Duration
+
+	// ② clean
+	cleaned := cleaner.Clean(text)
+	emit(trajectory.Entry{Kind: trajectory.KindInputClean, Content: cleaned})
+
+	// ③ dict correct
+	corrected := cleaned
+	var corrections []contract.Correction
+	if o.Dict != nil {
+		corrected, corrections = o.Dict.Correct(cleaned)
+	}
+	emit(trajectory.Entry{Kind: trajectory.KindInputCorrec, Content: corrected})
+
+	// ④ TaskClassifier.ClassifyTask（空间候选取自注册域列表）
+	classifier := input.NewTaskClassifier(confOf(o.Cfg), spaceHints(o.Spaces))
+	intent := classifier.ClassifyTask(corrected)
+	intent.RawText = text
+	intent.Corrections = corrections
+
+	// M7 ① 意图分类 LLM 回退：规则低置信/UNKNOWN 且像自然语言问句时 → fast provider 补分类。
+	intent = o.llmIntentFallback(ctx, intent, corrected)
+	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
+
+	// ⑤ refer 消解（不覆盖分类器已显式填好的字段）；M4-5：同时拿 refer 目标候选。
+	// M7 修复（Codex/gpt-6-luna 外部诊断 2026-10-02）：按意图门控——
+	// QUERY 高置信（>=0.8）的"这个/那个"是普通口语代词，跳过指代消解，
+	// 否则 refer 候选为空会写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
+	var referOpts []refer.Option
+	if o.Refer != nil && shouldResolveRefer(&intent) {
+		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
+		if err == nil && resolved != nil {
+			intent = *resolved
+			referOpts = opts
+		}
+	}
+	emit(trajectory.Entry{Kind: "refer", Intent: &intent})
+
+	// 回问出口：分类器/指代任一层要回问 → 不执行。
+	// M3 #37：回问是真实的"模型/人需要更多上下文"点，这里注入 ground 认知切片。
+	if intent.NeedsClarification() {
+		snap := o.renderGround()
+		intent.Context = append(intent.Context, snap.ProjectMap...)
+		out.Intent = intent
+		out.Ask = intent.Ask
+		// M4-5：意图候选 + refer 目标候选合并（id 去重）。
+		out.Options = mergeAskOptions(intentCandidates(), referOpts)
+		out.ContextBlock = snap.Block
+		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
+			"待澄清："+intent.Ask, "轨迹 kind=intent/refer", "下次给出具体域/对象后重试")
+		o.writeAttribution(out.Attribution)
+		out.LoopMs = time.Since(start).Milliseconds()
+		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		out.View = contract.ReceiptView{
+			Action: shortAction(intent), Files: "—",
+			Result: "未执行（需回问：" + intent.Ask + "）", Undo: "—（未执行）",
+		}
+		o.writeTaskMetrics(intent, out, false)
+		return out, nil
+	}
+
+	// ⑥ space select + Check
+	spaceID := defaultSpaceFor(intent)
+	intent.Space = spaceID
+	caps := planCaps(intent)
+	verdict := space.Check(o.Spaces, space.CheckInput{
+		Intent:   intent,
+		Grant:    space.Grant{Authorized: true},
+		ToolCaps: caps,
+		// Contracts 有意传 nil：B/C 测试与冻结语义均以工具族名（file/git/read/…）做族级门禁；
+		// 契约逐 cap 的 risk 分级在 risk.Evaluate 阶段消费，不在此重复交集。
+	})
+	b, _ := json.Marshal(verdict)
+	emit(trajectory.Entry{Kind: "space_check", Content: string(b)})
+	out.Intent = intent
+	out.Verdict = verdict
+
+	// 拦截出口：space_check 拒绝 → 绝不执行。
+	if !verdict.Allowed {
+		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
+			"space_check 拒绝（"+verdict.Reason+"）", "轨迹 kind=space_check",
+			"先注册/确认域，或换到已授权的项目域")
+		o.writeAttribution(out.Attribution)
+		out.LoopMs = time.Since(start).Milliseconds()
+		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		out.View = contract.ReceiptView{
+			Action: shortAction(intent), Files: "—",
+			Result: "BOUNDARY_VIOLATION：" + reasonText(verdict.Reason), Undo: "—（未执行）",
+		}
+		o.writeTaskMetrics(intent, out, false)
+		return out, nil
+	}
+
+	// ⑦ risk.Evaluate（机械信号：fs 引用统计 + 热度；无真实项目时取 0）
+	imp := o.mechanicalImpact(intent)
+	decision := risk.Evaluate(intent, imp)
+	intent.Confirm = decision.Level
+	out.Decision = decision
+	db, _ := json.Marshal(decision)
+	emit(trajectory.Entry{Kind: "risk", Content: string(db)})
+
+	// ⑧ confirm（按 Decision 分派；四元缓存命中=不再问）
+	// 安全不变量（SPEC #40/#29）：human=不可逆，永远走 ConfirmFn，
+	// 从四元缓存 Get 与 Set 双双排除——"不可逆不可被学习掉"。
+	wait0 := time.Now()
+	approved := false
+	quad := quadKey(intent, decision.Level)
+	cacheable := decision.Level != contract.ConfirmHuman
+	if o.Cache != nil && cacheable {
+		if cached, ok := o.Cache.Get(quad); ok {
+			// cached 只在 Set 处写入 decision.Level；"approved" 是历史兼容串，一并放行。
+			approved = cached == decision.Level || cached == "approved"
+		}
+	}
+	if !approved {
+		switch decision.Level {
+		case contract.ConfirmAuto:
+			approved = true // 不打断
+		case contract.ConfirmLight:
+			approved = o.confirm(ctx, out.RequestID, "轻确认："+decision.Reason+"，放行？(y/n)")
+		case contract.ConfirmStrong:
+			if o.guard.ShouldDowngrade(targetPath(intent)) {
+				approved = true // 同路径连续强确认疲劳 → 降为汇总待复核
+			} else {
+				approved = o.confirm(ctx, out.RequestID, "强确认："+decision.Reason+"，放行？(y/n)")
+			}
+		case contract.ConfirmHuman:
+			q := "人工放行（不可逆）：" + decision.Reason
+			// M4-4：COMMIT 前把未提交改动数写进确认问题，绝不覆盖/改写历史。
+			if it := intent; it.Intent == contract.IntentCommit {
+				if root := o.projectRootForCommit(it); root != "" {
+					if n := gitDirtyCount(root); n >= 0 {
+						q += fmt.Sprintf("；项目 %s 当前有 %d 个未提交改动，提交将包含它们（git add -A + commit，不改写历史）", root, n)
+					}
+				}
+			}
+			approved = o.confirm(ctx, out.RequestID, q+"，放行？(y/n)")
+		}
+	}
+	// M4-1：是否真问过人工（auto 不打断不算等待；waitMs 的 µs 级 overhead 不计）。
+	humanWait := decision.Level != contract.ConfirmAuto
+	waitMs += time.Since(wait0)
+	out.Confirmed = approved
+	emit(trajectory.Entry{Kind: "confirm", Content: fmt.Sprintf("level=%s approved=%v", decision.Level, approved)})
+	o.recordDecision(out.RequestID, intent, decision, approved)
+	if o.Cache != nil && approved && cacheable {
+		// human 级绝不写缓存（不可逆永远人工）。
+		_ = o.Cache.Set(quad, decision.Level)
+	}
+
+	// 未放行出口：不执行。
+	if !approved {
+		out.Attribution = o.attribution(out.RequestID, contract.AttrModel,
+			"用户未放行（decision="+decision.Level+"）", "轨迹 kind=confirm", "如属误拒可加入四元缓存放行")
+		o.writeAttribution(out.Attribution)
+		out.LoopMs = time.Since(start).Milliseconds()
+		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		out.View = contract.ReceiptView{
+			Action: shortAction(intent), Files: targetFiles(intent),
+			Result: "待确认（" + decision.Level + "，未放行）", Undo: "—（未执行）",
+		}
+		return out, nil
+	}
+
+	// ⑨ Exec（仅已过 space_check + risk 的动作）
+	receipts := o.execActions(intent)
+	out.Receipts = receipts
+	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+
+	// ⑩ verify 独立校验
+	spec := o.planVerify(intent, o.logDir())
+	if spec != nil && o.Verifier != nil {
+		res, err := o.Verifier.Run(*spec)
+		if err != nil {
+			out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: err.Error()}
+		} else {
+			out.Verify = res
+		}
+	} else {
+		out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: "M2 未为该意图定义独立校验"}
+	}
+	vb, _ := json.Marshal(out.Verify)
+	emit(trajectory.Entry{Kind: "verify", Content: string(vb)})
+
+	// ⑪ attribution + 轨迹（end = 归因写入完成）
+	cls, detail, suggestion := classifyAttribution(intent, receipts, out.Verify, corrections)
+	out.Attribution = o.attribution(out.RequestID, cls, detail, evidenceOf(receipts, out.Verify), suggestion)
+	o.writeAttribution(out.Attribution)
+
+	// ⑫ cache：四元组已在⑧ Set；拦截/漂移路径在 o.attribution 里无需额外失效。
+	// ⑬ view
+	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
+	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
+
+	out.LoopMs = time.Since(start).Milliseconds()
+	out.NetMs = out.LoopMs - waitMs.Milliseconds()
+
+	// ⑭ 任务指标入轨迹（#52 摘要聚合源）：结构化 JSON 一行。
+	o.writeTaskMetrics(intent, out, humanWait)
+	return out, nil
+}
+
+// taskMetricsPayload 是写入轨迹的单行结构化指标（#52/#M4-1 摘要按此聚合）。
+type taskMetricsPayload struct {
+	Kind    string `json:"kind"` // "task_metrics"
+	Space   string `json:"space"`
+	Intent  string `json:"intent"`
+	AttrCls string `json:"attr_class"`
+	LoopMs  int64  `json:"loop_ms"`
+	NetMs   int64  `json:"net_ms"`
+	HadWait bool   `json:"had_wait"` // M4-1：有人工等待/LLM 才计入 Net 均值
+	OK      bool   `json:"ok"`
+}
+
+func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bool) {
+	p := taskMetricsPayload{
+		Kind:    "task_metrics",
+		Space:   it.Space,
+		Intent:  it.Intent,
+		AttrCls: out.Attribution.Class,
+		LoopMs:  out.LoopMs,
+		NetMs:   out.NetMs,
+		HadWait: humanWait,
+		OK:      out.Verify.Status != verify.StatusFail && !hasFailure(out.Receipts),
+	}
+	b, _ := json.Marshal(p)
+	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: "task_metrics", Content: string(b)})
+}
+
+// ---------- 集成层小工具（薄封装，规则语义均在被编排的包内） ----------
+
+func confOf(cfg *config.Config) float64 {
+	if cfg != nil && cfg.Input.IntentConf > 0 {
+		return cfg.Input.IntentConf
+	}
+	return 0.6
+}
+
+func spaceHints(r *space.Registry) []input.SpaceHint {
+	if r == nil {
+		return nil
+	}
+	var hints []input.SpaceHint
+	for _, name := range r.List() {
+		hints = append(hints, input.SpaceHint{Name: name})
+	}
+	return hints
+}
+
+// defaultSpaceFor 按意图类别落默认域（搬 VSL：只读→global 兜底；NOTE→vault-notes 追加；
+// 写意图必须由分类器/指代点名域，否则落到 global 只读会被 space_check 自然拒绝）。
+func defaultSpaceFor(it contract.Intent) string {
+	if it.Space != "" {
+		return it.Space
+	}
+	switch it.Intent {
+	case contract.IntentNote:
+		return "vault-notes"
+	case contract.IntentQuery, contract.IntentAsk:
+		return "global"
+	default:
+		return "global"
+	}
+}
+
+// planCaps 把意图翻译成待调工具族名（与 manifest.Tools 词表对齐）。
+func planCaps(it contract.Intent) []string {
+	switch it.Intent {
+	case contract.IntentNote:
+		return []string{"note", "file-append", "read"}
+	case contract.IntentQuery, contract.IntentAsk:
+		return []string{"read", "query"}
+	case contract.IntentEdit, contract.IntentDebug:
+		return []string{"file", "read", "run"}
+	case contract.IntentTest:
+		return []string{"test", "run", "read"}
+	case contract.IntentCommit:
+		return []string{"git", "read"}
+	case contract.IntentDeploy:
+		return []string{"deploy", "http", "read"}
+	case contract.IntentRegisterTool:
+		return []string{"read"}
+	default:
+		return []string{"read"}
+	}
+}
+
+// execActions 把意图翻译成具体工具动作（M2 最小可执行集；NOT E/QUERY 走通即可）。
+func (o *Options) execActions(it contract.Intent) []contract.Receipt {
+	if o.Exec == nil {
+		return []contract.Receipt{{Tool: "pipeline", OK: false, Err: "执行器未配置"}}
+	}
+	logDir := o.logDir()
+	switch it.Intent {
+	case contract.IntentNote:
+		path := filepath.Join(logDir, "notes.md")
+		args := map[string]any{
+			"action":  "append",
+			"path":    path,
+			"content": "\n- " + time.Now().Format("2006-01-02 15:04") + " " + it.CorrectedText + "\n",
+			"log_dir": logDir,
+		}
+		return []contract.Receipt{o.run("file", args)}
+	case contract.IntentQuery, contract.IntentAsk:
+		pattern := it.CorrectedText
+		if it.Params != nil && it.Params["object"] != "" {
+			pattern = it.Params["object"]
+		}
+		args := map[string]any{"pattern": pattern, "kind": "text"}
+		recv := o.run("search", args)
+		// M7 ②：用 LLM 把 search 结果转成自然语言回答（失败回退 search stdout）。
+		if answer := o.queryLLMAnswer(context.Background(), it.RawText, recv.Stdout); answer != "" {
+			recv.Stdout = answer
+		}
+		return []contract.Receipt{recv}
+	case contract.IntentCommit:
+		// M4-4：在项目域 scope 根执行真实 git 提交（git add -A + commit；不改写历史）。
+		root := o.projectRootForCommit(it)
+		if root == "" {
+			return []contract.Receipt{{Tool: "git", OK: false, Err: "未解析到项目域根（COMMIT 需注册 project 域）"}}
+		}
+		msg := strings.TrimSpace(it.CorrectedText)
+		if msg == "" {
+			msg = "vhs: commit"
+		}
+		var stdout strings.Builder
+		add := exec.Command("git", "add", "-A")
+		add.Dir = root
+		if out, err := add.CombinedOutput(); err != nil {
+			return []contract.Receipt{{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}}
+		}
+		cm := exec.Command("git", "commit", "-m", msg)
+		cm.Dir = root
+		if out, err := cm.CombinedOutput(); err != nil {
+			// 无改动也返回 OK=false（不报错历史）；回执带 stdout。
+			stdout.Write(out)
+			return []contract.Receipt{{Tool: "git", OK: false, Stdout: stdout.String(), Err: "git commit: " + err.Error()}}
+		} else {
+			stdout.Write(out)
+		}
+		// 取新提交 hash 作为回执证据（fs 事实）。
+		log := exec.Command("git", "log", "-1", "--format=%H %s")
+		log.Dir = root
+		if lout, err := log.Output(); err == nil {
+			stdout.WriteString("\n" + strings.TrimSpace(string(lout)))
+		}
+		return []contract.Receipt{{Tool: "git", OK: true, Stdout: stdout.String()}}
+	default:
+		// EDIT/DEBUG/TEST/COMMIT/DEPLOY：M2 编排层只接通门禁与回执，不擅自起子进程写项目库；
+		// 返回一条占位回执，由后续里程碑接模型工具循环。这样门禁/校验/归因链路在 M2 已闭环可测。
+		return []contract.Receipt{{
+			Tool: "pipeline", OK: true,
+			Stdout: "M2 已过 space_check+risk+confirm，动作待模型工具循环落地（intent=" + it.Intent + "）",
+		}}
+	}
+}
+
+func (o *Options) run(tool string, args map[string]any) contract.Receipt {
+	c, _ := o.Tools.Get(tool)
+	recv, err := o.Exec.Exec(tool, args, c)
+	if err != nil {
+		recv.OK = false
+		recv.Err = err.Error()
+	}
+	return recv
+}
+
+// planVerify 给可独立复核的意图生成 verify.Spec；否则返回 nil（unverifiable）。
+// COMMIT 的独立证据直接落在回执 stdout（git log -1 输出），不另设 verify.Kind（verify 包不可改）。
+func (o *Options) planVerify(it contract.Intent, logDir string) *verify.Spec {
+	switch it.Intent {
+	case contract.IntentNote:
+		return &verify.Spec{Kind: "file", Args: []string{filepath.Join(logDir, "notes.md")}, BaseDir: logDir}
+	default:
+		return nil
+	}
+}
+
+// projectRootForCommit 解析 COMMIT 意图域的项目根（M4-4）。
+//
+// 【伪代码逻辑层】（执行根解析属裁决逻辑）：
+//
+//	if intent.Intent != COMMIT: return ""（其他意图保持 logDir）。
+//	m = o.Spaces.Get(intent.Space)；无 manifest → return ""。
+//	对 m.Scope 第 1 条：剥 "/**" 后缀 → Clean → 必须是已存在目录 → 否则 return ""。
+//	硬约束：根不得 ==/under logDir（防把 logDir 当项目库）。
+//	return 根路径。
+func (o *Options) projectRootForCommit(it contract.Intent) string {
+	if it.Intent != contract.IntentCommit {
+		return ""
+	}
+	if o == nil || o.Spaces == nil {
+		return ""
+	}
+	m, ok := o.Spaces.Get(it.Space)
+	if !ok || m == nil || len(m.Scope) == 0 {
+		return ""
+	}
+	root := strings.TrimSuffix(m.Scope[0], "/**")
+	root = filepath.Clean(root)
+	st, err := os.Stat(root)
+	if err != nil || !st.IsDir() {
+		return ""
+	}
+	return root
+}
+
+// gitDirtyCount 在 root 跑 `git status --porcelain` 统计未提交改动行数。
+// 非 git 仓/命令失败 → 返回 -1（保守：确认文案不写计数，但仍提交）。
+func gitDirtyCount(root string) int {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return -1
+	}
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// mechanicalImpact 用真实 fs 机械算影响面（RefCount/HasTest/Heat）。
+//
+// 【伪代码逻辑层】（必写模块：引用定义/排除规则/上限；阈值定义搬 VSL risk.StaticImpact）
+//
+// 控制流：
+//
+//	target = targetPath(it)；空 → return 零值（回退 auto/small，绝不臆造）。
+//	m = o.Spaces.Get(it.Space)；无 manifest → return 零值。
+//	roots = m.Scope 剥 "/**" 后取目录；
+//	  硬排除（M2 失败模式防回归）：跳过任何 ==/under logDir 的 root，
+//	  Ignore 注入 [".git","node_modules","memory","data"]——轨迹/discuss/decisions/词典
+//	  自身绝不能被算成"引用"。
+//	if len(roots)==0: return 零值。
+//	hits = search.FindText(target, {Roots:roots, Ignore})
+//	RefCount = 去重后命中文件数；封顶 refCap（默认 50，防大库爆量）。
+//	HasTest = 任一 root 下存在 *_test.go 文件（filepath.Walk 一级深度即可）。
+//	Heat    = 当日 trajectory-*.jsonl 中含 target basename 的行数（字段匹配才计数）。
+//	return {RefCount, HasTest, Heat}。
+//
+// 异常：search 返回 err → RefCount=0（保守 small）；轨迹文件读不到 → Heat=0。
+const refCap = 50
+
+func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
+	imp := risk.ImpactInput{}
+	target := targetPath(it)
+	if target == "" {
+		return imp
+	}
+	if o.Spaces == nil {
+		return imp
+	}
+	m, ok := o.Spaces.Get(it.Space)
+	if !ok {
+		return imp
+	}
+
+	// scope roots，剥 /**/* 后缀
+	logAbs, _ := filepath.Abs(o.logDir())
+	var roots []string
+	for _, s := range m.Scope {
+		s = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(s), "/**"), "/*")
+		if s == "" || s == "." || strings.HasPrefix(s, "~") {
+			continue
+		}
+		abs, err := filepath.Abs(s)
+		if err != nil {
+			continue
+		}
+		// 硬排除：root 落在 log_dir 内（防把轨迹/决策日志当引用）
+		if logAbs != "" && (abs == logAbs || strings.HasPrefix(abs, logAbs+string(os.PathSeparator))) {
+			continue
+		}
+		roots = append(roots, abs)
+	}
+	if len(roots) == 0 {
+		return imp
+	}
+
+	ignore := []string{".git", "node_modules", "memory", "data"}
+
+	// RefCount = 引用 target 的去重文件数
+	if hits, err := search.FindText(target, search.Options{Roots: roots, Ignore: ignore}); err == nil {
+		files := map[string]bool{}
+		for _, h := range hits {
+			files[h.File] = true
+		}
+		imp.RefCount = len(files)
+		if imp.RefCount > refCap {
+			imp.RefCount = refCap
+		}
+	}
+
+	// HasTest = scope 内存在 *_test.go
+	imp.HasTest = hasTestFile(roots, ignore)
+
+	// Heat = 当日轨迹中命中 target basename 的次数
+	imp.Heat = o.trajectoryHeat(target)
+	return imp
+}
+
+// hasTestFile 在 roots 下找 *_test.go（尊重 ignore 段）。
+func hasTestFile(roots, ignore []string) bool {
+	for _, root := range roots {
+		found := false
+		_ = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+			if err != nil || found {
+				return nil
+			}
+			base := fi.Name()
+			for _, pat := range ignore {
+				if ok, _ := filepath.Match(pat, base); ok {
+					if fi.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+			}
+			if fi.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(base, "_test.go") {
+				found = true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// trajectoryHeat 数当日轨迹文件中含 target basename 的行数。
+func (o *Options) trajectoryHeat(target string) int {
+	base := filepath.Base(target)
+	if base == "" || base == "." {
+		return 0
+	}
+	path := filepath.Join(o.logDir(), "trajectory-"+time.Now().Format("20060102")+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	heat := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, base) {
+			heat++
+		}
+	}
+	return heat
+}
+
+func (o *Options) logDir() string {
+	if o.Cfg != nil && o.Cfg.Global.LogDir != "" {
+		return o.Cfg.Global.LogDir
+	}
+	return os.TempDir()
+}
+
+// renderGround 渲染认知切片（#37）；Ground 未配置 → 空快照（薄降级，Ask 照常走）。
+func (o *Options) renderGround() ground.Snapshot {
+	if o.Ground != nil {
+		return o.Ground.Render()
+	}
+	return ground.Snapshot{}
+}
+
+// recordDecision 在确认闸落盘一条裁决（#37 decisions.jsonl 数据源）。
+func (o *Options) recordDecision(rid string, it contract.Intent, d risk.Decision, approved bool) {
+	if o.Ground == nil {
+		return
+	}
+	confirm := "auto_skipped"
+	if d.Level != contract.ConfirmAuto {
+		if approved {
+			confirm = "approved"
+		} else {
+			confirm = "rejected"
+		}
+	}
+	_ = o.Ground.RecordDecision(ground.Decision{
+		Ts:       time.Now().Format(time.RFC3339),
+		TaskID:   rid,
+		Intent:   it.Intent,
+		Decision: d.Level,
+		Confirm:  confirm,
+		Reason:   d.Reason,
+	})
+}
+
+func quadKey(it contract.Intent, level string) cache.QuadKey {
+	ref := ""
+	if it.Target != nil {
+		ref = it.Target.Entity
+	}
+	return cache.QuadKey{Intent: it.Intent, Space: it.Space, Perm: level, Ref: ref}
+}
+
+func targetPath(it contract.Intent) string {
+	if it.Params != nil {
+		if p := it.Params["object"]; p != "" {
+			return p
+		}
+		if p := it.Params["path"]; p != "" {
+			return p
+		}
+	}
+	if it.Target != nil {
+		return it.Target.Entity
+	}
+	return ""
+}
+
+// ---------- 归因（六格） ----------
+
+func classifyAttribution(it contract.Intent, receipts []contract.Receipt, v verify.Result, corr []contract.Correction) (cls, detail, suggestion string) {
+	switch {
+	case len(corr) > 0:
+		return contract.AttrInput, "ASR 经词典纠错 " + strconvItoa(len(corr)) + " 处后完成", "把高频误识别固化进词典"
+	case hasFailure(receipts):
+		return contract.AttrExec, "执行回执失败：" + firstErr(receipts), "检查环境/路径/权限后重试"
+	case v.Status == verify.StatusFail:
+		return contract.AttrExec, "独立校验未通过：" + v.Detail, "verify 不读自报，按真实 fs 修正"
+	case v.Status == verify.StatusUnverifiable && it.Intent == contract.IntentNote:
+		return contract.AttrModel, "NOTE 已追加，无独立校验必要", ""
+	default:
+		return contract.AttrModel, "意图分类正确，执行与校验通过", ""
+	}
+}
+
+func hasFailure(rs []contract.Receipt) bool {
+	for _, r := range rs {
+		if !r.OK {
+			return true
+		}
+	}
+	return false
+}
+
+func firstErr(rs []contract.Receipt) string {
+	for _, r := range rs {
+		if !r.OK {
+			if r.Err != "" {
+				return r.Err
+			}
+			if r.Stderr != "" {
+				return r.Stderr
+			}
+		}
+	}
+	return "未知执行错误"
+}
+
+// ---------- 视图（四行回执，SPEC §2.41） ----------
+
+func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contract.Receipt, vr verify.Result, confirmed bool) contract.ReceiptView {
+	view := contract.ReceiptView{
+		Action: shortAction(it),
+		Files:  targetFiles(it),
+		Undo:   undoText(it, rs),
+	}
+	switch {
+	case !confirmed:
+		view.Result = "待确认（" + d.Level + "）"
+	case hasFailure(rs) || vr.Status == verify.StatusFail:
+		reason := firstErr(rs)
+		if vr.Status == verify.StatusFail {
+			reason = "verify 未通过：" + vr.Detail
+		}
+		view.Result = "FAILED：" + truncateStr(reason, 60)
+	default:
+		view.Result = "OK（" + confirmWord(d.Level) + "）"
+		// M7：工具 stdout 有实质内容（QUERY 的 LLM 回答/降级文案等纯文本）时，
+		// 四行回执的"结果"展示回答文本（截断 120），不再只显示"OK（自动执行）"空壳。
+		if len(rs) > 0 {
+			if s := strings.TrimSpace(rs[0].Stdout); s != "" && !strings.HasPrefix(s, "{") {
+				view.Result = truncateStr(s, 120)
+			}
+		}
+	}
+	return view
+}
+
+// intentCandidates 产出低置信回问的结构化意图候选（M4-3 ①）。
+//
+// 【伪代码逻辑层】（候选集生成属裁决逻辑）：
+//
+//	返回 4 个稳定意图候选 {id,label}：edit/query/note/commit。
+//	id 与 label 一一对应、稳定可测；answer 传 id 时 server 续跑据此映射为强关键词前缀。
+func intentCandidates() []AskOption {
+	return []AskOption{
+		{ID: "edit", Label: "改文件（替换/编辑）"},
+		{ID: "query", Label: "查代码/问状态"},
+		{ID: "note", Label: "记想法到笔记"},
+		{ID: "commit", Label: "提交改动（不可逆）"},
+	}
+}
+
+// shouldResolveRefer 判定是否对当前意图执行 refer 指代消解（M7，外部模型诊断方案扩展）。
+//
+// 【伪代码逻辑层】（裁决逻辑，方案来源：Codex/gpt-6-luna 外部诊断 2026-10-02 + 复验补强）：
+//
+//	含口语问句特征（?？吗呢怎么如何为什么哪）→ false
+//	  （"如果这个效果好/看看效果怎么样"里的"这个/那个"是口语代词，
+//	   不是文件/笔记操作指代；即使规则误判为 NOTE 也不触发指代 Ask——22:04 真机证据）。
+//	NOTE/EDIT/COMMIT → true（真操作指代消解保持原行为）。
+//	QUERY → Confidence < 0.8（低置信保留原澄清；高置信口语代词不触发指代 Ask）。
+//	其他 → true（沿用旧行为）。
+func shouldResolveRefer(it *contract.Intent) bool {
+	if strings.ContainsAny(it.CorrectedText, "?？吗呢怎么如何为什么哪") {
+		return false
+	}
+	switch it.Intent {
+	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit:
+		return true
+	case contract.IntentQuery:
+		return it.Confidence < 0.8
+	default:
+		return true
+	}
+}
+
+// llmIntentFallback（M7 ①）：规则低置信/UNKNOWN 且像自然语言问句时，调 fast provider 补分类。
+//
+// 【伪代码逻辑层】（新裁决逻辑）：
+//
+//	if o.Providers == nil: return intent（纯规则路径）。
+//	trigger = (intent.Intent==UNKNOWN || intent.Confidence < 0.6) && 文本含 [?？吗呢怎么如何为什么]。
+//	if !trigger: return intent。
+//	调 fast.Chat(system="你是意图分类器，输出 JSON {intent,confidence}")
+//		user=原始文本 + 可用域列表。
+//	解析 JSON：合法且 intent∈{NOTE,QUERY,EDIT,COMMIT} → 覆盖 intent；否则保留规则结果。
+//	任何 err/超时 → return intent（不阻断）。
+func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, text string) contract.Intent {
+	if o == nil || o.Providers == nil {
+		return it
+	}
+	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
+	// M7 复验补强：含问句特征时，规则未判 QUERY（UNKNOWN/低置信/误判其他意图如 NOTE）
+	// 一律调 LLM 复查——规则词典对口语长问句常误判（22:04 真机："我现在测试一下…看看效果怎么样"
+	// 被规则判 NOTE 高置信，若只看低置信则 fallback 永不触发）。已是 QUERY 则直接信任规则。
+	if !hasQ {
+		return it
+	}
+	if it.Intent == contract.IntentQuery {
+		return it
+	}
+	p, err := o.Providers.Get("fast")
+	if err != nil {
+		return it
+	}
+	resp, err := p.Chat(ctx, provider.ChatRequest{
+		Messages: []contract.Message{
+			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交。"},
+			{Role: "user", Content: text},
+		},
+		MaxTokens: 64,
+	})
+	if err != nil || resp.Content == "" {
+		return it
+	}
+	// 极简 JSON 解析（零依赖）。
+	var parsed struct {
+		Intent     string  `json:"intent"`
+		Confidence float64 `json:"confidence"`
+	}
+	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
+		return it
+	}
+	valid := map[string]bool{
+		contract.IntentNote: true, contract.IntentQuery: true,
+		contract.IntentEdit: true, contract.IntentCommit: true,
+	}
+	if !valid[parsed.Intent] {
+		return it
+	}
+	it.Intent = parsed.Intent
+	if parsed.Confidence > 0 {
+		it.Confidence = parsed.Confidence
+	}
+	// 覆盖成功后清掉旧 UNKNOWN 澄清残留（否则 NeedsClarification 仍触发回问；
+	// refer 层若目标仍歧义会重新填 Ask）。
+	it.Ask = ""
+	return it
+}
+
+// queryLLMAnswer（M7 ②）：QUERY 搜索后调 fast 生成自然语言回答。
+// 失败（网络/预算超限/超时）→ 返回友好降级文案（不再空壳"OK（自动执行）"）。
+func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStdout string) string {
+	degraded := "（模型服务暂不可用——今日预算可能已用尽或网络异常，无法生成回答；请明日重试或提高预算。检索结果：" + strings.TrimSpace(searchStdout) + "）"
+	if o == nil || o.Providers == nil {
+		return degraded
+	}
+	p, err := o.Providers.Get("fast")
+	if err != nil {
+		return degraded
+	}
+	resp, err := p.Chat(ctx, provider.ChatRequest{
+		Messages: []contract.Message{
+			{Role: "system", Content: "你是 VoxSign 助手。根据用户问题和检索结果给简洁中文回答。只输出回答文本本身，不要输出 JSON、不要做意图分类、不要输出任何结构化格式。"},
+			{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
+		},
+		MaxTokens: 400,
+	})
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return degraded
+	}
+	// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本回答。
+	// 键不稳定（text/response/content/answer/message 均可能），逐一尝试取首个非空字符串。
+	content := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(content, "{") {
+		var j map[string]any
+		if err := json.Unmarshal([]byte(content), &j); err == nil {
+			for _, k := range []string{"text", "response", "content", "answer", "message"} {
+				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+					content = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+		// 仍是 JSON 壳（模型输出意外结构）→ 降级文案，不把 JSON 透传给用户。
+		if strings.HasPrefix(content, "{") {
+			return degraded
+		}
+	}
+	return content
+}
+
+// mergeAskOptions 合并意图候选与 refer 目标候选（id 去重，上限 8）。
+func mergeAskOptions(base []AskOption, referOpts []refer.Option) []AskOption {
+	seen := map[string]bool{}
+	out := make([]AskOption, 0, len(base)+len(referOpts))
+	for _, o := range base {
+		if !seen[o.ID] {
+			seen[o.ID] = true
+			out = append(out, o)
+		}
+	}
+	for _, o := range referOpts {
+		if len(out) >= 8 {
+			break
+		}
+		if !seen[o.ID] {
+			seen[o.ID] = true
+			out = append(out, AskOption{ID: o.ID, Label: o.Label})
+		}
+	}
+	return out
+}
+
+func shortAction(it contract.Intent) string {
+	obj := targetPath(it)
+	if obj == "" {
+		return it.Intent
+	}
+	return it.Intent + " " + obj
+}
+
+func targetFiles(it contract.Intent) string {
+	p := targetPath(it)
+	if p == "" {
+		return "—"
+	}
+	return p
+}
+
+func undoText(it contract.Intent, rs []contract.Receipt) string {
+	switch it.Intent {
+	case contract.IntentCommit, contract.IntentDeploy:
+		return "不可撤销（不可逆，已人工确认）"
+	}
+	// M4-3：用 C 交付的结构化 VHS_BACKUP_PATH: 标记解析具体备份文件。
+	for _, r := range rs {
+		if p := tools.ParseBackupPath(r.Stdout); p != "" {
+			return "备份 " + filepath.Base(p) + "（" + filepath.Dir(p) + "）"
+		}
+	}
+	return "—（只读/无备份）"
+}
+
+func confirmWord(level string) string {
+	switch level {
+	case contract.ConfirmHuman:
+		return "人工放行"
+	case contract.ConfirmStrong:
+		return "强确认后执行"
+	case contract.ConfirmLight:
+		return "轻确认后执行"
+	default:
+		return "自动执行"
+	}
+}
+
+func reasonText(r string) string {
+	switch r {
+	case "unknown_space":
+		return "未注册域"
+	case "drift":
+		return "域漂移（scope 路径失效）"
+	case "default_deny":
+		return "权限交集为空"
+	case "boundary_violation":
+		return "越界（不在域声明的工具/范围内）"
+	case "cross_ref_deny":
+		return "跨域引用未声明"
+	default:
+		return r
+	}
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+func strconvItoa(n int) string {
+	return fmt.Sprintf("%d", n)
+}
+
+// ---------- 轨迹/discuss 薄封装（nil-safe） ----------
+
+func (o *Options) write(e trajectory.Entry) {
+	if o.Trace != nil {
+		_ = o.Trace.Write(e) // #44：轨迹写失败不阻断只读任务
+	}
+}
+
+func (o *Options) attribution(rid, cls, detail, evidence, suggestion string) contract.Attribution {
+	return contract.Attribution{
+		RequestID: rid, Stage: "discuss", Class: cls,
+		Detail: detail, Evidence: evidence, Suggestion: suggestion,
+		Ts: time.Now().Format(time.RFC3339),
+	}
+}
+
+func (o *Options) writeAttribution(a contract.Attribution) {
+	// 用 Content 携带完整归因 JSON（trajectory.Entry 无 Attrib 字段，按 #44 用 content 落）
+	b, _ := json.Marshal(a)
+	o.write(trajectory.Entry{RequestID: a.RequestID, Kind: "attribution", Content: string(b)})
+	o.appendDiscussLog(a)
+}
+
+func evidenceOf(rs []contract.Receipt, v verify.Result) string {
+	parts := []string{}
+	for _, r := range rs {
+		parts = append(parts, "receipt:"+r.Tool)
+	}
+	if v.Status != "" {
+		parts = append(parts, "verify:"+v.Status)
+	}
+	return strings.Join(parts, ",")
+}
+
+// appendDiscussLog 追加一条人可见结论到 <log_dir>/discuss.jsonl（下一轮注入；不自动改词典/策略）。
+func (o *Options) appendDiscussLog(a contract.Attribution) {
+	dir := o.logDir()
+	_ = os.MkdirAll(dir, 0o755)
+	f, err := os.OpenFile(filepath.Join(dir, discussLogName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	b, _ := json.Marshal(a)
+	_, _ = f.Write(append(b, '\n'))
+}
+
+// confirm 包装 ConfirmFn，ctx 取消时返回 false（不等待）。
+func (o *Options) confirm(ctx context.Context, taskID, question string) bool {
+	if o.ConfirmFn == nil {
+		return false
+	}
+	type res struct{ ok bool }
+	ch := make(chan res, 1)
+	go func() {
+		ok, err := o.ConfirmFn(taskID, question)
+		if err != nil {
+			ok = false
+		}
+		ch <- res{ok}
+	}()
+	select {
+	case r := <-ch:
+		return r.ok
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func newRequestID() string {
+	return "req-" + time.Now().Format("150405.000000") + "-" + fmt.Sprintf("%x", time.Now().UnixNano()%0xffff)
+}
+
+// ---------- Summary（每日摘要） ----------
+
+// Summary 聚合当日（since 之后）轨迹，按域/归因 class 分组，算认知闭环均值与通过率。
+// #52：手机可读纯文本；数据源=轨迹 kind=task_metrics（结构化单行）。
+func Summary(o *Options, since time.Time) (string, error) {
+	dir := o.logDir()
+	day := time.Now().Format("20060102")
+	path := filepath.Join(dir, "trajectory-"+day+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "（当日暂无轨迹）", nil
+		}
+		return "", fmt.Errorf("读取当日轨迹失败: %w", err)
+	}
+
+	var (
+		byIntent = map[string]int{}
+		bySpace  = map[string]int{}
+		byAttr   = map[string]int{}
+		total    int
+		ok       int
+		sumLoop  int64
+		waitN    int // M4-1：有人工等待/LLM 的任务数（Net 均值分母）
+		sumWait  int64
+		pureN    int // 纯管线任务数（Net 均值分母外）
+	)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var e trajectory.Entry
+		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
+			continue
+		}
+		// #52 主聚合源：结构化 task_metrics 行
+		if e.Kind == "task_metrics" {
+			var p taskMetricsPayload
+			if json.Unmarshal([]byte(e.Content), &p) != nil {
+				continue
+			}
+			total++
+			byIntent[p.Intent]++
+			if p.Space != "" {
+				bySpace[p.Space]++
+			}
+			if p.AttrCls != "" {
+				byAttr[p.AttrCls]++
+			}
+			sumLoop += p.LoopMs
+			if p.HadWait {
+				waitN++
+				sumWait += p.NetMs
+			} else {
+				pureN++
+			}
+			if p.OK {
+				ok++
+			}
+			continue
+		}
+		// 兼容旧轨迹：无 task_metrics 时仍数 intent 行（M2 历史）
+		if e.Intent != nil && e.Kind == trajectory.KindIntent {
+			total++
+			byIntent[e.Intent.Intent]++
+			if e.Intent.Space != "" {
+				bySpace[e.Intent.Space]++
+			}
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "VoxSign 当日摘要（%s）\n", day)
+	if total == 0 {
+		sb.WriteString("（当日暂无任务）\n")
+		return sb.String(), nil
+	}
+	fmt.Fprintf(&sb, "任务数：%d\n", total)
+	passRate := 100.0
+	if total > 0 {
+		passRate = float64(ok) / float64(total) * 100
+	}
+	avgLoop := sumLoop / int64(total)
+	fmt.Fprintf(&sb, "通过率：%.0f%%（%d/%d）\n", passRate, ok, total)
+	fmt.Fprintf(&sb, "认知闭环：Loop 均值 %dms", avgLoop)
+	if waitN > 0 {
+		fmt.Fprintf(&sb, " / Net 均值 %dms（含等待/LLM 任务 %d 个）", sumWait/int64(waitN), waitN)
+	}
+	fmt.Fprintf(&sb, "\n")
+	if pureN > 0 {
+		fmt.Fprintf(&sb, "纯管线任务（无等待/LLM）%d 个，不计入 Net 均值\n", pureN)
+	}
+	writeCounts(&sb, "按意图", byIntent)
+	writeCounts(&sb, "按域", bySpace)
+	writeCounts(&sb, "按归因", byAttr)
+	return sb.String(), nil
+}
+
+func writeCounts(sb *strings.Builder, title string, m map[string]int) {
+	if len(m) == 0 {
+		return
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	var items []kv
+	for k, v := range m {
+		items = append(items, kv{k, v})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].v != items[j].v {
+			return items[i].v > items[j].v
+		}
+		return items[i].k < items[j].k
+	})
+	fmt.Fprintf(sb, "%s：\n", title)
+	for _, it := range items {
+		fmt.Fprintf(sb, "  %s ×%d\n", it.k, it.v)
+	}
+}
