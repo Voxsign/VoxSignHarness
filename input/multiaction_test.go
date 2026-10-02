@@ -45,7 +45,7 @@ func TestMultiActionLongStatementExempt(t *testing.T) {
 	if got.Ask != "" {
 		t.Errorf("M7 长句不得回问（既有回归 TestColloquialQuestionNoReferAsk）：Ask=%q", got.Ask)
 	}
-	if n, labels := multiActionClauses(m7); n >= 2 {
+	if n, labels, had := multiActionClauses(m7); multiActionTrips(n, had) {
 		t.Errorf("M7 长句被判多动作 %d 段 %v —— 判据应基于顺序连接词", n, labels)
 	}
 }
@@ -84,7 +84,7 @@ func TestMultiActionIntentsUnit(t *testing.T) {
 		{"", 0},
 	}
 	for _, tc := range cases {
-		if got, labels := multiActionClauses(tc.text); got != tc.want {
+		if got, labels, _ := multiActionClauses(tc.text); got != tc.want {
 			t.Errorf("multiActionClauses(%q) 分句数 = %d，期望 %d（%v）",
 				tc.text, got, tc.want, labels)
 		}
@@ -156,7 +156,70 @@ func TestClauseActionsNoMasking(t *testing.T) {
 		t.Errorf("P1-4: 「查一下这个报错」应同时含 QUERY 与 DEBUG，实际 %v（DEBUG 被 QUERY 吞掉）", acts)
 	}
 	// 计数不该被 masking 低估
-	if n, _ := multiActionClauses("改一下顺便查一下，然后再看看"); n < 2 {
+	if n, _, _ := multiActionClauses("改一下顺便查一下，然后再看看"); n < 2 {
 		t.Errorf("P1-4: 三个分句（改/查/看）应计为 ≥2，实际 %d", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 评审 G5-P2-5 / P2-6 的反例回归。
+// ---------------------------------------------------------------------------
+
+// TestMultiActionNoConnectorReviewP2_5 评审 P2-5：无连接词的口语并列。
+// ASR 常把连接词吞掉，只靠逗号分层时要求 ≥3 段（以保住 M7 口语长句）。
+func TestMultiActionNoConnectorReviewP2_5(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	got := c.ClassifyTask("查一下库存，记一下结果，提交")
+	if got.Conflict != contract.ConflictMultiAction {
+		t.Errorf("P2-5: 无连接词的三段并列未判多动作（intent=%s conflict=%q）—— 会只执行第一件",
+			got.Intent, got.Conflict)
+	}
+	if got.Ask == "" {
+		t.Error("P2-5: 必须回问")
+	}
+}
+
+// TestQuotedSpanNotSplitReviewP2_6 评审 P2-6：引号里的"然后"是被引用的文本，不是连接词。
+func TestQuotedSpanNotSplitReviewP2_6(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	got := c.ClassifyTask("把提示语改成「然后提交」")
+	if got.Conflict == contract.ConflictMultiAction {
+		t.Errorf("P2-6: 引号内容被当连接词切分，误报多动作（intent=%s）", got.Intent)
+	}
+	if n, _, _ := multiActionClauses("把提示语改成「然后提交」"); n >= 2 {
+		t.Errorf("P2-6: stripQuotedSpans 未生效，切出 %d 段", n)
+	}
+}
+
+// TestSelfCorrectionIsNotMultiAction 自我修正链不是多动作（它被反复修正，不是多件事）。
+func TestSelfCorrectionIsNotMultiAction(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	text := "把标题改成中文，不对，改成英文，说错了，改成阿拉伯语"
+	got := c.ClassifyTask(text)
+	if got.Conflict == contract.ConflictMultiAction {
+		t.Errorf("修正链被误判为多动作（intent=%s）", got.Intent)
+	}
+	if got.Intent != contract.IntentEdit || got.Params["value"] != "阿拉伯语" {
+		t.Errorf("修正链应走 G7 逻辑得 EDIT/阿拉伯语，实际 intent=%s value=%q",
+			got.Intent, got.Params["value"])
+	}
+}
+
+// TestMultiActionTripsUnit 测量与决策分离后的阈值单测。
+func TestMultiActionTripsUnit(t *testing.T) {
+	cases := []struct {
+		n       int
+		hadConn bool
+		want    bool
+	}{
+		{2, true, true},   // 有连接词，2 段即可
+		{2, false, false}, // 纯标点，2 段不够（保住 M7 长句）
+		{3, false, true},  // 纯标点，3 段算多动作
+		{1, false, false},
+	}
+	for _, tc := range cases {
+		if got := multiActionTrips(tc.n, tc.hadConn); got != tc.want {
+			t.Errorf("multiActionTrips(%d, %v) = %v，期望 %v", tc.n, tc.hadConn, got, tc.want)
+		}
 	}
 }

@@ -620,6 +620,16 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 	// 注意：这里**不**重置 askedQuestions / askRounds —— 它们要跨轮保留，
 	// 才能识别"同一个问题又被问了一遍"（评审 S1）。
 
+	// 评审 G5-P2-7：多动作回问的答案应被当作**新的单条指令**执行。
+	//
+	// 原句本身含多动作，把它拼回去（`原文 + " 澄清：" + 答案`）只会再次触发多动作检测，
+	// 形成澄清循环。这给回问文案承诺的「先说要先做哪个」一个**确定语义**：
+	// 用户说的那句，就是要执行的那一件。
+	if ts.Outcome != nil && ts.Outcome.Intent.Conflict == contract.ConflictMultiAction {
+		s.runPipeline(ts, ctx, strings.TrimSpace(answer), "")
+		return true
+	}
+
 	prefix := ""
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "edit":

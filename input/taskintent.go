@@ -386,15 +386,29 @@ func clauseActions(clause string) []string {
 //   - 含动作的**分句数**（评审 G5-P0-2：按分句数计，不按"不同意图数"计 ——
 //     「先查 A 再查 B」是两个动作，若按不同意图去重会算成 1，第二个仍被静默丢弃）
 //   - 这些分句里出现过的动作意图（去重，仅用于回问文案）
-func multiActionClauses(text string) (int, []string) {
-	parts := []string{text}
+func multiActionClauses(text string) (int, []string, bool) {
+	// 评审 G5-P2-6：先剥掉引号内容 —— 「把提示语改成「然后提交」」里的"然后"
+	// 是**被引用的文本**，不是顺序连接词，切它会误报多动作。
+	clean := stripQuotedSpans(text)
+	hadConnector := false
 	for _, c := range sequenceConnectors {
+		if strings.Contains(clean, c) {
+			hadConnector = true
+			break
+		}
+	}
+
+	parts := []string{clean}
+	// 先按顺序连接词切，再按分句标点切（评审 G5-P2-5：ASR 常把连接词吞掉，
+	// 「查一下库存，记一下结果，提交」只靠逗号分层）。
+	for _, sep := range append(append([]string{}, sequenceConnectors...), clauseSeparators...) {
 		var next []string
 		for _, p := range parts {
-			next = append(next, strings.Split(p, c)...)
+			next = append(next, strings.Split(p, sep)...)
 		}
 		parts = next
 	}
+
 	n := 0
 	seen := map[string]bool{}
 	var labels []string
@@ -411,7 +425,43 @@ func multiActionClauses(text string) (int, []string) {
 			}
 		}
 	}
-	return n, labels
+	return n, labels, hadConnector
+}
+
+// multiActionTrips 是**决策**（与上面的测量分离）：
+//   - 有顺序连接词 → 2 段带动作即算多动作；
+//   - 纯标点分层 → 要求 ≥3 段。
+//
+// 后者是为了保住 M7 口语长句：它用逗号分层，但只有 2 段带动作，且是一段独白 ——
+// 必须保持 Ask 为空（既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+func multiActionTrips(n int, hadConnector bool) bool {
+	if hadConnector {
+		return n >= 2
+	}
+	return n >= 3
+}
+
+// clauseSeparators 是分句标点。
+var clauseSeparators = []string{"，", "；", "。", ",", ";"}
+
+// stripQuotedSpans 去掉被引号包裹的内容（引号本身也去掉），
+// 避免把"被引用的文本"当成真实指令。
+func stripQuotedSpans(text string) string {
+	pairs := [][2]string{{"「", "」"}, {"“", "”"}, {"\"", "\""}}
+	for _, q := range pairs {
+		for {
+			i := strings.Index(text, q[0])
+			if i < 0 {
+				break
+			}
+			j := strings.Index(text[i+len(q[0]):], q[1])
+			if j < 0 {
+				break
+			}
+			text = text[:i] + text[i+len(q[0])+j+len(q[1]):]
+		}
+	}
+	return text
 }
 
 // joinIntentLabels 把动作意图列表拼成"查、记、提交"这样的中文串。
@@ -575,8 +625,15 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 评审 G5-P1-3：编排任务本身多动作、由计划承载，**必须豁免**。
 	// 原实现靠"恰好没有顺序连接词"才没被抢走 —— 保护是偶然的，不是结构性的：
 	// 「…整理成《全景开发文档》，然后再保存提交」会被截成 NOTE+COMMIT 而永远不走编排。
-	if _, _, isOrchestrate := detectOrchestrate(text); !isOrchestrate {
-		if n, labels := multiActionClauses(text); n >= 2 {
+	// 评审 G5-P2-6 延伸：**自我修正链不是多动作**。
+	// 「把标题改成中文，不对，改成英文，说错了，改成阿拉伯语」按逗号会切出 3 段 EDIT，
+	// 但它是同一个意图被反复修正，应交给 G7 的修正逻辑处理。
+	corrections := 0
+	if cut, _ := lastCorrection(text); cut >= 0 {
+		corrections = 1
+	}
+	if _, _, isOrchestrate := detectOrchestrate(text); !isOrchestrate && corrections == 0 {
+		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
 			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 			got.Conflict = contract.ConflictMultiAction
 			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
