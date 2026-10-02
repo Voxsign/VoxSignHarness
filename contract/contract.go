@@ -143,6 +143,7 @@ const (
 	IntentDeploy       = "DEPLOY"        // 部署/外发/生成报表：发/上线/部署
 	IntentAsk          = "ASK"           // 问问题：为什么/怎么办/你觉得
 	IntentRegisterTool = "REGISTER_TOOL" // 语音注册新工具契约（自举充分条件，8 类之外单独定义）
+	IntentOrchestrate  = "ORCHESTRATE"   // 多步编排（组织者式路由）：读多份文档→汇总→生成文件→提交
 )
 
 // 确认策略等级（Intent.Confirm，risk 包裁决后回填权威值）。
@@ -195,6 +196,9 @@ const (
 	ConflictNoteVsDeploy = "note_vs_deploy" // 「发个想法」被仲裁为 NOTE
 	ConflictDebugPlan    = "debug_plan"     // 「修 bug 的思路」低置信 → 回问
 	ConflictDelete       = "delete"         // 删除动词 → EDIT(action=delete)
+	// ConflictNegation：否定词直接支配动作 → ASK 确认，绝不执行（缺口 G1）。
+	// 依据 SPEC-v2:49「Ask != '' → 绝不执行」与 VS-HARNESS-001:314「该回问、该拒绝也算正确」。
+	ConflictNegation = "negation"
 )
 
 // Intent 是输入容错层产出的结构化意图（架构文档 §5.5）：

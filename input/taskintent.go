@@ -99,6 +99,137 @@ var (
 	defaultExcludes  = []string{".env*", "node_modules"}
 )
 
+// ---------------------------------------------------------------------------
+// 否定仲裁（缺口 G1）
+//
+// 问题：`不要删除那个文件` 被 deleteTriggers 抢先判成 EDIT(action=delete)，
+// 否定词完全没被看见 —— 目标一旦可解析就会真的删。
+// 依据：SPEC-v2:49「Ask != '' → 绝不执行」；
+//
+//	VS-HARNESS-001:314「该回问、该拒绝也算正确，单纯 JSON 合法不算」。
+//
+// 设计：否定词**直接支配动作**时一律转为 ASK 确认，绝不执行。
+// ---------------------------------------------------------------------------
+
+// negationMarkers 是多字否定词。刻意**不含**"不能"与裸"别"：
+//   - "不能"是"能不能"的一部分，收了会把「查一下能不能跑测试」误判为否定；
+//   - 裸"别"会命中"特别/别的/告别"，需按后随动词判断（见 bieFollowingVerbs）。
+var negationMarkers = []string{"不要", "不用", "不需要", "先别", "别再", "不要再"}
+
+// bieFollowingVerbs 是单字"别"后面紧跟时才认定为否定的动作动词。
+var bieFollowingVerbs = []rune("删发改动碰关停做执提交部署记看查修跑送")
+
+// bieBlockPrefixes 是裸"别"前面出现时说明它属于词的一部分（不是否定）的字：
+// 特/告/分/个/差/类/级/区/性/离/作 —— 如"特别关注"里的"别"。
+var bieBlockPrefixes = []rune("特告分个差类级区性离作")
+
+// hasNegation 报告文本里是否有否定，并说明该否定是否**本身就绑定了动作**。
+//
+// 返回值：(命中的否定形式, 是否自带动作, 是否命中)
+//   - 多字否定词（不要/不用/…）→ 自带动作=false，调用方需确认句中另有动作词，
+//     以免把「不用担心」这类寒暄变成决策点；
+//   - 裸"别"+动作动词（别删/别发/…）→ 自带动作=true，本身就是"否定+动作"的证据。
+func hasNegation(text string) (string, bool, bool) {
+	if mk, ok := containsAnyReturn(text, negationMarkers); ok {
+		return mk, false, true
+	}
+	runes := []rune(text)
+	for i, r := range runes {
+		if r != '别' || i+1 >= len(runes) {
+			continue
+		}
+		if bieIsWordPart(runes, i) {
+			continue
+		}
+		for _, v := range bieFollowingVerbs {
+			if runes[i+1] == v {
+				return "别" + string(runes[i+1]), true, true
+			}
+		}
+	}
+	return "", false, false
+}
+
+// bieIsWordPart 报告 runes[i]（'别'）是否只是某个词的一部分（如"特别"）。
+func bieIsWordPart(runes []rune, i int) bool {
+	if i == 0 {
+		return false
+	}
+	for _, p := range bieBlockPrefixes {
+		if runes[i-1] == p {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAnyReturn 与 containsAny 同义，但返回命中的关键词（用于回问文案）。
+func containsAnyReturn(text string, keywords []string) (string, bool) {
+	lower := strings.ToLower(text)
+	for _, k := range keywords {
+		if strings.Contains(lower, strings.ToLower(k)) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// actionWords 是"否定词要支配的动作"全集。只有当否定与动作同时出现时才回问，
+// 避免把「不用担心」这类无动作的寒暄也变成决策点。
+var actionWords = func() []string {
+	var all []string
+	for _, group := range [][]string{
+		registerTriggers, deleteTriggers, noteTriggers, queryTriggers,
+		debugTriggers, testTriggers, commitTriggers, deployTriggers,
+		askTriggers, editTriggers,
+	} {
+		all = append(all, group...)
+	}
+	return all
+}()
+
+// 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
+//
+//	organizeWords ∩ docWords ∩ (saveWords ∪ commitTriggers) 同时成立。
+//
+// 设计取舍（方案 B）：动作计划（read→summarize→write→commit）由 pipeline 编排引擎确定性产出，
+// 不在分类层做 function-calling；分类层只负责"这是一个多步编排任务"的识别 + 抽出目标文档名。
+var (
+	orchOrganizeWords = []string{"整理成", "整理", "汇总成", "汇总", "汇编"}
+	orchDocWords      = []string{"沟通记录", "设计文档", "文档", "记录"}
+	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成"}
+)
+
+// detectOrchestrate 判定文本是否为"整理多份文档→生成文件→保存/提交"的复合长任务。
+// 命中时返回 (IntentOrchestrate, params{target_doc, source_hint}, true)。
+// target_doc 从《…》书名号里抽；抽不到则由编排引擎落默认文件名。
+func detectOrchestrate(text string) (string, map[string]string, bool) {
+	if !containsAny(text, orchOrganizeWords) {
+		return "", nil, false
+	}
+	if !containsAny(text, orchDocWords) {
+		return "", nil, false
+	}
+	if !(containsAny(text, orchSaveWords) || containsAny(text, commitTriggers)) {
+		return "", nil, false
+	}
+	params := map[string]string{"commit": "1"}
+	if title := extractBookTitle(text); title != "" {
+		params["target_doc"] = title
+	}
+	return contract.IntentOrchestrate, params, true
+}
+
+// extractBookTitle 抽取《…》书名号内的文档名（去书名号，保留扩展名点）。
+func extractBookTitle(text string) string {
+	i := strings.Index(text, "《")
+	j := strings.Index(text, "》")
+	if i >= 0 && j > i {
+		return strings.TrimSpace(text[i+len("《") : j])
+	}
+	return ""
+}
+
 // nowFn 是时间源（timeanchor.go 依赖，测试可替换）。
 var nowFn = func() time.Time { return time.Now() }
 
@@ -118,6 +249,17 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	if runes := []rune(text); len(runes) > 512 {
 		text = string(runes[:512])
 		ti.CorrectedText = text
+	}
+
+	// 0. 否定仲裁（缺口 G1，必须排在删除仲裁**之前**）。
+	//    `不要删除那个文件` 若先撞上 deleteTriggers，就会被判成可执行的 EDIT(action=delete)；
+	//    否定词直接支配动作时一律转 ASK 确认 —— SPEC-v2:49「Ask != '' → 绝不执行」。
+	if neg, actionBound, ok := hasNegation(text); ok && (actionBound || containsAny(text, actionWords)) {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictNegation
+		got.Ask = "我听到的是「" + neg + "」——确认不执行这个动作吗？" +
+			"确认不做请说「取消」；确实要做请重新说一遍完整指令"
+		return got
 	}
 
 	// 1. 冲突仲裁（优先级最高）
@@ -146,6 +288,14 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 2a. 显式「把 X 改成/换成 Y」→ EDIT（优先于 COMMIT/DEPLOY 等触发词，如「把提交按钮改成中文」）
 	if _, _, ok := extractReplace(text); ok {
 		return c.fill(ti, contract.IntentEdit, 0.9, c.editParams(text))
+	}
+
+	// 2a-bis. 复合/长任务（组织者式路由）：整理/汇总 + 文档/记录 +（保存/提交）三连信号
+	// → ORCHESTRATE，不再压成单条 NOTE/COMMIT。
+	// 必须先于 2b 单类触发：「沟通记录」含「记录」会命中 noteTriggers，「提交」会命中 commitTriggers——
+	// 长任务「把全部沟通记录和设计文档整理成《…》并保存提交」此前被降级为单条 NOTE 整段 append。
+	if kind, params, ok := detectOrchestrate(text); ok {
+		return c.fill(ti, kind, 0.9, params)
 	}
 
 	// 【伪代码逻辑层】（M5-1 触发词碰撞仲裁：NOTE 语境词 vs TEST 触发词）
@@ -235,7 +385,7 @@ func (c *TaskClassifier) applyCommon(ti *contract.Intent, kind string, conf floa
 
 	// 7. 风险基线 + 8. 确认基线（非权威；risk 包裁决后回填权威值）
 	switch kind {
-	case contract.IntentCommit, contract.IntentDeploy:
+	case contract.IntentCommit, contract.IntentDeploy, contract.IntentOrchestrate:
 		ti.Risk = &contract.RiskBaseline{Reversible: false, Impact: contract.ImpactHigh}
 		ti.Confirm = contract.ConfirmHuman
 	case contract.IntentDebug:
