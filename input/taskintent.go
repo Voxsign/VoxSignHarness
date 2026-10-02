@@ -226,6 +226,53 @@ var actionWords = func() []string {
 	return all
 }()
 
+// ---------------------------------------------------------------------------
+// 元指令仲裁（缺口 G3）
+//
+// 问题：「开始测试」「继续测试」被判 TEST 0.85 且 test_kind="go test ./..." —— 真的去跑测试。
+// 但这两句在对话里说的是「进入测试阶段 / 继续推进」，是**对话控制**，不是执行命令。
+//
+// 歧义不猜：命中即回问消歧，既不误执行，也不假装听懂了。
+// ---------------------------------------------------------------------------
+
+// metaPrefixes 是对话控制类前缀。
+var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下来", "推进", "开工", "先这样", "暂停", "停一下"}
+
+// metaInstruction 报告文本是否为"元指令 + 动作"的形态。
+//
+// 三个前提同时成立才判元指令：
+//  1. 元指令出现在**句首附近**（前面不超过 2 个字符），否则它只是句子的一部分；
+//  2. 其后确实跟着一个动作词——纯元指令（如「开始」）没有动作可误执行，
+//     交回 UNKNOWN 处理即可，不必多问一句；
+//  3. 整句**足够短**（≤ metaMaxRunes）。长句里的「开始/推进」是叙述，不是控制指令：
+//     M7 真机教训「我想开始认真测一下，接下来把项目推进起来」被系统追问，
+//     项目已把它钉为回归用例 `pipeline.TestCodexNineRegressions` 的
+//     「8-元指令控制组不Ask」——长句必须保持不 Ask。
+const metaMaxRunes = 8
+
+func metaInstruction(text string) (string, bool) {
+	if len([]rune(text)) > metaMaxRunes {
+		return "", false
+	}
+	for _, m := range metaPrefixes {
+		i := strings.Index(text, m)
+		if i < 0 {
+			continue
+		}
+		if len([]rune(text[:i])) > 2 {
+			continue
+		}
+		rest := text[i+len(m):]
+		if rest == "" {
+			continue
+		}
+		if containsAny(rest, actionWords) {
+			return m, true
+		}
+	}
+	return "", false
+}
+
 // 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
 //
 //	organizeWords ∩ docWords ∩ (saveWords ∪ commitTriggers) 同时成立。
@@ -297,6 +344,16 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		got.Conflict = contract.ConflictNegation
 		got.Ask = "我听到的是「" + neg + "」——确认不执行这个动作吗？" +
 			"确认不做请说「取消」；确实要做请重新说一遍完整指令"
+		return got
+	}
+
+	// 0.5 元指令仲裁（缺口 G3）：「开始测试」是推进对话，不是"跑 go test ./..."。
+	//     必须有动作词才算（纯「开始」不过这里），命中即回问消歧。
+	if meta, ok := metaInstruction(text); ok {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictMeta
+		got.Ask = "「" + meta + "」是让我继续推进，还是要我现在就执行后面的动作？" +
+			"要执行请直接说完整指令（例如「跑一下测试」）"
 		return got
 	}
 

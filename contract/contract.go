@@ -199,6 +199,9 @@ const (
 	// ConflictNegation：否定词直接支配动作 → ASK 确认，绝不执行（缺口 G1）。
 	// 依据 SPEC-v2:49「Ask != '' → 绝不执行」与 VS-HARNESS-001:314「该回问、该拒绝也算正确」。
 	ConflictNegation = "negation"
+	// ConflictMeta：元指令（开始/继续/推进）被误当可执行命令 → ASK 消歧（缺口 G3）。
+	// 「开始测试」是推进对话，不是"跑 go test ./..."。
+	ConflictMeta = "meta"
 )
 
 // Intent 是输入容错层产出的结构化意图（架构文档 §5.5）：
