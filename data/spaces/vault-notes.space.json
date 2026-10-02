@@ -1,0 +1,13 @@
+{
+  "name": "vault-notes",
+  "type": "vault-notes",
+  "scope": ["~/.voicesign/vault/notes/**"],
+  "exclude": ["**/*.secret"],
+  "tools": ["note", "file-append", "read"],
+  "context": ["decisions:*"],
+  "perms": { "read": true, "write": true },
+  "acceptance": "想法库仅追加，不改写历史条目",
+  "risk_default": "auto",
+  "cross_refs": [],
+  "version": 1
+}
