@@ -122,6 +122,19 @@ func (p *Personalized) Correct(req CorrectRequest) CorrectResult {
 	runes := []rune(raw)
 	offs := runeOffsets(raw)
 
+	// 无内容守卫（C3）：整句只有填充词/指代词 + 标点空白 → 不是"该纠什么"，
+	// 而是"没听清/没说内容"。文本一字不动，通过 Candidates 发出**回问信号**
+	// （asr.go:40：Candidates 非空 = 该问人/该问外部）。引擎绝不猜测。
+	if pureNoise(runes) {
+		res.Candidates = []Candidate{{
+			Text:       raw, // 不提供改写建议：原样是唯一可读法
+			Confidence: 0,   // 零置信 = 没有可信改写
+			Reason:     askNoiseReasonPrefix + " —— 整句只有填充词/指代词，无可用内容，需上层回问澄清（引擎不猜测）",
+		}}
+		res.Latency = time.Since(start)
+		return res
+	}
+
 	applied := detectFillers(runes)
 	applied = append(applied, comp.detectAuto(runes)...)
 	applied = resolve(applied, len(runes))
