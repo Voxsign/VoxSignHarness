@@ -6,7 +6,9 @@ package input
 import "strings"
 
 // defaultFillers 是默认填充词表（架构 §5.1）。
-var defaultFillers = []string{"嗯", "那个", "请", "帮我", "麻烦", "的话", "一下"}
+// M7（Codex/gpt-6-luna 诊断 2026-10-02）：移除"那个"——它是核心指代词（anaphora），
+// 句尾"修那个/打开上次那个"里是操作对象，cleaner 剥掉后 refer 指代消解失效（根因实证）。
+var defaultFillers = []string{"嗯", "请", "帮我", "麻烦", "的话", "一下"}
 
 // Cleaner 做文本规范化：全角→半角、去句首句尾填充词、压缩空白、去句末标点。
 type Cleaner struct {

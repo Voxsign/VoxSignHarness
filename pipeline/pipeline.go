@@ -84,6 +84,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1090,6 +1091,11 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		MaxTokens: 400,
 	})
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		if err != nil {
+			log.Printf("[queryLLMAnswer] fast Chat err: %v", err)
+		} else {
+			log.Printf("[queryLLMAnswer] fast Chat empty content")
+		}
 		return degraded
 	}
 	// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本回答。

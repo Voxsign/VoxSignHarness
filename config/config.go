@@ -133,9 +133,9 @@ func Default() Config {
 			MaxOutputChars:     4000,
 		},
 		Providers: []Provider{
-			{Name: "center", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
-			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
-			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "deepseek-v4-pro", ResponseFormat: &trueVal},
+			{Name: "center", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
+			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
+			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
 			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://api.deepseek.com", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "openai", Kind: OpenAIKind, Endpoint: "https://api.openai.com/v1", Model: "gpt-5.4-mini", ResponseFormat: &trueVal},
 			{Name: "gemini", Kind: OpenAIKind, Endpoint: "https://generativelanguage.googleapis.com/v1beta/openai", Model: "gemini-3.8-flash", ResponseFormat: &trueVal},

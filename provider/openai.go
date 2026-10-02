@@ -99,12 +99,23 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse,
 // 注意：任何路径都不得把 apiKey 写进 body（鉴权走 Header）。
 func buildRequestBody(c *openaiClient, req ChatRequest) ([]byte, error) {
 	body := map[string]any{
-		"model":       c.model,
-		"messages":    req.Messages,
-		"temperature": 0, // harness 要求确定性输出
+		"model":    c.model,
+		"messages": req.Messages,
+	}
+	// gpt-6-luna 等新模型不接受 temperature=0（只允许默认值 1，实测 400）；
+	// 确定性由 max_completion_tokens + response_format 保证，故这类模型不发 temperature。
+	if c.params["use_max_completion_tokens"] != true {
+		body["temperature"] = 0 // harness 要求确定性输出
 	}
 	if req.MaxTokens > 0 {
-		body["max_tokens"] = req.MaxTokens
+		// gpt-6-luna 等新模型不支持 max_tokens，只接受 max_completion_tokens
+		// （模型中心实测 400 unsupported_parameter）。通过端点 Params 的
+		// use_max_completion_tokens:true 开启，不影响 deepseek/openai 等旧模型。
+		if c.params["use_max_completion_tokens"] == true {
+			body["max_completion_tokens"] = req.MaxTokens
+		} else {
+			body["max_tokens"] = req.MaxTokens
+		}
 	}
 	if c.responseFormat {
 		body["response_format"] = map[string]any{"type": "json_object"}

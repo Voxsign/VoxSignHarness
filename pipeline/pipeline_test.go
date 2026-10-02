@@ -363,13 +363,6 @@ func TestAskOptionsStructured(t *testing.T) {
 			t.Fatalf("候选 id/label 不得为空: %+v", o)
 		}
 	}
-	ids := map[string]bool{}
-	for _, o := range opts {
-		ids[o.ID] = true
-	}
-	if !ids["edit"] || !ids["note"] {
-		t.Fatalf("应含 edit/note 候选: %+v", opts)
-	}
 }
 
 // TestGitCommitInProjectRoot（M4-4）：temp git 项目注册 project 域，COMMIT → 项目根真实出现新提交。
@@ -481,8 +474,8 @@ func TestAskOptionsIncludeReferCandidates(t *testing.T) {
 		{ID: "edit", Label: "重复 id 应被去重"},
 	}
 	merged := mergeAskOptions(base, referOpts)
-	if len(merged) < 5 || len(merged) > 8 {
-		t.Fatalf("合并后总数应 5-8（4 意图 + 2-4 refer），got %d: %+v", len(merged), merged)
+	if len(merged) != 3 {
+		t.Fatalf("合并后应为 refer 候选去重数 3（base 为空——EDIT 无 refer 目标不塞固定项），got %d: %+v", len(merged), merged)
 	}
 	ids := map[string]bool{}
 	for _, o := range merged {
@@ -491,12 +484,7 @@ func TestAskOptionsIncludeReferCandidates(t *testing.T) {
 		}
 		ids[o.ID] = true
 	}
-	// 必含意图候选
-	for _, want := range []string{"edit", "query", "note", "commit"} {
-		if !ids[want] {
-			t.Fatalf("应含意图候选 %s: %+v", want, merged)
-		}
-	}
+	// 固定意图候选已废除（Codex 2026-10-02：options 按意图动态生成）——只验证 refer 候选去重
 	// 必含 refer 候选
 	for _, want := range []string{"dict:那个", "rec:orders.go"} {
 		if !ids[want] {
@@ -540,7 +528,12 @@ func TestShouldResolveReferGate(t *testing.T) {
 		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false},
 		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", true},
 		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", true},
-		{"UNKNOWN 兜底", contract.IntentUnknown, 0.2, "随便看看", true},
+		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false},
+		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", true},
+		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false},
+		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false},
+		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", true},
+		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", true},
 	}
 	for _, c := range cases {
 		it := contract.Intent{Intent: c.intent, Confidence: c.conf, CorrectedText: c.text}
@@ -572,12 +565,12 @@ func TestCodexNineRegressions(t *testing.T) {
 		wantAsk string // 子串断言；"" 表示断言 Ask 为空
 	}{
 		{"1-本实例不弹那个指哪个", "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来", "指的是哪个"},
-		{"2-陈述引用不Ask", "我那个前端的问题又不过来", "指的是哪个"},
+		{"2-陈述引用不Ask（断言不含'指的是哪个'）", "我那个前端的问题又不过来", "NOT:指的是哪个"},
 		{"3-操作指代仍Ask", "把那个前端文件改一下", "指的是哪个"},
 		{"4-把上次那个改成蓝色操作指代", "把上次那个改成蓝色", "那个"},
 		{"5-EDIT真歧义候选无固定项", "把那个前端文件改一下", "指的是哪个"},
 		{"6-QUERY裸指代真歧义", "查一下这个", "指的是哪个"},
-		{"7-NOTE真歧义Ask", "记一下 这个", ""},
+		{"7-NOTE真歧义Ask（'记一下 这个'内容歧义）", "记一下 这个", "指的是哪个"},
 		{"8-元指令控制组不Ask", "我想开始认真测一下，接下来把项目推进起来", ""},
 		{"9a-修那个正例", "修那个", "指的是哪个"},
 		{"9b-改那个文件正例", "改那个文件", "指的是哪个"},
@@ -592,6 +585,11 @@ func TestCodexNineRegressions(t *testing.T) {
 		if c.wantAsk == "" {
 			if out.Ask != "" {
 				t.Errorf("[%s] 预期不 Ask，got ask=%q", c.name, out.Ask)
+			}
+		} else if strings.HasPrefix(c.wantAsk, "NOT:") {
+			notWant := strings.TrimPrefix(c.wantAsk, "NOT:")
+			if strings.Contains(out.Ask, notWant) {
+				t.Errorf("[%s] 预期 ask 不含 %q，got ask=%q", c.name, notWant, out.Ask)
 			}
 		} else if !strings.Contains(out.Ask, c.wantAsk) {
 			t.Errorf("[%s] 预期 ask 含 %q，got ask=%q", c.name, c.wantAsk, out.Ask)
