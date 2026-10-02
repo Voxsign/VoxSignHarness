@@ -367,18 +367,26 @@ var actionIntentGroups = []struct {
 	{contract.IntentEdit, editTriggers},
 }
 
-// clauseAction 返回单个分句命中的第一个动作意图；无则空串。
-func clauseAction(clause string) string {
+// clauseActions 返回单个分句命中的**全部**动作意图。
+//
+// 评审 G5-P1-4：原实现按词表顺序只取第一个命中（词表里 Query 在 Debug/Edit 之前，
+// 且 queryTriggers 含单字"看/查/找"），会把「查一下这个报错」判成纯 QUERY、
+// 把「改一下顺便查一下」判成纯 QUERY —— 既让回问文案说不准，也**低估动作数**。
+func clauseActions(clause string) []string {
+	var out []string
 	for _, g := range actionIntentGroups {
 		if containsAny(clause, g.triggers) {
-			return g.intent
+			out = append(out, g.intent)
 		}
 	}
-	return ""
+	return out
 }
 
-// multiActionIntents 返回按顺序连接词切分后出现的**不同**动作意图（按首次出现顺序）。
-func multiActionIntents(text string) []string {
+// multiActionClauses 按顺序连接词切分文本，返回：
+//   - 含动作的**分句数**（评审 G5-P0-2：按分句数计，不按"不同意图数"计 ——
+//     「先查 A 再查 B」是两个动作，若按不同意图去重会算成 1，第二个仍被静默丢弃）
+//   - 这些分句里出现过的动作意图（去重，仅用于回问文案）
+func multiActionClauses(text string) (int, []string) {
 	parts := []string{text}
 	for _, c := range sequenceConnectors {
 		var next []string
@@ -387,15 +395,23 @@ func multiActionIntents(text string) []string {
 		}
 		parts = next
 	}
+	n := 0
 	seen := map[string]bool{}
-	var order []string
+	var labels []string
 	for _, p := range parts {
-		if k := clauseAction(p); k != "" && !seen[k] {
-			seen[k] = true
-			order = append(order, k)
+		acts := clauseActions(p)
+		if len(acts) == 0 {
+			continue
+		}
+		n++
+		for _, a := range acts {
+			if !seen[a] {
+				seen[a] = true
+				labels = append(labels, a)
+			}
 		}
 	}
-	return order
+	return n, labels
 }
 
 // joinIntentLabels 把动作意图列表拼成"查、记、提交"这样的中文串。
@@ -556,12 +572,17 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	//
 	// 一次只做一件是产品的既有约束（一屏一决策点），所以这里**不猜顺序**，
 	// 直接把几件事摊开让用户选先做哪个。
-	if actions := multiActionIntents(text); len(actions) >= 2 {
-		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
-		got.Conflict = contract.ConflictMultiAction
-		got.Ask = "这句里有两件以上的事（" + joinIntentLabels(actions) + "）。" +
-			"我一次只做一件——请先说要先做哪个，或分成两句分别说"
-		return got
+	// 评审 G5-P1-3：编排任务本身多动作、由计划承载，**必须豁免**。
+	// 原实现靠"恰好没有顺序连接词"才没被抢走 —— 保护是偶然的，不是结构性的：
+	// 「…整理成《全景开发文档》，然后再保存提交」会被截成 NOTE+COMMIT 而永远不走编排。
+	if _, _, isOrchestrate := detectOrchestrate(text); !isOrchestrate {
+		if n, labels := multiActionClauses(text); n >= 2 {
+			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+			got.Conflict = contract.ConflictMultiAction
+			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
+				"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+			return got
+		}
 	}
 
 	// 2a. 显式「把 X 改成/换成 Y」→ EDIT（优先于 COMMIT/DEPLOY 等触发词，如「把提交按钮改成中文」）

@@ -45,8 +45,8 @@ func TestMultiActionLongStatementExempt(t *testing.T) {
 	if got.Ask != "" {
 		t.Errorf("M7 长句不得回问（既有回归 TestColloquialQuestionNoReferAsk）：Ask=%q", got.Ask)
 	}
-	if actions := multiActionIntents(m7); len(actions) >= 2 {
-		t.Errorf("M7 长句被判多动作 %v —— 判据应基于顺序连接词", actions)
+	if n, labels := multiActionClauses(m7); n >= 2 {
+		t.Errorf("M7 长句被判多动作 %d 段 %v —— 判据应基于顺序连接词", n, labels)
 	}
 }
 
@@ -84,9 +84,9 @@ func TestMultiActionIntentsUnit(t *testing.T) {
 		{"", 0},
 	}
 	for _, tc := range cases {
-		if got := len(multiActionIntents(tc.text)); got != tc.want {
-			t.Errorf("multiActionIntents(%q) 数 = %d，期望 %d（%v）",
-				tc.text, got, tc.want, multiActionIntents(tc.text))
+		if got, labels := multiActionClauses(tc.text); got != tc.want {
+			t.Errorf("multiActionClauses(%q) 分句数 = %d，期望 %d（%v）",
+				tc.text, got, tc.want, labels)
 		}
 	}
 }
@@ -98,5 +98,65 @@ func TestMultiActionDoesNotShadowOrchestrate(t *testing.T) {
 	got := c.ClassifyTask(text)
 	if got.Conflict == contract.ConflictMultiAction {
 		t.Errorf("编排任务被多动作检测抢走：intent=%s conflict=%q", got.Intent, got.Conflict)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 评审 G5-P0-2 / P1-3 / P1-4 的反例回归。
+// ---------------------------------------------------------------------------
+
+// TestMultiActionSameIntentStillAsks 评审 P0-2：**同一个意图出现两次**也是多动作。
+// 「先查 A 再查 B」若按"不同意图数"去重会算成 1 → 不 Ask → 第二个查询静默消失。
+func TestMultiActionSameIntentStillAsks(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	for _, text := range []string{
+		"先查 A 再查 B",
+		"先跑单元测试再跑集成测试",
+		"先提交 A 再提交 B",
+	} {
+		got := c.ClassifyTask(text)
+		if got.Conflict != contract.ConflictMultiAction {
+			t.Errorf("P0-2: %q 未判多动作（intent=%s conflict=%q）—— 第二个动作会被静默丢弃",
+				text, got.Intent, got.Conflict)
+		}
+		if got.Ask == "" {
+			t.Errorf("P0-2: %q 必须回问，实际 Ask 为空", text)
+		}
+	}
+}
+
+// TestOrchestrateNotInterceptedByMultiAction 评审 P1-3：编排任务**必须**豁免多动作检测。
+// 原实现靠"恰好没有连接词"才没被抢走 —— 加个"然后再"就会绕过编排。
+func TestOrchestrateNotInterceptedByMultiAction(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	for _, text := range []string{
+		"把全部沟通记录和设计文档整理成《全景开发文档》并保存提交",
+		"把全部沟通记录和设计文档整理成《全景开发文档》，然后再保存提交",
+	} {
+		got := c.ClassifyTask(text)
+		if got.Conflict == contract.ConflictMultiAction {
+			t.Errorf("P1-3: 编排任务被多动作检测抢走：%q（intent=%s）", text, got.Intent)
+		}
+	}
+}
+
+// TestClauseActionsNoMasking 评审 P1-4：一个分句命中的**全部**动作都要计入。
+// 原实现按词表顺序只取第一个，而 queryTriggers 含单字"看/查/找"且排在 Debug/Edit 之前。
+func TestClauseActionsNoMasking(t *testing.T) {
+	acts := clauseActions("查一下这个报错")
+	has := func(want string) bool {
+		for _, a := range acts {
+			if a == want {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(contract.IntentQuery) || !has(contract.IntentDebug) {
+		t.Errorf("P1-4: 「查一下这个报错」应同时含 QUERY 与 DEBUG，实际 %v（DEBUG 被 QUERY 吞掉）", acts)
+	}
+	// 计数不该被 masking 低估
+	if n, _ := multiActionClauses("改一下顺便查一下，然后再看看"); n < 2 {
+		t.Errorf("P1-4: 三个分句（改/查/看）应计为 ≥2，实际 %d", n)
 	}
 }

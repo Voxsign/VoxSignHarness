@@ -1447,7 +1447,12 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	//   - 条件句：「如果测试通过就提交吗」同理。
 	// 三者都必须在进入回退前直接返回。
 	switch it.Conflict {
-	case contract.ConflictNegation, contract.ConflictMeta, contract.ConflictConditional:
+	case contract.ConflictNegation, contract.ConflictMeta, contract.ConflictConditional,
+		contract.ConflictMultiAction:
+		// 评审 G5-P0-1：多动作也必须豁免 —— 否则「把报价改成中文然后跑一下测试，行吗？」
+		// 会被 fallback 清空 Ask 后只执行第一个动作，G5 复发。
+		// 这是**同一类系统性缺口的第三个实例**（G1-P4 / G3-P3 已各踩一次）：
+		// 每新增一条"靠 Ask 拦住"的安全分支，都必须同时登记到这个 switch。
 		return it
 	}
 	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
