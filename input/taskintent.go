@@ -551,6 +551,51 @@ func (c *TaskClassifier) queryParams(text string) map[string]string {
 // extractReplace 抽取「把 X 改成 Y / 把 X 换成 Y」三槽位：
 //   - before 段先取「把」之后的部分（object），再剥离「在 X 里/中」前置子句（其承载空间信息）。
 func extractReplace(text string) (object, value string, ok bool) {
+	// 缺口 G7：口述自我修正。用户在"不对/说错了"之前的表述作废，只有其后才是真实意图。
+	//
+	// 原行为：`记一下A，不对，改成记B` 会把"记一下A，不对"整段当成 object。
+	//
+	// 修正后常省略对象（`把标题改成中文，不对，改成英文`），故承接修正前的对象。
+	carry := ""
+	if cut, end := lastCorrection(text); cut >= 0 {
+		if obj, _, okPre := extractReplaceRaw(text[:cut]); okPre {
+			carry = obj
+		}
+		text = strings.TrimLeft(text[end:], "，。、, ")
+	}
+	object, value, ok = extractReplaceRaw(text)
+	if !ok {
+		return "", "", false
+	}
+	if object == "" {
+		object = carry
+	}
+	if object == "" || value == "" {
+		return "", "", false
+	}
+	return object, value, true
+}
+
+// correctionMarkers 是自我修正信号（缺口 G7）。取其**最后一次**出现，支持连续修正。
+var correctionMarkers = []string{"不对", "说错了", "打错了", "重新说", "我是说", "应该是"}
+
+// lastCorrection 返回最后一个自我修正标记的起始与结束**字节**下标；无则 (-1, -1)。
+func lastCorrection(s string) (int, int) {
+	bestStart, bestEnd := -1, -1
+	for _, m := range correctionMarkers {
+		if i := strings.LastIndex(s, m); i >= 0 && i > bestStart {
+			bestStart, bestEnd = i, i+len(m)
+		}
+	}
+	return bestStart, bestEnd
+}
+
+// extractReplaceRaw 是未做自我修正处理的原始实现。
+//
+// 与旧版唯一的语义差别：**对象为空不再直接判失败**（只要求 value 非空），
+// 以便 extractReplace 在"改口后省略对象"时承接修正前的对象。
+// 是否最终成立由 extractReplace 决定。
+func extractReplaceRaw(text string) (object, value string, ok bool) {
 	low := strings.ToLower(text)
 	for _, sep := range []string{"改成", "换成"} {
 		if i := strings.Index(low, sep); i >= 0 {
@@ -563,7 +608,7 @@ func extractReplace(text string) (object, value string, ok bool) {
 				before = stripped
 			}
 			object = strings.Trim(before, "，。、  ")
-			if object == "" || value == "" {
+			if value == "" {
 				return "", "", false
 			}
 			return object, value, true
