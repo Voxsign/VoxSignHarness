@@ -399,8 +399,8 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// ⑩-bis verify fail → 带 tool:"verify" 进诊断层（不自动重跑 verify，结论供归因）。
 	if out.Verify.Status == verify.StatusFail {
 		if svc := o.selfheal(); svc != nil {
-			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Failure{
-				{Tool: "verify", Err: out.Verify.Detail, Stdout: out.Verify.Evidence},
+			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Trace{
+				selfheal.NewTrace("verify", "", map[string]any{"evidence": out.Verify.Evidence}, out.Verify.Detail),
 			})
 		}
 	}
@@ -1230,8 +1230,8 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		// 慢但成功：不丢弃已有回答，只把慢响应带 model 名进诊断层（供归因/后续学习）。
 		if elapsed > time.Duration(o.fastResponseMs())*time.Millisecond {
 			if svc := o.selfheal(); svc != nil {
-				_ = svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Failure{
-					{Tool: "llm", Model: "fast", Err: "slow response", Stdout: truncateStr(content, 200)},
+				_ = svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Trace{
+					selfheal.NewTrace("llm", "fast", map[string]any{"model": "fast"}, "slow response"),
 				})
 			}
 		}
@@ -1241,14 +1241,14 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	// err/空内容 → 先诊断；diag 可用且可重试 → 指数退避重试（≤2 轮）。
 	svc := o.selfheal()
 	if svc != nil {
-		d := svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Failure{
-			{Tool: "llm", Model: "fast", Err: "fast chat 失败或空内容"},
+		d := svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Trace{
+			selfheal.NewTrace("llm", "fast", map[string]any{"model": "fast"}, "fast chat 失败或空内容"),
 		})
 		if d != nil && (d.Action == selfheal.ActionRetry || d.Action == selfheal.ActionModify) {
-			for round := 0; round < selfheal.MaxAutoRetries; round++ {
+			for round := 0; round < d.MaxRetries(); round++ {
 				select {
 				case <-ctx.Done():
-				case <-time.After(selfheal.BackoffAfter(round)):
+				case <-time.After(d.Wait(round)):
 				}
 				if c2, ok2 := callFast(); ok2 {
 					svc.KB.Remember(*d)

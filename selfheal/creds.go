@@ -51,8 +51,11 @@ func ReadModelCenterKey() string {
 	return ""
 }
 
-// PrepareDiagKey 在 provider.NewRegistry 之前调用：若 config 声明了 diag provider
-// 且未显式配置 api_key，则从模型中心凭证文件补填 key。
+// PrepareDiagKey 在 provider.NewRegistry 之前调用，对声明的 diag provider 做两件事：
+//  1. 超时预算：未显式配置 TimeoutMs 时默认 30000ms（避免干等 Global.LLMTimeoutMs=60s）；
+//     超时→传输层返回错误→诊断层优雅跳过，不阻断主链。
+//  2. 凭证：若未显式配置 api_key，从模型中心凭证文件补填。
+//
 // 已显式配置 api_key 的 diag provider【优先用它】，不被覆盖；
 // 凭证缺失 → diag 保持空 key（后续 Chat 401 → 诊断层优雅跳过）。
 // 未声明 diag provider → 零动作（诊断层整体跳过，主链不变）。
@@ -64,11 +67,20 @@ func PrepareDiagKey(cfg *config.Config) {
 	if !ok {
 		return
 	}
+	// ① diag 默认 30s 超时预算（独立于 key 来源；显式配置不覆盖）。
+	if p.TimeoutMs <= 0 {
+		for i := range cfg.Providers {
+			if cfg.Providers[i].Name == p.Name {
+				cfg.Providers[i].TimeoutMs = DiagDefaultTimeoutMs
+				break
+			}
+		}
+	}
+	// ② 凭证补填（显式 api_key 优先）。
 	if strings.TrimSpace(p.APIKey) != "" {
-		return // 显式配置优先
+		return
 	}
 	if key := ReadModelCenterKey(); key != "" {
-		p.APIKey = key
 		for i := range cfg.Providers {
 			if cfg.Providers[i].Name == p.Name {
 				cfg.Providers[i].APIKey = key
@@ -77,3 +89,6 @@ func PrepareDiagKey(cfg *config.Config) {
 		}
 	}
 }
+
+// DiagDefaultTimeoutMs 是 diag provider 未显式配置 TimeoutMs 时的默认超时（30s）。
+const DiagDefaultTimeoutMs = 30000

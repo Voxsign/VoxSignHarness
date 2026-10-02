@@ -69,12 +69,12 @@ func BackoffAfter(round int) time.Duration {
 
 // Diagnose 跑 ①→② 环：先查知识库（命中即复用，0 模型调用）；未命中且 diag 可用才调模型。
 // 任何失败（无 failures / 模型未配置 / Chat err / 超时 / JSON 解析失败）→ 返回 nil 跳过。
-func (s *Service) Diagnose(ctx context.Context, task, intent string, failures []Failure) *Diagnosis {
-	if len(failures) == 0 {
+func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Trace) *Diagnosis {
+	if len(traces) == 0 {
 		return nil
 	}
-	primary := failures[0]
-	fp := Fingerprint(intent, primary.Tool, primary.Err)
+	primary := traces[0]
+	fp := Fingerprint(intent, primary.Tool, primary.Raw)
 
 	// ① 知识库命中。
 	if d, ok := s.KB.Lookup(fp); ok {
@@ -88,7 +88,7 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, failures []
 		return nil
 	}
 
-	user, err := encodeUser(task, intent, failures)
+	user, err := encodeUser(task, intent, traces)
 	if err != nil {
 		return nil
 	}
@@ -147,11 +147,12 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 	if s == nil {
 		return nil, nil
 	}
-	f := Failure{Tool: att.Tool, Args: argsSummary(att.Args), Err: att.Receipt.Err, Stdout: att.Receipt.Stdout}
-	if att.Receipt.Err == "" {
-		f.Err = att.Receipt.Stderr
+	errText := att.Receipt.Err
+	if errText == "" {
+		errText = att.Receipt.Stderr
 	}
-	d := s.Diagnose(ctx, task, intent, []Failure{f})
+	tr := NewTrace(att.Tool, "", att.Args, errText)
+	d := s.Diagnose(ctx, task, intent, []Trace{tr})
 	if d == nil {
 		return nil, nil
 	}
@@ -166,11 +167,13 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 			return nil, d
 		}
 		fp := d.Fingerprint
-		if s.counters[fp] >= MaxAutoRetries {
-			return nil, d // 2 轮上限
+		// 轮次上限：硬性 2 轮；retry_params.max_retries 可收紧但不突破上限。
+		if s.counters[fp] >= d.effectiveMaxRetries() {
+			return nil, d
 		}
-		// 指数退避（尊重 ctx 取消）。
-		wait := retryBackoff[s.counters[fp]]
+		// 退避：优先 retry_params.backoff_seconds（指数 base*2^round）+ cooldown_seconds；
+		// 缺省用内置默认退避（500ms/1s）。尊重 ctx 取消。
+		wait := waitForRound(d, s.counters[fp])
 		select {
 		case <-ctx.Done():
 			return nil, d
@@ -187,6 +190,7 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 			s.KB.Remember(*d)
 			return &nr, d
 		}
+		// 重放失败：不回写 KB（避免把未验证结论固化）。
 		return nil, d
 	default:
 		// fallback / ask / stop：不再执行，结论供归因。
@@ -194,30 +198,40 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 	}
 }
 
-// argsSummary 把原始 args 压成诊断用参数摘要（截断，避免把大 payload 发给模型）。
-func argsSummary(args map[string]any) string {
-	if len(args) == 0 {
-		return ""
+// waitForRound 计算第 round 轮重试前等待时长（v2 retry_params）。
+func waitForRound(d *Diagnosis, round int) time.Duration {
+	var w time.Duration
+	if base := d.backoffSeconds(); base > 0 {
+		mult := 1 << round // 指数：第 round 轮 = base * 2^round
+		w = time.Duration(base * float64(mult) * float64(time.Second))
+	} else {
+		if round >= len(retryBackoff) {
+			round = len(retryBackoff) - 1
+		}
+		w = retryBackoff[round]
 	}
-	b, err := json.Marshal(args)
-	if err != nil {
-		return ""
+	if cd := d.cooldownSeconds(); cd > 0 {
+		w += time.Duration(cd * float64(time.Second))
 	}
-	s := string(b)
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return w
 }
 
-// applyRetryParams 把 retry_params 里的字符串标量合并进 args（modify 动作）。
-// 只合入简单标量，防模型注入任意结构；未知 key 忽略。
+// retryControlKeys 是 v2 retry_params 里的 harness 控制键，不是工具参数，modify 时不得注入工具 args。
+var retryControlKeys = map[string]bool{
+	"backoff_seconds": true, "max_retries": true, "cooldown_seconds": true,
+}
+
+// applyRetryParams 把 retry_params 里的标量修正合并进 args（modify 动作）。
+// 只合入简单标量、且跳过 harness 控制键，防模型注入任意结构；未知 key 忽略。
 func applyRetryParams(args map[string]any, params map[string]any) map[string]any {
 	out := make(map[string]any, len(args)+len(params))
 	for k, v := range args {
 		out[k] = v
 	}
 	for k, v := range params {
+		if retryControlKeys[k] {
+			continue
+		}
 		switch v.(type) {
 		case string, float64, bool:
 			out[k] = v

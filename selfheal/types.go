@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // SystemPrompt 是发给问题定位模型的 system 文本（接口标准 v1 §2，逐字）。
@@ -56,14 +57,74 @@ var validAction = map[string]bool{
 	ActionRetry: true, ActionModify: true, ActionFallback: true, ActionAsk: true, ActionStop: true,
 }
 
-// Failure 是一条失败轨迹（诊断模型 user 输入的 failure 数组元素）。
-// Model 仅在「模型类失败」（fast/diag 调用 err/空/慢超时）时填被调模型名，工具类失败留空。
-type Failure struct {
-	Tool   string `json:"tool"`
-	Args   string `json:"args,omitempty"`
-	Err    string `json:"err"`
-	Stdout string `json:"stdout,omitempty"`
-	Model  string `json:"model,omitempty"`
+// Trace 是 v2 定稿的失败轨迹（user content 的 traces 数组元素，接口标准 v2 §2）。
+// 替代 v1 的 {tool,args,err,stdout,model}：
+//   - params：原 args 原样 map（不再压成字符串摘要）；
+//   - error：{code,type}——code 优先取可解析的 HTTP 状态码，否则稳定占位；type 为错误类别；
+//   - stdout：v2 无此字段，省略（如需可并入 params）；
+//   - model：模型类失败（fast/jev 调用）填被调模型名，工具类失败留空。
+type Trace struct {
+	Tool   string         `json:"tool"`
+	Params map[string]any `json:"params,omitempty"`
+	Error  *TraceError    `json:"error,omitempty"`
+	Model  string         `json:"model,omitempty"`
+	Raw    string         `json:"-"` // 原始错误文本，仅本地指纹用，不上送模型
+}
+
+// TraceError 是 v2 轨迹里的错误结构。
+type TraceError struct {
+	Code string `json:"code"` // HTTP 状态码（如 "503"/"429"）；不可解析则 "ERR_UNKNOWN"
+	Type string `json:"type"` // 错误类别（timeout/rate_limit/auth/not_found/overload…）
+}
+
+// NewTrace 从原始错误文本构造一条 v2 轨迹（自动归类 error.code/type）。
+func NewTrace(tool, model string, params map[string]any, errText string) Trace {
+	code, typ := classifyError(errText)
+	return Trace{Tool: tool, Params: params, Model: model, Error: &TraceError{Code: code, Type: typ}, Raw: errText}
+}
+
+// classifyError 把 openaiClient/执行器错误文本归类为 v2 error{code,type}。
+// openaiClient 错误形态为 "HTTP 404: …" / "HTTP 500: …"，优先取三位状态码。
+func classifyError(s string) (code, typ string) {
+	code = "ERR_UNKNOWN"
+	typ = "unknown"
+	if i := strings.Index(s, "HTTP "); i >= 0 {
+		rest := s[i+len("HTTP "):]
+		digits := ""
+		for _, ch := range rest {
+			if ch >= '0' && ch <= '9' {
+				digits += string(ch)
+			} else {
+				break
+			}
+		}
+		if len(digits) == 3 {
+			code = digits
+			switch digits {
+			case "400", "422":
+				typ = "invalid_request"
+			case "401", "403":
+				typ = "auth"
+			case "404":
+				typ = "not_found"
+			case "429":
+				typ = "rate_limit"
+			default:
+				if digits[0] == '5' {
+					typ = "overload"
+				}
+			}
+			return
+		}
+	}
+	lower := strings.ToLower(s)
+	switch {
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline"):
+		code, typ = "ERR_TIMEOUT", "timeout"
+	case strings.Contains(lower, "connection") || strings.Contains(lower, "dial") || strings.Contains(lower, "no such host"):
+		code, typ = "ERR_NETWORK", "connection"
+	}
+	return
 }
 
 // Diagnosis 是一次诊断结论（知识库命中或模型输出归一化后的形状）。
@@ -129,21 +190,76 @@ func Fingerprint(intent, tool, errText string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-// diagnoseRequest 是发给问题定位模型的 user 负载（JSON 序列化后作为 user content）。
+// diagnoseRequest 是发给问题定位模型的 user 负载（v2：traces 结构化数组）。
 type diagnoseRequest struct {
-	Task    string    `json:"task"`
-	Intent  string    `json:"intent"`
-	Failure []Failure `json:"failure"`
+	Task   string  `json:"task"`
+	Intent string  `json:"intent"`
+	Traces []Trace `json:"traces"`
 }
 
 // encodeUser 把诊断输入编码为 user content JSON。
-func encodeUser(task, intent string, failures []Failure) (string, error) {
-	if len(failures) == 0 {
-		failures = []Failure{{}}
+func encodeUser(task, intent string, traces []Trace) (string, error) {
+	if len(traces) == 0 {
+		traces = []Trace{{}}
 	}
-	b, err := json.Marshal(diagnoseRequest{Task: task, Intent: intent, Failure: failures})
+	b, err := json.Marshal(diagnoseRequest{Task: task, Intent: intent, Traces: traces})
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
 }
+
+// retry_params 读取助手（v2 字段名：backoff_seconds / max_retries / cooldown_seconds）。
+
+// backoffSeconds 取 retry_params.backoff_seconds（指数退避基数，秒）；缺省返回 0（用内置默认）。
+func (d *Diagnosis) backoffSeconds() float64 {
+	if d == nil || d.RetryParams == nil {
+		return 0
+	}
+	if v, ok := toFloat(d.RetryParams["backoff_seconds"]); ok && v > 0 {
+		return v
+	}
+	return 0
+}
+
+// cooldownSeconds 取 retry_params.cooldown_seconds（重试前一次性冷却，秒）。
+func (d *Diagnosis) cooldownSeconds() float64 {
+	if d == nil || d.RetryParams == nil {
+		return 0
+	}
+	if v, ok := toFloat(d.RetryParams["cooldown_seconds"]); ok && v > 0 {
+		return v
+	}
+	return 0
+}
+
+// effectiveMaxRetries 取 retry_params.max_retries，但硬性不超过 MaxAutoRetries（2 轮）。
+func (d *Diagnosis) effectiveMaxRetries() int {
+	limit := MaxAutoRetries
+	if d != nil && d.RetryParams != nil {
+		if v, ok := toFloat(d.RetryParams["max_retries"]); ok {
+			m := int(v)
+			if m >= 0 && m < limit {
+				limit = m
+			}
+		}
+	}
+	return limit
+}
+
+// toFloat 把 JSON 数字（float64）/整数断言为 float64。
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+// MaxRetries 返回本次诊断允许的重试轮次上限（retry_params.max_retries，硬性不超过 2）。
+func (d *Diagnosis) MaxRetries() int { return d.effectiveMaxRetries() }
+
+// Wait 返回第 round 轮重试前等待时长（v2 retry_params.backoff_seconds 指数 + cooldown）。
+func (d *Diagnosis) Wait(round int) time.Duration { return waitForRound(d, round) }

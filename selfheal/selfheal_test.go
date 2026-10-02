@@ -136,7 +136,7 @@ func TestDiagnoseKbHitNoModelCall(t *testing.T) {
 		okJSON(w, diagJSONBody)
 	})
 	svc := NewService(kb, diag, nil)
-	d := svc.Diagnose(context.Background(), "查一下", "QUERY", []Failure{{Tool: "search", Err: "dial tcp: i/o timeout"}})
+	d := svc.Diagnose(context.Background(), "查一下", "QUERY", []Trace{NewTrace("search", "", nil, "dial tcp: i/o timeout")})
 	if d == nil {
 		t.Fatal("KB 应命中")
 	}
@@ -159,8 +159,8 @@ func TestDiagnoseModelHappyPath(t *testing.T) {
 		okJSON(w, `{"category":"network","root_cause":"超时","confidence":0.9,"recoverable":true,"suggestion":"退避重试","action":"retry","retry_params":{}}`)
 	})
 	svc := NewService(OpenKB(path), diag, nil)
-	d := svc.Diagnose(context.Background(), "查一下订单", "QUERY", []Failure{
-		{Tool: "llm", Model: "fast", Err: "fast chat 失败或空内容"},
+	d := svc.Diagnose(context.Background(), "查一下订单", "QUERY", []Trace{
+		NewTrace("llm", "fast", map[string]any{"model": "fast"}, "HTTP 500: boom"),
 	})
 	if d == nil {
 		t.Fatal("应返回诊断")
@@ -168,9 +168,13 @@ func TestDiagnoseModelHappyPath(t *testing.T) {
 	if *calls != 1 {
 		t.Fatalf("应调用诊断模型 1 次, got %d", *calls)
 	}
-	// 请求体：模型名 jev-diagnose + system 提示词 + user 负载含 task/intent/failure/model。
+	// 请求体：模型名 jev-diagnose + response_format=json_object + user 负载含 task/intent/traces/model。
 	if body["model"] != "jev-diagnose" {
 		t.Fatalf("model 应为 jev-diagnose, got %v", body["model"])
+	}
+	rf, _ := body["response_format"].(map[string]any)
+	if rf["type"] != "json_object" {
+		t.Fatalf("应带 response_format=json_object, got %v", body["response_format"])
 	}
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) < 2 {
@@ -184,8 +188,11 @@ func TestDiagnoseModelHappyPath(t *testing.T) {
 	if up.Task != "查一下订单" || up.Intent != "QUERY" {
 		t.Fatalf("user 负载 task/intent 不符: %+v", up)
 	}
-	if len(up.Failure) != 1 || up.Failure[0].Model != "fast" || up.Failure[0].Tool != "llm" {
-		t.Fatalf("failure 应带 model=fast/tool=llm: %+v", up.Failure)
+	if len(up.Traces) != 1 || up.Traces[0].Model != "fast" || up.Traces[0].Tool != "llm" {
+		t.Fatalf("traces 应带 model=fast/tool=llm: %+v", up.Traces)
+	}
+	if up.Traces[0].Error == nil || up.Traces[0].Error.Code != "500" || up.Traces[0].Error.Type != "overload" {
+		t.Fatalf("error.code/type 应从 HTTP 500 归类为 overload: %+v", up.Traces[0].Error)
 	}
 	if d.Category != CatNetwork || d.Action != ActionRetry || !d.Recoverable {
 		t.Fatalf("诊断解析异常: %+v", d)
@@ -212,7 +219,7 @@ func TestDiagnoseDegradesOnBadEndpoint(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			diag, _ := newDiagProvider(t, h)
 			svc := NewService(OpenKB(filepath.Join(t.TempDir(), "exceptions.jsonl")), diag, nil)
-			d := svc.Diagnose(context.Background(), "t", "QUERY", []Failure{{Tool: "llm", Model: "fast", Err: "x"}})
+			d := svc.Diagnose(context.Background(), "t", "QUERY", []Trace{NewTrace("llm", "fast", nil, "x")})
 			if d != nil {
 				t.Fatalf("%s 应返回 nil（跳过不扩散）, got %+v", name, d)
 			}
@@ -223,7 +230,7 @@ func TestDiagnoseDegradesOnBadEndpoint(t *testing.T) {
 func TestDiagnoseNoDiagProviderSkips(t *testing.T) {
 	// diag=nil（未配置）→ 返回 nil，零开销跳过。
 	svc := NewService(OpenKB(filepath.Join(t.TempDir(), "exceptions.jsonl")), nil, nil)
-	if d := svc.Diagnose(context.Background(), "t", "QUERY", []Failure{{Tool: "x", Err: "y"}}); d != nil {
+	if d := svc.Diagnose(context.Background(), "t", "QUERY", []Trace{NewTrace("x", "", nil, "y")}); d != nil {
 		t.Fatalf("未配置 diag 应 nil, got %+v", d)
 	}
 }
@@ -256,6 +263,35 @@ func TestSafeRetryReadOnlySuccessWritesKB(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), `"fingerprint"`) {
 		t.Fatalf("修复成功应回写 exceptions.jsonl: %s", data)
+	}
+}
+
+// TestSafeRetryReplayFailureDoesNotWriteKB（负向）：重放后仍失败 → 绝不回写知识库，
+// 避免把未验证的结论固化成"已知修复"。
+func TestSafeRetryReplayFailureDoesNotWriteKB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exceptions.jsonl")
+	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		okJSON(w, `{"category":"transient","root_cause":"瞬时抖动","confidence":0.7,"recoverable":true,"suggestion":"重试","action":"retry"}`)
+	})
+	runner := func(tool string, args map[string]any) contract.Receipt {
+		return contract.Receipt{Tool: tool, OK: false, Err: "still down"} // 重放仍失败
+	}
+	svc := NewService(OpenKB(path), diag, runner)
+	att := Attempt{Tool: "search", Args: map[string]any{"pattern": "x"}, Receipt: contract.Receipt{Tool: "search", OK: false, Err: "dial tcp: i/o timeout"}}
+	nr, d := svc.SafeRetry(context.Background(), "查 x", "QUERY", att)
+	if nr != nil {
+		t.Fatal("重放仍失败不应返回成功回执")
+	}
+	if d == nil || d.Action != ActionRetry {
+		t.Fatalf("诊断结论应保留: %+v", d)
+	}
+	// KB 应为空（未修复成功不得回写）。
+	if got := svc.KB.Count(); got != 0 {
+		t.Fatalf("重放失败不得回写 KB, KB 条目数=%d", got)
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), `"fingerprint"`) {
+		t.Fatalf("exceptions.jsonl 不应含任何回写: %s", data)
 	}
 }
 
@@ -390,6 +426,16 @@ func TestPrepareDiagKeyPreservesExplicit(t *testing.T) {
 	PrepareDiagKey(&cfg)
 	if cfg.Providers[0].APIKey != "explicit-123" {
 		t.Fatal("显式 api_key 必须优先保留，不被覆盖")
+	}
+	// diag 未显式配 TimeoutMs → 默认 30000ms（避免干等 60s）。
+	if cfg.Providers[0].TimeoutMs != DiagDefaultTimeoutMs {
+		t.Fatalf("diag 未配 TimeoutMs 应默认 %dms, got %d", DiagDefaultTimeoutMs, cfg.Providers[0].TimeoutMs)
+	}
+	// 显式 TimeoutMs 不被覆盖。
+	cfg3 := config.Config{Providers: []config.Provider{{Name: "diag", Kind: config.OpenAIKind, Endpoint: "https://x", Model: "jev-diagnose", APIKey: "k", TimeoutMs: 12345}}}
+	PrepareDiagKey(&cfg3)
+	if cfg3.Providers[0].TimeoutMs != 12345 {
+		t.Fatalf("显式 TimeoutMs 应保留, got %d", cfg3.Providers[0].TimeoutMs)
 	}
 	// 未声明 diag → 零动作。
 	cfg2 := config.Config{Providers: []config.Provider{{Name: "fast", Kind: config.OpenAIKind, Endpoint: "https://x", Model: "m"}}}
