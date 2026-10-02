@@ -1,0 +1,15 @@
+{"id":"real-01","raw":"嗯那个呃记一下这个想法","expect":{"intent":"NOTE","corrected":"记一下这个想法"},"issue":"填充词只清句首，'那个呃'残留","source":"2026-10-03 本会话 ASR 实测","tags":["filler"]}
+{"id":"real-02","raw":"帮我把这个文件出交一下","expect":{"intent":"COMMIT","corrected":"帮我把这个文件提交一下"},"issue":"多字触发词同音失真（提交→出交）→ UNKNOWN，整条链路断","source":"2026-10-03 本会话 ASR 实测","tags":["homophone","trigger"]}
+{"id":"real-03","raw":"记一下：这次要修的是报价页那个别字","expect":{"intent":"NOTE","corrected":"记一下：这次要修的是报价页那个错别字"},"issue":"'别字'是'错别字'的 ASR 截断；这句也曾触发错误的指代追问（G9）","source":"2026-10-03 LHT-0001 结算 step1","tags":["truncation","anaphora"]}
+{"id":"real-04","raw":"不要删除那个文件","expect":{"intent":"ASK","corrected":"不要删除那个文件"},"issue":"否定必须原样保住——纠错绝不能把'不'纠掉","source":"2026-10-03 G1 缺口实测","tags":["negation","safety"]}
+{"id":"real-05","raw":"查一吓库存还有多少","expect":{"intent":"QUERY"},"issue":"近音失真（下→吓），意图侥幸保住——但不可依赖侥幸","source":"2026-10-03 本会话 ASR 实测","tags":["homophone"]}
+{"id":"real-06","raw":"把抱价单改成中文","expect":{"intent":"EDIT"},"issue":"专名同音（报→抱）；槽位错了比意图错了更隐蔽","source":"2026-10-03 本会话 ASR 实测","tags":["homophone","proper_noun"]}
+{"id":"real-07","raw":"呃呃呃","expect":{"intent":"UNKNOWN","ask_nonempty":true},"issue":"纯噪声必须回问，绝不脑补成命令","source":"2026-10-03 本会话 ASR 实测","tags":["noise","safety"]}
+{"id":"real-08","raw":"开始测试","expect":{"intent":"ASK"},"issue":"元指令是对话控制，不是'跑 go test'（G3）","source":"2026-10-03 本会话 ASR 实测","tags":["meta"]}
+{"id":"real-09","raw":"如果测试通过就提交","expect":{"intent":"ASK"},"issue":"条件句前提不得被忽略（G6）；纠错不得把'如果'纠掉","source":"2026-10-03 本会话 ASR 实测","tags":["conditional","safety"]}
+{"id":"real-10","raw":"查一下库存，然后记一下结果，最后提交","expect":{"intent":"ASK"},"issue":"多动作不得静默丢弃（G5）","source":"2026-10-03 本会话 ASR 实测","tags":["multi_action"]}
+{"id":"real-11","raw":"注册一个命令，用来压缩图片","expect":{"intent":"REGISTER_TOOL"},"issue":"自举入口对措辞敏感（A1）；'命令'曾被漏收","source":"2026-10-03 架构桩 A1 实测","tags":["register","bootstrap"]}
+{"id":"real-12","raw":"嗯那个呃记一下","expect":{"intent":"NOTE"},"issue":"同一句曾被 refer 覆写成指代追问（G4）；填充词残留","source":"2026-10-03 G4 缺口实测","tags":["filler","anaphora"]}
+{"id":"real-13","raw":"那个那个那个","expect":{"intent":"UNKNOWN","ask_nonempty":true},"issue":"重复指代词是噪声，不是实体","source":"2026-10-03 本会话 ASR 实测","tags":["noise"]}
+{"id":"real-14","raw":"我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进，就是重点是把这个能力建立起来","expect":{"fidelity":true},"issue":"M7 真机长句：纠错不得改动一个字，也不得触发指代追问。**纠错保真**反例","source":"2026-10-03 M7 真机验收","tags":["fidelity","long"]}
+{"id":"real-15","raw":"我想开始认真测一下，接下来把项目推进起来","expect":{"ask_empty":true},"issue":"M7 真机教训：长句元指令不得追问（TestCodexNineRegressions#8）","source":"2026-10-03 M7 真机验收","tags":["fidelity","meta"]}
