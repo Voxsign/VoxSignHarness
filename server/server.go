@@ -105,8 +105,12 @@ type taskState struct {
 	Role      string               `json:"role,omitempty"` // M5-3：当前角色
 	Question  string               `json:"question,omitempty"`
 	Options   []pipeline.AskOption `json:"options,omitempty"`
-	Outcome   *pipeline.Outcome    `json:"outcome,omitempty"`
-	Err       string               `json:"error,omitempty"`
+
+	// lastAsk（缺口 G8 修复）：上一次回问的问题文本。
+	// 用途：同一问题重复出现 = 澄清无法收敛，必须明确失败而不是无限循环。
+	lastAsk string
+	Outcome *pipeline.Outcome `json:"outcome,omitempty"`
+	Err     string            `json:"error,omitempty"`
 
 	// rollback 元数据
 	Reversible bool   `json:"reversible,omitempty"`
@@ -463,7 +467,17 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		case ctx.Err() != nil:
 			s.markStatus(ts, stCanceled)
 		case out.Ask != "":
+			// 缺口 G8 修复：同一问题重复出现 → 澄清无法收敛。
+			// 不再无限回问（手机走到这一屏就走不出去），改为明确失败并给出可执行建议。
+			if ts.lastAsk != "" && out.Ask == ts.lastAsk {
+				ts.Err = "澄清未收敛：重复出现同一问题，请直接用完整指令再说一遍（说出具体对象）"
+				s.markStatus(ts, stCanceled)
+				s.emitEvent(ts, "canceled", map[string]any{"reason": "ask_not_converging"})
+				s.persist(ts)
+				return
+			}
 			// 回问出口：挂起为 need_ask，等待 /answer 续跑（M4-1 ②）。
+			ts.lastAsk = out.Ask
 			s.markStatus(ts, stNeedAsk)
 			ts.Question = out.Ask
 			ts.Options = out.Options // M4-3 ① 结构化 [{id,label}]
@@ -493,14 +507,52 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	}()
 }
 
+// askAnaphora 是续跑时应当被澄清答案替换掉的指代词（长词在前，避免"那个文件"被"那个"抢先切分）。
+var askAnaphora = []string{
+	"那个文件", "这个文件", "那个页面", "这个页面", "那个项目", "这个项目",
+	"那个", "这个", "它",
+}
+
+// stripOptionPrefix 把候选按钮 id（dict:xxx / rec:xxx）还原成可读实体名。
+func stripOptionPrefix(s string) string {
+	for _, p := range []string{"dict:", "rec:"} {
+		if strings.HasPrefix(s, p) {
+			return strings.TrimPrefix(s, p)
+		}
+	}
+	return s
+}
+
+// resolveClarified 用澄清答案替换原句里的指代词，得到自洽的续跑文本（缺口 G8 修复）。
+//
+// 原实现只把答案追加在句尾（`原文 + " 澄清：" + 答案`），原句里的"这个/那个"仍在，
+// refer 层依旧找不到候选 → 再次写出同一句 Ask → 手机上永远走不出这一屏。
+//
+// 替换后用引号包裹答案，使分类器的 extractPath 能直接抽出显式对象：
+//
+//	"把这个改一下" + "main.go" → "把“main.go”改一下"，不再需要指代消解。
+func resolveClarified(text, answer string) string {
+	a := strings.TrimSpace(stripOptionPrefix(answer))
+	if a == "" {
+		return text
+	}
+	for _, trig := range askAnaphora {
+		if strings.Contains(text, trig) {
+			return strings.Replace(text, trig, "“"+a+"”", 1)
+		}
+	}
+	return text
+}
+
 // resumeAsk 把 need_ask 任务用 answer 续跑。answer 为候选 id 时映射为强关键词前缀，
-// 自由文本时直接拼澄清（M4-3 ①：点选即续跑）。
+// 自由文本时替换原句指代词；无可替换指代词则退回"追加澄清"的老行为。
 func (s *Server) resumeAsk(ts *taskState, answer string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 	s.markStatus(ts, stRunning)
 	ts.Question = ""
 	ts.Options = nil
+	// 注意：这里**不**重置 lastAsk —— 它要跨轮保留，才能识别"同一问题又被问了一遍"。
 
 	prefix := ""
 	switch strings.ToLower(strings.TrimSpace(answer)) {
@@ -513,7 +565,11 @@ func (s *Server) resumeAsk(ts *taskState, answer string) {
 	case "commit":
 		prefix = "提交 "
 	}
-	clarified := prefix + ts.Text + " 澄清：" + answer
+	substituted := resolveClarified(ts.Text, answer)
+	clarified := prefix + substituted
+	if substituted == ts.Text {
+		clarified = prefix + ts.Text + " 澄清：" + answer
+	}
 	s.runPipeline(ts, ctx, clarified, "")
 }
 
