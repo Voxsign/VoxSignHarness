@@ -202,6 +202,9 @@ const (
 	// ConflictMeta：元指令（开始/继续/推进）被误当可执行命令 → ASK 消歧（缺口 G3）。
 	// 「开始测试」是推进对话，不是"跑 go test ./..."。
 	ConflictMeta = "meta"
+	// ConflictConditional：条件句（如果…就…）被无条件执行 → ASK（缺口 G6）。
+	// 系统不替用户守条件，也不得把"有前提的动作"当无条件命令做掉。
+	ConflictConditional = "conditional"
 )
 
 // Intent 是输入容错层产出的结构化意图（架构文档 §5.5）：

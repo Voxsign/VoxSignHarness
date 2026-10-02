@@ -250,6 +250,49 @@ var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下�
 //     「8-元指令控制组不Ask」——长句必须保持不 Ask。
 const metaMaxRunes = 8
 
+// ---------------------------------------------------------------------------
+// 条件句仲裁（缺口 G6）
+//
+// 问题：「如果测试通过就提交」被判 TEST 0.85 直接执行 —— **前提被完全忽略**。
+// 系统不替用户守条件，也不该把"有前提的动作"当无条件命令做掉。
+// ---------------------------------------------------------------------------
+
+// conditionalMarkers 是前置条件标记。"就"是中文最典型的条件连接词，
+// 但它太常见（就是/就这个），必须配合**后随动作窗口**才判定。
+var conditionalMarkers = []string{"如果", "只要", "除非", "一旦", "要是", "假如", "就"}
+
+// conditionalWindow 是条件标记之后允许出现动作词的字数窗口。
+//
+// 为什么必须限窗口：M7 真机长句
+// 「我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进…」
+// 同时含"如果""就"和动作词，但它是一段口语陈述，**必须保持 Ask 为空**
+// （既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+// 条件句的特征是"后果紧跟条件"（如果测试通过**就提交**），而不是句子里恰好都有。
+const conditionalWindow = 12
+
+// conditionalClause 报告文本是否含"条件 + 紧跟其后的动作"，返回命中的标记。
+func conditionalClause(text string) (string, bool) {
+	for _, m := range conditionalMarkers {
+		from := 0
+		for {
+			i := strings.Index(text[from:], m)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			after := text[pos+len(m):]
+			if r := []rune(after); len(r) > conditionalWindow {
+				after = string(r[:conditionalWindow])
+			}
+			if containsAny(after, actionWords) {
+				return m, true
+			}
+			from = pos + len(m)
+		}
+	}
+	return "", false
+}
+
 func metaInstruction(text string) (string, bool) {
 	if len([]rune(text)) > metaMaxRunes {
 		return "", false
@@ -354,6 +397,16 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		got.Conflict = contract.ConflictMeta
 		got.Ask = "「" + meta + "」是让我继续推进，还是要我现在就执行后面的动作？" +
 			"要执行请直接说完整指令（例如「跑一下测试」）"
+		return got
+	}
+
+	// 0.6 条件句仲裁（缺口 G6）：「如果测试通过就提交」的前提不能被忽略。
+	//     系统不替用户守条件 —— 明确告知，请用户先完成前提再下指令。
+	if cond, ok := conditionalClause(text); ok {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictConditional
+		got.Ask = "「" + cond + "」是带前提的动作。我不会替你守着条件——" +
+			"请先完成前提（例如先把测试跑完），再直接说指令"
 		return got
 	}
 
