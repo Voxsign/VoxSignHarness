@@ -82,6 +82,9 @@ func NewTaskClassifier(conf float64, spaces []SpaceHint) *TaskClassifier {
 const taskAskTemplate = "你是想让我做什么？请再说清楚一点（记想法/查代码/改代码/修 bug/跑测试/提交/部署/问问题）"
 
 var (
+	// registerTriggers 是历史触发词表：保留给 actionWords（否定/条件的动作全集）
+	// 与非结构化兜底使用。新判定一律走 registerToolRequest 的结构性判据 ——
+	// 见下方"注册工具意图（架构缺口 A1）"。
 	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具"}
 	deleteTriggers   = []string{"删掉", "删除", "去掉", "移除", "清空"}
 	feasibleAsk      = []string{"能不能", "可不可以", "是否可以", "行不行"}
@@ -98,6 +101,104 @@ var (
 	askTriggers      = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何"}
 	defaultExcludes  = []string{".env*", "node_modules"}
 )
+
+// ---------------------------------------------------------------------------
+// 注册工具意图（架构缺口 A1 · 决策 #7「契约注册机制可被语音调用」）
+//
+// 问题：「注册一个命令，用来压缩图片」被判 UNKNOWN —— 自举链条从入口就断了。
+// 根因不是"少收了几个词"，而是把"注册意图"实现成了对固定短语的词表匹配
+// （加一个工具/注册工具/新增工具…）。用户不会迁就系统的词表：同一个意图
+// 可以说成「注册一个命令」「新增一个技能」「添加个插件」「创建一个脚本」。
+//
+// 真特征（结构性）：**注册动词**直接支配**能力名词** —— 两者之间只允许
+// 量化/虚词（一个/个/一条/新的…），不得夹带实义成分。据此：
+//
+//	「注册一个命令」      注册 + 一个 + 命令   → ✅ REGISTER_TOOL
+//	「加个新工具」        加 + 个新 + 工具     → ✅ REGISTER_TOOL
+//	「查一下注册表」      注册 后面是"表"，不支配任何能力名词 → ❌ 保持 QUERY
+//	「查一下已注册的工具」 注册 与 工具 之间夹着"的"，是描述不是注册动作 → ❌
+//
+// 注意：判据刻意**不**允许"的"等实义成分跨过动词与名词之间，否则
+// 「查一下已注册的工具」这类问句会被误判成注册指令（回归保护见
+// input/registertool_regression_test.go）。
+// ---------------------------------------------------------------------------
+
+// registerVerbs 是"把一项新能力登记进系统"的动词。
+// "加/做/搞"是口语中的泛化动词，必须靠"紧邻能力名词"才判定，故不能单独用。
+var registerVerbs = []string{"注册", "新增", "添加", "增加", "创建", "新建", "加", "做", "搞", "上架", "接入"}
+
+// registerCapabilityNouns 是可被注册的能力类别名词（需紧邻在动词/量词之后）。
+var registerCapabilityNouns = []string{"工具", "小工具", "工具链", "命令", "子命令", "指令", "技能", "能力", "插件", "功能", "脚本"}
+
+// registerGapFillers 是注册动词与能力名词之间允许出现的量化/虚词。
+// **必须按长度降序**：registerGapThenNoun 取首个前缀命中，长词优先才不会被
+// "一个"先把"一个新的"截断（否则"一个新的工具"剥成"新的工具"后判失败）。
+var registerGapFillers = []string{
+	"一个全新的",
+	"一个新的", "一种新的", "一款新的",
+	"个新的",
+	"一个", "一条", "一款", "一种", "一支", "一项", "个新", "新的",
+	"新", "个", "条", "款", "种", "支", "项",
+}
+
+// registerVerbWordPart 报告单字动词 v 在 pos 处是否只是某个词的一部分，而非独立动词。
+// 「参加一个工具培训」里的"加"属于"参加"（去参加培训），不是"加一个工具"——
+// 不加此闸会把它误判成注册意图。只有单字泛化动词需要这个词部分判断。
+func registerVerbWordPart(text string, pos int, v string) bool {
+	if v != "加" || pos == 0 {
+		return false
+	}
+	runes := []rune(text[:pos])
+	return runes[len(runes)-1] == '参'
+}
+
+// registerToolRequest 报告文本是否为"注册一项新能力"的语音指令（结构性判据）。
+func registerToolRequest(text string) bool {
+	lower := strings.ToLower(text)
+	for _, v := range registerVerbs {
+		from := 0
+		for {
+			i := strings.Index(lower[from:], v)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			if registerVerbWordPart(lower, pos, v) {
+				from = pos + len(v)
+				continue
+			}
+			if registerGapThenNoun(lower[pos+len(v):]) {
+				return true
+			}
+			from = pos + len(v)
+		}
+	}
+	return false
+}
+
+// registerGapThenNoun 报告 after 是否以「(量化虚词)* 能力名词」开头。
+func registerGapThenNoun(after string) bool {
+	rest := after
+	for {
+		matched := false
+		for _, g := range registerGapFillers {
+			if strings.HasPrefix(rest, g) {
+				rest = rest[len(g):]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			break
+		}
+	}
+	for _, n := range registerCapabilityNouns {
+		if strings.HasPrefix(rest, n) {
+			return true
+		}
+	}
+	return false
+}
 
 // ---------------------------------------------------------------------------
 // 否定仲裁（缺口 G1）
@@ -283,7 +384,7 @@ func conditionalClause(text string) (string, bool) {
 			if r := []rune(after); len(r) > conditionalWindow {
 				after = string(r[:conditionalWindow])
 			}
-			if containsAny(after, actionWords) {
+			if containsAny(after, actionWords) || registerToolRequest(after) {
 				return m, true
 			}
 			from = pos + len(m)
@@ -375,7 +476,13 @@ var actionIntentGroups = []struct {
 func clauseActions(clause string) []string {
 	var out []string
 	for _, g := range actionIntentGroups {
-		if containsAny(clause, g.triggers) {
+		// REGISTER_TOOL 用结构性判据（动词支配能力名词），不再用固定短语词表 ——
+		// 否则「注册一个命令，然后跑测试」会被算成 1 个动作而漏报多动作。
+		hit := containsAny(clause, g.triggers)
+		if g.intent == contract.IntentRegisterTool {
+			hit = registerToolRequest(clause)
+		}
+		if hit {
 			out = append(out, g.intent)
 		}
 	}
@@ -563,7 +670,8 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 0. 否定仲裁（缺口 G1，必须排在删除仲裁**之前**）。
 	//    `不要删除那个文件` 若先撞上 deleteTriggers，就会被判成可执行的 EDIT(action=delete)；
 	//    否定词直接支配动作时一律转 ASK 确认 —— SPEC-v2:49「Ask != '' → 绝不执行」。
-	if neg, actionBound, ok := hasNegation(text); ok && (actionBound || containsAny(text, actionWords)) {
+	if neg, actionBound, ok := hasNegation(text); ok && (actionBound ||
+		containsAny(text, actionWords) || registerToolRequest(text)) {
 		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 		got.Conflict = contract.ConflictNegation
 		got.Ask = "我听到的是「" + neg + "」——确认不执行这个动作吗？" +
@@ -593,7 +701,7 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 
 	// 1. 冲突仲裁（优先级最高）
 	switch {
-	case containsAny(text, registerTriggers):
+	case registerToolRequest(text):
 		return c.fill(ti, contract.IntentRegisterTool, 0.95, nil)
 	case containsAny(text, deleteTriggers):
 		ti.Conflict = contract.ConflictDelete

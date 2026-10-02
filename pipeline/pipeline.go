@@ -1440,19 +1440,32 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if o == nil || o.Providers == nil {
 		return it
 	}
-	// 评审 P4（G1）/ P3（G3）：仲裁结果**不得**被 LLM 回退覆盖。
+	// 评审 P4（G1）/ P3（G3）：进入"绝不执行"确认态的结果**不得**被 LLM 回退覆盖。
 	// 回退命中后会把 it.Ask 清空，而「Ask != '' → 绝不执行」是安全红线：
 	//   - 否定：「不要删除那个文件吗？」会被清 Ask 后判 EDIT 执行；
 	//   - 元指令：「开始测试吗」同理（评审 G3-P3）；
-	//   - 条件句：「如果测试通过就提交吗」同理。
-	// 三者都必须在进入回退前直接返回。
-	switch it.Conflict {
-	case contract.ConflictNegation, contract.ConflictMeta, contract.ConflictConditional,
-		contract.ConflictMultiAction:
-		// 评审 G5-P0-1：多动作也必须豁免 —— 否则「把报价改成中文然后跑一下测试，行吗？」
-		// 会被 fallback 清空 Ask 后只执行第一个动作，G5 复发。
-		// 这是**同一类系统性缺口的第三个实例**（G1-P4 / G3-P3 已各踩一次）：
-		// 每新增一条"靠 Ask 拦住"的安全分支，都必须同时登记到这个 switch。
+	//   - 条件句：「如果测试通过就提交吗」同理；
+	//   - 多动作：「把报价改成中文然后跑一下测试，行吗？」（评审 G5-P0-1）。
+	//
+	// 结构性不变式（技能 §4）：**仲裁已发生，且已落在 Ask 确认态** → 一律豁免。
+	// 即 `Conflict != "" && Ask != ""`。原实现是白名单 switch
+	// （negation/meta/conditional/multi_action），于是同一类缺口连踩三次：
+	// 每新增一条"靠 Ask 拦住"的仲裁分支，就忘了登记到这里。白名单必然漏 ——
+	// 实测就漏收了 ConflictDebugPlan（input/taskintent.go:717-721，Ask 非空，
+	// 却不在白名单里，回退可以把"要给思路还是直接修"这个确认态直接清掉）。
+	//
+	// 为什么是 Conflict+Ask 两者，而不是只用其中任一：
+	//   - 只用 `Conflict != ""`：会误伤 ConflictDelete / ConflictNoteVsDeploy /
+	//     ConflictAskVsOp 这些 **Ask 为空的合法可执行路径**（删除由下游域/风险门禁管，
+	//     不该在这里被挡住回退）；
+	//   - 只用 `Ask != ""`：会误杀回退本身 —— ClassifyTask 初始化即带
+	//     `Ask: taskAskTemplate`（"你是想让我做什么？"），UNKNOWN/低置信出口
+	//     必然 Ask 非空，于是本函数永不触发（M7 ① 静默失效）。
+	//     分类器把两种 Ask 混用了：**默认分类 Ask**（UNKNOWN 模板/低置信）与
+	//     **仲裁 Ask**（安全停）。Conflict 非空正是"这是仲裁 Ask"的可观测标志。
+	//
+	// 回归保护见 pipeline/intentfallback_regression_test.go（四类双向反例）。
+	if it.Conflict != "" && it.Ask != "" {
 		return it
 	}
 	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
