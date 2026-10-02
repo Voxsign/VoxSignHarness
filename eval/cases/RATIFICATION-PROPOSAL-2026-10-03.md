@@ -68,3 +68,57 @@ G1 修好后系统改用 `ASK` 回问（更安全），却被 v0 判成违规 �
 
 在 `eval/cases/cases.jsonl` 对应行填 `ratified_by`（人名）与 `ratified_at`，
 并把 `status` 改为 `met`。签名即代表：**该条的外部真值由人确认，agent 不得再改**。
+
+---
+
+## 六、新增复算机制 + 一处机械修正（2026-10-03 第 12 轮）
+
+### 6.1 复算机制：真值库不再只是文档
+
+本轮新增 **漂移探测器** `eval/cases/drift_test.go`（构建标签 `evaldrift`，默认门禁不受影响）：
+
+```bash
+go test -tags evaldrift ./eval/cases -run TestTruthSourceDrift -v
+```
+
+它逐条跑每行的 `verify_cmd`，比对**声明状态**与**实测结果**：
+
+| 声明 | 要求 |
+|---|---|
+| `met` | `verify_cmd` 必须退出 0 |
+| `not_met` | `verify_cmd` 必须非 0（缺口确实还在） |
+| `unverified` | **不判**，只报告（未评测项显式保留） |
+
+**一致 = 真值库可信；不一致 = 漂移，须人工重签。agent 不得自行改状态。**
+
+首次运行结果：
+
+```
+复算 16 条（另有 1 条 unverified，显式保留不判）
+漂移 8 条：VHS-ASR-0010…0017 声明 not_met 但 verify_cmd 已通过
+          → 这 8 个缺口已修，状态待人工重签
+```
+
+### 6.2 一处**机械修正**（不是状态变更）
+
+漂移探测器同时抓到真值库自身的一个缺陷：
+
+```
+VHS-ASR-0006  verify_cmd: go test ./server -run A|B -v
+```
+
+`|` 被 shell 当作**管道**，不是 Go 测试的正则"或"——**这条命令根本跑不通**，
+导致一个声明 `met` 的条目实际上无法被复算，长期"看起来通过"。
+
+已修正为（仅加引号）：
+
+```
+go test ./server -run 'TestASRSimPhoneFuzzyNeverBlankOrStuck|TestASRSimPhoneAskOptionsWellFormed' -v
+```
+
+**性质说明**：这是修"复算配方"，不是改"外部真值判定"，故由 agent 直接修正并在本文件留痕。
+修正后该行实测通过，与声明的 `met` 一致。
+
+### 6.3 全库扫描
+
+已扫描全部 17 行的 `verify_cmd`，**只有 VHS-ASR-0006 存在未加引号的 `|`**，其余命令均可直接执行。
