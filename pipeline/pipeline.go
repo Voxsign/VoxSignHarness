@@ -1081,6 +1081,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	}
 	p, err := o.Providers.Get("fast")
 	if err != nil {
+		log.Printf("[queryLLMAnswer] fast provider unavailable: %v", err)
 		return degraded
 	}
 	resp, err := p.Chat(ctx, provider.ChatRequest{
@@ -1104,7 +1105,9 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	if strings.HasPrefix(content, "{") {
 		var j map[string]any
 		if err := json.Unmarshal([]byte(content), &j); err == nil {
-			for _, k := range []string{"text", "response", "content", "answer", "message"} {
+			// error 键也要解出：模型中心 gpt-6-luna 在"无数据可判断"等场景会输出
+			// {"error":"..."} 诚实回答，键若遗漏会把有效内容误吞成降级文案。
+			for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
 				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
 					content = strings.TrimSpace(s)
 					break
@@ -1113,6 +1116,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		}
 		// 仍是 JSON 壳（模型输出意外结构）→ 降级文案，不把 JSON 透传给用户。
 		if strings.HasPrefix(content, "{") {
+			log.Printf("[queryLLMAnswer] fast returned unexpected JSON shell: %.160s", content)
 			return degraded
 		}
 	}
