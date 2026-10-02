@@ -368,6 +368,73 @@ func TestRecoverableFalseForcesStop(t *testing.T) {
 	}
 }
 
+// TestSafeRetryModifyReplaysReadOnlyWithFilteredParams：param→modify 正向重放。
+// 只读工具首次失败 → 诊断 modify → 应用 retry_params 后重放成功；
+// 断言业务键合入工具 args，而 harness 控制键（backoff/cooldown/max_retries）被过滤不注入。
+func TestSafeRetryModifyReplaysReadOnlyWithFilteredParams(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exceptions.jsonl")
+	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		okJSON(w, `{"category":"param","root_cause":"pattern 拼写错误","confidence":0.9,"recoverable":true,"suggestion":"修正 pattern 后重试","action":"modify","retry_params":{"backoff_seconds":0.05,"cooldown_seconds":0.01,"max_retries":1,"pattern":"fixed-pattern"}}`)
+	})
+	var gotArgs map[string]any
+	called := 0
+	runner := func(tool string, args map[string]any) contract.Receipt {
+		called++
+		gotArgs = args
+		return contract.Receipt{Tool: tool, OK: true, Stdout: "hits: 9"}
+	}
+	svc := NewService(OpenKB(path), diag, runner)
+	att := Attempt{Tool: "search", Args: map[string]any{"pattern": "wrong*"}, Receipt: contract.Receipt{Tool: "search", OK: false, Err: "param invalid"}}
+	nr, d := svc.SafeRetry(context.Background(), "查 x", "QUERY", att)
+
+	// (a) 重放发生且成功。
+	if nr == nil || !nr.OK || called != 1 {
+		t.Fatalf("modify 应重放一次并成功: called=%d nr=%+v", called, nr)
+	}
+	if d == nil || d.Action != ActionModify || d.Category != CatParam {
+		t.Fatalf("诊断结论应为 param/modify: %+v", d)
+	}
+	// (b) 业务键合入工具 args。
+	if gotArgs["pattern"] != "fixed-pattern" {
+		t.Fatalf("合入业务键 pattern 应为 fixed-pattern, got %v", gotArgs["pattern"])
+	}
+	// (c) harness 控制键未注入工具 args。
+	for _, k := range []string{"backoff_seconds", "cooldown_seconds", "max_retries"} {
+		if _, leaked := gotArgs[k]; leaked {
+			t.Fatalf("控制键 %s 不应注入工具 args: %+v", k, gotArgs)
+		}
+	}
+	// (d) 修复成功回写 KB。
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `"fingerprint"`) {
+		t.Fatalf("modify 修复成功应回写 KB: %s", data)
+	}
+}
+
+// TestSafeRetryUnknownAskDoesNotReplay：unknown→ask 路由。
+// runner 零调用（不重放）、无错误扩散，结论保留供归因。
+func TestSafeRetryUnknownAskDoesNotReplay(t *testing.T) {
+	dir := t.TempDir()
+	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		okJSON(w, `{"category":"unknown","root_cause":"无法判定","confidence":0.5,"recoverable":true,"suggestion":"人工介入","action":"ask"}`)
+	})
+	called := 0
+	runner := func(tool string, args map[string]any) contract.Receipt {
+		called++
+		return contract.Receipt{Tool: tool, OK: true}
+	}
+	svc := NewService(OpenKB(filepath.Join(dir, "exceptions.jsonl")), diag, runner)
+	att := Attempt{Tool: "search", Args: map[string]any{"pattern": "x"}, Receipt: contract.Receipt{Tool: "search", OK: false, Err: "weird"}}
+	nr, d := svc.SafeRetry(context.Background(), "t", "QUERY", att)
+	if nr != nil || called != 0 {
+		t.Fatalf("action=ask 绝不重放, called=%d nr=%+v", called, nr)
+	}
+	if d == nil || d.Action != ActionAsk {
+		t.Fatalf("结论应保留为 ask 供归因: %+v", d)
+	}
+}
+
 func TestReadOnlyClassification(t *testing.T) {
 	cases := []struct {
 		tool string
