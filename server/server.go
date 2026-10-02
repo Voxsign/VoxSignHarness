@@ -106,11 +106,16 @@ type taskState struct {
 	Question  string               `json:"question,omitempty"`
 	Options   []pipeline.AskOption `json:"options,omitempty"`
 
-	// lastAsk（缺口 G8 修复）：上一次回问的问题文本。
-	// 用途：同一问题重复出现 = 澄清无法收敛，必须明确失败而不是无限循环。
-	lastAsk string
-	Outcome *pipeline.Outcome `json:"outcome,omitempty"`
-	Err     string            `json:"error,omitempty"`
+	// askedQuestions / askRounds（缺口 G8 修复）：已问过的问题集合 + 澄清轮次。
+	//
+	// 评审 S1：只比对"紧邻上一轮"在 Q1→Q2→Q1→Q2 交替时永不命中，仍会无限循环。
+	// 改为记录**问题集合**并加轮次上限，任一命中即判收敛失败。
+	// 注（评审 S5）：这两个字段未导出、不参与 JSON 序列化；跨进程恢复后守卫失效，
+	// 属已知限制——当前 server 的任务表是内存态，重启恢复路径另有 interrupted 处理。
+	askedQuestions map[string]bool
+	askRounds      int
+	Outcome        *pipeline.Outcome `json:"outcome,omitempty"`
+	Err            string            `json:"error,omitempty"`
 
 	// rollback 元数据
 	Reversible bool   `json:"reversible,omitempty"`
@@ -467,17 +472,25 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		case ctx.Err() != nil:
 			s.markStatus(ts, stCanceled)
 		case out.Ask != "":
-			// 缺口 G8 修复：同一问题重复出现 → 澄清无法收敛。
-			// 不再无限回问（手机走到这一屏就走不出去），改为明确失败并给出可执行建议。
-			if ts.lastAsk != "" && out.Ask == ts.lastAsk {
-				ts.Err = "澄清未收敛：重复出现同一问题，请直接用完整指令再说一遍（说出具体对象）"
+			// 缺口 G8 修复：澄清无法收敛时明确失败，而不是无限回问。
+			// 评审 S1：判定依据是**问题集合 + 轮次上限**，不是"与上一轮逐字相同"
+			// —— 后者在 Q1→Q2→Q1→Q2 交替时永远不命中。
+			if ts.askedQuestions == nil {
+				ts.askedQuestions = map[string]bool{}
+			}
+			if ts.askedQuestions[out.Ask] || ts.askRounds >= maxAskRounds {
+				ts.Err = "澄清未收敛：同一个问题被反复问到，或已达澄清轮次上限；" +
+					"请直接用完整指令再说一遍（明确说出对象）"
 				s.markStatus(ts, stCanceled)
-				s.emitEvent(ts, "canceled", map[string]any{"reason": "ask_not_converging"})
+				s.emitEvent(ts, "canceled", map[string]any{
+					"reason": "ask_not_converging", "rounds": ts.askRounds,
+				})
 				s.persist(ts)
 				return
 			}
 			// 回问出口：挂起为 need_ask，等待 /answer 续跑（M4-1 ②）。
-			ts.lastAsk = out.Ask
+			ts.askedQuestions[out.Ask] = true
+			ts.askRounds++
 			s.markStatus(ts, stNeedAsk)
 			ts.Question = out.Ask
 			ts.Options = out.Options // M4-3 ① 结构化 [{id,label}]
@@ -507,17 +520,50 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	}()
 }
 
+// maxAskRounds 是同一任务允许的最大澄清轮次（缺口 G8 修复）。
+// 超过即判"澄清未收敛"并取消，不再无限回问。
+const maxAskRounds = 3
+
 // askAnaphora 是续跑时应当被澄清答案替换掉的指代词（长词在前，避免"那个文件"被"那个"抢先切分）。
 var askAnaphora = []string{
 	"那个文件", "这个文件", "那个页面", "这个页面", "那个项目", "这个项目",
 	"那个", "这个", "它",
 }
 
+// pronounIndex 返回 trig 在 text 中的**字节**下标；未命中返回 -1。
+//
+// 评审 S2：中文没有词边界，裸单字代词用 strings.Contains 会误伤词的一部分
+// （"其它" 里的 "它"、"由它" 里的 "它"）。故对单字代词做前文排除。
+func pronounIndex(text, trig string) int {
+	runes := []rune(text)
+	tr := []rune(trig)
+	if len(tr) == 0 || len(tr) > len(runes) {
+		return -1
+	}
+	if len(tr) > 1 {
+		return strings.Index(text, trig)
+	}
+	for i, r := range runes {
+		if r != tr[0] {
+			continue
+		}
+		if i > 0 {
+			switch runes[i-1] {
+			case '其', '由': // 其它 / 由它 —— 是词的一部分，不是代词
+				continue
+			}
+		}
+		return len(string(runes[:i]))
+	}
+	return -1
+}
+
 // stripOptionPrefix 把候选按钮 id（dict:xxx / rec:xxx）还原成可读实体名。
 func stripOptionPrefix(s string) string {
+	s = strings.TrimSpace(s)
 	for _, p := range []string{"dict:", "rec:"} {
 		if strings.HasPrefix(s, p) {
-			return strings.TrimPrefix(s, p)
+			return strings.TrimSpace(strings.TrimPrefix(s, p))
 		}
 	}
 	return s
@@ -531,28 +577,35 @@ func stripOptionPrefix(s string) string {
 // 替换后用引号包裹答案，使分类器的 extractPath 能直接抽出显式对象：
 //
 //	"把这个改一下" + "main.go" → "把“main.go”改一下"，不再需要指代消解。
+//
+// 该"引号可被抽出"的假设由 server 包的单测 TestResolveClarifiedExtractsObject 锁定（评审 S3）。
 func resolveClarified(text, answer string) string {
-	a := strings.TrimSpace(stripOptionPrefix(answer))
+	a := stripOptionPrefix(answer)
 	if a == "" {
 		return text
 	}
 	for _, trig := range askAnaphora {
-		if strings.Contains(text, trig) {
-			return strings.Replace(text, trig, "“"+a+"”", 1)
+		if i := pronounIndex(text, trig); i >= 0 {
+			return text[:i] + "“" + a + "”" + text[i+len(trig):]
 		}
 	}
 	return text
 }
 
-// resumeAsk 把 need_ask 任务用 answer 续跑。answer 为候选 id 时映射为强关键词前缀，
-// 自由文本时替换原句指代词；无可替换指代词则退回"追加澄清"的老行为。
-func (s *Server) resumeAsk(ts *taskState, answer string) {
+// resumeAsk 把 need_ask 任务用 answer 续跑；answer 为空则**拒绝**并保持等待态。
+// 返回 false 表示未受理（调用方应回 400），任务仍停在 need_ask，用户可以再答一次。
+func (s *Server) resumeAsk(ts *taskState, answer string) bool {
+	if strings.TrimSpace(answer) == "" {
+		// 评审 S7：空答案不是"澄清未收敛"，原因不同，不能混报。
+		return false
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 	s.markStatus(ts, stRunning)
 	ts.Question = ""
 	ts.Options = nil
-	// 注意：这里**不**重置 lastAsk —— 它要跨轮保留，才能识别"同一问题又被问了一遍"。
+	// 注意：这里**不**重置 askedQuestions / askRounds —— 它们要跨轮保留，
+	// 才能识别"同一个问题又被问了一遍"（评审 S1）。
 
 	prefix := ""
 	switch strings.ToLower(strings.TrimSpace(answer)) {
@@ -566,11 +619,12 @@ func (s *Server) resumeAsk(ts *taskState, answer string) {
 		prefix = "提交 "
 	}
 	substituted := resolveClarified(ts.Text, answer)
-	clarified := prefix + substituted
 	if substituted == ts.Text {
-		clarified = prefix + ts.Text + " 澄清：" + answer
+		// 无可替换指代词的兜底路径：仍要剥离候选 id 前缀，避免两条路径处理不一致（评审 S4）。
+		substituted = " 澄清：" + stripOptionPrefix(answer)
 	}
-	s.runPipeline(ts, ctx, clarified, "")
+	s.runPipeline(ts, ctx, prefix+substituted, "")
+	return true
 }
 
 func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
@@ -763,8 +817,15 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request, ts *taskSt
 	// need_ask：以澄清文本续跑同一任务。
 	if st == stNeedAsk {
 		s.mu.Lock()
-		s.resumeAsk(ts, req.Answer)
+		accepted := s.resumeAsk(ts, req.Answer)
 		s.mu.Unlock()
+		if !accepted {
+			// 空答案：拒绝受理，任务仍停在 need_ask，用户可以再答一次（评审 S7）。
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "澄清答案不能为空；任务仍在等待作答", "status": st,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "resumed": true})
 		return
 	}
