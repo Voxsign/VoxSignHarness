@@ -244,11 +244,10 @@ var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下�
 //  1. 元指令出现在**句首附近**（前面不超过 2 个字符），否则它只是句子的一部分；
 //  2. 其后确实跟着一个动作词——纯元指令（如「开始」）没有动作可误执行，
 //     交回 UNKNOWN 处理即可，不必多问一句；
-//  3. 整句**足够短**（≤ metaMaxRunes）。长句里的「开始/推进」是叙述，不是控制指令：
-//     M7 真机教训「我想开始认真测一下，接下来把项目推进起来」被系统追问，
-//     项目已把它钉为回归用例 `pipeline.TestCodexNineRegressions` 的
-//     「8-元指令控制组不Ask」——长句必须保持不 Ask。
-const metaMaxRunes = 8
+//  3. 元词之后**除了动作本身没有别的实质内容**（评审 P1：不用字数当代理判据）。
+//     长句里的「开始/推进」是叙述（M7 真机教训，见
+//     pipeline.TestCodexNineRegressions#8：长句元指令必须保持不 Ask）——
+//     长句天然带有大量实质内容，会被本条自动排除。
 
 // ---------------------------------------------------------------------------
 // 条件句仲裁（缺口 G6）
@@ -293,27 +292,49 @@ func conditionalClause(text string) (string, bool) {
 	return "", false
 }
 
+// metaMaxPrefixRunes 是元指令词之前允许的前置字数（"好的，""我们先""嗯，"）。
+const metaMaxPrefixRunes = 4
+
+// metaTrailingNoise 是元指令句尾的语气/征询成分，剥掉后不算"实质内容"。
+var metaTrailingNoise = []string{
+	"好不好", "行吗", "可以吗", "一下吧", "一下",
+	"吧", "呢", "啊", "呀", "了", "嗯", "那", "好", "不",
+	"。", "，", "、", "！", "？", "!", "?", " ",
+}
+
 func metaInstruction(text string) (string, bool) {
-	if len([]rune(text)) > metaMaxRunes {
-		return "", false
-	}
 	for _, m := range metaPrefixes {
 		i := strings.Index(text, m)
 		if i < 0 {
 			continue
 		}
-		if len([]rune(text[:i])) > 2 {
+		if len([]rune(text[:i])) > metaMaxPrefixRunes {
 			continue
 		}
 		rest := text[i+len(m):]
-		if rest == "" {
+		if rest == "" || !containsAny(rest, actionWords) {
 			continue
 		}
-		if containsAny(rest, actionWords) {
+		// 剥掉动作词与句尾语气成分；什么都不剩 = 用户没给对象 = 元指令。
+		residual := rest
+		for _, w := range append(append([]string{}, actionWords...), metaTrailingNoise...) {
+			residual = strings.ReplaceAll(residual, w, "")
+		}
+		if strings.TrimSpace(residual) == "" {
 			return m, true
 		}
 	}
 	return "", false
+}
+
+// metaActionText 给出与该元指令词相称的文案（评审 P4：「暂停测试」不该被说成"是让我继续推进"）。
+func metaActionText(meta string) string {
+	switch meta {
+	case "暂停", "停一下", "先这样":
+		return "先停一下 / 收尾"
+	default:
+		return "继续推进"
+	}
 }
 
 // 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
@@ -395,7 +416,7 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	if meta, ok := metaInstruction(text); ok {
 		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 		got.Conflict = contract.ConflictMeta
-		got.Ask = "「" + meta + "」是让我继续推进，还是要我现在就执行后面的动作？" +
+		got.Ask = "「" + meta + "」是让我" + metaActionText(meta) + "，还是要我现在就执行后面的动作？" +
 			"要执行请直接说完整指令（例如「跑一下测试」）"
 		return got
 	}

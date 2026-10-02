@@ -38,9 +38,6 @@ func TestMetaInstructionAsksForDisambiguation(t *testing.T) {
 // TestMetaLongSentenceExempt 长句豁免：长句里的「开始/推进」是叙述，不是控制指令。
 func TestMetaLongSentenceExempt(t *testing.T) {
 	long := "我想开始认真测一下，接下来把项目推进起来"
-	if len([]rune(long)) <= metaMaxRunes {
-		t.Fatal("测试前提：该句应长于 metaMaxRunes")
-	}
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask(long)
 	if got.Conflict == contract.ConflictMeta {
@@ -92,5 +89,54 @@ func TestNegationBeatsMeta(t *testing.T) {
 	got := c.ClassifyTask("不要开始测试")
 	if got.Conflict != contract.ConflictNegation {
 		t.Errorf("conflict = %q，期望 %q（否定应优先于元指令）", got.Conflict, contract.ConflictNegation)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 评审 G3-P1 的反例回归：字数代理判据的两个方向都错。
+// ---------------------------------------------------------------------------
+
+// TestMetaMissedCasesReviewP1 原先会**漏判**的元指令（漏了就会真的去跑测试）。
+func TestMetaMissedCasesReviewP1(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	for _, text := range []string{
+		"好的，开始测试",
+		"我们先开始测试吧好不好",
+		"开始测试一下好不好",
+		"嗯，开始测试",
+	} {
+		got := c.ClassifyTask(text)
+		if got.Intent == contract.IntentTest {
+			t.Errorf("P1 漏判: %q 仍被判 TEST（会真的跑 go test ./...）", text)
+		}
+		if got.Conflict != contract.ConflictMeta {
+			t.Errorf("P1 漏判: %q conflict=%q，期望 %q", text, got.Conflict, contract.ConflictMeta)
+		}
+	}
+}
+
+// TestMetaFalsePositiveCasesReviewP1 原先会**误判**的正常指令（误了就把该执行的变成回问）。
+func TestMetaFalsePositiveCasesReviewP1(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	for _, text := range []string{
+		"开始部署到沙特",
+		"开始部署到服务器",
+		"继续改报价",
+		"接着删除那个文件",
+	} {
+		got := c.ClassifyTask(text)
+		if got.Conflict == contract.ConflictMeta {
+			t.Errorf("P1 误判: %q 被当元指令（真实指令被拦成回问）intent=%s", text, got.Intent)
+		}
+	}
+}
+
+// TestMetaActionTextReviewP4 「暂停」类前缀不该被说成"继续推进"。
+func TestMetaActionTextReviewP4(t *testing.T) {
+	if text := metaActionText("暂停"); text == "继续推进" {
+		t.Error("P4: 「暂停」不该套用「继续推进」文案")
+	}
+	if text := metaActionText("开始"); text != "继续推进" {
+		t.Errorf("P4: 「开始」文案 = %q，期望「继续推进」", text)
 	}
 }

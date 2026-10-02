@@ -145,6 +145,7 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 		return nil, nil, nil
 	}
 	var opts []Option
+
 	// 0. 已显式目标：仅词典规范化，不回问
 	if it.Target != nil && it.Target.Entity != "" {
 		if canon := r.dictLookup(it.CorrectedText); canon != "" {
@@ -154,6 +155,20 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 	}
 
 	text := it.CorrectedText
+
+	// 缺口 G4：UNKNOWN 的澄清原因**不得**被指代回问覆写。
+	//
+	// 分类器判 UNKNOWN 时会写「你是想让我做什么？」——这是用户最需要知道的信息。
+	// 若 refer 把它改写成「你说的「那个」指的是哪个？」，用户会被问一个**错误的问题**。
+	//
+	// 但不能一刀切（既有回归 pipeline.TestCodexNineRegressions#1 要求
+	// 「我现在想认真开始测…把这个哈…推进起来…」这一句**必须**保留 refer 的指代回问）。
+	// 区分标准：是不是**操作指代**。
+	//   - 「把 这个…」→ 操作指代，refer 的澄清有价值 → 放行；
+	//   - 「嗯 那个 呃 记一下」→ 语气词，不是操作对象 → 保留分类器的澄清原因。
+	if it.Intent == contract.IntentUnknown && it.Ask != "" && !anyOperationAnaphora(text) {
+		return it, opts, nil
+	}
 
 	// 1. 词典层（100%）
 	if canon := r.dictLookup(text); canon != "" {
@@ -298,4 +313,57 @@ func (r *Resolver) Solidify(entity, variant string) error {
 		return err
 	}
 	return nil
+}
+
+// operationVerbs 是指代词后紧跟时说明它是"操作对象"的动词。
+var operationVerbs = []rune("发删改查看开关跑修记提部打建写读")
+
+// operationAnaphora 报告某个指代词是否构成"操作指代"。
+//
+//	把 这个 改一下     → 前一字是"把"          → 是操作指代
+//	那个文件 改一下     → 后一字是动词"改"       → 是操作指代
+//	嗯 那个 呃 记一下   → 前后都不是操作语境      → 只是语气词，不是操作对象
+func operationAnaphora(text, trigger string) bool {
+	i := strings.Index(text, trigger)
+	if i < 0 {
+		return false
+	}
+	if i > 0 {
+		prev := []rune(text[:i])
+		if len(prev) > 0 {
+			p := prev[len(prev)-1]
+			switch p {
+			case '把', '将', '对', '给':
+				return true
+			}
+			// 动词在指代词之前：「打开它」「删除这个」——它仍是操作对象。
+			for _, v := range operationVerbs {
+				if p == v {
+					return true
+				}
+			}
+		}
+	}
+	rest := []rune(text[i+len(trigger):])
+	if len(rest) > 0 {
+		for _, v := range operationVerbs {
+			if rest[0] == v {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyOperationAnaphora 报告文本中是否存在**任意**一个操作指代。
+//
+// 注意必须遍历全部候选：hasAny 按词表顺序返回首个命中，而词表顺序与出现位置无关，
+// 长句里可能先命中语气词"那个"，却漏掉更早出现的操作指代"把这个"。
+func anyOperationAnaphora(text string) bool {
+	for _, t := range anaphoraTriggers {
+		if strings.Contains(text, t) && operationAnaphora(text, t) {
+			return true
+		}
+	}
+	return false
 }

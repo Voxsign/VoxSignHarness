@@ -1440,10 +1440,14 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if o == nil || o.Providers == nil {
 		return it
 	}
-	// 评审 P4：否定仲裁的结果**不得**被 LLM 回退覆盖。
-	// 回退命中后会把 it.Ask 清空，而「Ask != '' → 绝不执行」是安全红线；
-	// 一旦允许覆盖，「不要删除那个文件吗？」这类问句化否定会绕过该红线。
-	if it.Conflict == contract.ConflictNegation {
+	// 评审 P4（G1）/ P3（G3）：仲裁结果**不得**被 LLM 回退覆盖。
+	// 回退命中后会把 it.Ask 清空，而「Ask != '' → 绝不执行」是安全红线：
+	//   - 否定：「不要删除那个文件吗？」会被清 Ask 后判 EDIT 执行；
+	//   - 元指令：「开始测试吗」同理（评审 G3-P3）；
+	//   - 条件句：「如果测试通过就提交吗」同理。
+	// 三者都必须在进入回退前直接返回。
+	switch it.Conflict {
+	case contract.ConflictNegation, contract.ConflictMeta, contract.ConflictConditional:
 		return it
 	}
 	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
