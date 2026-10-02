@@ -180,3 +180,29 @@ func isClausePunct(r rune) bool {
 	}
 	return false
 }
+
+// askNoiseReasonPrefix 是"无内容、需回问"信号的**稳定机器可判前缀**。
+// 上层据此回问；判据可据此精确断言（见 engine.go Correct 的无内容守卫）。
+const askNoiseReasonPrefix = "ask:noise"
+
+// pureNoise 报告整句是否**只由填充词/指示代词 + 标点空白构成**（即无可用内容）。
+//
+// 用途：C3 的"该回问"信号。它只认"一个字都没有实义"的极窄情形——
+// 任何实义词、数字、拉丁字母出现即返回 false，因此不会把正常短句判成噪声
+// （C3 的反向反例：real-15 这类长句必须 ask_empty）。
+func pureNoise(runes []rune) bool {
+	fillers := 0
+	for i := 0; i < len(runes); {
+		if isBoundary(runes[i]) {
+			i++
+			continue
+		}
+		n, _ := matchFillerWord(runes[i:])
+		if n == 0 {
+			return false
+		}
+		fillers++
+		i += n
+	}
+	return fillers > 0
+}

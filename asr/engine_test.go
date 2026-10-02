@@ -24,8 +24,10 @@ type corpusCase struct {
 	Raw    string   `json:"raw"`
 	Tags   []string `json:"tags"`
 	Expect struct {
-		Corrected string `json:"corrected"`
-		Fidelity  bool   `json:"fidelity"`
+		Corrected   string `json:"corrected"`
+		Fidelity    bool   `json:"fidelity"`
+		AskEmpty    bool   `json:"ask_empty"`
+		AskNonempty bool   `json:"ask_nonempty"`
 	} `json:"expect"`
 }
 
@@ -308,6 +310,14 @@ func TestCorpusSafetyInvariants(t *testing.T) {
 				t.Errorf("噪声被唯一改写且无候选 [%s]: %q", c.ID, got.Text)
 			}
 		}
+		// C3 的"该回问"必须可观测：噪声 → Candidates 非空且带 ask:noise 前缀。
+		if c.Expect.AskNonempty && len(got.Candidates) == 0 {
+			t.Errorf("ask_nonempty 未交付 [%s]: 噪声没有发出任何回问信号", c.ID)
+		}
+		// 反向：有实义的句子不得被当成噪声（不得乱回问）。
+		if c.Expect.AskEmpty && len(got.Candidates) != 0 {
+			t.Errorf("ask_empty 被破 [%s]: 正常句却给了候选 %+v", c.ID, got.Candidates)
+		}
 		if c.Expect.Corrected != "" && c.Expect.Corrected != c.Raw {
 			if got.Text != c.Expect.Corrected {
 				t.Errorf("未还原 [%s]: 期望 %q 实际 %q", c.ID, c.Expect.Corrected, got.Text)
@@ -365,6 +375,125 @@ func TestMemoryFootprint(t *testing.T) {
 		t.Fatalf("堆增量 %d KB，超过 50 MB 目标", used/1024)
 	}
 	t.Logf("引擎堆增量 %d KB（含一次构造 + 100 次快路）", used/1024)
+}
+
+// TestPinyinTableDeterministic 钉住"可回放"：拼音表不得依赖 Go map 迭代顺序。
+func TestPinyinTableDeterministic(t *testing.T) {
+	a, b := buildPinyinTable(), buildPinyinTable()
+	if len(a) != len(b) {
+		t.Fatalf("两次构建长度不同: %d vs %d", len(a), len(b))
+	}
+	for r, syl := range a {
+		if b[r] != syl {
+			t.Fatalf("两次构建不一致: %q → %q vs %q", r, syl, b[r])
+		}
+	}
+	// 表存在且关键字的读音符合预期（防呆）。
+	for r, want := range map[rune]string{'题': "ti", '提': "ti", '交': "jiao", '报': "bao", '存': "cun"} {
+		if got := a[r]; got != want {
+			t.Errorf("%q → %q，期望 %q", r, got, want)
+		}
+	}
+}
+
+// TestPinyinTableHasNoCrossGroupDuplicate 钉住"多音字不入表"：
+// 同字跨音节组会让 buildPinyinTable 的"先到先得"依赖组顺序，
+// 是 P1 评审指出的潜伏缺陷。要么删掉重复，要么显式决定读音。
+func TestPinyinTableHasNoCrossGroupDuplicate(t *testing.T) {
+	seen := make(map[rune]string)
+	for _, g := range pinyinGroups {
+		for _, r := range g.chars {
+			if prev, ok := seen[r]; ok {
+				t.Errorf("多音字跨组重复：%q 同时在 %q 与 %q（请删掉一个或显式决定）", r, prev, g.syllable)
+				continue
+			}
+			seen[r] = g.syllable
+		}
+	}
+}
+
+// TestNoiseEmitsAskSignal 是 P2 评审的直接判据：噪声必须发出可观测的回问信号。
+// 约定：Candidates 恰有一条，Text==Raw、Confidence==0、Reason 以 ask:noise 开头。
+func TestNoiseEmitsAskSignal(t *testing.T) {
+	eng := NewEngine()
+	for _, raw := range []string{"呃呃呃", "那个那个那个", "嗯，那个呃，嗯", "这个"} {
+		got := eng.Correct(CorrectRequest{Raw: raw})
+		if got.Text != raw {
+			t.Errorf("噪声不得改文本 [%q]: %q", raw, got.Text)
+		}
+		if len(got.Corrections) != 0 {
+			t.Errorf("噪声不改文本却记录了 Correction [%q]: %+v", raw, got.Corrections)
+		}
+		if len(got.Candidates) != 1 {
+			t.Fatalf("噪声回问信号应恰有 1 条候选 [%q]: %+v", raw, got.Candidates)
+		}
+		c := got.Candidates[0]
+		if c.Text != raw || c.Confidence != 0 || !strings.HasPrefix(c.Reason, askNoiseReasonPrefix) {
+			t.Errorf("回问信号约定不符 [%q]: %+v", raw, c)
+		}
+	}
+	// 反向：有实义的句子不得触发回问信号。
+	for _, raw := range []string{"查一下库存", "把报价单改成中文", "开始测试"} {
+		got := eng.Correct(CorrectRequest{Raw: raw})
+		for _, c := range got.Candidates {
+			if strings.HasPrefix(c.Reason, askNoiseReasonPrefix) {
+				t.Errorf("正常句被误判为噪声 [%q]: %+v", raw, c)
+			}
+		}
+	}
+}
+
+// TestConcurrentCorrectAndObserve 是 P4 评审要求的交叉并发：
+// 读者（Correct/Lexicon）与写者（Observe）同时进行，配合 `go test -race` 使用。
+func TestConcurrentCorrectAndObserve(t *testing.T) {
+	eng := NewEngine()
+	raw := "嗯那个呃记一下这个想法"
+	want := eng.Correct(CorrectRequest{Raw: raw}).Text
+
+	done := make(chan struct{})
+	var readers, writers sync.WaitGroup
+
+	for r := 0; r < 4; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				got := eng.Correct(CorrectRequest{Raw: raw})
+				if got.Text != want {
+					t.Errorf("并发下文本漂移: %q，期望 %q", got.Text, want)
+					return
+				}
+				for _, cor := range got.Corrections {
+					if cor.Start < 0 || cor.End > len(raw) || cor.Start >= cor.End {
+						t.Errorf("并发下区间非法: %+v", cor)
+						return
+					}
+				}
+				_ = eng.Lexicon("dev")
+			}
+		}()
+	}
+
+	for w := 0; w < 2; w++ {
+		writers.Add(1)
+		go func(id int) {
+			defer writers.Done()
+			target := "harness-" + string(rune('a'+id))
+			for i := 0; i < 300; i++ {
+				_ = eng.Observe(Feedback{Raw: "哈牛斯", Corrected: target, Accepted: true, Source: "user_edit"})
+				_ = eng.Observe(Feedback{Raw: "哈牛斯", Corrected: target, Accepted: false, Source: "user_edit"})
+			}
+		}(w)
+	}
+
+	writers.Wait()
+	close(done)
+	readers.Wait()
 }
 
 // ---------------------------------------------------------------------------

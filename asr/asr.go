@@ -35,10 +35,27 @@ type CorrectRequest struct {
 
 // CorrectResult 是一次纠正结果。
 type CorrectResult struct {
-	Text        string        // 纠正后文本
-	Corrections []Correction  // 每一处纠正都带证据（可为空 = 一处未改）
+	Text        string        // 纠正后文本。**只承载正文纠错，标点不得混入**（见 Punctuated）
+	Corrections []Correction  // 对 Text 的每一处改动，都带证据（可为空 = Text 一处未改）
 	Candidates  []Candidate   // 置信度接近时的候选（不为空表示"该问人/该问外部"）
 	Latency     time.Duration // 本次纠正耗时
+
+	// Punctuated 是**标点恢复后**的文本（需求 4.3 / 判据 C1 v2）。
+	//
+	// 硬约定（C1 v2 的安全侧）：
+	//   - **标点不得混入 Text** —— Text 只装正文纠错，Punctuated 只装标点恢复；
+	//   - 两者去掉标点后必须**逐字相等**；保真类条目还须与 Raw 去标点后逐字相等；
+	//   - 未做任何标点恢复时，Punctuated == Text。
+	Punctuated string
+
+	// PunctuationCorrections 是标点恢复的逐条留痕（Kind 恒为 "punctuation"）。
+	//
+	// 为什么与 Corrections 分开：C4 的安全不变式是"Text 没改就不得有 Correction 记录"
+	// （防凭空记录）。标点恢复不改 Text，若混进 Corrections 会直接破 C4。
+	//
+	// 每条是**插入**语义：Start == End == 插入点在 Text 中的字节下标，
+	// From == ""，To == 插入的标点；Confidence 与 Evidence 必须非空。
+	PunctuationCorrections []Correction
 }
 
 // Correction 是一处具体纠正 —— **必须可回溯到原文区间**。
