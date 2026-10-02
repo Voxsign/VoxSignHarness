@@ -150,3 +150,25 @@ func TestASRSimGapSelfCorrectionNotUnderstood(t *testing.T) {
 		}
 	}
 }
+
+// TestASRSimGapNoteContentAnaphoraNotAsk 缺口 G9：NOTE 句里的**内容指代**被当成操作指代。
+//
+// 发现于 LHT-0001 结算（step1）：`记一下：这次要修的是报价页那个错别字`
+// → intent=NOTE，却触发了「你说的「那个」指的是哪个？」。
+//
+// "那个"在这里是**笔记内容的一部分**，不是要解析的操作对象 —— 笔记是自由文本，
+// 系统没有理由追问它指的是哪个。追问会打断用户，且用户无法回答"哪个"（他就是这么说的）。
+//
+// 边界（既有回归 pipeline.TestCodexNineRegressions#7）：
+// `记一下 这个` 的"这个"**就是全部内容**，此时追问是合理的 —— 必须保持 Ask。
+func TestASRSimGapNoteContentAnaphoraNotAsk(t *testing.T) {
+	opts := simOpts(t)
+	out := simRun(t, opts, "记一下：这次要修的是报价页那个错别字")
+	if out.Intent.Intent != contract.IntentNote {
+		t.Skipf("意图 = %s，未走 NOTE 路径，本缺口不适用", out.Intent.Intent)
+	}
+	if strings.Contains(out.Ask, "指的是哪个") {
+		t.Errorf("GAP G9: NOTE 句里的内容指代被当成操作指代：Ask=%q\n"+
+			"「那个」是笔记内容的一部分，追问会打断用户且用户无法回答", out.Ask)
+	}
+}

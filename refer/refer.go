@@ -170,6 +170,19 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 		return it, opts, nil
 	}
 
+	// 缺口 G9：NOTE 句里的**内容指代**不是操作指代。
+	//
+	// 笔记是自由文本：「记一下：这次要修的是报价页那个错别字」里的"那个"
+	// 是内容的一部分，追问"指的是哪个"既无意义（用户就是这么说的）又打断他。
+	//
+	// 边界（既有回归 pipeline.TestCodexNineRegressions#7）：`记一下 这个`
+	// 里指代**就是全部内容**，此时确实不知道记什么 —— 必须保持追问。
+	if it.Intent == contract.IntentNote {
+		if trigger, ok := hasAny(text, anaphoraTriggers); ok && !notePayloadIsJustPronoun(text, trigger) {
+			return it, opts, nil
+		}
+	}
+
 	// 1. 词典层（100%）
 	if canon := r.dictLookup(text); canon != "" {
 		it.Target = &contract.Target{Entity: canon, RefType: "dict"}
@@ -366,4 +379,23 @@ func anyOperationAnaphora(text string) bool {
 		}
 	}
 	return false
+}
+
+// noteTriggersForRefer 是 NOTE 意图的触发词（与 input 层保持一致；refer 不 import input，
+// 故此处独立列出，只用于判断"剥掉后是否什么都不剩"）。
+var noteTriggersForRefer = []string{
+	"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
+}
+
+// notePayloadIsJustPronoun 报告 NOTE 句里剥掉指代与触发词后是否**什么都不剩**。
+//
+//	记一下 这个                        → 剩空 → true （指代就是全部内容，必须追问）
+//	记一下：这次要修的是报价页那个错别字   → 剩"：这次要修的是报价页错别字" → false（是内容，不追问）
+func notePayloadIsJustPronoun(text, trigger string) bool {
+	rest := strings.Replace(text, trigger, "", 1)
+	for _, w := range noteTriggersForRefer {
+		rest = strings.ReplaceAll(rest, w, "")
+	}
+	rest = strings.Trim(rest, "：:，。、！？!? 　")
+	return strings.TrimSpace(rest) == ""
 }

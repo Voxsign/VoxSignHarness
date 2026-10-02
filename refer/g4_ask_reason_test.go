@@ -8,6 +8,7 @@
 package refer
 
 import (
+	"strings"
 	"testing"
 
 	"voicesign-harness/contract"
@@ -79,5 +80,46 @@ func TestUnknownWithOperationAnaphoraStillAsks(t *testing.T) {
 	}
 	if got.Ask == "你是想让我做什么？" {
 		t.Errorf("含操作指代时 refer 应给出指代回问，实际仍为分类器原文 %q", got.Ask)
+	}
+}
+
+// TestNotePayloadIsJustPronoun 缺口 G9 的边界：NOTE 的内容指代 vs 全部内容。
+func TestNotePayloadIsJustPronoun(t *testing.T) {
+	cases := []struct {
+		text    string
+		trigger string
+		want    bool
+	}{
+		{"记一下 这个", "这个", true},              // 指代就是全部内容 → 必须追问
+		{"记一下：这次要修的是报价页那个错别字", "那个", false}, // 是内容 → 不追问
+		{"记一下，季总那个厂房下周一出报价", "那个", false},   // 是内容 → 不追问
+	}
+	for _, tc := range cases {
+		if got := notePayloadIsJustPronoun(tc.text, tc.trigger); got != tc.want {
+			t.Errorf("notePayloadIsJustPronoun(%q, %q) = %v，期望 %v", tc.text, tc.trigger, got, tc.want)
+		}
+	}
+}
+
+// TestNoteContentAnaphoraDoesNotAsk G9 主线（refer 层）。
+func TestNoteContentAnaphoraDoesNotAsk(t *testing.T) {
+	r := New(nil)
+	it := &contract.Intent{
+		Intent:        contract.IntentNote,
+		Confidence:    0.85,
+		CorrectedText: "记一下：这次要修的是报价页那个错别字",
+	}
+	got, _, err := r.ResolveOptions(it, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Ask, "指的是哪个") {
+		t.Errorf("G9: NOTE 的内容指代仍被追问：Ask=%q", got.Ask)
+	}
+	// 边界：指代就是全部内容时必须追问
+	it2 := &contract.Intent{Intent: contract.IntentNote, Confidence: 0.85, CorrectedText: "记一下 这个"}
+	got2, _, _ := r.ResolveOptions(it2, "")
+	if !strings.Contains(got2.Ask, "指的是哪个") {
+		t.Errorf("既有回归：'记一下 这个' 必须追问，实际 Ask=%q", got2.Ask)
 	}
 }
