@@ -355,7 +355,71 @@ func (c *TaskClassifier) fill(ti contract.Intent, kind string, conf float64, par
 		ti.Params = params
 	}
 	c.applyCommon(&ti, kind, conf)
+
+	// 缺口 G2：零信息句子即便高置信也必须回问。
+	// 原行为：单类触发恒 0.85，恒高于默认阈值 0.6，于是 applyCommon 里那条
+	// "低置信回问"在默认配置下几乎不可达 —— 「改一下」「修」「查」直接进执行通道。
+	if ti.Ask == "" && slotGateTrips(kind, ti.CorrectedText) {
+		ti.Ask = askForKind(kind)
+	}
 	return ti
+}
+
+// slotGateFillers 是剥除时一并去掉的虚词/填充词。
+var slotGateFillers = []string{
+	"一下", "一遍", "这个", "那个", "它", "帮我", "麻烦", "请", "吧", "呢", "啊", "呀",
+	"了", "的", "，", "。", "、", "！", "？", ",", ".", "!", "?", " ",
+}
+
+// slotGateTrips 报告该意图的句子除了触发词本身之外是否几乎不剩信息。
+//
+// 只对 EDIT / DEBUG / QUERY 生效：这三类的"对象"是必需槽位，缺了就无从执行。
+// TEST/COMMIT/DEPLOY/NOTE/ASK 有默认值或本身就无需对象，不在本闸范围内。
+//
+// 实现要点：**不能**把触发词从文本里剥掉再量长度 —— 触发词常常就是信息本身。
+// 例如 DEBUG 的触发词表里有 "bug"，「修一下这个 bug」剥完只剩空，会被误判为零信息。
+// 因此改为：剥掉虚词后，看**残留长度是否不超过句中命中的最长触发词**。
+//
+//	"改一下"            → 残留"改"(1) ≤ 最长触发词"改一下"(3) → 回问
+//	"修一下这个 bug"     → 残留"修bug"(4) > 最长触发词"bug"(3)  → 不回问
+//	"查"                → 残留"查"(1) ≤ "查"(1)              → 回问
+func slotGateTrips(kind, text string) bool {
+	triggers := slotGateTriggers(kind)
+	if triggers == nil {
+		return false
+	}
+	residual := text
+	for _, f := range slotGateFillers {
+		residual = strings.ReplaceAll(residual, f, "")
+	}
+	residual = strings.TrimSpace(residual)
+
+	longest := 0
+	for _, t := range triggers {
+		if strings.Contains(text, t) {
+			if n := len([]rune(t)); n > longest {
+				longest = n
+			}
+		}
+	}
+	if longest == 0 {
+		return false
+	}
+	return len([]rune(residual)) <= longest
+}
+
+// slotGateTriggers 返回该意图参与槽位闸的触发词表；不在闸内返回 nil。
+func slotGateTriggers(kind string) []string {
+	switch kind {
+	case contract.IntentEdit:
+		return editTriggers
+	case contract.IntentDebug:
+		return debugTriggers
+	case contract.IntentQuery:
+		return queryTriggers
+	default:
+		return nil
+	}
 }
 
 // applyCommon 填充 空间候选/目标/时间锚点/边界基线/风险基线/确认基线/验收模板/低置信回问。
