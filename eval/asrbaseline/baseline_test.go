@@ -68,6 +68,28 @@ func loadCorpus(t *testing.T) []corpusCase {
 	return nil
 }
 
+// punctNorm 把全角标点映射为半角（与 input/clean.go 的 fullwidthToHalf 同向）。
+//
+// 用途：把"只改了标点"与"改了正文"**分开计**。
+// 二者性质完全不同：
+//
+//	· 只改标点 —— 是**产品定义问题**（中文正文里该不该归一化），取决于 Peter 的口径
+//	· 改了正文 —— 是**实打实的过度纠正**，无争议
+//
+// 混在一起数会导致结论两头不讨好，所以本轮把它们拆成两个数字。
+func punctNorm(s string) string {
+	pairs := map[rune]rune{
+		'，': ',', '。': '.', '：': ':', '；': ';', '！': '!', '？': '?',
+		'（': '(', '）': ')', '、': ',', '“': '"', '”': '"', '‘': '\'', '’': '\'',
+	}
+	return strings.Map(func(r rune) rune {
+		if q, ok := pairs[r]; ok {
+			return q
+		}
+		return r
+	}, s)
+}
+
 func hasTag(c corpusCase, tag string) bool {
 	for _, t := range c.Tags {
 		if t == tag {
@@ -128,11 +150,19 @@ func TestHarnessOverCorrectionOnFidelity(t *testing.T) {
 			continue
 		}
 		total++
-		if got := h.Correct(c.Raw); got != c.Raw {
-			over = append(over, c.ID)
-			t.Errorf("过度纠正 [%s]（%s）\n     原文 %q\n     改动 %q",
-				c.ID, strings.Join(c.Tags, ","), c.Raw, got)
+		got := h.Correct(c.Raw)
+		if got == c.Raw {
+			continue
 		}
+		// 口径修正（2026-10-03）：**只有正文被改**才算过度纠正。
+		// 全角标点→半角是产品口径问题（见 TestHarnessChangeBreakdown），
+		// 不该由本测试单方面裁定——旧版把它一并算作过度纠正，是夸大的口径。
+		if punctNorm(got) == punctNorm(c.Raw) {
+			continue
+		}
+		over = append(over, c.ID)
+		t.Errorf("过度纠正（正文被改）[%s]（%s）\n     原文 %q\n     改动 %q",
+			c.ID, strings.Join(c.Tags, ","), c.Raw, got)
 	}
 	t.Logf("保真类 %d 条，原 harness 改动其中 %d 条", total, len(over))
 }
@@ -169,5 +199,39 @@ func TestHarnessBaselineSnapshot(t *testing.T) {
 	}
 	for k, v := range byProv {
 		t.Logf("  %s：改动 %d / 未动 %d", k, v[0], v[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 评测四：把"只改标点"与"改了正文"拆开计
+//
+// 这是为了让测量**不依赖产品口径**：不论中文标点归一化算不算问题，
+// 两个数字都有各自的解释力。
+// ---------------------------------------------------------------------------
+func TestHarnessChangeBreakdown(t *testing.T) {
+	h := newHarnessCleaner()
+	var punctOnly, contentChange, total int
+	var contentIDs []string
+	for _, c := range loadCorpus(t) {
+		if !c.Expect.Fidelity {
+			continue
+		}
+		total++
+		got := h.Correct(c.Raw)
+		if got == c.Raw {
+			continue
+		}
+		if punctNorm(got) == punctNorm(c.Raw) {
+			punctOnly++ // 只有标点宽度差异
+			continue
+		}
+		contentChange++ // 正文被改动 —— 无争议的过度纠正
+		contentIDs = append(contentIDs, c.ID)
+	}
+	t.Logf("保真类 %d 条：未动 %d / **只改标点 %d** / **改了正文 %d**",
+		total, total-punctOnly-contentChange, punctOnly, contentChange)
+	if contentChange > 0 {
+		t.Errorf("保真类里有 %d 条被改了正文（与标点口径无关，任何定义下都是过度纠正）：%v",
+			contentChange, contentIDs)
 	}
 }
