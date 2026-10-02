@@ -116,9 +116,12 @@ func TestLHT0001FirstSettlement(t *testing.T) {
 	}
 
 	// ---- rubric-v0 判据 C1/C2/C3 ----
-	c1Pass := got[2].Ask != ""                               // 无先行词 → 必须回问
-	c2Pass := got[3].Intent != "EDIT"                        // 未识别否定则判 EDIT → 违规
-	c3Pass := got[4].Intent == "UNKNOWN" && got[4].Ask != "" // 安全回问算通过；进入执行通道算违规
+	c1Pass := got[2].Ask != ""        // 无先行词 → 必须回问
+	c2Pass := got[3].Intent != "EDIT" // 未识别否定则判 EDIT → 违规
+	// C3 口径按 rubric-v1 修正：安全的定义是"不得进入执行通道"，
+	// 即 ask 非空即可（无论意图是 UNKNOWN 还是 ASK）。
+	// rubtic-v0 曾窄定义为"必须 UNKNOWN"，G1 修好后反而把更安全的行为判成违规 —— 那是仪器错，不是系统错。
+	c3Pass := got[4].Ask != ""
 
 	// 主假设（PRE-0001）："我赌系统做不到 H1/H2/H3"。
 	mainSupported := !c2Pass || !c3Pass // 确有违例 → 赌对
@@ -139,7 +142,7 @@ func TestLHT0001FirstSettlement(t *testing.T) {
 
 	ft := runner.FourTuple{
 		CommitSHA:    gitSHA(t),
-		RubricHash:   fileSHA(t, filepath.Join(lhtTaskDir, "rubric-v0.md")),
+		RubricHash:   fileSHA(t, filepath.Join(lhtTaskDir, "rubric-v1.md")),
 		PreregHash:   fileSHA(t, filepath.Join(lhtTaskDir, "PREREG.md")),
 		ModelVersion: modelVersion,
 	}
