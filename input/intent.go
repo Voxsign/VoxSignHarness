@@ -139,10 +139,15 @@ func containsAny(text string, keywords []string) bool {
 //  4. 都没有 → found=false（由调用方决定默认值）。
 func extractPath(text string) (path string, found bool) {
 	// 1. 引号内
+	//    注意：中文引号「“」「”」「「」「」」是**多字节** UTF-8，
+	//    早期实现用 text[i+1:i+1+j] 切分，会把开引号的第 2、3 字节留在结果里
+	//    （“报告.docx” → "\x80\x9c报告.docx"），中文引号内的路径全被切坏。
+	//    这里改为按开引号的实际字节长度推进。
 	for _, q := range [][2]string{{"“", "”"}, {"「", "」"}, {"\"", "\""}, {"'", "'"}} {
 		if i := strings.Index(text, q[0]); i >= 0 {
-			if j := strings.Index(text[i+1:], q[1]); j >= 0 {
-				return strings.TrimSpace(text[i+1 : i+1+j]), true
+			rest := text[i+len(q[0]):]
+			if j := strings.Index(rest, q[1]); j >= 0 {
+				return strings.TrimSpace(rest[:j]), true
 			}
 		}
 	}

@@ -1,0 +1,13 @@
+{
+  "name": "vault-creds",
+  "type": "vault-creds",
+  "scope": ["~/.voicesign/vault/creds/**"],
+  "exclude": ["**"],
+  "tools": ["read"],
+  "context": [],
+  "perms": { "read": true, "write": false },
+  "acceptance": "凭证库高敏只读：禁止写、禁止外发、禁止 deploy/http",
+  "risk_default": "human",
+  "cross_refs": [],
+  "version": 1
+}
