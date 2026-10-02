@@ -423,7 +423,8 @@ func (r *Registry) DetectDrift() ([]Drift, error) {
 func needsWrite(it contract.Intent) bool {
 	switch it.Intent {
 	case contract.IntentEdit, contract.IntentCommit, contract.IntentDeploy,
-		contract.IntentDebug, contract.IntentNote, contract.IntentRegisterTool:
+		contract.IntentDebug, contract.IntentNote, contract.IntentRegisterTool,
+		contract.IntentOrchestrate:
 		return true
 	default: // QUERY / ASK / TEST
 		return false

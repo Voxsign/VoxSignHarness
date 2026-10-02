@@ -99,6 +99,48 @@ var (
 	defaultExcludes  = []string{".env*", "node_modules"}
 )
 
+// 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
+//
+//	organizeWords ∩ docWords ∩ (saveWords ∪ commitTriggers) 同时成立。
+//
+// 设计取舍（方案 B）：动作计划（read→summarize→write→commit）由 pipeline 编排引擎确定性产出，
+// 不在分类层做 function-calling；分类层只负责"这是一个多步编排任务"的识别 + 抽出目标文档名。
+var (
+	orchOrganizeWords = []string{"整理成", "整理", "汇总成", "汇总", "汇编"}
+	orchDocWords      = []string{"沟通记录", "设计文档", "文档", "记录"}
+	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成"}
+)
+
+// detectOrchestrate 判定文本是否为"整理多份文档→生成文件→保存/提交"的复合长任务。
+// 命中时返回 (IntentOrchestrate, params{target_doc, source_hint}, true)。
+// target_doc 从《…》书名号里抽；抽不到则由编排引擎落默认文件名。
+func detectOrchestrate(text string) (string, map[string]string, bool) {
+	if !containsAny(text, orchOrganizeWords) {
+		return "", nil, false
+	}
+	if !containsAny(text, orchDocWords) {
+		return "", nil, false
+	}
+	if !(containsAny(text, orchSaveWords) || containsAny(text, commitTriggers)) {
+		return "", nil, false
+	}
+	params := map[string]string{"commit": "1"}
+	if title := extractBookTitle(text); title != "" {
+		params["target_doc"] = title
+	}
+	return contract.IntentOrchestrate, params, true
+}
+
+// extractBookTitle 抽取《…》书名号内的文档名（去书名号，保留扩展名点）。
+func extractBookTitle(text string) string {
+	i := strings.Index(text, "《")
+	j := strings.Index(text, "》")
+	if i >= 0 && j > i {
+		return strings.TrimSpace(text[i+len("《") : j])
+	}
+	return ""
+}
+
 // nowFn 是时间源（timeanchor.go 依赖，测试可替换）。
 var nowFn = func() time.Time { return time.Now() }
 
@@ -146,6 +188,14 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 2a. 显式「把 X 改成/换成 Y」→ EDIT（优先于 COMMIT/DEPLOY 等触发词，如「把提交按钮改成中文」）
 	if _, _, ok := extractReplace(text); ok {
 		return c.fill(ti, contract.IntentEdit, 0.9, c.editParams(text))
+	}
+
+	// 2a-bis. 复合/长任务（组织者式路由）：整理/汇总 + 文档/记录 +（保存/提交）三连信号
+	// → ORCHESTRATE，不再压成单条 NOTE/COMMIT。
+	// 必须先于 2b 单类触发：「沟通记录」含「记录」会命中 noteTriggers，「提交」会命中 commitTriggers——
+	// 长任务「把全部沟通记录和设计文档整理成《…》并保存提交」此前被降级为单条 NOTE 整段 append。
+	if kind, params, ok := detectOrchestrate(text); ok {
+		return c.fill(ti, kind, 0.9, params)
 	}
 
 	// 【伪代码逻辑层】（M5-1 触发词碰撞仲裁：NOTE 语境词 vs TEST 触发词）
@@ -235,7 +285,7 @@ func (c *TaskClassifier) applyCommon(ti *contract.Intent, kind string, conf floa
 
 	// 7. 风险基线 + 8. 确认基线（非权威；risk 包裁决后回填权威值）
 	switch kind {
-	case contract.IntentCommit, contract.IntentDeploy:
+	case contract.IntentCommit, contract.IntentDeploy, contract.IntentOrchestrate:
 		ti.Risk = &contract.RiskBaseline{Reversible: false, Impact: contract.ImpactHigh}
 		ti.Confirm = contract.ConfirmHuman
 	case contract.IntentDebug:

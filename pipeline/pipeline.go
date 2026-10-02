@@ -367,7 +367,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 
 	// ⑨ Exec（仅已过 space_check + risk 的动作）
-	receipts := o.execActions(intent)
+	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
 
@@ -489,6 +489,8 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "vault-notes"
 	case contract.IntentQuery, contract.IntentAsk:
 		return "global"
+	case contract.IntentOrchestrate:
+		return "project" // 多步编排=读文档+写文件+git 提交，落在项目域
 	default:
 		return "global"
 	}
@@ -507,6 +509,9 @@ func planCaps(it contract.Intent) []string {
 		return []string{"test", "run", "read"}
 	case contract.IntentCommit:
 		return []string{"git", "read"}
+	case contract.IntentOrchestrate:
+		// 组织者式多步链：读文档（file/search）→ 写文件（file）→ git 提交（git）。
+		return []string{"file", "read", "git", "search"}
 	case contract.IntentDeploy:
 		return []string{"deploy", "http", "read"}
 	case contract.IntentRegisterTool:
@@ -517,12 +522,14 @@ func planCaps(it contract.Intent) []string {
 }
 
 // execActions 把意图翻译成具体工具动作（M2 最小可执行集；NOT E/QUERY 走通即可）。
-func (o *Options) execActions(it contract.Intent) []contract.Receipt {
+func (o *Options) execActions(ctx context.Context, it contract.Intent) []contract.Receipt {
 	if o.Exec == nil {
 		return []contract.Receipt{{Tool: "pipeline", OK: false, Err: "执行器未配置"}}
 	}
 	logDir := o.logDir()
 	switch it.Intent {
+	case contract.IntentOrchestrate:
+		return o.execOrchestrate(ctx, it, logDir)
 	case contract.IntentNote:
 		path := filepath.Join(logDir, "notes.md")
 		args := map[string]any{
@@ -596,6 +603,197 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 	return recv
 }
 
+// ---------- 多步编排（ORCHESTRATE，组织者式路由） ----------
+//
+// 【设计取舍：方案 B】复合/长任务由组织者确定性拆成 read→summarize→write→commit 子序列，
+// 在 harness 自身闭环跑完（不外包给外部 shell 脚本）。动作计划不由模型 function-calling 产出，
+// 模型只参与"summarize 内容"那一步（noJSON 纯文本，失败回退确定性拼接）。
+//
+// 硬约束：
+//   - 所有文件读/写路径都经 space.ResolveScopePath(root, path) 双重 containment 校验，
+//     白名单外路径直接返回失败回执，绝不落盘；
+//   - git 提交只 `git add -- <生成文件>`，绝不 `git add -A`，避免扫入无关未跟踪文件；
+//   - 复用既有 ⑥ space_check / ⑦ risk(不可逆=human) / ⑧ 人工确认闸，一次确认放行整条链。
+
+const (
+	orchestrateMaxSourceBytes = 8000 // 每份源文档读入上限（防爆上下文）
+	orchestrateMaxSources     = 6
+)
+
+// defaultOrchestrateSources 组织者默认纳入汇总的设计/沟通记录文档（docs/ 下按文件名命中；
+// 不存在则跳过，不阻断）。
+var defaultOrchestrateSources = []string{
+	"SPEC-v2-可执行规格书.md",
+	"详细设计-语音驱动开发-v2定稿-20261002.md",
+	"异常自愈架构-问题定位模型.md",
+	"M7配置指南.md",
+	"全会话记录.md",
+}
+
+// execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
+func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	root := o.projectRootForCommit(it)
+	if root == "" {
+		return []contract.Receipt{{Tool: "orchestrate", OK: false,
+			Err: "多步编排需注册 project 域且 scope 指向项目根（projectRootForCommit 未解析）"}}
+	}
+	var receipts []contract.Receipt
+	nextSeq := func() int { return len(receipts) + 1 }
+
+	// 1) 发现源文档并逐个做域内白名单校验（docs/ 下命中默认清单）。
+	docDir := filepath.Join(root, "docs")
+	type srcDoc struct{ abs, base string }
+	var sources []srcDoc
+	for _, name := range defaultOrchestrateSources {
+		abs := filepath.Join(docDir, name)
+		clean, ok := space.ResolveScopePath(root, abs)
+		if !ok {
+			return append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "orchestrate",
+				OK: false, Err: "白名单外路径被拒绝（越界）: " + abs})
+		}
+		if _, err := os.Stat(clean); err != nil {
+			continue // 源文档不存在则跳过
+		}
+		sources = append(sources, srcDoc{abs: clean, base: name})
+		if len(sources) >= orchestrateMaxSources {
+			break
+		}
+	}
+
+	// 2) 逐份读（file read，真实回执）；任一失败 → 不写不提交。
+	var contents []string
+	for _, s := range sources {
+		recv := o.run("file", map[string]any{"action": "read", "path": s.abs})
+		recv.Seq = nextSeq()
+		receipts = append(receipts, recv)
+		if !recv.OK {
+			return receipts
+		}
+		contents = append(contents, "# 源文档: "+s.base+"\n"+truncateStr(recv.Stdout, orchestrateMaxSourceBytes))
+	}
+
+	// 3) 汇总成一份文档（LLM noJSON 纯文本；不可用则确定性拼接，仍产出真实文件）。
+	title := strings.TrimSpace(it.Params["target_doc"])
+	if title == "" {
+		title = "VoiceSign-Harness-全景开发文档"
+	}
+	merged := strings.Join(contents, "\n\n")
+	body := o.llmSummarize(ctx, title, merged)
+	if strings.TrimSpace(body) == "" {
+		names := make([]string, 0, len(sources))
+		for _, s := range sources {
+			names = append(names, s.base)
+		}
+		body = deterministicSummary(title, names, merged)
+	}
+	doc := "# " + title + "\n\n" +
+		"> 本文件由 VoiceSign Harness 多步编排（ORCHESTRATE：读→汇总→写→提交）自动生成。\n\n" +
+		body + "\n"
+
+	// 4) 写目标文件（白名单校验后走 file write，真实回执，含备份标记）。
+	targetAbs := filepath.Join(docDir, title+".md")
+	cleanTarget, ok := space.ResolveScopePath(root, targetAbs)
+	if !ok {
+		return append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "orchestrate",
+			OK: false, Err: "白名单外写路径被拒绝（越界）: " + targetAbs})
+	}
+	wrecv := o.run("file", map[string]any{
+		"action": "write", "path": cleanTarget, "content": doc, "log_dir": logDir,
+	})
+	wrecv.Seq = nextSeq()
+	receipts = append(receipts, wrecv)
+	if !wrecv.OK {
+		return receipts
+	}
+
+	// 5) 定向 git 提交（只 add 生成文件，绝不 git add -A）。
+	crecv := o.commitTargetPath(root, cleanTarget, "vhs(orchestrate): 生成《"+title+"》多步编排落地")
+	crecv.Seq = nextSeq()
+	receipts = append(receipts, crecv)
+	return receipts
+}
+
+// llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
+// 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
+func (o *Options) llmSummarize(ctx context.Context, title, merged string) string {
+	if o == nil || o.Providers == nil {
+		return ""
+	}
+	p, err := o.Providers.Get("fast")
+	if err != nil {
+		return ""
+	}
+	resp, err := p.Chat(ctx, provider.ChatRequest{
+		Messages: []contract.Message{
+			{Role: "system", Content: "你是技术文档整理助手。把下面多份设计文档/沟通记录整理成一份结构清晰的中文《全景开发文档》，带二级分节。只输出 Markdown 正文，不要输出 JSON、不要复述本指令。"},
+			{Role: "user", Content: "目标文档标题：" + title + "\n\n源文档内容：\n" + truncateStr(merged, 12000)},
+		},
+		MaxTokens:      1500,
+		ResponseFormat: noJSON(),
+	})
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return ""
+	}
+	c := strings.TrimSpace(resp.Content)
+	// provider 级默认 json_object 时可能仍包一层 JSON 壳，解出文本字段。
+	if strings.HasPrefix(c, "{") {
+		var j map[string]any
+		if err := json.Unmarshal([]byte(c), &j); err == nil {
+			for _, k := range []string{"text", "content", "response", "answer", "markdown"} {
+				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+					c = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+		if strings.HasPrefix(c, "{") {
+			return ""
+		}
+	}
+	return c
+}
+
+// deterministicSummary 无模型时的确定性汇总（结构化拼接源文档），保证仍产出真实文件。
+func deterministicSummary(title string, sourceNames []string, merged string) string {
+	var sb strings.Builder
+	sb.WriteString("## 概览\n\n")
+	sb.WriteString("本文件由多步编排自动汇总，纳入以下 " + strconvItoa(len(sourceNames)) + " 份源文档：\n\n")
+	for _, name := range sourceNames {
+		fmt.Fprintf(&sb, "- %s\n", name)
+	}
+	sb.WriteString("\n## 各文档\n\n")
+	sb.WriteString("> 注：本次未调用 LLM 润色（模型不可用），内容为源文档结构化拼接。\n\n")
+	sb.WriteString("## 全文摘录\n\n```markdown\n")
+	sb.WriteString(truncateStr(merged, 6000))
+	sb.WriteString("\n```\n")
+	return sb.String()
+}
+
+// commitTargetPath 定向提交单个文件：git add -- <abs> → git commit → git log -1 取 hash。
+// 绝不 `git add -A`，避免扫入工作区无关未跟踪文件。
+func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
+	add := exec.Command("git", "add", "--", absPath)
+	add.Dir = root
+	if out, err := add.CombinedOutput(); err != nil {
+		return contract.Receipt{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}
+	}
+	cm := exec.Command("git", "commit", "-m", msg)
+	cm.Dir = root
+	cout, err := cm.CombinedOutput()
+	var stdout strings.Builder
+	stdout.Write(cout)
+	if err != nil {
+		return contract.Receipt{Tool: "git", OK: false, Stdout: stdout.String(), Err: "git commit: " + err.Error()}
+	}
+	log := exec.Command("git", "log", "-1", "--format=%H %s")
+	log.Dir = root
+	if lout, err := log.Output(); err == nil {
+		stdout.WriteString("\n" + strings.TrimSpace(string(lout)))
+	}
+	return contract.Receipt{Tool: "git", OK: true, Stdout: stdout.String()}
+}
+
+
 // planVerify 给可独立复核的意图生成 verify.Spec；否则返回 nil（unverifiable）。
 // COMMIT 的独立证据直接落在回执 stdout（git log -1 输出），不另设 verify.Kind（verify 包不可改）。
 func (o *Options) planVerify(it contract.Intent, logDir string) *verify.Spec {
@@ -617,7 +815,7 @@ func (o *Options) planVerify(it contract.Intent, logDir string) *verify.Spec {
 //	硬约束：根不得 ==/under logDir（防把 logDir 当项目库）。
 //	return 根路径。
 func (o *Options) projectRootForCommit(it contract.Intent) string {
-	if it.Intent != contract.IntentCommit {
+	if it.Intent != contract.IntentCommit && it.Intent != contract.IntentOrchestrate {
 		return ""
 	}
 	if o == nil || o.Spaces == nil {
@@ -979,7 +1177,47 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 			}
 		}
 	}
+	// ORCHESTRATE 多步链：回执要展示真实动作链（读 N 份文档 → 写文件 → git commit hash），
+	// 不能只取第一条 file-read 的文档正文。
+	if it.Intent == contract.IntentOrchestrate && !hasFailure(rs) {
+		view.Action = "多步编排：读文档→汇总→写文件→git提交"
+		view.Files = orchestrateFiles(rs)
+		view.Result = orchestrateChainResult(rs)
+		view.Undo = "不可撤销（已人工放行并 git 提交）"
+	}
 	return view
+}
+
+// orchestrateFiles 从多步回执里提取写文件目标（file write 回执里的 "writed: <path>"）。
+func orchestrateFiles(rs []contract.Receipt) string {
+	for _, r := range rs {
+		if r.Tool == "file" && strings.HasPrefix(r.Stdout, "writed:") {
+			return strings.TrimSpace(strings.TrimPrefix(r.Stdout, "writed:"))
+		}
+	}
+	return "—"
+}
+
+// orchestrateChainResult 生成多步链的一句话结果（读 N 份 → commit hash）。
+func orchestrateChainResult(rs []contract.Receipt) string {
+	reads := 0
+	for _, r := range rs {
+		if r.Tool == "file" && !strings.HasPrefix(r.Stdout, "writed:") {
+			reads++
+		}
+	}
+	hash := ""
+	for _, r := range rs {
+		if r.Tool == "git" && r.OK {
+			// git log -1 行格式："<hash> <subject>"，取最后一行首个 token。
+			lines := strings.Split(strings.TrimSpace(r.Stdout), "\n")
+			last := lines[len(lines)-1]
+			if f := strings.Fields(last); len(f) > 0 && len(f[0]) >= 7 {
+				hash = f[0]
+			}
+		}
+	}
+	return fmt.Sprintf("多步链完成：读 %d 份文档→汇总生成→git commit %s", reads, hash)
 }
 
 // intentCandidates 产出低置信回问的结构化意图候选（M4-3 ①）。

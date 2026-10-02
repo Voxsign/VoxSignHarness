@@ -143,6 +143,7 @@ const (
 	IntentDeploy       = "DEPLOY"        // 部署/外发/生成报表：发/上线/部署
 	IntentAsk          = "ASK"           // 问问题：为什么/怎么办/你觉得
 	IntentRegisterTool = "REGISTER_TOOL" // 语音注册新工具契约（自举充分条件，8 类之外单独定义）
+	IntentOrchestrate  = "ORCHESTRATE"   // 多步编排（组织者式路由）：读多份文档→汇总→生成文件→提交
 )
 
 // 确认策略等级（Intent.Confirm，risk 包裁决后回填权威值）。
