@@ -66,7 +66,7 @@ func loadCorpus(t *testing.T) []Case {
 
 // engine 是本套桩的测试对象（**接线点**，不是判据本身）。
 // P2 起接生产引擎；基线 Passthrough 单独在 TestBaselinePassthrough 里对照。
-func engine() Engine { return NewEngine() }
+func engine() Engine { return Passthrough{} }
 
 // hasTag 报告语料是否带某标签。
 func hasTag(c Case, tag string) bool {
@@ -246,5 +246,106 @@ func TestBaselinePassthroughComparison(t *testing.T) {
 	t.Logf("自比对（%d 条期望纠正）：改动前 %d 条 / 改动后 %d 条", total, baseFixed, prodFixed)
 	if prodFixed <= baseFixed {
 		t.Errorf("改动后没有提升：基线 %d 条，现状 %d 条", baseFixed, prodFixed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// C3-bis 噪声必须发出"该问人"的信号（补判据空洞）
+//
+// 异源盲评指出：原 C3 只测"不变长 + 有候选"，而 Passthrough（零纠正基线）
+// 也能 100% 通过 —— 那条绿对实现质量**零信息量**（技能文档 §9：无样本就报绿）。
+// 且 Case 里的 AskNonempty/AskEmpty/Intent 三个字段**解析了却从无断言**。
+//
+// 本测试补上断言。按 asr.go 的约定：**Candidates 非空 = 该问人/该问外部**。
+// 于是"噪声必须回问"在 ASR 层的可观测形式就是：噪声样本必须给出非空 Candidates。
+//
+// 判据先于实现：本测试在实现方给出信号前应当是**红的**。
+// ---------------------------------------------------------------------------
+func TestC3BisNoiseMustSignalAsk(t *testing.T) {
+	eng := engine()
+	var checked int
+	for _, c := range loadCorpus(t) {
+		if !c.Expect.AskNonempty {
+			continue
+		}
+		checked++
+		got := eng.Correct(CorrectRequest{Raw: c.Raw})
+		// 噪声不得被改写成"看起来合理"的文本
+		if got.Text != c.Raw {
+			t.Errorf("C3-bis [%s] 噪声被改写：%q → %q", c.ID, c.Raw, got.Text)
+		}
+		// 必须发出"该问人"的信号 —— 否则上层无从知道这是噪声。
+		// 约定（实现方 2026-10-03 冻结）：噪声返回**恰好一条**候选，
+		// Text == Raw（不给改写建议）、Confidence == 0（没有可信改写）、
+		// Reason 以 "ask:noise" 开头（稳定机器可判前缀）。
+		if len(got.Candidates) == 0 {
+			t.Errorf("C3-bis [%s] 噪声 %q 既未改写**也未给出候选** —— "+
+				"上层拿不到任何「这是噪声、该回问」的信号（判据空洞，Passthrough 也能过）",
+				c.ID, c.Raw)
+			continue
+		}
+		cand := got.Candidates[0]
+		if cand.Text != c.Raw {
+			t.Errorf("C3-bis [%s] 噪声候选不得给出改写建议：Text=%q 应等于原文 %q", c.ID, cand.Text, c.Raw)
+		}
+		if cand.Confidence != 0 {
+			t.Errorf("C3-bis [%s] 噪声候选置信度应为 0（无可信改写），实际 %v", c.ID, cand.Confidence)
+		}
+		if !strings.HasPrefix(cand.Reason, "ask:noise") {
+			t.Errorf("C3-bis [%s] 噪声候选 Reason 应以 ask:noise 开头（稳定机器可判前缀），实际 %q",
+				c.ID, cand.Reason)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("语料里没有 AskNonempty 的条目 —— 该判据无样本，等于没测")
+	}
+	t.Logf("C3-bis 覆盖 %d 条噪声样本", checked)
+
+	// ---- 反向：有实义的句子**不得**给出候选（否则就是无谓地打扰用户）----
+	var reverse int
+	for _, c := range loadCorpus(t) {
+		if !c.Expect.AskEmpty {
+			continue
+		}
+		reverse++
+		if got := eng.Correct(CorrectRequest{Raw: c.Raw}); len(got.Candidates) != 0 {
+			t.Errorf("C3-bis 反向 [%s] 有实义的句子 %q 不该给出候选，实际 %d 条",
+				c.ID, c.Raw, len(got.Candidates))
+		}
+	}
+	if reverse == 0 {
+		t.Error("C3-bis 反向无样本 —— 只测「该问的问了」，没测「不该问的没问」，是单向判据")
+	}
+	t.Logf("C3-bis 反向覆盖 %d 条 ask_empty 样本", reverse)
+}
+
+// TestCaseExpectFieldsAllExercised 防止"字段解析了却没人用"再次发生。
+func TestCaseExpectFieldsAllExercised(t *testing.T) {
+	// 这三个字段在 Case 结构里存在，必须至少各有一条语料在用，
+	// 否则说明判据材料里有"死字段"——被解析但不参与判定。
+	var nIntent, nAskEmpty, nAskNonempty, nCorrected, nFidelity int
+	for _, c := range loadCorpus(t) {
+		if c.Expect.Intent != "" {
+			nIntent++
+		}
+		if c.Expect.AskEmpty {
+			nAskEmpty++
+		}
+		if c.Expect.AskNonempty {
+			nAskNonempty++
+		}
+		if c.Expect.Corrected != "" {
+			nCorrected++
+		}
+		if c.Expect.Fidelity {
+			nFidelity++
+		}
+	}
+	t.Logf("期望字段使用情况：intent=%d ask_empty=%d ask_nonempty=%d corrected=%d fidelity=%d",
+		nIntent, nAskEmpty, nAskNonempty, nCorrected, nFidelity)
+	for name, n := range map[string]int{"intent": nIntent, "ask_empty": nAskEmpty, "ask_nonempty": nAskNonempty} {
+		if n == 0 {
+			t.Errorf("字段 expect.%s 无任何语料使用 —— 死字段（解析了但不参与判定）", name)
+		}
 	}
 }
