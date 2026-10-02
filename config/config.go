@@ -74,6 +74,10 @@ type Global struct {
 	MaxActionTimeoutMs int    `json:"max_action_timeout_ms"` // 动作超时硬上限，默认 120000
 	AllowHighRisk      bool   `json:"allow_high_risk"`       // 高危命令放行（默认 false）
 	MaxOutputChars     int    `json:"max_output_chars"`      // 回执输出截断，默认 4000
+	// FastResponseMs 快速响应阈值：fast 等「快模型」调用墙钟超过它视为慢响应，
+	// 不直接降级而是带 model 名进异常诊断层（区分网络慢/预算排队/参数不当）。
+	// 默认 10000ms；<=0 归一化为 10000。
+	FastResponseMs int `json:"fast_response_ms"`
 }
 
 // Provider 一个模型端点（OpenAI 兼容或 mock）。同一网关可声明多个 provider（不同 model）实现按场景选模型。
@@ -131,6 +135,7 @@ func Default() Config {
 			MaxActionTimeoutMs: 120000,
 			AllowHighRisk:      false,
 			MaxOutputChars:     4000,
+			FastResponseMs:     10000,
 		},
 		Providers: []Provider{
 			{Name: "center", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
@@ -295,6 +300,9 @@ func (c *Config) validate() error {
 	if c.Global.MaxOutputChars > 1<<20 {
 		c.Global.MaxOutputChars = 1 << 20
 	}
+	if c.Global.FastResponseMs <= 0 {
+		c.Global.FastResponseMs = 10000
+	}
 	if strings.TrimSpace(c.Global.LogDir) == "" {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			c.Global.LogDir = filepath.Join(home, ".voicesign", "harness")
@@ -410,6 +418,13 @@ func (c *Config) ProviderByName(name string) (Provider, bool) {
 func (c *Config) IsMockProvider(name string) bool {
 	p, ok := c.ProviderByName(name)
 	return ok && p.Kind == MockKind
+}
+
+// DiagProvider 返回 name=="diag" 的「问题定位模型」provider（异常自愈层 ② 环）。
+// 未配置（ok=false）→ 诊断层零开销跳过，主链行为不变。diag.Endpoint 可在配置里覆盖
+// 为模型中心专用诊断端点；缺省即模型中心 OpenAI 兼容通道。
+func (c *Config) DiagProvider() (Provider, bool) {
+	return c.ProviderByName("diag")
 }
 
 // EffectiveMaxTurns 返回路由生效的 max_turns（0 = local 直通）。

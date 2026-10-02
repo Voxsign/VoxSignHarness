@@ -103,6 +103,7 @@ import (
 	"voicesign-harness/refer"
 	"voicesign-harness/risk"
 	"voicesign-harness/search"
+	"voicesign-harness/selfheal"
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
 	"voicesign-harness/trajectory"
@@ -129,6 +130,9 @@ type Options struct {
 
 	// Providers（M7）LLM 接线层；nil 时纯规则/纯 search 路径不阻断。
 	Providers *provider.Registry
+
+	// selfhealSvc 异常自愈层（三环）；懒装配。Providers==nil 时恒为 nil（零开销跳过，主链不变）。
+	selfhealSvc *selfheal.Service
 
 	mu    *sync.Mutex
 	guard *risk.Guard
@@ -367,6 +371,16 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
 
+	// ⑨-bis 异常自愈层（可选）：有失败回执 → 诊断 + 只读安全重放（限 2 轮）。
+	// 诊断层未配置/失败一律不阻断；重放成功的新回执合并进 out.Receipts，诊断结论供归因。
+	if hasFailure(receipts) {
+		if repaired := o.repairFailed(ctx, intent, receipts); len(repaired) > 0 {
+			receipts = append(receipts, repaired...)
+			out.Receipts = receipts
+			emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+		}
+	}
+
 	// ⑩ verify 独立校验
 	spec := o.planVerify(intent, o.logDir())
 	if spec != nil && o.Verifier != nil {
@@ -382,8 +396,25 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	vb, _ := json.Marshal(out.Verify)
 	emit(trajectory.Entry{Kind: "verify", Content: string(vb)})
 
+	// ⑩-bis verify fail → 带 tool:"verify" 进诊断层（不自动重跑 verify，结论供归因）。
+	if out.Verify.Status == verify.StatusFail {
+		if svc := o.selfheal(); svc != nil {
+			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Failure{
+				{Tool: "verify", Err: out.Verify.Detail, Stdout: out.Verify.Evidence},
+			})
+		}
+	}
+
 	// ⑪ attribution + 轨迹（end = 归因写入完成）
 	cls, detail, suggestion := classifyAttribution(intent, receipts, out.Verify, corrections)
+	// ⑪-bis：执行类归因且诊断层有结论时，用诊断 suggestion 替换静态建议，detail 附根因；
+	// 无诊断结论 → 静态建议逐字不变。
+	if svc := o.selfheal(); svc != nil {
+		if d := svc.LastDiagnosis(); d != nil && cls == contract.AttrExec {
+			suggestion = d.Suggestion
+			detail = detail + "（诊断根因：" + d.RootCause + "）"
+		}
+	}
 	out.Attribution = o.attribution(out.RequestID, cls, detail, evidenceOf(receipts, out.Verify), suggestion)
 	o.writeAttribution(out.Attribution)
 
@@ -763,6 +794,70 @@ func (o *Options) logDir() string {
 	return os.TempDir()
 }
 
+// fastResponseMs 返回快速响应阈值（Global.FastResponseMs，<=0 归一化为 10000）。
+func (o *Options) fastResponseMs() int {
+	if o.Cfg != nil && o.Cfg.Global.FastResponseMs > 0 {
+		return o.Cfg.Global.FastResponseMs
+	}
+	return 10000
+}
+
+// selfheal 懒装配异常自愈层。Providers==nil（testOptions 现状/纯规则路径）→ 恒 nil，
+// 诊断层零开销跳过，主链行为 100% 不变。diag provider 未注册 → 模型环 nil（知识库环仍可用）。
+func (o *Options) selfheal() *selfheal.Service {
+	if o == nil || o.Providers == nil {
+		return nil
+	}
+	if o.selfhealSvc != nil {
+		return o.selfhealSvc
+	}
+	var diag provider.Provider
+	if p, err := o.Providers.Get("diag"); err == nil {
+		diag = p
+	}
+	kb := selfheal.OpenKB(filepath.Join(o.logDir(), selfheal.KBFileName))
+	o.selfhealSvc = selfheal.NewService(kb, diag, o.run)
+	return o.selfhealSvc
+}
+
+// repairFailed 对失败回执跑异常自愈（可选层）：诊断 + 只读安全重放（限 2 轮）。
+// 重放成功的新回执由主链合并进 out.Receipts；诊断结论暂存供归因。诊断层未配置/失败 → 返回 nil。
+func (o *Options) repairFailed(ctx context.Context, it contract.Intent, receipts []contract.Receipt) []contract.Receipt {
+	svc := o.selfheal()
+	if svc == nil {
+		return nil
+	}
+	var repaired []contract.Receipt
+	for i := range receipts {
+		r := receipts[i]
+		if r.OK {
+			continue
+		}
+		att := selfheal.Attempt{Tool: r.Tool, Args: o.argsForFailed(it, r.Tool), Receipt: r}
+		if nr, _ := svc.SafeRetry(ctx, it.RawText, it.Intent, att); nr != nil {
+			repaired = append(repaired, *nr)
+		}
+	}
+	return repaired
+}
+
+// argsForFailed 为重放重建最小参数（只有只读族失败才会真重放；写类重建了也被 IsReadOnly 拦下）。
+func (o *Options) argsForFailed(it contract.Intent, tool string) map[string]any {
+	switch tool {
+	case "search":
+		pattern := it.CorrectedText
+		if it.Params != nil && it.Params["object"] != "" {
+			pattern = it.Params["object"]
+		}
+		return map[string]any{"pattern": pattern, "kind": "text"}
+	case "file":
+		// NOTE 追加（写类，不会被自动重放）。
+		return map[string]any{"action": "append", "path": filepath.Join(o.logDir(), "notes.md"), "log_dir": o.logDir()}
+	default:
+		return map[string]any{}
+	}
+}
+
 // renderGround 渲染认知切片（#37）；Ground 未配置 → 空快照（薄降级，Ask 照常走）。
 func (o *Options) renderGround() ground.Snapshot {
 	if o.Ground != nil {
@@ -1074,6 +1169,11 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 
 // queryLLMAnswer（M7 ②）：QUERY 搜索后调 fast 生成自然语言回答。
 // 失败（网络/预算超限/超时）→ 返回友好降级文案（不再空壳"OK（自动执行）"）。
+//
+// 异常自愈接线（可选层，不改变成功路径与降级文案逐字）：
+//   - 测量 fast.Chat 墙钟：慢但成功 → 不丢回答，仅带 model:"fast" 进诊断层记一笔供归因；
+//   - err/空内容 → 先诊断（budget/network/param 分类），diag 可用且 action=retry/modify →
+//     指数退避重试（≤2 轮），成功返回回答并回写知识库；失败或 diag 不可用 → 逐字降级文案。
 func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStdout string) string {
 	degraded := "（模型服务暂不可用——今日预算可能已用尽或网络异常，无法生成回答；请明日重试或提高预算。检索结果：" + strings.TrimSpace(searchStdout) + "）"
 	if o == nil || o.Providers == nil {
@@ -1084,43 +1184,80 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		log.Printf("[queryLLMAnswer] fast provider unavailable: %v", err)
 		return degraded
 	}
-	resp, err := p.Chat(ctx, provider.ChatRequest{
-		Messages: []contract.Message{
-			{Role: "system", Content: "你是 VoxSign 助手。根据用户问题和检索结果给简洁中文回答。只输出回答文本本身，不要输出 JSON、不要做意图分类、不要输出任何结构化格式。"},
-			{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
-		},
-		MaxTokens: 400,
-	})
-	if err != nil || strings.TrimSpace(resp.Content) == "" {
+
+	// callFast 发一次 fast 调用并解 JSON 壳；ok=false 表示失败/空/意外壳（与原逻辑一致）。
+	callFast := func() (string, bool) {
+		resp, err := p.Chat(ctx, provider.ChatRequest{
+			Messages: []contract.Message{
+				{Role: "system", Content: "你是 VoxSign 助手。根据用户问题和检索结果给简洁中文回答。只输出回答文本本身，不要输出 JSON、不要做意图分类、不要输出任何结构化格式。"},
+				{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
+			},
+			MaxTokens: 400,
+		})
 		if err != nil {
 			log.Printf("[queryLLMAnswer] fast Chat err: %v", err)
-		} else {
-			log.Printf("[queryLLMAnswer] fast Chat empty content")
+			return "", false
 		}
-		return degraded
+		if strings.TrimSpace(resp.Content) == "" {
+			log.Printf("[queryLLMAnswer] fast Chat empty content")
+			return "", false
+		}
+		// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本回答。
+		content := strings.TrimSpace(resp.Content)
+		if strings.HasPrefix(content, "{") {
+			var j map[string]any
+			if err := json.Unmarshal([]byte(content), &j); err == nil {
+				for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
+					if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+						content = strings.TrimSpace(s)
+						break
+					}
+				}
+			}
+			if strings.HasPrefix(content, "{") {
+				log.Printf("[queryLLMAnswer] fast returned unexpected JSON shell: %.160s", content)
+				return "", false
+			}
+		}
+		return content, true
 	}
-	// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本回答。
-	// 键不稳定（text/response/content/answer/message 均可能），逐一尝试取首个非空字符串。
-	content := strings.TrimSpace(resp.Content)
-	if strings.HasPrefix(content, "{") {
-		var j map[string]any
-		if err := json.Unmarshal([]byte(content), &j); err == nil {
-			// error 键也要解出：模型中心 gpt-6-luna 在"无数据可判断"等场景会输出
-			// {"error":"..."} 诚实回答，键若遗漏会把有效内容误吞成降级文案。
-			for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
-				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
-					content = strings.TrimSpace(s)
-					break
+
+	start := time.Now()
+	content, ok := callFast()
+	elapsed := time.Since(start)
+
+	if ok {
+		// 慢但成功：不丢弃已有回答，只把慢响应带 model 名进诊断层（供归因/后续学习）。
+		if elapsed > time.Duration(o.fastResponseMs())*time.Millisecond {
+			if svc := o.selfheal(); svc != nil {
+				_ = svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Failure{
+					{Tool: "llm", Model: "fast", Err: "slow response", Stdout: truncateStr(content, 200)},
+				})
+			}
+		}
+		return content
+	}
+
+	// err/空内容 → 先诊断；diag 可用且可重试 → 指数退避重试（≤2 轮）。
+	svc := o.selfheal()
+	if svc != nil {
+		d := svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Failure{
+			{Tool: "llm", Model: "fast", Err: "fast chat 失败或空内容"},
+		})
+		if d != nil && (d.Action == selfheal.ActionRetry || d.Action == selfheal.ActionModify) {
+			for round := 0; round < selfheal.MaxAutoRetries; round++ {
+				select {
+				case <-ctx.Done():
+				case <-time.After(selfheal.BackoffAfter(round)):
+				}
+				if c2, ok2 := callFast(); ok2 {
+					svc.KB.Remember(*d)
+					return c2
 				}
 			}
 		}
-		// 仍是 JSON 壳（模型输出意外结构）→ 降级文案，不把 JSON 透传给用户。
-		if strings.HasPrefix(content, "{") {
-			log.Printf("[queryLLMAnswer] fast returned unexpected JSON shell: %.160s", content)
-			return degraded
-		}
 	}
-	return content
+	return degraded
 }
 
 // mergeAskOptions 合并意图候选与 refer 目标候选（id 去重，上限 8）。

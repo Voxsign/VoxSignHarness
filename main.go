@@ -22,6 +22,7 @@ import (
 	"voicesign-harness/pipeline"
 	"voicesign-harness/provider"
 	"voicesign-harness/refer"
+	"voicesign-harness/selfheal"
 	"voicesign-harness/server"
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
@@ -115,6 +116,8 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 		opts.Trace = tr
 	}
 	// M7：LLM provider 注册表（VHS_API_KEY 已在 cfg 中）；失败薄降级。
+	// 异常自愈：diag provider 未显式配 key 时，从模型中心凭证文件补填（未配置 diag 则零动作）。
+	selfheal.PrepareDiagKey(cfg)
 	if reg, err := provider.NewRegistry(cfg); err == nil {
 		opts.Providers = reg
 	}

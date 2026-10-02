@@ -2,10 +2,15 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +18,7 @@ import (
 	"voicesign-harness/config"
 	"voicesign-harness/contract"
 	"voicesign-harness/memory"
+	"voicesign-harness/provider"
 	"voicesign-harness/refer"
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
@@ -616,5 +622,97 @@ func TestCodexOptionsForIntent(t *testing.T) {
 	q := contract.Intent{Intent: contract.IntentQuery, Confidence: 0.9}
 	if opts := optionsForIntent(&q, nil); len(opts) != 0 {
 		t.Fatalf("QUERY 无候选时应为 nil，got %+v", opts)
+	}
+}
+
+// TestQueryLLMAnswerDegradedUnchanged（回归）：Providers=nil（testOptions 现状）→
+// 诊断层零开销跳过，QUERY 走逐字降级文案（"今日预算可能已用尽或网络异常"）。
+func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
+	o := testOptions(t, nil) // Providers 未设 → nil
+	out, err := Run(context.Background(), o, "查一下 订单系统怎么样")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := ""
+	for _, r := range out.Receipts {
+		joined += r.Stdout
+	}
+	if !strings.Contains(joined, "模型服务暂不可用——今日预算可能已用尽或网络异常") {
+		t.Fatalf("无 Providers 应走逐字降级文案, got: %q", joined)
+	}
+}
+
+// TestQueryLLMAnswerDiagRetrySucceeds（异常自愈接线）：fast 首次 500 → 诊断模型判 retry
+// → 指数退避后重试 fast 成功，返回回答（而非降级文案）。诊断请求 failure 带 model=fast。
+func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
+	logDir := t.TempDir()
+	var fastCalls int32
+	var diagRaw strings.Builder
+
+	fastTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&fastCalls, 1)
+		// openaiClient 内部对 5xx 重试 3 次：前 3 次都 500 才能让外层 callFast 真正返回错误。
+		if n <= 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"boom"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"订单系统运行正常","finish_reason":"stop"}}],"usage":{}}`)
+	}))
+	defer fastTS.Close()
+
+	diagTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		diagRaw.Write(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"category\":\"network\",\"root_cause\":\"瞬时500\",\"confidence\":0.8,\"recoverable\":true,\"suggestion\":\"退避重试\",\"action\":\"retry\"}"}}],"usage":{}}`)
+	}))
+	defer diagTS.Close()
+
+	trueVal := true
+	cfg := config.Config{
+		Global: config.Global{LogDir: logDir, LLMTimeoutMs: 5000, FastResponseMs: 10000},
+		Providers: []config.Provider{
+			{Name: "fast", Kind: config.OpenAIKind, Endpoint: fastTS.URL, Model: "gpt-test", APIKey: "k", ResponseFormat: &trueVal, Params: map[string]any{"use_max_completion_tokens": true}},
+			{Name: "diag", Kind: config.OpenAIKind, Endpoint: diagTS.URL, Model: "jev-diagnose", APIKey: "k", ResponseFormat: &trueVal, Params: map[string]any{"use_max_completion_tokens": true}},
+		},
+	}
+	reg, err := provider.NewRegistry(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := &Options{Cfg: &cfg, Providers: reg}
+
+	answer := o.queryLLMAnswer(context.Background(), "查订单", "search-hit-line")
+	if !strings.Contains(answer, "订单系统运行正常") {
+		t.Fatalf("diag=retry 退避重试成功应返回回答, got %q", answer)
+	}
+	// 前 3 次耗尽 openaiClient 内部重试 → 外层错误；退避后第 4 次成功。
+	if atomic.LoadInt32(&fastCalls) != 4 {
+		t.Fatalf("fast 应被调用 4 次（3 次内部 500 + 1 次退避后成功）, got %d", fastCalls)
+	}
+	// 诊断请求体应含 jev-diagnose 模型名；user content（二次 JSON 串）应带 failure.model=fast。
+	var outer struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(diagRaw.String()), &outer); err != nil {
+		t.Fatalf("诊断请求体应为 JSON: %v", err)
+	}
+	if outer.Model != "jev-diagnose" {
+		t.Fatalf("诊断请求 model 应为 jev-diagnose, got %q", outer.Model)
+	}
+	var userContent string
+	for _, m := range outer.Messages {
+		if m.Role == "user" {
+			userContent = m.Content
+		}
+	}
+	if !strings.Contains(userContent, `"model":"fast"`) {
+		t.Fatalf("诊断请求 failure 应带 model=fast, got %q", userContent)
 	}
 }
