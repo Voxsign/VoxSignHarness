@@ -165,7 +165,6 @@ func TestOrchestrateNoSquashNote(t *testing.T) {
 }
 
 // TestOrchestrateWhitelistReject：target_doc 含 .. 穿越 → 写路径越界必须被拒绝，
-// 不写盘、不提交。
 func TestOrchestrateWhitelistReject(t *testing.T) {
 	o := testOptions(t, func(string, string) (bool, error) { return true, nil })
 	projDir := setupOrchestrateProj(t, o)
@@ -191,4 +190,37 @@ func TestOrchestrateWhitelistReject(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(projDir, "docs", "..", "..", "..", "etc", "vhs-pwned.md")); !os.IsNotExist(err) {
 		t.Fatal("越界文件不应被创建")
 	}
+}
+
+// TestOrchestrateIdempotent：同一长任务连跑两次——第一次真提交，第二次内容无变化
+// 必须视为成功收尾（receipt 注明"已是最新"），不得因 nothing to commit 而 FAILED。
+func TestOrchestrateIdempotent(t *testing.T) {
+	o := testOptions(t, func(string, string) (bool, error) { return true, nil })
+	setupOrchestrateProj(t, o)
+	it := contract.Intent{
+		Intent:        contract.IntentOrchestrate,
+		CorrectedText: "整理文档提交",
+		Space:         "project",
+		Params:        map[string]string{"target_doc": "幂等测试文档", "commit": "1"},
+	}
+	first := o.execOrchestrate(context.Background(), it, o.Cfg.Global.LogDir)
+	if !lastOK(first) {
+		t.Fatalf("第一次应成功: %+v", first[len(first)-1])
+	}
+	// 第二次：确定性输出相同 → git 无 diff → 幂等跳过。
+	second := o.execOrchestrate(context.Background(), it, o.Cfg.Global.LogDir)
+	last := second[len(second)-1]
+	if !last.OK {
+		t.Fatalf("第二次幂等重跑必须成功(不得 FAILED): %+v", last)
+	}
+	if !strings.Contains(last.Stdout, "内容无变化") && !strings.Contains(last.Stdout, "已是最新") {
+		t.Fatalf("第二次应注明内容无变化/已是最新, got %q", last.Stdout)
+	}
+}
+
+func lastOK(rs []contract.Receipt) bool {
+	if len(rs) == 0 {
+		return false
+	}
+	return rs[len(rs)-1].OK
 }

@@ -630,8 +630,65 @@ var defaultOrchestrateSources = []string{
 	"全会话记录.md",
 }
 
+// gitTopLevel 探测服务器进程工作目录所在 git 仓库根（`git rev-parse --show-toplevel`）。
+// m7-serve.sh 在仓库根启动二进制，故 cwd 即仓库根；探测失败返回空串。
+func gitTopLevel() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = wd
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// ensureProjectSpace 惰性确保 project 域已注册且 scope 指向 git 仓库根。
+//
+// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空，长任务会因 projectRootForCommit 未解析而 FAILED。
+// 这里自动探测 git toplevel 并注册 project 域（落盘到日志目录 spaces/，与 m7-serve.sh 防清理一致）。
+// 硬约束：仅注册 project 域，tools/权限取最小集（read+write），不扩大写权限范围；
+// 已存在带非空 scope 的 project 域则不覆盖（尊重用户/运维手工注册）。
+func (o *Options) ensureProjectSpace() {
+	if o == nil || o.Spaces == nil {
+		return
+	}
+	if m, ok := o.Spaces.Get("project"); ok && m != nil && len(m.Scope) > 0 {
+		return // 已有带 scope 的 project 域，不动
+	}
+	root := gitTopLevel()
+	if root == "" {
+		log.Printf("[ensureProjectSpace] 未探测到 git 仓库根（cwd=%s），跳过自动注册", mustGetwd())
+		return
+	}
+	if err := o.Spaces.Add(&space.Manifest{
+		Name:  "project",
+		Type:  space.TypeProject,
+		Scope: []string{root + "/**"},
+		Tools: []string{"file", "git", "search", "read", "test", "run"},
+		Perms: space.Perms{Read: true, Write: true},
+	}); err != nil {
+		log.Printf("[ensureProjectSpace] 自动注册 project 域失败: %v", err)
+		return
+	}
+	log.Printf("[ensureProjectSpace] 已自动注册 project 域 scope=%s/**", root)
+}
+
+func mustGetwd() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "?"
+}
+
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空 → 惰性自动注册 project 域，
+	// scope 指向 git 仓库根，落盘到日志目录 spaces/，长任务即开即用（不覆盖已有注册）。
+	o.ensureProjectSpace()
 	root := o.projectRootForCommit(it)
 	if root == "" {
 		return []contract.Receipt{{Tool: "orchestrate", OK: false,
@@ -715,23 +772,34 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 
 // llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
 // 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
+//
+// 【推理模型预算】gpt-6-luna 是推理模型，reasoning 会吃掉 max_completion_tokens；
+// 1500 全被思考吃光→finish_reason=length、content 空。故预算给到 8000，并在 system 里
+// 要求"直接输出正文、勿长篇推理"。失败/空必须打日志（对照 queryLLMAnswer，不再吞错）。
 func (o *Options) llmSummarize(ctx context.Context, title, merged string) string {
 	if o == nil || o.Providers == nil {
+		log.Printf("[llmSummarize] providers nil")
 		return ""
 	}
 	p, err := o.Providers.Get("fast")
 	if err != nil {
+		log.Printf("[llmSummarize] fast provider unavailable: %v", err)
 		return ""
 	}
 	resp, err := p.Chat(ctx, provider.ChatRequest{
 		Messages: []contract.Message{
-			{Role: "system", Content: "你是技术文档整理助手。把下面多份设计文档/沟通记录整理成一份结构清晰的中文《全景开发文档》，带二级分节。只输出 Markdown 正文，不要输出 JSON、不要复述本指令。"},
+			{Role: "system", Content: "你是技术文档整理助手。把下面多份设计文档/沟通记录整理成一份结构清晰的中文《全景开发文档》，带二级分节。直接输出 Markdown 正文：不要 JSON、不要复述本指令、不要长篇推理、不要解释你做了什么。"},
 			{Role: "user", Content: "目标文档标题：" + title + "\n\n源文档内容：\n" + truncateStr(merged, 12000)},
 		},
-		MaxTokens:      1500,
+		MaxTokens:      8000,
 		ResponseFormat: noJSON(),
 	})
-	if err != nil || strings.TrimSpace(resp.Content) == "" {
+	if err != nil {
+		log.Printf("[llmSummarize] fast Chat err: %v", err)
+		return ""
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		log.Printf("[llmSummarize] fast Chat empty content (finish_reason may be length; reasoning budget exhausted)")
 		return ""
 	}
 	c := strings.TrimSpace(resp.Content)
@@ -747,6 +815,7 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 			}
 		}
 		if strings.HasPrefix(c, "{") {
+			log.Printf("[llmSummarize] returned unparsable JSON shell: %.160s", c)
 			return ""
 		}
 	}
@@ -769,13 +838,31 @@ func deterministicSummary(title string, sourceNames []string, merged string) str
 	return sb.String()
 }
 
-// commitTargetPath 定向提交单个文件：git add -- <abs> → git commit → git log -1 取 hash。
+// commitTargetPath 定向提交单个文件：git add -- <abs> →（无 diff 则幂等跳过）→ git commit → git log -1 取 hash。
 // 绝不 `git add -A`，避免扫入工作区无关未跟踪文件。
+// 幂等：该文件相对暂存区/HEAD 无变化（重跑同内容）时，不触发 "nothing to commit" 失败，
+// 而是视为成功收尾，receipt 注明"内容无变化，跳过提交（已是最新）"。
 func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
 	add := exec.Command("git", "add", "--", absPath)
 	add.Dir = root
 	if out, err := add.CombinedOutput(); err != nil {
 		return contract.Receipt{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}
+	}
+	// 仅看本路径是否进入暂存区（有 diff）；空=无变化 → 幂等跳过提交。
+	ch := exec.Command("git", "diff", "--cached", "--name-only", "--", absPath)
+	ch.Dir = root
+	names, _ := ch.Output()
+	log := func() string {
+		l := exec.Command("git", "log", "-1", "--format=%H %s")
+		l.Dir = root
+		if lout, err := l.Output(); err == nil {
+			return strings.TrimSpace(string(lout))
+		}
+		return ""
+	}
+	if len(strings.TrimSpace(string(names))) == 0 {
+		return contract.Receipt{Tool: "git", OK: true,
+			Stdout: "内容无变化，跳过提交（已是最新）\n" + log()}
 	}
 	cm := exec.Command("git", "commit", "-m", msg)
 	cm.Dir = root
@@ -785,14 +872,11 @@ func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
 	if err != nil {
 		return contract.Receipt{Tool: "git", OK: false, Stdout: stdout.String(), Err: "git commit: " + err.Error()}
 	}
-	log := exec.Command("git", "log", "-1", "--format=%H %s")
-	log.Dir = root
-	if lout, err := log.Output(); err == nil {
-		stdout.WriteString("\n" + strings.TrimSpace(string(lout)))
+	if l := log(); l != "" {
+		stdout.WriteString("\n" + l)
 	}
 	return contract.Receipt{Tool: "git", OK: true, Stdout: stdout.String()}
 }
-
 
 // planVerify 给可独立复核的意图生成 verify.Spec；否则返回 nil（unverifiable）。
 // COMMIT 的独立证据直接落在回执 stdout（git log -1 输出），不另设 verify.Kind（verify 包不可改）。
