@@ -87,6 +87,87 @@ func ExecutedParadigmCheck(checkID string, passed bool, detail string) (Claim, e
 	return c, nil
 }
 
+// ruleAppliers 把**族规则名**映射到**可执行的比较函数**（这就是"联动"）：
+// 映射表给出规则名 ⇒ 这里必须真有对应实现，规则才可能改变排序。
+var ruleAppliers = map[string]func(a, b Claim) int{
+	RuleExecuted: func(a, b Claim) int { // ② 已执行 > 口头
+		if a.IsVerified() == b.IsVerified() {
+			return 0
+		}
+		if a.IsVerified() {
+			return 1
+		}
+		return -1
+	},
+	RuleVerified: func(a, b Claim) int { // ③ 已查证 > 一方称（同 ②，语义别名）
+		if a.IsVerified() == b.IsVerified() {
+			return 0
+		}
+		if a.IsVerified() {
+			return 1
+		}
+		return -1
+	},
+	RuleTraceable: func(a, b Claim) int { // ① 可追溯 > 不可追溯
+		if a.Traceable == b.Traceable {
+			return 0
+		}
+		if a.Traceable {
+			return 1
+		}
+		return -1
+	},
+	RuleParadigm: func(a, b Claim) int { // ④ 范式优先（仅经 check 认定）
+		if a.paradigm == b.paradigm {
+			return 0
+		}
+		if a.paradigm {
+			return 1
+		}
+		return -1
+	},
+}
+
+// RulesFromMapping 只返回**映射成功**的规则名（manual 条**不参与**执行 —— 不许假装它在跑）。
+func RulesFromMapping(ms []BasisMapping) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range ms {
+		for _, mp := range m.Mapped {
+			if !seen[mp.Rule] {
+				seen[mp.Rule] = true
+				out = append(out, mp.Rule)
+			}
+		}
+	}
+	return out
+}
+
+// RankByEvidenceWith 用**给定规则集**排序（rules 为空 ⇒ 不应用任何规则，保持原序）。
+// 这是"映射 ⇒ 执行"的联动点：映射出哪些规则，排序里就真的用哪些。
+func RankByEvidenceWith(rules []string, claims []Claim) (Claim, bool) {
+	if len(claims) == 0 {
+		return Claim{}, true
+	}
+	best := claims[0]
+	for _, c := range claims[1:] {
+		for _, r := range rules {
+			fn, ok := ruleAppliers[r]
+			if !ok {
+				continue // 未实现的规则名一律忽略（不许假装生效）
+			}
+			if fn(c, best) > 0 {
+				best = c
+				break
+			}
+			if fn(c, best) < 0 {
+				break
+			}
+		}
+	}
+	return best, !best.IsVerified() // 默认全规则（与 RankByEvidenceWith 全规则等价）
+}
+
 func better(a, b Claim) bool {
 	// ②③ 已执行/已查证优先（最强）
 	if a.IsVerified() != b.IsVerified() {
