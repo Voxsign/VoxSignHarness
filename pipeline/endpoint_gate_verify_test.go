@@ -25,18 +25,19 @@ func TestEndpointGateRealCase(t *testing.T) {
 			t.Errorf("需求侧未提取到端点 %s", want)
 		}
 	}
-	// 无人工产物目前只注册 2 个 → 差集必须恰好 5 个缺口（洞1 抓现行）。
+	// 需求侧 7 个 P0 端点必须全部落在产物侧（2026-10-04 无人工成功版已 7/7 齐全）。
+	// 缺口>0 意味着产物不完整 —— 洞1 判据5 抓现行。
 	var missing []string
 	for ep := range reqEP {
 		if !prodEP[ep] {
 			missing = append(missing, ep)
 		}
 	}
-	if len(missing) != 5 {
-		t.Fatalf("期望 5 个端点缺口，实得 %d: %v", len(missing), missing)
+	if len(missing) != 0 {
+		t.Fatalf("期望 0 个端点缺口（产物应覆盖需求全部 7 端点），实得 %d: %v", len(missing), missing)
 	}
-	// 产物侧提取：health+process 必须在。
-	for _, want := range []string{"/v1/health", "/v1/process"} {
+	// 产物侧提取：7 个端点必须在。
+	for _, want := range []string{"/v1/health", "/v1/process", "/v1/dict", "/v1/term", "/v1/correct", "/v1/feedback", "/v1/blacklist"} {
 		if !prodEP[want] {
 			t.Errorf("产物侧未提取到已注册端点 %s", want)
 		}
