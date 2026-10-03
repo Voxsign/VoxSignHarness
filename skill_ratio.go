@@ -23,7 +23,10 @@ import (
 //	自动化率 = `Manual == false` 的判据条数 / 判据总条数
 //	判据来自 knowhow 的 **judging / cautions / basis / style** 四个字段
 //	（`steps` 不进判据 —— 按 VHS-SKILL-001 §3：steps → 规划模板）
-//	当前实现里**唯一**的自动化条件是：`basis` 条目含「已查证」⇒ `checkVerifiedOverHearsay`
+//	当前的自动化条件（**两类**）：
+//	  · `basis` 条目含「已查证」        ⇒ `checkVerifiedOverHearsay`
+//	  · `judging` 条目含「ADR」          ⇒ `checkADRExists`（查文件）
+//	  · `judging` 条目含「约束未越界」    ⇒ `checkWithinBoundary`（用域门禁）
 //
 // 退出码：0 = 算出来了；1 = 算不出来（缺 key / 拉取失败 / 解不出 knowhow）——**不当通过**。
 func cmdSkillRatio(args []string) {
@@ -88,7 +91,9 @@ func cmdSkillRatio(args []string) {
 			totA, totC, float64(totA)*100/float64(totC))
 	}
 	if totJ > 0 {
-		fmt.Printf("（参考）judging 口径 = %d/%d = %.1f%% —— 当前实现下 judging **不可能**非人工\n",
+		// ⚠️ 2026-10-03：judging **已可机械化**（「决策有 ADR」查文件 ·「约束未越界」用域门禁）
+		// ⇒ 这里不再写"不可能非人工"（旧断言已失效，留着就是陈旧断言）。
+		fmt.Printf("（参考）judging 口径 = %d/%d = %.1f%%\n",
 			totA, totJ, float64(totA)*100/float64(totJ))
 	}
 	if failed > 0 {
