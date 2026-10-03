@@ -803,13 +803,16 @@ func TestSSEInterruptImmediacy(t *testing.T) {
 	srv.tasks[fake.ID] = fake
 	srv.mu.Unlock()
 
-	// 后台 cancel
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		postJSON(t, ts.URL+"/v1/tasks/task-sse-cancel/cancel", "secret", map[string]string{})
-	}()
-
+	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 时序耦合）：
+	//   原为 `go func(){ time.Sleep(100ms); postJSON(…/cancel) }()` ——
+	//   因为**服务端此前不提前 flush 响应头** ⇒ `getSSE`（`http.Do`）**阻塞到首个事件** ⇒
+	//   cancel **必须并发发出**，否则死锁 ⇒ 只能用"睡 100ms 再发"竞速
+	//   ⇒ **慢机器上 100ms 可能不够** ⇒ cancel 发在"流建立"之前 ⇒ `interrupt` 事件错过。
+	//
+	//   ⇒ 现已在 `handleEvents` 里**订阅后立刻 flush 响应头**（commit `9dd25dd`）⇒
+	//     `getSSE` **立即返回** ⇒ 可以**先建连接、再发 cancel** ⇒ **彻底去掉 sleep 与竞态** ✅
 	r := getSSE(t, ts.URL+"/v1/tasks/task-sse-cancel/events", "secret")
+	postJSON(t, ts.URL+"/v1/tasks/task-sse-cancel/cancel", "secret", map[string]string{})
 	events := readSSE(t, r)
 	foundInterrupt := false
 	for _, ev := range events {
