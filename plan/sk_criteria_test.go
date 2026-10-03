@@ -23,9 +23,12 @@ import (
 
 // 真值（机械导出结果的期望；数字来自探针，不是手写猜测）。
 var (
-	wantTools   = []string{"file", "git", "run", "search", "test", "verify"}
-	wantLive    = []string{"APP_LAUNCH", "ASK", "COMMIT", "DEBUG", "DEPLOY", "EDIT", "FILE_LIST", "FILE_READ", "INFO", "NOTE", "ORCHESTRATE", "QUERY", "REGISTER_TOOL", "SHELL", "TEST", "TIME", "UNKNOWN"}
-	wantDormant = []string{"FILE_WRITE"}
+	wantTools = []string{"file", "git", "run", "search", "test", "verify"}
+	// live/dormant 口径：按 DSH 裁决（2026-10-03）采用**生产代码引用**规则
+	// —— 能力清单描述"运行时真能做什么"，测试引用（router/router_test.go:37）
+	// 不构成运行时能力。故 APP_LAUNCH 归 dormant：16 live / 2 dormant。
+	wantLive    = []string{"ASK", "COMMIT", "DEBUG", "DEPLOY", "EDIT", "FILE_LIST", "FILE_READ", "INFO", "NOTE", "ORCHESTRATE", "QUERY", "REGISTER_TOOL", "SHELL", "TEST", "TIME", "UNKNOWN"}
+	wantDormant = []string{"APP_LAUNCH", "FILE_WRITE"}
 	wantDomains = []string{"external", "global", "project", "sandbox", "vault-creds", "vault-notes"}
 	// 域级别名中在契约注册表里不存在的（探针实测 11 处）。
 	wantUnresolvedAliases = []string{"ask", "deploy", "file-append", "http", "note", "query", "read"}
