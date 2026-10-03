@@ -9,8 +9,11 @@
 package asr
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,6 +24,8 @@ type Server struct {
 	// IntentModel 是可选的**兜底**模型（只有本地低置信时才用；nil = 纯本地）。
 	IntentModel   IntentModel
 	IntentTimeout time.Duration
+	// DataDir 是本机数据目录（画像等；空则视为无画像）。
+	DataDir string
 }
 
 // NewServer 构造服务。
@@ -104,9 +109,12 @@ type intentResponse struct {
 	DomainSuggestion []string       `json:"domain_suggestion"`
 	Control          string         `json:"control"`
 	Confirmable      *confirmedRef  `json:"confirmable,omitempty"`
-	Degraded         bool           `json:"degraded,omitempty"`
-	DegradedReason   string         `json:"degraded_reason,omitempty"`
-	Traces           []Step         `json:"traces"`
+	// ContextSources 是**注入来源归因**（SCOPE-PROFILE-01：能否说清从哪来）。
+	// 枚举：handwritten | zhiji | learned | project-map；无画像时给显式值，**不得缺字段**。
+	ContextSources []string `json:"context_sources"`
+	Degraded       bool     `json:"degraded,omitempty"`
+	DegradedReason string   `json:"degraded_reason,omitempty"`
+	Traces         []Step   `json:"traces"`
 }
 
 type processRequest struct {
@@ -139,6 +147,22 @@ func pickPathFromContext(ctx []string) string {
 		}
 	}
 	return ""
+}
+
+// profileSources 返回画像注入来源（归因，不保证内容）。
+//
+// 要求（SCOPE-PROFILE-01）：**永远非 nil**；无画像文件时给**显式值**（不是缺字段）；
+// 且**绝不做全量历史加载**（需求 4.5）。
+// ⚠️ L3 的 zhiji / learned / project-map 三类**尚未实现**（等真值来源裁决）。
+func profileSources(dataDir string) []string {
+	if dataDir == "" {
+		return []string{"none:no_profile"}
+	}
+	p := filepath.Join(dataDir, "profile", "handwritten.json")
+	if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
+		return []string{"handwritten"}
+	}
+	return []string{"none:no_profile"}
 }
 
 // detectConfirmation 识别"确认，就是 X"形态并给出可携带结构（服务不保存它）。
@@ -195,6 +219,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		Degraded:         ir.Degraded,
 		DegradedReason:   ir.DegradedReason,
 		Confirmable:      confirmable,
+		ContextSources:   profileSources(s.DataDir),
 		Traces:           res.Steps,
 	})
 }

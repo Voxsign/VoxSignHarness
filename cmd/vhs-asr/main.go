@@ -85,7 +85,9 @@ func main() {
 	stop := hot.StartRefresh(context.Background(), time.Hour)
 	defer stop()
 	pipe.Hot = &recog.Rewriter{Engine: asr.NewEngine(), Hot: hot}
-	srv := &http.Server{Addr: addr, Handler: asr.NewServer(pipe).Handler()}
+	srvObj := asr.NewServer(pipe)
+	srvObj.DataDir = dataDir // 画像归因来源（SCOPE-PROFILE-01）：无文件则显式 none:no_profile
+	srv := &http.Server{Addr: addr, Handler: srvObj.Handler()}
 	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）", addr, dataDir)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("服务退出: %v", err)
