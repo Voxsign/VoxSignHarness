@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -172,18 +173,19 @@ func feedbackHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	flag.Parse()
 
+	if _, err := os.Stat(*dataDir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(*dataDir, 0755); err != nil {
+			fmt.Printf("Failed to create data directory: %v\n", err)
+			return
+		}
+	}
+
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler)
 	http.HandleFunc("/v1/feedback", feedbackHandler)
 
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
-		os.Exit(1)
-	}
-
 	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("Failed to start server: %v\n", err)
 	}
 }
