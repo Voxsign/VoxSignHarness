@@ -31,6 +31,13 @@ const testPageHTML = `<!doctype html>
 </div>
 <div id="out"></div>
 <div id="metrics"></div>
+<h3>丢一个文档 + 一个难任务，看它打算怎么干</h3>
+<p style="color:#666"><b>本轮只规划，不执行</b>（不会真的改你的文件）。document 仅作规划输入、不落盘。</p>
+<textarea id="doc" placeholder="① 粘贴文档内容，或选择文件（本地读取，不上传服务器）……" style="height:120px"></textarea>
+<div><input type="file" id="file" onchange="loadFile()"> <span style="color:#666;font-size:14px">（文件只在浏览器本地读入文本框）</span></div>
+<textarea id="task" placeholder="② 写任务，可以很复杂：例如“把这个文档里的 TODO 整理成一份计划”……" style="height:60px"></textarea>
+<div><button onclick="planTask()">规划（只规划，不执行）</button></div>
+<div id="planout"></div>
 <h3>最近台账</h3><div id="recent"></div>
 <script>
 // ---- 浏览器原生语音识别（零后端、零 key、零依赖）----
@@ -109,6 +116,40 @@ async function run(){
     out.innerHTML = '<div class="row" style="color:#c00"><b>处理失败</b>：'+esc(String(err))+
       '<br>请求：<code>POST /v1/testpage</code>'+
       '<br>服务可能已停止，请重新运行 <code>sh scripts/dev.sh</code></div>';
+  }
+}
+function loadFile(){
+  const f = document.getElementById('file').files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=>{ document.getElementById('doc').value = rd.result; };
+  rd.readAsText(f);
+}
+async function planTask(){
+  const out = document.getElementById('planout');
+  out.innerHTML = '<div class="row">规划中…</div>';
+  try{
+    const r = await fetch('/v1/task', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({task: document.getElementById('task').value, document: document.getElementById('doc').value})});
+    if(!r.ok){ throw new Error('HTTP '+r.status+' /v1/task'); }
+    const d = await r.json();
+    const p = d.plan;
+    let h = '<div class="row"><b>'+(d.execute?'':'【只规划，不执行】')+'</b> 目标：<code>'+esc(d.goal)+'</code></div>';
+    h += '<div class="row"><span class="k">来源：</span>'+esc(p.source||'-')+
+         ' ｜ 降级：'+(p.degraded?('是（'+esc(p.degraded_reason||'')+'）'):'否')+
+         ' ｜ 拒绝：'+(p.refused?'<b style="color:#c60">是</b>':'否')+'</div>';
+    if(p.reason){ h += '<div class="row">原因：'+esc(p.reason)+'</div>'; }
+    if(p.missing && p.missing.length){ h += '<div class="row">做不到 / 找谁：<ul>'+p.missing.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>'; }
+    if(p.steps && p.steps.length){
+      h += '<table><tr><th>#</th><th>工具</th><th>cap</th><th>动作</th><th>产出</th><th>域</th></tr>';
+      p.steps.forEach(s=>{ h += '<tr><td>'+s.index+'</td><td>'+esc(s.tool)+'</td><td>'+esc((s.caps||[]).join(','))+'</td><td>'+esc(s.action)+'</td><td>'+esc(s.output)+'</td><td>'+esc(s.domain||'')+'</td></tr>'; });
+      h += '</table>';
+    } else { h += '<div class="row" style="color:#666">没有可执行步骤（见上面的拒绝原因/找谁）。</div>'; }
+    h += '<details><summary>轨迹（考虑了哪些要素 / 工作记忆）</summary><pre style="white-space:pre-wrap">'+
+         esc(JSON.stringify({considered:p.considered, wm:p.wm}, null, 1))+'</pre></details>';
+    out.innerHTML = h;
+  }catch(err){
+    out.innerHTML = '<div class="row" style="color:#c00"><b>规划失败</b>：'+esc(String(err))+
+      '<br>请求：<code>POST /v1/task</code><br>服务可能已停止，请重新运行 <code>sh scripts/dev.sh</code></div>';
   }
 }
 async function teach(){

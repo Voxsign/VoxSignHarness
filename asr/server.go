@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/feedback", s.handleFeedback)
 	mux.HandleFunc("/v1/observe", s.handleObserve)
 	mux.HandleFunc("/v1/lexicon", s.handleLexicon)
+	mux.HandleFunc("/v1/task", s.handleTask)
 	mux.HandleFunc("/v1/testpage", s.handleTestRun)
 	mux.HandleFunc("/v1/testlog", s.handleTestLog)
 	mux.HandleFunc("/", s.handleTestPage)
