@@ -264,6 +264,27 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 	emit(trajectory.Entry{Kind: "refer", Intent: &intent})
 
+	// 指代固化槽回读（方案 C 上下文槽，2026-10-03 记忆模拟装实证断点）：refer 候选未命中
+	// 仍要回问（intent.Ask 非空）+ 文本含指代 + 本会话槽最近有《…}记录 → 槽命中注入目标
+	// 并恢复 document 全文，使同会话内"那个事/这个需求"可直接消解执行（用户："说个事它真能知道是啥"）。
+	// 会话隔离：只读 o.ConvID 对应槽文件，不跨会话猜。
+	if intent.Ask != "" && hasDeicticDocRef(intent.CorrectedText) && o.ConvID != "" {
+		if td := o.referTargetFromSlots(); td != "" {
+			intent.Target = &contract.Target{Entity: td, RefType: "slot"}
+			intent.Ask = ""
+			if d := slotLatestDocument(o.logDir(), o.ConvID); d != "" {
+				o.Document = d
+				if intent.Params == nil {
+					intent.Params = map[string]string{}
+				}
+				intent.Params["document"] = d
+				log.Printf("[refer-slot] 槽命中指代目标=%s，恢复 document %d 字符（会话 %s）", td, len(d), o.ConvID)
+			} else {
+				log.Printf("[refer-slot] 槽命中指代目标=%s（会话 %s，无 document 可恢复）", td, o.ConvID)
+			}
+		}
+	}
+
 	// 回问出口：分类器/指代任一层要回问 → 不执行。
 	// M3 #37：回问是真实的"模型/人需要更多上下文"点，这里注入 ground 认知切片。
 	if intent.NeedsClarification() {
@@ -964,6 +985,20 @@ func (o *Options) referTargetFromSlots() string {
 		if t, ok := recs[i]["text"].(string); ok {
 			if m := bracketTitle.FindStringSubmatch(t); len(m) == 2 {
 				return m[1]
+			}
+		}
+	}
+	return ""
+}
+
+// slotLatestDocument 读会话槽最近一条 has_doc=true 记录的 doc_full（指代命中后恢复全文）。
+// 2026-10-03 记忆增强：配合 referTargetFromSlots，让"那个事"不仅解出书名号，还能拿到可执行的 document。
+func slotLatestDocument(logDir, convID string) string {
+	recs := serverReadContextSlots(logDir, convID)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if b, ok := recs[i]["has_doc"].(bool); ok && b {
+			if d, ok := recs[i]["doc_full"].(string); ok && d != "" {
+				return d
 			}
 		}
 	}

@@ -1270,6 +1270,7 @@ func convSlot(convID, text, document string) string {
 		"conv_id":   convID,
 		"text":      truncateRunes(text, 300),
 		"doc_head":  truncateRunes(document, 200),
+		"doc_full":  document, // 全文（2026-10-03 记忆增强：指代命中后恢复 document 全文，使"那个事"能真跑）
 		"has_doc":   document != "",
 	}
 	b, _ := json.Marshal(rec)
