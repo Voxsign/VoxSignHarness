@@ -1,22 +1,33 @@
-# 个性化后台实现（Harness 产出代码骨架）
+# 个性化后台实现
 
-> 由 VoiceSign Harness 多步编排（ORCHESTRATE kind=implement）自动生成，2026-10-03。
+前置：确保 go build 通过，main.go 无 todo/占位。
 
-## 内容
-- main.go 服务入口（配置/健康检查/鉴权占位）
-- router.go 路由注册（/v1/health、/v1/process）
-- domain.go 领域层 TODO（需求章节见文件头注释）
+构建：
+go build -o personal-backend .
 
-## 使用
-```bash
-cd harness-output/impl
-go build ./...   # 骨架可编译
-```
+启动：
+./personal-backend --addr 127.0.0.1:8080 --data-dir ./data --auth-token dev-token
 
+仅监听 127.0.0.1；addr 非回环会拒绝启动。鉴权为占位，请求需带 Authorization: Bearer dev-token。
 
-## 需求映射
-- 实现计划（完整）：docs/个性化后台实现-实现计划.md
-- 需求全文：用户提交的附件 document（见实现计划「需求文档全文摘录」）
+端点：
+GET /v1/health：健康检查。
+POST /v1/process：JSON 请求/响应；执行清洗、词典纠错、意图分类。intent 取值为 NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE。
 
-## 状态
-骨架阶段（可编译、可运行 /v1/health）；核心逻辑待实现阶段按需求文档填充。
+请求示例：
+{"user_id":"u1","text":"要 note 一下","action":"auto"}
+
+响应示例：
+{"request_id":"...","cleaned_text":"...","intent":"NOTE","dictionary_hits":[],"corrected":false}
+
+反馈：提交 ✔/✘ 后追加写入 feedback.jsonl，不重写历史。
+
+数据文件，默认 ./data，可用 --data-dir 修改：
+dictionary.json：个性化词典条目。
+traces.jsonl：处理轨迹，append-only。
+usage.jsonl：调用用量，append-only。
+feedback.jsonl：反馈学习，append-only。
+
+快速验证：
+curl http://127.0.0.1:8080/v1/health
+curl -X POST http://127.0.0.1:8080/v1/process -H "Content-Type: application/json" -H "Authorization: Bearer dev-token" -d '{"user_id":"u1","text":"要 note 一下"}'
