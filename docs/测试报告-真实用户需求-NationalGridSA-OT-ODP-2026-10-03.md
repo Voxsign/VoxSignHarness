@@ -166,11 +166,11 @@ Harness 的**安全骨架**（默认拒绝、确认不放行、否定拦截、�
 
 修复前 6/15 → 修复闭环 14/15（R6 遗留）→ **本轮 25/25 意图级一致**（R6 修复生效；R1/R9/R15/R19/R21 等查询类真实 LLM 回答，检索无果一律诚实说明"检索结果里没有…"，不幻觉；R20 模型暂不可用走诚实降级文案）。
 
-### 8.4 多轮会话边界（重要发现）
+### 8.4 多轮会话边界（重要发现 → 已接线，见 §9）
 
 同沙箱连续两轮（先"查一下 OT-ODP 六层目标架构"，再"这个方案里 DMZ 发布是不是单向的"）→ 第二轮仍回问"你说的「这个」指的是哪个？"。
 **根因**：`refer.Recent`（跨轮上下文）在生产路径**零构造**——全仓 `RecentEntity{` 仅出现在测试代码；`server` 侧 `ConvID` 已接通（并行会话 358b2f0 起），但**最近实体列表未注入 resolver**，多轮指代消解是"有设计、无接线"。
-**行为评估**：安全（一律回问、绝不猜错），但多轮上下文感知能力未实现——这是当前测到的最深的能力边界，建议下轮接线（在 pipeline 执行后把产出实体追加进 Recent 并回读）。
+**行为评估**：安全（一律回问、绝不猜错），但多轮上下文感知能力未实现——**2026-10-04 已接线并实测通过（§9）**。
 
 ### 8.5 HTTP 服务冒烟
 
@@ -189,3 +189,42 @@ VHS_LOG_DIR=/tmp/vhs-final/log /tmp/vhs run "在方案里补一句：源系统�
 go test ./bench -run xxx -bench BenchmarkPipelineProcess            # 6.26µs
 # 25 条全量：/tmp/vhs-final/corpus.sh → /tmp/vhs-final/run25.log（25/25）
 ```
+
+---
+
+## 9. 多轮指代接线（2026-10-04）：refer.Recent 生产路径注入 + 实测通过
+
+> 用户要求"把多轮指代接线再测一轮"。§8.4 发现的"最近实体生产路径零构造"已修复：补上**写入端 + 读取端**，把 refer 的跨轮上下文真正接通。
+
+### 9.1 实现（底层标准化：复用既有会话槽体系）
+
+- **写入端**：执行成功的轮次，把对话核心实体 append 到 `<logDir>/context_slots/<convID>.jsonl`（与文档槽/ASR 槽同体系：append-only、会话隔离、可审计）。实体提取规则：拉丁专名（OT-ODP/SPoG/DMZ，正则支持 SPoG 大小写混合）+ 书名号《…》+ 引号短语，去重带时间戳。
+- **读取端**：下一轮 refer 解析前，从同槽读 `type=recent_entity` 记录（ts 倒序取前 16），注入 `resolver.Recent`。
+- **会话隔离**：按 ConvID 分文件；CLI 缺省 `default`（同 logDir 下多轮 run 共享），server 按真实会话隔离，不跨会话猜（与 358b2f0 指代固化槽同范式）。
+- **门控放宽**：`shouldResolveRefer` 增加 `hasRecent` 参数——QUERY 高置信非裸指代（"查一下这个方案"）在**有上下文时解析**，无上下文保持 M7 原行为（不解析、不回问）。问句语气（是不是/怎么/为什么）仍不解析指代（口语代词豁免），但也不写指代回问——直接执行，不打断。
+
+### 9.2 单测（pipeline/refer_recent_test.go，4 个）
+
+| 测试 | 断言 |
+|---|---|
+| TestExtractRecentEntities | 文本实体提取（OT-ODP/SPoG/DMZ/书名号/引号，去重） |
+| TestRecentSlotRoundtrip | write→load 闭环，ts 倒序 |
+| TestMultiTurnReferThroughPipeline | 端到端：轮1 NOTE OT-ODP → 轮2"这个方案…查一下"→ Target=OT-ODP、无 Ask |
+| TestRecentSlotSessionIsolation | 会话隔离：sess-B 不读 sess-A 的实体 |
+
+### 9.3 真实复测（同沙箱连续三轮，/tmp/vhs-mt）
+
+| 轮 | 输入 | 动作 | 说明 |
+|---|---|---|---|
+| 1 | 查一下 OT-ODP 六层目标架构是哪六层 | QUERY | 建立上下文；写槽 OT-ODP |
+| 2 | **这个方案**里 DMZ 发布机制查一下 | **QUERY OT-ODP** ✅ | 接线前：回问"这个指的是哪个"；接线后：直接消解执行 |
+| 3 | 它里面 SPoG 的定位查一下 | QUERY SPoG ✅ | "它"→ 最近实体（SPoG） |
+| 3' | 它里面 SPoG **是**怎么**定位的**查一下 | QUERY（问句语气不消解、不回问） | 安全边界：问句口语代词豁免，直接执行不打断 |
+
+槽证据：`/tmp/vhs-mt/log/context_slots/default.jsonl` = [OT-ODP, DMZ, OT-ODP, SPoG…]（append-only，可审计）。
+
+### 9.4 回归确认
+
+接线后全量复测：**28 包全绿**、`vhs task` **20/20**、25 条语料单轮 **25/25 一致**（多轮写入不影响单轮行为）、bench **6,807 ns/op**（阈值 9.9µs）。
+
+**结论**：多轮指代从"有设计、无接线"变为"已接线、实测通过"；问句语气内的指代保持"不解析但不打断"的安全边界。这是本案例测试推进的最后一环——意图分类 25/25 + 多轮指代消解 + 安全骨架全绿。

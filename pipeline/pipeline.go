@@ -1195,8 +1195,8 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 		seen[e] = true
 		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
 	}
-	// 拉丁大写专名（含 - 连接可 0..N 段）：OT-ODP / SPoG / DMZ / NGSA
-	re := regexp.MustCompile(`[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]+)*`)
+	// 拉丁专名（大写开头，可含小写如 SPoG、连字符段）：OT-ODP / SPoG / DMZ / NGSA
+	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
 	for _, m := range re.FindAllString(text, -1) {
 		add(m, "project")
 	}
