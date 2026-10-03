@@ -6,6 +6,7 @@ package route
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -272,5 +273,57 @@ func TestRouteAmbiguousIsVisible(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("[L0-2] 多命中/未命中未留痕（命中率将不可测）: %+v", d.Ledger)
+	}
+}
+
+// 台账落盘：append-only、不丢字段、可聚合出三个考察指标。
+func TestLedgerAppendOnlyAndAggregatable(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Path: filepath.Join(dir, "ledger.jsonl")}
+	// 1) L0 命中
+	r0 := &Router{Hot: hotCache(t)}
+	d0 := r0.Route(context.Background(), "爱ops", "q", Situation{})
+	if err := l.Write(d0, "t0", KindFor("爱ops")); err != nil {
+		t.Fatal(err)
+	}
+	// 2) L0.5 ambiguous → 回问
+	r1 := &Router{Hot: hotCache(t), JEV: &fakeJEV{resp: JEVResponse{Choice: "ambiguous", Confidence: 0.5}}}
+	d1 := r1.Route(context.Background(), "讲个笑话", "q", Situation{})
+	if err := l.Write(d1, "t1", KindFor("讲个笑话")); err != nil {
+		t.Fatal(err)
+	}
+	// 3) L1 升级
+	r2 := &Router{Hot: hotCache(t), JEV: &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}, L1: &fakeL1{out: "ok"}, NeedsReasoning: true}
+	d2 := r2.Route(context.Background(), "先A再B", "q", Situation{})
+	if err := l.Write(d2, "t2", KindFor("先A再B")); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(l.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(raw), "\n"); n != 3 {
+		t.Fatalf("[台账] append-only 应为 3 行，实际 %d", n)
+	}
+	s, err := Aggregate(l.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Total != 3 || s.ByLevel[LevelL0] != 1 || s.ByLevel[LevelL05] != 1 || s.ByLevel[LevelL1] != 1 {
+		t.Errorf("[台账] 层级分布不符: %+v", s)
+	}
+	if s.EscalationRate <= 0 || s.EscalationRate > 1 {
+		t.Errorf("[台账] 升级率异常: %v", s.EscalationRate)
+	}
+	if s.AskedUserRate <= 0 {
+		t.Errorf("[台账] 回问率应 >0: %v", s.AskedUserRate)
+	}
+	if s.L0Share <= 0 || s.L0Share > 1 {
+		t.Errorf("[台账] L0 比例异常: %v", s.L0Share)
+	}
+	// 空台账不崩
+	if empty, err := Aggregate(filepath.Join(dir, "nope.jsonl")); err != nil || empty.Total != 0 {
+		t.Errorf("[台账] 空/缺失台账应返回空摘要: %+v err=%v", empty, err)
 	}
 }
