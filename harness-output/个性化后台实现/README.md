@@ -1,76 +1,61 @@
-个性化后台 运行说明
+README.md
 
-一、启动
-1. 直接运行
-   go run . --addr 127.0.0.1:8080 --data-dir ./data
+个性化后台（Go 单二进制）
 
-2. 编译后运行
-   go build -o server .
-   ./server --addr 127.0.0.1:8080 --data-dir ./data
+一、编译
+  go build -o personald .
+  （要求 Go 1.21+；无第三方依赖，仅标准库）
 
-默认参数
-   --addr     监听地址，仅允许 127.0.0.1，默认 127.0.0.1:8080
-   --data-dir 数据目录，默认 ./data
-   --token    可选占位鉴权 token，默认空
+二、启动
+  ./personald -addr 127.0.0.1:8787 -data-dir ./data
+  参数说明：
+    -addr      监听地址，默认 127.0.0.1:8787；非回环地址（如 0.0.0.0、局域网 IP）启动时直接拒绝并退出。
+    -data-dir  数据目录，默认 ./data；首次运行自动创建。
+    -token     可选占位鉴权串，默认空；非空时要求请求头 Authorization: Bearer <token>。
 
-二、端点
-1. 健康检查
-   GET /v1/health
-   响应示例
-   {"status":"ok","addr":"127.0.0.1:8080","data_dir":"./data"}
+  第一次启动会在 data-dir 下生成字典文件 dictionary.json（不存在则写入空词典骨架）。
 
-2. 业务处理
-   POST /v1/process
-   Content-Type: application/json
-   可选鉴权头
-   Authorization: Bearer <token>
-   请求示例
-   {"text":"帮我记一下明天开会","action":"classify","feedback":null}
-   响应示例
-   {"ok":true,"intent":"NOTE","corrected":"帮我记一下明天开会","changed":false}
+三、HTTP 端点（全部 JSON 请求/响应）
+  1) GET /v1/health
+     返回：{"ok":true,"status":"healthy","data_dir":"...","dictionary_size":N}
 
-3. 词典操作
-   通过 /v1/process 的 action 字段区分
-   action=dict_add   新增词条
-   action=dict_del   删除词条
-   action=dict_get   查询词条
-   action=correct    文本清洗与词典纠错
-   action=classify   意图分类
-   action=feedback   提交 ✔/✘ 反馈
+  2) POST /v1/process
+     请求：{"text":"...","intent_hint":"","feedback":""}
+     响应：{"intent":"NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE","clean_text":"...","corrected_text":"...","corrections":[...],"dict_hits":[...],"trace_id":"..."}
+     说明：
+       - text 为空或纯空白返回 400。
+       - 正常文本经过清洗与词典纠错后必须保持不变（不误改）。
+       - 纠错只采用词典中的高置信条目，并按安全规则（长度、非子串误伤）生效。
+       - feedback 字段为可选，取值为 "yes"/"no"（或 ✔/✘），等价于调用一次 /v1/feedback。
 
-4. 意图分类取值
-   NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+  3) POST /v1/dict  （增）
+     请求：{"term":"错误词","replacement":"正确词"}
+     响应：{"ok":true,"size":N}
 
-三、数据文件
-数据目录由 --data-dir 指定，所有 JSONL 均为 append-only。
+  4) GET /v1/dict?term=xxx  （查；term 省略则返回全部条目）
+     响应：{"ok":true,"entries":[{"term":"...","replacement":"...","hits":N}]}
 
-   data/dict.json       个性化词典持久化文件
-   data/feedback.jsonl  ✔/✘ 反馈记录，每行一条
-   data/traces.jsonl    处理轨迹，每行一条
-   data/usage.jsonl     调用用量，每行一条
+  5) DELETE /v1/dict?term=xxx  （删）
+     响应：{"ok":true,"removed":true,"size":N}
 
-四、请求示例
-1. 文本纠错
-   curl -s -X POST http://127.0.0.1:8080/v1/process \
-     -H 'Content-Type: application/json' \
-     -d '{"text":"帮我记一下明天开会","action":"correct"}'
+  6) POST /v1/feedback
+     请求：{"trace_id":"...","verdict":"yes|no","note":"可选"}
+     响应：{"ok":true}
 
-2. 意图分类
-   curl -s -X POST http://127.0.0.1:8080/v1/process \
-     -H 'Content-Type: application/json' \
-     -d '{"text":"帮我记一下明天开会","action":"classify"}'
+四、数据文件（全部 append-only JSONL，位于 data-dir）
+  data/dictionary.json   个性化词典，整体原子重写（增删改）
+  data/feedback.jsonl    反馈学习记录，每行 {"ts":...,"trace_id":...,"verdict":...,"note":...}
+  data/traces.jsonl      每次 /v1/process 的调用轨迹，每行一条
+  data/usage.jsonl       用量统计，每行 {"ts":...,"endpoint":...,"intent":...,"latency_ms":...}
 
-3. 新增词典条目
-   curl -s -X POST http://127.0.0.1:8080/v1/process \
-     -H 'Content-Type: application/json' \
-     -d '{"action":"dict_add","word":"开会","replacement":"会议"}'
+  落盘约定：所有 .jsonl 仅追加、不重写、不删除；写入失败不影响接口返回，但会写入 stderr 日志。
 
-4. 提交反馈
-   curl -s -X POST http://127.0.0.1:8080/v1/process \
-     -H 'Content-Type: application/json' \
-     -d '{"action":"feedback","trace_id":"t-123","feedback":"✔"}'
+五、意图分类规则（NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE）
+  按关键词与句式打分，取最高分，无命中时默认 NOTE。
 
-五、安全与限制
-   服务仅监听 127.0.0.1，非回环地址拒绝启动。
-   Token 鉴权为占位实现，生产环境需替换为真实校验。
-   所有落盘文件按 append-only 方式写入，不覆盖历史数据。
+六、快速自检
+  curl -s http://127.0.0.1:8787/v1/health
+  curl -s -X POST http://127.0.0.1:8787/v1/dict -d '{"term":"登陆","replacement":"登录"}'
+  curl -s -X POST http://127.0.0.1:8787/v1/process -d '{"text":"我要登陆系统"}'
+  curl -s -X POST http://127.0.0.1:8787/v1/feedback -d '{"trace_id":"<上一步返回的 trace_id>","verdict":"yes"}'
+  tail -n 5 ./data/traces.jsonl
