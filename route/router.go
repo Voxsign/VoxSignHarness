@@ -200,7 +200,8 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 				Ledger: append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "gateway-route", Escalated: false}),
 			}
 		default:
-			ledgerNote = append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "route-no-unique-hit", Escalated: false})
+			// 落空必须可见：多命中/未命中不得静默落到 L0.5（否则永远不知道命中率）。
+			ledgerNote = append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "route_ambiguous=true", Escalated: false})
 		}
 	}
 	// ---- 升级（唯一触发器：调用方声明"需要多步推理"）----

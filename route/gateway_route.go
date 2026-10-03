@@ -7,6 +7,7 @@
 package route
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,7 +55,8 @@ func (c *RouteClient) Lookup(ctx context.Context, q string) (string, bool, error
 	var out struct {
 		Hits []json.RawMessage `json:"hits"`
 	}
-	if err := json.Unmarshal(raw, &out); err != nil {
+	// 容错：网关响应可能带尾随内容（实测 {"q":…,"hits":[…]} 后还有字节）⇒ 只解第一个 JSON 值。
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&out); err != nil {
 		return "", false, fmt.Errorf("解析失败（按不可用处理）: %w", err)
 	}
 	if len(out.Hits) == 0 {

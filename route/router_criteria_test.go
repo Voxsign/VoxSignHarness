@@ -258,3 +258,19 @@ func TestEscalationOnlyOnReasoningNeed(t *testing.T) {
 		t.Errorf("[L1] 应在 L0.5 停住: %+v", d2)
 	}
 }
+
+// 第二梯队落空也必须可见：多命中/未命中 ⇒ route_ambiguous=true（不静默落 L0.5）。
+func TestRouteAmbiguousIsVisible(t *testing.T) {
+	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
+	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{ok: false}, JEV: jev}
+	d := r.Route(context.Background(), "翻译一下", "翻译一下", Situation{})
+	found := false
+	for _, e := range d.Ledger {
+		if e.Reason == "route_ambiguous=true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[L0-2] 多命中/未命中未留痕（命中率将不可测）: %+v", d.Ledger)
+	}
+}
