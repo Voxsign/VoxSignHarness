@@ -9,6 +9,7 @@
     "default": {
       "enabled": true,
       "provider": "aiops",
+      "tier": "fast",
       "model_id": "deepseek-flash",
       "timeout_ms": 30000,
       "max_concurrency": 4,
@@ -17,6 +18,7 @@
     "diagnose": {
       "enabled": false,
       "provider": "aiops",
+      "tier": "quality",
       "model_id": "TBD",
       "timeout_ms": 30000,
       "max_concurrency": 2,
@@ -25,10 +27,31 @@
     "learn": {
       "enabled": false,
       "provider": "aiops",
+      "tier": "quality",
       "model_id": "TBD",
       "timeout_ms": 60000,
       "max_concurrency": 1,
       "write_back": true
+    },
+    "plan": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 60000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "research": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 60000,
+      "max_concurrency": 2,
+      "write_back": false
     }
+  },
+  "tiers": {
+    "fast": "deepseek-flash",
+    "quality": "deepseek-v4-pro"
   }
 }

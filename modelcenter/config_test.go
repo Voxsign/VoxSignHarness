@@ -17,8 +17,11 @@ func goodConfig() Config {
 	return Config{
 		ContractVersion: "1",
 		Gateway:         GatewayConfig{BaseURL: "https://aiops.example", ChatPath: "/api/model/chat", APIKeyEnv: "VHS_TEST_KEY"},
+		Tiers:           map[string]string{"fast": "deepseek-flash", "quality": "deepseek-v4-pro"},
 		Channels: map[string]ChannelConfig{
-			"default":  {Enabled: true, Provider: "aiops", ModelID: "deepseek-flash", TimeoutMS: 5000, MaxConcurrency: 4, WriteBack: false},
+			"default":  {Enabled: true, Provider: "aiops", ModelID: "deepseek-flash", Tier: "fast", TimeoutMS: 5000, MaxConcurrency: 4, WriteBack: false},
+			"plan":     {Enabled: true, Provider: "aiops", Tier: "quality", TimeoutMS: 5000, MaxConcurrency: 2, WriteBack: false},
+			"research": {Enabled: true, Provider: "aiops", Tier: "quality", TimeoutMS: 5000, MaxConcurrency: 2, WriteBack: false},
 			"diagnose": {Enabled: false, Provider: "aiops", ModelID: "TBD", TimeoutMS: 5000, MaxConcurrency: 2, WriteBack: false},
 			"learn":    {Enabled: false, Provider: "aiops", ModelID: "TBD", TimeoutMS: 5000, MaxConcurrency: 1, WriteBack: true},
 		},
@@ -216,4 +219,42 @@ func TestLoadDotEnvSetsOnlyMissing(t *testing.T) {
 func decodeJSON(r *http.Request, v any) error {
 	defer func() { _ = r.Body.Close() }()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// 档位+用途两层（Lead 裁决）：通道名与档位分开；default 不得指向 quality。
+func TestTiersAndChannelResolution(t *testing.T) {
+	c := goodConfig()
+	// plan/research ⇒ 走 quality 档
+	for _, ch := range []Channel{ChannelPlan, ChannelResearch} {
+		got, err := c.ResolveModel(ch)
+		if err != nil {
+			t.Fatalf("[tier] %s 解析失败: %v", ch, err)
+		}
+		if got != "deepseek-v4-pro" {
+			t.Errorf("[tier] %s 应解析到 quality 档模型，实际 %q", ch, got)
+		}
+	}
+	// default ⇒ fast 档（显式 model_id 优先）
+	if got, _ := c.ResolveModel(ChannelDefault); got != "deepseek-flash" {
+		t.Errorf("[tier] default 应为快档模型，实际 %q", got)
+	}
+	// ⑤ 分档退化：default 指向 quality ⇒ 必须拦下
+	bad := goodConfig()
+	d := bad.Channels["default"]
+	d.Tier = TierQuality
+	bad.Channels["default"] = d
+	if err := bad.Validate(); err == nil {
+		t.Error("[tier] default 指向 quality 却未被拦下（分档退化）")
+	}
+	// fail-closed：通道引用不存在的 tier ⇒ 报错
+	bad2 := goodConfig()
+	p := bad2.Channels["plan"]
+	p.Tier = "no-such-tier"
+	bad2.Channels["plan"] = p
+	if err := bad2.Validate(); err == nil {
+		t.Error("[tier] 引用不存在的 tier 未被拦下（应 fail-closed）")
+	}
+	if _, err := bad2.ResolveModel(ChannelPlan); err == nil {
+		t.Error("[tier] 解析不存在的 tier 未报错")
+	}
 }
