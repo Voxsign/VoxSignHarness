@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,10 +19,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,20 +34,22 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
+func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
-			words[i] = correction
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -62,13 +63,13 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	if strings.Contains(text, "note") {
+	if strings.HasPrefix(text, "note") {
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	} else if strings.HasPrefix(text, "query") {
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	} else if strings.HasPrefix(text, "edit") {
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
 	} else {
 		return ORCHESTRATE
@@ -80,89 +81,91 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func AppendFeedback(filePath string, feedback Feedback) error {
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(feedback)
+}
+
+type Trace struct {
+	Input  string `json:"input"`
+	Output string `json:"output"`
+}
+
+func AppendTrace(filePath string, trace Trace) error {
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
-}
+	defer file.Close()
 
-type Request struct {
-	Text string `json:"text"`
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(trace)
 }
-
-type Response struct {
-	CorrectedText string `json:"corrected_text"`
-	Intent        Intent `json:"intent"`
-}
-
-var (
-	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir = flag.String("data-dir", "./data", "Data directory")
-	dict    = NewDictionary()
-)
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func processHandler(dict *Dictionary, feedbackPath, tracePath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var request struct {
+			Text string `json:"text"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		correctedText := dict.Correct(request.Text)
+		intent := ClassifyIntent(correctedText)
+
+		response := struct {
+			CorrectedText string `json:"corrected_text"`
+			Intent        Intent `json:"intent"`
+		}{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		trace := Trace{Input: request.Text, Output: correctedText}
+		if err := AppendTrace(tracePath, trace); err != nil {
+			fmt.Println("Error appending trace:", err)
+		}
 	}
-
-	var req Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	correctedText := dict.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
-
-	resp := Response{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
 
 func main() {
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
-		os.Exit(1)
-	}
+	dict := NewDictionary()
+	feedbackPath := *dataDir + "/feedback.jsonl"
+	tracePath := *dataDir + "/traces.jsonl"
 
 	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
+	http.HandleFunc("/v1/process", processHandler(dict, feedbackPath, tracePath))
 
-	fmt.Printf("Listening on %s...\n", *addr)
+	fmt.Println("Starting server on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Server failed:", err)
 	}
 }
