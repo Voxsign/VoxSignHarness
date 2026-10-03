@@ -82,7 +82,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
+func AppendJSONL(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -90,11 +90,15 @@ func AppendToFile(filename string, data interface{}) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
+	defer writer.Flush()
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+
+	_, err = writer.WriteString(string(jsonData) + "\n")
+	return err
 }
 
 type Request struct {
@@ -137,12 +141,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
+	if err := AppendJSONL(*dataDir+"/traces.jsonl", req); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -163,7 +162,7 @@ func feedbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
+	if err := AppendJSONL(*dataDir+"/feedback.jsonl", feedback); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -176,7 +175,7 @@ func main() {
 
 	if _, err := os.Stat(*dataDir); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(*dataDir, 0755); err != nil {
-			fmt.Printf("Failed to create data directory: %v\n", err)
+			fmt.Println("Failed to create data directory:", err)
 			return
 		}
 	}
@@ -185,8 +184,8 @@ func main() {
 	http.HandleFunc("/v1/process", processHandler)
 	http.HandleFunc("/v1/feedback", feedbackHandler)
 
-	fmt.Printf("Starting server on %s\n", *addr)
+	fmt.Println("Server is listening on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Printf("Server failed: %v\n", err)
+		fmt.Println("Failed to start server:", err)
 	}
 }
