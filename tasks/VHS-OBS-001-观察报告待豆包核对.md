@@ -75,6 +75,27 @@ server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 
 ⚠️ **我只报位置，不给修法**（"统一走 `spawnTask`" vs "在 `handleRun` 补 `persist`/`byReq`"
 > 各有风险 —— 前者可能改变 `/v1/run` 的其它语义，后者可能遗漏 `spawnTask` 的其它附带行为）。
 
+### OBS-10 【读码】`handleRun` 比 `spawnTask` **少设 5 个字段**（**完整差距清单**）
+
+```
+handleRun(:270-275) 构造的 taskState：**只有 3 个字段**（ID · Status · confirmCh）
+spawnTask(:559-570) 构造的：**8 个字段**（多 RequestID · Text · Document · Role · startedAt）
+⇒ 少设 5 个。其中**已验证 2 个**产生对外可见症状（RequestID ⇒ OBS-08 · Role ⇒ OBS-09），
+  加上未执行的 `persist` ⇒ OBS-04。**⇒ 建议按这张清单一次性评估，而不是一条条试。**
+```
+
+⚠️ **剩下 3 个字段我**测不出对外后果**，请勿当成"已证实有害"**
+```
+· `Text` 未设：对外**不可见**（view 层两个入口都不含 text）；而**落盘文件里有** ⇒
+  差异真实存在于内部/磁盘，**但我无法证明对外的可观测影响**
+· `Document` 未设：`runReq` 只有 `Text` ⇒ `/v1/run` **根本不接受** document（入口层面就不支持）
+  ⇒ 若"纯文本执行入口"是有意设计 ⇒ 非缺陷 ⇒ **需你判定**
+· `startedAt` 未设：**完全未核**
+```
+
+⚠️ 另记一处**未核**差异（**不报为缺陷**）：`GET /v1/tasks/<id>` 的响应里
+`/v1/tasks` 多一个 **`reversible`** 键 —— 可能只是 `omitempty`，**未核**。
+
 ---
 
 ## 2. 其余 7 条（摘要 · 详见 `docs/` 完整报告）
