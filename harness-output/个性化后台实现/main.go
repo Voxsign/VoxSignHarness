@@ -40,11 +40,9 @@ func (d *Dictionary) Lookup(word string) (string, bool) {
 }
 
 func (d *Dictionary) Correct(text string) string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
 	words := strings.Fields(text)
 	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
+		if correction, exists := d.Lookup(word); exists {
 			words[i] = correction
 		}
 	}
@@ -62,13 +60,13 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+	if strings.Contains(text, "note") {
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	} else if strings.Contains(text, "query") {
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	} else if strings.Contains(text, "edit") {
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	} else if strings.Contains(text, "commit") {
 		return COMMIT
 	} else {
 		return ORCHESTRATE
@@ -104,81 +102,91 @@ type Response struct {
 	Intent        Intent `json:"intent"`
 }
 
-var (
-	dictionary = NewDictionary()
-	dataDir    string
-)
+func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		correctedText := dict.Correct(req.Text)
+		intent := ClassifyIntent(req.Text)
+
+		resp := Response{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := AppendToFile(dataDir+"/traces.jsonl", req); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := AppendToFile(dataDir+"/usage.jsonl", resp); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func feedbackHandler(dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var feedback Feedback
+		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		if err := AppendToFile(dataDir+"/feedback.jsonl", feedback); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	correctedText := dictionary.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
-
-	resp := Response{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func feedbackHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var feedback Feedback
-	if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), feedback); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
 func main() {
-	flag.StringVar(&dataDir, "data-dir", "./data", "Directory to store data files")
-	addr := flag.String("addr", "127.0.0.1:8080", "Address to listen on")
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
-	http.HandleFunc("/v1/feedback", feedbackHandler)
-
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		fmt.Println("Error creating data directory:", err)
-		return
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	fmt.Println("Server is listening on", *addr)
+	dict := NewDictionary()
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
+
+	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Error starting server:", err)
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
 }
