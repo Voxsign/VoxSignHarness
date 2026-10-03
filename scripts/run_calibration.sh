@@ -83,9 +83,9 @@ if [ $i -ge 40 ]; then
   exit 2
 fi
 echo "[calib-R]    服务就绪（${i}×0.25s）"
-# 起后自证：该端口只应有 1 个监听者（就是我刚起的 $SRV）
+# 起后自证：该端口只应有 1 个监听者（就是我刚起的 ${SRV}）
 nlisten=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')
-echo "[calib-R]    端口 $PORT 监听者数 = $nlisten（应为 1；我起的 PID=$SRV）"
+echo "[calib-R]    端口 $PORT 监听者数 = ${nlisten}（应为 1；我起的 PID=${SRV}）"
 if [ "$nlisten" -gt 1 ]; then
   echo "[calib-R] ❌ 端口 $PORT 有多个监听者 ⇒ **响应未必来自我起的进程** ⇒ 拒绝取证"
   exit 2
