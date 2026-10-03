@@ -170,7 +170,8 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 }
 
 // Start 在 cfg.ServerBind() 上起 HTTP 服务。
-func (s *Server) Start() error {
+// Handler 返回完整路由（**Start 与判据共用同一份装配** —— 避免"判据的装配 ≠ 真启动的装配"）。
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// INTERACT-v1 正式端点
 	mux.HandleFunc("/v1/tasks", s.auth(s.handleTasksPost))
@@ -184,7 +185,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("/v1/health", s.auth(s.handleHealth))
+	return mux
+}
 
+func (s *Server) Start() error {
+	mux := s.Handler()
 	addr := s.cfg.ServerBind()
 	fmt.Printf("vhs server listening on %s (token_set=%v)\n", addr, s.cfg.Server.Token != "")
 	return http.ListenAndServe(addr, mux)
