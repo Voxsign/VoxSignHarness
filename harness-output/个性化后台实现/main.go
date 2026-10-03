@@ -20,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, definition string) {
+func (d *Dictionary) Add(word, correction string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = definition
+	d.entries[word] = correction
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,22 +35,20 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	definition, exists := d.entries[word]
-	return definition, exists
+	correction, exists := d.entries[word]
+	return correction, exists
 }
 
-func (d *Dictionary) Correct(word string) string {
+func (d *Dictionary) Correct(text string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.entries[word]; exists {
-		return word
-	}
-	for entry := range d.entries {
-		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
-			return entry
+	words := strings.Fields(text)
+	for i, word := range words {
+		if correction, exists := d.entries[word]; exists {
+			words[i] = correction
 		}
 	}
-	return word
+	return strings.Join(words, " ")
 }
 
 type Intent string
@@ -64,19 +62,18 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	text = strings.ToLower(text)
-	switch {
-	case strings.Contains(text, "note"):
+	if strings.HasPrefix(text, "note:") {
 		return NOTE
-	case strings.Contains(text, "query"):
+	} else if strings.HasPrefix(text, "query:") {
 		return QUERY
-	case strings.Contains(text, "edit"):
+	} else if strings.HasPrefix(text, "edit:") {
 		return EDIT
-	case strings.Contains(text, "commit"):
+	} else if strings.HasPrefix(text, "commit:") {
 		return COMMIT
-	default:
+	} else if strings.HasPrefix(text, "orchestrate:") {
 		return ORCHESTRATE
 	}
+	return NOTE
 }
 
 type Feedback struct {
@@ -84,7 +81,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendJSONL(filename string, data interface{}) error {
+func AppendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -92,15 +89,11 @@ func AppendJSONL(filename string, data interface{}) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
+	encoder := json.NewEncoder(writer)
+	if err := encoder.Encode(data); err != nil {
 		return err
 	}
-
-	_, err = writer.WriteString(string(jsonData) + "\n")
-	return err
+	return writer.Flush()
 }
 
 type Server struct {
@@ -135,7 +128,7 @@ func (s *Server) ProcessHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	correctedText := s.dictionary.Correct(request.Text)
-	intent := ClassifyIntent(correctedText)
+	intent := ClassifyIntent(request.Text)
 
 	response := struct {
 		CorrectedText string `json:"corrected_text"`
@@ -145,13 +138,19 @@ func (s *Server) ProcessHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := AppendJSONL(s.dataDir+"/traces.jsonl", response); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	trace := map[string]interface{}{
+		"text":           request.Text,
+		"corrected_text": correctedText,
+		"intent":         intent,
+	}
+	if err := AppendToFile(s.dataDir+"/traces.jsonl", trace); err != nil {
+		fmt.Println("Error writing trace:", err)
+	}
 }
 
 func main() {
@@ -169,7 +168,7 @@ func main() {
 	http.HandleFunc("/v1/health", server.HealthHandler)
 	http.HandleFunc("/v1/process", server.ProcessHandler)
 
-	fmt.Println("Server is listening on", *addr)
+	fmt.Println("Starting server on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		fmt.Println("Error starting server:", err)
 	}
