@@ -45,8 +45,9 @@ func (d *Dictionary) Correct(word string) string {
 	if _, exists := d.entries[word]; exists {
 		return word
 	}
+	// Simple correction: return the first word that starts with the same letter
 	for entry := range d.entries {
-		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+		if strings.HasPrefix(entry, string(word[0])) {
 			return entry
 		}
 	}
@@ -63,7 +64,7 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func classifyIntent(text string) Intent {
+func ClassifyIntent(text string) Intent {
 	text = strings.ToLower(text)
 	switch {
 	case strings.Contains(text, "note"):
@@ -74,14 +75,31 @@ func classifyIntent(text string) Intent {
 		return EDIT
 	case strings.Contains(text, "commit"):
 		return COMMIT
-	default:
+	case strings.Contains(text, "orchestrate"):
 		return ORCHESTRATE
+	default:
+		return QUERY
 	}
 }
 
 type Feedback struct {
 	Text   string `json:"text"`
 	Correct bool   `json:"correct"`
+}
+
+func AppendToFile(filename string, data interface{}) error {
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	encoder := json.NewEncoder(writer)
+	if err := encoder.Encode(data); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
 
 type Request struct {
@@ -93,106 +111,88 @@ type Response struct {
 	Intent        Intent `json:"intent"`
 }
 
-var (
-	dictionary = NewDictionary()
-	dataDir    string
-)
+func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-func init() {
-	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		correctedText := dict.Correct(req.Text)
+		intent := ClassifyIntent(req.Text)
+
+		resp := Response{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := AppendToFile(dataDir+"/traces.jsonl", req); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+	}
 }
 
-func main() {
-	flag.Parse()
+func feedbackHandler(dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
+		var feedback Feedback
+		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
 
-	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
-		fmt.Println("Error creating data directory:", err)
-		return
-	}
+		if err := AppendToFile(dataDir+"/feedback.jsonl", feedback); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	fmt.Println("Server listening on 127.0.0.1:8080")
-	if err := http.ListenAndServe("127.0.0.1:8080", nil); err != nil {
-		fmt.Println("Error starting server:", err)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+func main() {
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
+	flag.Parse()
+
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		os.Exit(1)
 	}
 
-	var req Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
+	dict := NewDictionary()
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
+
+	fmt.Printf("Starting server on %s\n", *addr)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
-
-	correctedText := dictionary.Correct(req.Text)
-	intent := classifyIntent(req.Text)
-
-	resp := Response{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	if err := logTrace(req.Text, correctedText, intent); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func logTrace(originalText, correctedText string, intent Intent) error {
-	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	trace := map[string]interface{}{
-		"original_text":  originalText,
-		"corrected_text": correctedText,
-		"intent":         intent,
-	}
-
-	data, err := json.Marshal(trace)
-	if err != nil {
-		return err
-	}
-
-	writer := bufio.NewWriter(file)
-	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
-		return err
-	}
-	return writer.Flush()
-}
-
-func logFeedback(feedback Feedback) error {
-	file, err := os.OpenFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	data, err := json.Marshal(feedback)
-	if err != nil {
-		return err
-	}
-
-	writer := bufio.NewWriter(file)
-	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
-		return err
-	}
-	return writer.Flush()
 }
