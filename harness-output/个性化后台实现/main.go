@@ -64,18 +64,19 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	if strings.Contains(text, "note") {
+func classifyIntent(text string) Intent {
+	if strings.HasPrefix(text, "note") {
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	} else if strings.HasPrefix(text, "query") {
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	} else if strings.HasPrefix(text, "edit") {
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
-	} else {
+	} else if strings.HasPrefix(text, "orchestrate") {
 		return ORCHESTRATE
 	}
+	return NOTE
 }
 
 type Feedback struct {
@@ -83,7 +84,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
+func appendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -113,14 +114,13 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 		var request struct {
 			Text string `json:"text"`
 		}
-
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
 		correctedText := dict.Correct(request.Text)
-		intent := ClassifyIntent(correctedText)
+		intent := classifyIntent(correctedText)
 
 		response := struct {
 			CorrectedText string `json:"corrected_text"`
@@ -130,13 +130,29 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 			Intent:        intent,
 		}
 
-		if err := AppendToFile(dataDir+"/traces.jsonl", response); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+		appendToFile(dataDir+"/traces.jsonl", response)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
+	}
+}
+
+func feedbackHandler(dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var feedback Feedback
+		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		appendToFile(dataDir+"/feedback.jsonl", feedback)
+
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -153,6 +169,7 @@ func main() {
 	dict := NewDictionary()
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {

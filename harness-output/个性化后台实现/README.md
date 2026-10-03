@@ -1,57 +1,71 @@
-个性化后台实现 · 运行说明
+个性化后台实现 运行说明
 
-一、启动
+一、环境与构建
+依赖：Go 1.21+
+构建：go build -o p13n .
+或直接运行：go run .
 
-  go build -o backend .
-  ./backend -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+二、启动命令
+默认启动（监听回环地址，数据目录 ./data）：
+go run . --addr 127.0.0.1:8787 --data-dir ./data
 
-  -addr     监听地址，仅允许 127.0.0.1 / ::1 / localhost，非回环地址直接拒绝启动
-  -data-dir 数据目录，默认 ./data，不存在时自动创建
-  -token    鉴权占位令牌，默认 dev-token；请求需带 Authorization: Bearer <token>
+常用参数：
+--addr      监听地址，默认 127.0.0.1:8787；非回环地址（如 0.0.0.0:8787）会被直接拒绝启动
+--data-dir  数据目录，默认 ./data，不存在时自动创建
+--token     鉴权占位令牌，默认 dev-token
 
-  开发调试：go run . -data-dir ./data
+启动成功输出示例：
+p13n listening on 127.0.0.1:8787, data-dir=./data
 
-二、HTTP 端点
+三、HTTP 端点
+1. 健康检查
+GET /v1/health
+返回：{"status":"ok","version":"...","data_dir":"..."}
 
-  GET /v1/health
-    返回 {"status":"ok","version":"...","data_dir":"..."}，无需鉴权。
+2. 业务处理
+POST /v1/process
+请求头：Authorization: Bearer dev-token（占位鉴权，缺失或错误返回 401）
+请求体（JSON）：
 
-  POST /v1/process
-    Content-Type: application/json，需鉴权，请求/响应均为 JSON。
+{
+  "text": "帮我把这条笔记存一下",
+  "user_id": "u1",
+  "feedback": null
+}
 
-    1) 文本处理（清洗 + 词典纠错 + 意图分类）
-       请求 {"text":"明天下午三点开个会"}
-       响应 {"corrected":"明天下午三点开个会","intent":"NOTE","hits":[],"trace_id":"..."}
-       intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-       正常文本原样返回，不误改。
+字段说明：
+text     必填，待处理文本
+user_id  可选，用于分用户落盘
+feedback 可选，✔/✘ 反馈回执，取值为 "up" 或 "down"
 
-    2) 词典增删查
-       增  {"op":"dict_add","term":"阿理","replacement":"阿里"}
-       删  {"op":"dict_del","term":"阿理"}
-       查  {"op":"dict_get","term":"阿理"}
-       列表 {"op":"dict_list"}
-       匹配与纠错带安全校验：长度、空白、自替换、命中重叠均跳过。
+响应体（JSON）：
 
-    3) 反馈学习
-       请求 {"op":"feedback","text":"明天开会","corrected":"明天下午开会","intent":"NOTE","verdict":"up"}
-       verdict 为 up / down，仅追加写入，不修改历史记录。
+{
+  "intent": "NOTE",
+  "corrected": "帮我把这条笔记存一下",
+  "matched_terms": [],
+  "trace_id": "..."
+}
 
-三、数据文件（均在 -data-dir 下，JSONL 一律 append-only）
+intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
 
-  dictionary.json   个性化词典条目（增删查的唯一权威源）
-  feedback.jsonl    反馈学习记录，每行一条
-  traces.jsonl      每次 /v1/process 的请求、结果、耗时
-  usage.jsonl       按端点与意图的调用计数与用量
+四、词典管理（HTTP）
+GET    /v1/dict            查询全部条目
+GET    /v1/dict?q=关键字   按词条查询
+POST   /v1/dict            新增条目，体：{"term":"...","alias":["..."]}
+DELETE /v1/dict?term=...   删除条目
 
-  行格式示例
-    {"ts":"2026-01-01T10:00:00Z","trace_id":"...","text":"...","corrected":"...","intent":"NOTE","ms":3}
-    {"ts":"2026-01-01T10:00:01Z","verdict":"up","term":"阿理","replacement":"阿里"}
+匹配与纠错安全约定：仅做精确与别名匹配，长度阈值与相似度阈值不足时不做替换；正常文本原样返回，不被改坏。
 
-四、curl 自检
+五、数据文件（append-only，均位于 data-dir 下）
+data/dictionary.json  个性化词典（原子整写，非 append）
+data/feedback.jsonl   反馈学习记录，每行一条 {"ts","user_id","intent","text","feedback"}
+data/traces.jsonl     处理链路追踪，每行一条 {"ts","trace_id","user_id","intent","stage"}
+data/usage.jsonl      用量统计，每行一条 {"ts","user_id","endpoint","count"}
 
-  curl -s http://127.0.0.1:8080/v1/health
-  curl -s -H 'Authorization: Bearer dev-token' -H 'Content-Type: application/json' \
-    -d '{"text":"明天下午三点开个会"}' http://127.0.0.1:8080/v1/process
-  curl -s -H 'Authorization: Bearer dev-token' -H 'Content-Type: application/json' \
-    -d '{"op":"dict_add","term":"阿理","replacement":"阿里"}' http://127.0.0.1:8080/v1/process
-  tail -n 5 data/traces.jsonl
+三个 .jsonl 文件均为追加写入，只增不改不删，可直接 tail -f data/traces.jsonl 观察。
+
+六、快速验证
+curl -s http://127.0.0.1:8787/v1/health
+curl -s -X POST http://127.0.0.1:8787/v1/process -H "Authorization: Bearer dev-token" -H "Content-Type: application/json" -d '{"text":"帮我查一下昨天的记录","user_id":"u1"}'
+curl -s -X POST http://127.0.0.1:8787/v1/process -H "Authorization: Bearer dev-token" -H "Content-Type: application/json" -d '{"text":"帮我查一下昨天的记录","user_id":"u1","feedback":"up"}'
