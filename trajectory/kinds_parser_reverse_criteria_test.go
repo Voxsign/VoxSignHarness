@@ -46,7 +46,8 @@ func extractKindConsts(t *testing.T, src string) map[string]string {
 
 // ⑪a 反例：**故意加一个未登记的 KindFoo ⇒ 必须被检出**
 func TestUnregisteredKindConstIsDetected(t *testing.T) {
-	src := "package p\n\nconst (\n\tKindKnown = \"known\"\n\tKindFoo   = \"foo_unregistered\"\n)\n"
+	// fixture 里用**真实已登记的值**（intent_source），否则"正例"本身就不成立
+	src := "package p\n\nconst (\n\tKindReal = \"" + KindIntentSource + "\"\n\tKindFoo  = \"foo_unregistered\"\n)\n"
 	got := extractKindConsts(t, src)
 	if _, ok := got["KindFoo"]; !ok {
 		t.Fatal("[⑪ 反例] 提取逻辑没抓到 KindFoo（判据会空过）")
@@ -55,7 +56,7 @@ func TestUnregisteredKindConstIsDetected(t *testing.T) {
 		t.Error("[⑪ 反例] KindFoo 竟被当作已登记 —— 反例无效")
 	}
 	// 正例：已登记的 kind 必须为 true
-	if !KnownKind(got["KindKnown"]) {
-		t.Error("[⑪] 已登记 kind 被判未登记")
+	if !KnownKind(got["KindReal"]) {
+		t.Errorf("[⑪] 已登记 kind（%q）被判未登记", got["KindReal"])
 	}
 }
