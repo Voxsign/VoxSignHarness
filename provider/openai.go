@@ -44,16 +44,17 @@ func newOpenAIClient(p config.Provider, cfg *config.Config) *openaiClient {
 	}
 }
 
-// normalizeEndpoint 规范化端点为完整的 chat/completions URL。
-// 兼容三种形态：
+// normalizeEndpoint 规范化端点为完整的 chat URL。
+// 兼容四种形态：
 //   - base：             "https://host"                    → "https://host/chat/completions"
 //   - 带 /v1：           "https://host/v1"                 → "https://host/v1/chat/completions"
 //   - 完整路径：         "https://host/v1/chat/completions" → 原样返回
+//   - 网关自定义路径：   "https://host/api/model/chat"      → 原样返回（aiops 网关 2026-10-03）
 //
 // 同时去掉任意尾部斜杠（如 "https://host/"、"https://host/v1/"）。
 func normalizeEndpoint(ep string) string {
 	ep = strings.TrimRight(ep, "/")
-	if !strings.HasSuffix(ep, "/chat/completions") {
+	if !strings.HasSuffix(ep, "/chat/completions") && !strings.HasSuffix(ep, "/chat") {
 		ep += "/chat/completions"
 	}
 	return ep

@@ -133,6 +133,10 @@ type Options struct {
 
 	// ConfirmFn 阻塞等待人工放行（CLI=stdin / server=HTTP）；返回 false 表示拒绝。
 	ConfirmFn func(taskID, question string) (bool, error)
+
+	// 2026-10-03 L-01 架构（对齐 dsh goal-round）：任务多轮逼近目标。
+	RoundEvidence string // 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）
+	SkipConfirm   bool   // 第 2+ 轮跳过确认桥（授权已在本轮之前生效）
 	Trace     *trajectory.Trajectory
 
 	// Ground（M3 #37）认知切片注入器；nil 时薄降级（空 context）。
@@ -345,6 +349,10 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			// cached 只在 Set 处写入 decision.Level；"approved" 是历史兼容串，一并放行。
 			approved = cached == decision.Level || cached == "approved"
 		}
+	}
+	if !approved && o.SkipConfirm {
+		// 第 2+ 轮（多轮逼近目标）：任务级授权已在本轮之前生效，不再打断。
+		approved = true
 	}
 	if !approved {
 		switch decision.Level {
@@ -1041,9 +1049,16 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		crecv.Seq = nextSeq()
 		receipts = append(receipts, crecv)
 
-		// 代码骨架：独立目录 harness-output/<title>/（不污染现有代码），确定性模板可编译。
+		// 语义实现（L-01 验收 2026-10-03：harness 单次产出**完整可运行实现**）：
+		// LLM 读需求文档 → 生成多文件 Go 代码 → 写盘 → go build **真编译验证** →
+		// 编译错误回喂 LLM 修复（≤2 轮）→ 全绿才提交；LLM 不可用/迭代耗尽 → 确定性骨架兜底。
 		skelDir := filepath.Join(root, "harness-output", sanitizePathPart(title))
-		for name, content := range deterministicImplementSkeleton(title, doc) {
+		files, genNote := o.llmGenerateImplement(ctx, title, doc, skelDir)
+		if files == nil {
+			log.Printf("[execOrchestrate] LLM 语义实现不可用（%s）→ 确定性骨架兜底", genNote)
+			files = deterministicImplementSkeleton(title, doc)
+		}
+		for name, content := range files {
 			abs := filepath.Join(skelDir, name)
 			clean, ok := space.ResolveScopePath(root, abs)
 			if !ok {
@@ -1241,6 +1256,225 @@ func asciiSlug(s string) string {
 		out = "impl"
 	}
 	return out
+}
+
+// llmGenerateImplement（L-01 验收 2026-10-03）：需求文档 → LLM 生成**完整可运行**
+// 的 Go 实现 → 写盘 → go build 真编译验证 → 编译错误回喂修复（≤2 轮）。
+//
+// **逐文件生成**（2026-10-03 真跑实测）：aiops 网关对 /api/model/chat 有 ~60s 硬上限
+// （裸调 12000 tokens 60.6s → 504 Gateway Time-out）；单文件生成实测 36s/11913 字符 ✅。
+// ⇒ 拆成 main.go（自包含完整服务）一次调用 + go.mod/README 小文件，避免网关 504。
+//
+// 返回 (files, note)：files=nil 表示 LLM 不可用/迭代耗尽（调用方回落确定性骨架）；
+// note 为失败原因或"编译全绿（N 轮）"。
+func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir string) (map[string]string, string) {
+	if o == nil || o.Providers == nil {
+		return nil, "providers nil"
+	}
+	p, err := o.Providers.Get("fast")
+	if err != nil {
+		return nil, "fast provider unavailable: " + err.Error()
+	}
+	gen := func(sysMsg, usrMsg string) (string, string) {
+		resp, err := p.Chat(ctx, provider.ChatRequest{
+			Messages: []contract.Message{
+				{Role: "system", Content: sysMsg},
+				{Role: "user", Content: usrMsg},
+			},
+			// 2026-10-03 真跑实证：MaxTokens 上限会令模型用满 12000 tokens → 网关 60s 504/超时；
+			// 不设上限 → 模型自然收敛（裸调实测 36s/11913 字符）。故此处不传 MaxTokens。
+			ResponseFormat: noJSON(),
+		})
+		if err != nil {
+			return "", "fast Chat err: " + err.Error()
+		}
+		c := strings.TrimSpace(resp.Content)
+		if c == "" {
+			return "", "LLM 空输出"
+		}
+		return c, ""
+	}
+
+	req := "目标产品标题：" + title + "\n\n需求文档：\n" + truncateStr(doc, 14000)
+	if o.RoundEvidence != "" {
+		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
+		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"
+	}
+	files := map[string]string{}
+
+	// ① main.go：自包含完整服务（词典/纠错/意图/反馈/JSONL 落盘/端点/健康检查）——大文件独立调用。
+	sysMain := "你是资深 Go 工程师。只输出 main.go 的**完整代码文本**（自包含、可直接 go build 通过的服务）。" +
+		"硬性要求：①仅用标准库，零第三方依赖；②不许留 TODO/占位/伪代码；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
+		"④提供 /v1/health 与需求要求的业务端点；⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
+		"纯文本输出，不要 Markdown 围栏、不要 JSON、不要解释。"
+	mainCode, note := gen(sysMain, req)
+	if mainCode == "" {
+		return nil, "main.go 生成失败: " + note
+	}
+	files["main.go"] = mainCode
+
+	// ② go.mod：小文件独立调用。
+	modCode, note := gen("你是 Go 工程师。只输出 go.mod 的完整文本：module 名用 harness-output/impl（ASCII 小写，中文 module 非法），go 版本 1.21。纯文本，不要围栏。", req)
+	if modCode == "" {
+		return nil, "go.mod 生成失败: " + note
+	}
+	files["go.mod"] = modCode
+
+	// ③ README.md：小文件，失败不致命（跳过仍可编译）。
+	if rd, rn := gen("你是技术文档作者。输出 README.md 的简短中文运行说明（启动命令/端点/数据文件）。纯文本，不要围栏。", req); rd != "" {
+		files["README.md"] = rd
+	} else {
+		log.Printf("[llmGenerateImplement] README 生成跳过（%s）", rn)
+	}
+
+	if err := writeFilesToDisk(skelDir, files); err != nil {
+		return nil, "写盘失败: " + err.Error()
+	}
+	// 真编译验证（不许桩）：go build -C <skelDir> ./...（Go 1.20+ -C 支持，runCmd Dir 固定故用 -C）。
+	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
+	if buildRecv.OK {
+		return files, "编译全绿（0 轮修复）"
+	}
+	// 编译失败 → 回喂 LLM 修复 main.go（≤2 轮）。
+	lastErr := truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
+	for i := 1; i <= 2; i++ {
+		mainCode, note = gen(sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
+		if mainCode == "" {
+			return nil, "main.go 修复失败: " + note
+		}
+		files["main.go"] = mainCode
+		if err := writeFilesToDisk(skelDir, files); err != nil {
+			return nil, "写盘失败: " + err.Error()
+		}
+		buildRecv = o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
+		if buildRecv.OK {
+			return files, fmt.Sprintf("编译全绿（%d 轮修复）", i)
+		}
+		lastErr = truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
+	}
+	return nil, "编译迭代 2 轮仍未通过"
+}
+
+// parseGenFiles 解析 LLM 返回的 {"files":{...}} JSON（容忍 ```json 围栏与前后杂质）。
+func parseGenFiles(content string) (map[string]string, string) {
+	c := strings.TrimSpace(content)
+	if i := strings.Index(c, "```"); i >= 0 {
+		// 去掉首个围栏行与结尾围栏
+		rest := c[i:]
+		if j := strings.Index(rest, "\n"); j >= 0 {
+			rest = rest[j+1:]
+		}
+		if k := strings.LastIndex(rest, "```"); k >= 0 {
+			rest = rest[:k]
+		}
+		c = strings.TrimSpace(rest)
+	}
+	if i := strings.Index(c, "{"); i >= 0 {
+		c = c[i:]
+	}
+	if j := strings.LastIndex(c, "}"); j >= 0 {
+		c = c[:j+1]
+	}
+	var parsed struct {
+		Files map[string]string `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(c), &parsed); err != nil {
+		return nil, "LLM 输出非合法 JSON: " + err.Error()
+	}
+	if len(parsed.Files) == 0 {
+		return nil, "LLM 输出空文件集"
+	}
+	return parsed.Files, ""
+}
+
+// writeFilesToDisk 把生成文件写入 skelDir（先建目录）。
+func writeFilesToDisk(dir string, files map[string]string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for name, content := range files {
+		if name != filepath.Base(name) {
+			return fmt.Errorf("非法文件名（含路径分隔）: %q", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
+// 返回缺口列表；空列表 = 证据门全过（产物存在且非空、真编译通过、P0 能力存在性）。
+//
+// 判据（对齐 dsh"完成前收集证据"）：
+//  1. 产物目录存在且 main.go 非空（骨架/占位/空文件 → 缺口）
+//  2. main.go 不含 TODO/占位标记（LLM 语义实现 vs 确定性骨架兜底的区分）
+//  3. go build -C <产物根> ./... 真编译通过（不许桩）
+//  4. P0 能力存在性：词典/纠错/意图/反馈/JSONL 落盘/健康检查（关键字扫描产物源码）
+func (o *Options) EvidenceGaps(out *Outcome) []string {
+	if out == nil {
+		return []string{"任务无产物（Outcome 为空）"}
+	}
+	// 从回执提取 harness-output/ 产物根目录（stdout 形如 "writed: /abs/harness-output/<title>/main.go"）。
+	implRoot := ""
+	for _, r := range out.Receipts {
+		line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Stdout), "writed:"))
+		if p := filepath.Clean(strings.TrimSpace(line)); strings.Contains(p, "harness-output") {
+			if strings.HasSuffix(p, "main.go") || strings.HasSuffix(p, "go.mod") {
+				implRoot = filepath.Dir(p)
+			}
+		}
+	}
+	if implRoot == "" {
+		// 回执未必含路径：回退扫项目根 harness-output/。
+		if candidates, _ := filepath.Glob("harness-output/*"); len(candidates) > 0 {
+			implRoot = candidates[len(candidates)-1]
+		}
+	}
+	if implRoot == "" {
+		return []string{"未找到实现产物目录（harness-output/ 缺失）"}
+	}
+
+	var gaps []string
+	mainPath := filepath.Join(implRoot, "main.go")
+	mainBytes, err := os.ReadFile(mainPath)
+	if err != nil || len(mainBytes) == 0 {
+		return append(gaps, "main.go 缺失或为空（" + mainPath + "）")
+	}
+	mainSrc := string(mainBytes)
+	// 判据 2：骨架/占位检测（确定性骨架的特征注释）。
+	low := strings.ToLower(mainSrc)
+	for _, marker := range []string{"todo", "占位", "not implemented", "code generated by voice sign harness"} {
+		if strings.Contains(low, marker) {
+			gaps = append(gaps, "main.go 仍是骨架/占位（含 `"+marker+"` 标记），未产出完整实现")
+			break
+		}
+	}
+	// 判据 4：P0 能力存在性（关键字扫描——判据为"有实现痕迹"，非语义级）。
+	type p0 struct{ key, name string }
+	p0s := []p0{
+		{"dictionary", "词典（增删查）"}, {"dict", "词典"},
+		{"correct", "纠错"}, {"intent", "意图分类"},
+		{"feedback", "反馈学习"}, {"jsonl", "JSONL 落盘"},
+		{"append", "append-only 落盘"}, {"/v1/health", "健康检查"},
+		{"v1/process", "业务端点 /v1/process"},
+	}
+	seen := map[string]bool{}
+	for _, p := range p0s {
+		if seen[p.name] {
+			continue
+		}
+		seen[p.name] = true
+		if !strings.Contains(low, p.key) {
+			gaps = append(gaps, "缺 P0 能力实现："+p.name+"（源码中未见 `"+p.key+"`）")
+		}
+	}
+	// 判据 3：真编译（不许桩）。
+	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", implRoot, "./..."}})
+	if !buildRecv.OK {
+		gaps = append(gaps, "真编译失败："+truncateStr(buildRecv.Stderr, 300))
+	}
+	return gaps
 }
 
 // deterministicImplementSkeleton 生成可编译 Go 代码骨架（LLM 不可用时仍产出）。

@@ -46,8 +46,13 @@ const (
 	stNeedConfirm = "need_confirm"    // 强确认（红条）
 	stDone        = "done"
 	stCanceled    = "canceled"
+	stBlocked     = "blocked" // 2026-10-03 L-01 架构：证据门多轮未过/上限 → 明确阻塞（对齐 dsh block 语义）
 	stInterrupted = "interrupted" // M4-1 ③：重启恢复的未完成任务，不自动续跑
 )
+
+// defaultMaxRounds 是任务默认轮次上限（2026-10-03 L-01 架构：多轮逼近目标，
+// 对齐 dsh goal maxGoalRounds；超限且证据门未过 → blocked，杜绝"骨架也 done"）。
+const defaultMaxRounds = 20
 
 // 角色映射（M5-3）：pipeline 13 阶段 → Planner / Executor / Verifier。
 //
@@ -70,6 +75,8 @@ func roleForStatus(status string) string {
 		return RolePlanner
 	case stDone:
 		return RoleVerifier
+	case stBlocked:
+		return RolePlanner // 阻塞属决策层（对齐 dsh blocked 由策略判定）
 	case stRunning:
 		return RoleExecutor
 	default:
@@ -88,6 +95,8 @@ func stepName(status string) string {
 		return "确认闸"
 	case stDone:
 		return "校验/归因"
+	case stBlocked:
+		return "阻塞"
 	case stCanceled:
 		return "取消"
 	case stInterrupted:
@@ -117,6 +126,13 @@ type taskState struct {
 	// 属已知限制——当前 server 的任务表是内存态，重启恢复路径另有 interrupted 处理。
 	askedQuestions map[string]bool
 	askRounds      int
+
+	// 2026-10-03 L-01 架构（对齐 dsh goal-round）：任务 = 多轮逼近目标。
+	MaxRounds      int          `json:"max_rounds,omitempty"`      // 轮次上限（默认 20）
+	RoundsUsed     int          `json:"rounds_used,omitempty"`     // 已用轮次（每轮=一次 pipeline 执行）
+	BlockedReason  string       `json:"blocked_reason,omitempty"`  // blocked 原因（如 round-limit + 证据缺口）
+	RoundLog       []roundEntry `json:"round_log,omitempty"`       // 轮次留痕（每轮 status/证据/耗时）
+	LastRoundGaps  string       `json:"-"`                         // 上一轮证据门缺口（回喂下一轮 LLM）
 	Outcome        *pipeline.Outcome `json:"outcome,omitempty"`
 	Err            string            `json:"error,omitempty"`
 
@@ -134,6 +150,15 @@ type taskState struct {
 	eventSeq  int
 	events    []sseEvent
 	listeners []chan sseEvent
+}
+
+// roundEntry 是一次目标轮次的留痕记录（对齐 dsh goal-round 的轮次可追溯性）。
+type roundEntry struct {
+	Round     int    `json:"round"`              // 轮次序号
+	Status    string `json:"status"`             // pass / fail
+	Evidence  string `json:"evidence,omitempty"` // PASS 简述或失败缺口（证据门结论）
+	Err       string `json:"error,omitempty"`    // 轮次错误
+	ElapsedMs int64  `json:"elapsed_ms,omitempty"` // 该轮耗时
 }
 
 // sseEvent 是一条 SSE 事件（seq 单调递增）。Data 被平铺进最终 JSON（契约：data 必含 seq）。
@@ -524,6 +549,7 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document, convID string) 
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
+		MaxRounds: defaultMaxRounds, // L-01 架构：多轮逼近目标上限（对齐 dsh maxGoalRounds）
 	}
 	if convID != "" {
 		ts.ConvID = convID
@@ -577,7 +603,25 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		fullText = "在 " + spaceHint + " " + text
 	}
 	go func() {
-		out, err := pipeline.Run(ctx, &o, fullText)
+		// L-01 架构（2026-10-03）：任务 = 多轮逼近目标。每轮跑一次 pipeline，
+		// 轮末过**证据门**（产物存在性 + 真编译 + P0 能力存在性）：
+		//   - 证据门全过 → done（唯一成功出口）
+		//   - 有缺口且未超上限 → 记录 fail 轮次，缺口回喂下一轮 LLM 修复
+		//   - 有缺口且超上限 → blocked（对齐 dsh round-limit block，杜绝"骨架也 done"）
+		for s.runOneRound(ts, &o, ctx, fullText) {
+		}
+	}()
+}
+
+// runOneRound 执行一轮目标轮次（L-01 架构）：跑 pipeline → 收尾/证据门。
+// 返回 true = 预算内证据门 FAIL，应继续下一轮；false = 到达终态（done/canceled/blocked/need_ask 挂起）。
+// 锁纪律：证据门（含 go build 真编译）在**锁外**执行，锁内只做状态收尾（防持锁跑子进程）。
+func (s *Server) runOneRound(ts *taskState, o *pipeline.Options, ctx context.Context, fullText string) bool {
+	t0 := time.Now()
+	out, err := pipeline.Run(ctx, o, fullText)
+
+	// 非成功产出路径（错误/取消/回问）——与成功路径分开处理，避免持锁跑证据门。
+	if err != nil || ctx.Err() != nil || out.Ask != "" {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		ts.Outcome = &out
@@ -602,7 +646,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 					"reason": "ask_not_converging", "rounds": ts.askRounds,
 				})
 				s.persist(ts)
-				return
+				return false
 			}
 			// 回问出口：挂起为 need_ask，等待 /answer 续跑（M4-1 ②）。
 			ts.askedQuestions[out.Ask] = true
@@ -614,26 +658,90 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				"question": out.Ask, "options": out.Options,
 			})
 			s.persist(ts)
-		default:
-			s.markStatus(ts, stDone)
-			ts.Reversible = isReversibleIntent(out.Intent.Intent)
-			ts.BackupPath = pickBackupPath(out.Receipts, out.View.Undo)
-			ts.TargetPath = pickTargetPath(out.Intent)
-			if out.Intent.Intent == contract.IntentNote {
-				ts.TargetPath = filepath.Join(s.cfg.Global.LogDir, "notes.md")
-				if ts.BackupPath == "" {
-					ts.BackupPath = newestBackup(s.cfg.Global.LogDir)
-				}
-			}
-			s.emitEvent(ts, "done", map[string]any{
-				"receipt":     contract.RenderReceipt(out.View),
-				"attribution": out.Attribution,
-				"reversible":  ts.Reversible,
-				"role":        ts.Role,
-			})
-			s.persist(ts)
+			return false
 		}
-	}()
+		return false
+	}
+
+	// 成功产出路径。
+	// 证据门只对实现类任务（ORCHESTRATE kind=implement）生效；
+	// 其他意图保持原逻辑直接 done（L-01 架构边界，防普通任务被误锁循环）。
+	isImplement := out.Intent.Intent == contract.IntentOrchestrate &&
+		out.Intent.Params != nil && out.Intent.Params["kind"] == "implement"
+	gaps := []string(nil)
+	if isImplement {
+		gaps = o.EvidenceGaps(&out) // 锁外：含 go build 真编译，不许桩
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts.Outcome = &out
+	round := ts.RoundsUsed + 1
+	ts.RoundsUsed = round
+	if !isImplement {
+		s.finishDone(ts, &out)
+		return false
+	}
+	if len(gaps) == 0 {
+		// 证据门 PASS → done（唯一成功出口）。
+		ts.RoundLog = append(ts.RoundLog, roundEntry{
+			Round: round, Status: "pass",
+			Evidence:  "证据门全过：产物存在/真编译/P0 能力齐全",
+			ElapsedMs: time.Since(t0).Milliseconds(),
+		})
+		ts.LastRoundGaps = ""
+		s.finishDone(ts, &out)
+		return false
+	}
+	// 证据门 FAIL：记录 fail 轮次，判断是否还有轮次预算。
+	gapText := strings.Join(gaps, "；")
+	ts.RoundLog = append(ts.RoundLog, roundEntry{
+		Round: round, Status: "fail",
+		Evidence:  "证据门缺口：" + gapText,
+		ElapsedMs: time.Since(t0).Milliseconds(),
+	})
+	ts.LastRoundGaps = gapText
+	if ts.RoundsUsed >= ts.MaxRounds {
+		ts.BlockedReason = "round-limit：证据门 " + fmt.Sprintf("%d", ts.RoundsUsed) + " 轮未通过：" + gapText
+		s.markStatus(ts, stBlocked)
+		s.emitEvent(ts, "blocked", map[string]any{
+			"reason": "round-limit", "rounds_used": ts.RoundsUsed, "gaps": gapText,
+		})
+		s.persist(ts)
+		return false
+	}
+	// 预算内 → 下一轮：带缺口继续（第 2+ 轮不再确认、携带上轮证据门缺口）。
+	o.RoundEvidence = gapText
+	o.SkipConfirm = true
+	s.markStatus(ts, stRunning)
+	s.emitEvent(ts, "round", map[string]any{
+		"round": round + 1, "prev_gaps": gapText,
+	})
+	s.persist(ts)
+	return true
+}
+
+// finishDone 是 done 终态的统一收尾（L-01 架构抽取：非实现类任务与证据门 PASS 共用）。
+// 调用方已持 s.mu。
+func (s *Server) finishDone(ts *taskState, out *pipeline.Outcome) {
+	s.markStatus(ts, stDone)
+	ts.Reversible = isReversibleIntent(out.Intent.Intent)
+	ts.BackupPath = pickBackupPath(out.Receipts, out.View.Undo)
+	ts.TargetPath = pickTargetPath(out.Intent)
+	if out.Intent.Intent == contract.IntentNote {
+		ts.TargetPath = filepath.Join(s.cfg.Global.LogDir, "notes.md")
+		if ts.BackupPath == "" {
+			ts.BackupPath = newestBackup(s.cfg.Global.LogDir)
+		}
+	}
+	s.emitEvent(ts, "done", map[string]any{
+		"receipt":     contract.RenderReceipt(out.View),
+		"attribution": out.Attribution,
+		"reversible":  ts.Reversible,
+		"role":        ts.Role,
+		"rounds_used": ts.RoundsUsed,
+	})
+	s.persist(ts)
 }
 
 // maxAskRounds 是同一任务允许的最大澄清轮次（缺口 G8 修复）。

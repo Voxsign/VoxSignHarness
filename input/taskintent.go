@@ -696,6 +696,12 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 	vi, ni := -1, -1
 	for _, w := range implementVerbs {
 		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
+			// 2026-10-03 真跑发现：动词命中必须**不在书名号《…》内**——
+			// 「整理成《全景开发文档》并保存提交」的"开发"是文档名成分，误当实现动词
+			// ⇒ 整理类被误判 implement（L-01 验收真跑，见 /tmp/l01_confirm.txt）。
+			if insideBookTitle(text, idx, idx+len(w)) {
+				continue
+			}
 			vi = idx
 		}
 	}
@@ -759,6 +765,17 @@ func extractBookTitle(text string) string {
 		return strings.TrimSpace(text[i+len("《") : j])
 	}
 	return ""
+}
+
+// insideBookTitle 判断 [start,end) 区间是否完全落在书名号《…》内。
+// 用途：动词/名词匹配排除文档名成分（如《全景开发文档》里的"开发"不是实现动词）。
+func insideBookTitle(text string, start, end int) bool {
+	i := strings.Index(text, "《")
+	j := strings.Index(text, "》")
+	if i < 0 || j <= i {
+		return false
+	}
+	return start >= i && end <= j
 }
 
 // nowFn 是时间源（timeanchor.go 依赖，测试可替换）。
