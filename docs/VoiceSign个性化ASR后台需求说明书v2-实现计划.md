@@ -9,8 +9,33 @@
 
 ## 需求要点（确定性提取）
 
+- **1. 项目定位与核心目标**
+- **1.1 一句话定义**
+- **1.2 与 VoiceSign Harness 的关系（重要修正）**
+- **1.3 北极星目标（不可动摇）**
+- **2. 核心设计思想：个性化的三层递进**
+- **3. 系统架构（独立服务）**
+- **3.1 总体架构**
+- **3.2 分层设计原则**
+- **4. 功能需求清单（开发实施范围）**
+- **4.1 基础服务能力 P0**
+- **4.2 个性化词典 P0（L1 听清的核心）**
+- **4.3 文本清洗与纠错 P0**
+- **4.4 指代消解 P1（L2 听懂的核心）**
+- **4.5 上下文个性化记忆 P1（L3 懂你的核心）**
+- **4.6 意图解析与标准化输出 P0**
+- **4.7 域（Space）建议 P1**
+- **4.8 反馈学习闭环 P1（越用越懂你的机制）**
+- **4.9 异常与降级 P2**
+- **5. 数据模型与持久化**
+- **6. 对外接口定义（示意）**
 - **请求示例（/v1/process）**
 - **响应示例**
+- **7. 非功能需求**
+- **8. 边界与红线（开发必须遵守）**
+- **9. 未来能力演进路线图（全双工愿景）**
+- **10. 风险与开发注意点**
+- **11. 验收标准**
 
 ## 建议模块划分（骨架，待实现时细化）
 
@@ -37,81 +62,56 @@
 
 ```markdown
 VoiceSign 个性化 ASR 后台 · 需求说明书 v2
-
-  @page { size: A4; margin: 16mm 15mm 18mm 15mm; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", sans-serif;
-    font-size: 11pt; line-height: 1.62; color: #1f2937; margin: 0; padding: 0;
-  }
-  .cover { text-align: left; padding: 10mm 0 6mm 0; border-bottom: 3px solid #1f3a5f; margin-bottom: 8mm; }
-  .cover .doc-title { font-size: 24pt; font-weight: 700; color: #1f3a5f; margin: 0 0 4mm 0; line-height: 1.3; }
-  .cover .doc-sub { font-size: 12pt; color: #475569; margin: 0 0 6mm 0; }
-  .cover table.meta { border-collapse: collapse; width: 100%; font-size: 10pt; }
-  .cover table.meta td { padding: 1.2mm 2mm; border: none; }
-  .cover table.meta td.k { width: 22mm; color: #64748b; font-weight: 600; }
-  h1 { font-size: 16pt; color: #1f3a5f; border-left: 4px solid #1f3a5f; padding-left: 3mm; margin: 8mm 0 3.5mm 0; page-break-after: avoid; }
-  h2 { font-size: 12.5pt; color: #1f3a5f; margin: 5.5mm 0 2.5mm 0; page-break-after: avoid; }
-  h3 { font-size: 11pt; color: #334155; margin: 4mm 0 2mm 0; page-break-after: avoid; }
-  p { margin: 1.5mm 0; }
-  ul, ol { margin: 1.5mm 0 1.5mm 0; padding-left: 6mm; }
-  li { margin: 0.8mm 0; }
-  table { border-collapse: collapse; width: 100%; margin: 2.5mm 0; font-size: 9.5pt; page-break-inside: avoid; }
-  th { background: #eef2f7; color: #1f3a5f; font-weight: 600; }
-  th, td { border: 1px solid #cbd5e1; padding: 1.6mm 2.2mm; text-align: left; vertical-align: top; }
-  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #f1f5f9; padding: 0 1mm; border-radius: 2px; color: #0f4c81; }
-  pre { background: #0f172a; color: #e2e8f0; padding: 4mm 5mm; border-radius: 3px; font-size: 9pt; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; page-break-inside: avoid; }
-  pre code { background: none; color: inherit; padding: 0; }
-  .callout { background: #f0f7ff; border: 1px solid #bcd6f5; border-left: 4px solid #1f6feb; padding: 3mm 4mm; margin: 3mm 0; border-radius: 2px; }
-  .warn { background: #fff8e6; border: 1px solid #f0d9a8; border-left: 4px solid #e8a13a; padding: 3mm 4mm; margin: 3mm 0; border-radius: 2px; }
-  .tag { display: inline-block; font-size: 8.5pt; padding: 0.3mm 2mm; border-radius: 2px; margin-right: 1.5mm; font-weight: 600; }
-  .tag.p0 { background: #fde2e2; color: #b91c1c; }
-  .tag.p1 { background: #fff0d9; color: #b45309; }
-  .tag.p2 { background: #e0f2fe; color: #0369a1; }
-  .tag.p3 { background: #e6e6fa; color: #4338ca; }
-  .footer { margin-top: 10mm; padding-top: 3mm; border-top: 1px solid #cbd5e1; font-size: 9pt; color: #94a3b8; }
-  .no-break { page-break-inside: avoid; }
-  .center { text-align: center; }
-
   VoiceSign 个性化 ASR 后台需求说明书 v2（Go 独立重构）
   做一套「越来越懂你」的语音输入理解后台 —— 独立服务、Go 实现、持续个性化、面向未来全双工
-  
     文档版本v2.0（2026-10-03）文档状态定稿待评审（可再改）
     阅读对象需求方（本人）、开发实施人员配套材料《VoiceSign Harness 全景审阅稿 v1》（飞书文档）
     技术栈Go 单二进制 / 独立服务 / JSON 配置 / 零第三方依赖边界声明本后台与 VoiceSign Harness 解耦，是独立的语音输入理解服务
-  
-
-1. 项目定位与核心目标
-
-1.1 一句话定义
+# 1. 项目定位与核心目标
+# 1.1 一句话定义
 VoiceSign 个性化 ASR 后台：一套用 Go 编写的独立后台服务，接收手机端传来的语音转写文本（及原始音频），完成「纠错 → 理解 → 个性化增强 → 输出标准化意图」，并且在使用过程中持续学习用户的口语、专名、习惯与偏好，越用越懂用户。
-
-1.2 与 VoiceSign Harness 的关系（重要修正）
-
+# 1.2 与 VoiceSign Harness 的关系（重要修正）
 本模块是纯粹独立的后台，不并入 VoiceSign Harness 二进制，也不与其耦合。
-
 ASR 后台 = 语音输入理解层（把用户说的变成机器能执行的意图）；Harness = 任务执行层（把意图变成真实结果）。两层职责不同、迭代节奏不同，必须解耦。
 ASR 后台通过标准接口对外输出意图 JSON，Harness 只是它的一个消费方；未来任何语音入口（手机 App、桌面端、其他设备）都可以复用同一个 ASR 后台。
 两套代码独立仓库、独立部署、独立数据目录；仅共享一套「意图 JSON 契约」，契约版本化、只增不改。
-
-1.3 北极星目标（不可动摇）
-
+# 1.3 北极星目标（不可动摇）
 越来越懂你：这是本后台存在的唯一理由。系统在使用中持续沉淀你的口语说法、专有名词、指代习惯、项目背景与偏好，个性化能力逐日增强，不依赖一次性配置。
 语音能力很强：识别结果的纠错、标点、意图理解、控制语义（打断/暂停/撤销）、语音文字双通道都要做到可用、可靠，体验对标豆包语音体系。
 响应极快：本地规则优先，模型兜底，处理链路微秒到毫秒级，语音说完即出结果，不出现长等待。
 面向未来全双工：架构从第一天就为「全双工实时语音交互」留好接口与数据模型（见第 9 章），未来实现边说边理解、随时打断、实时反馈。
-
-2. 核心设计思想：个性化的三层递进
+# 2. 核心设计思想：个性化的三层递进
 「越来越懂你」不是一句口号，而是三层能力逐层递进、每一层都在沉淀数据、数据反过来增强下一层的闭环：
-
 层级要解决的问题沉淀的个性化数据
-
   L1 听清（文本纠错层）
   语音转写常有错字、同音字、口语碎片、专名错误。例：「季总」实际是「冀总」；「那个 module」实际是某个项目名。
   自定义词典（口语→标准写法）、纠错经验库、语音置信度标记。
-
   L2 听懂（语义理解层）
   一句话的意图是什么？「它」指什么？「那个文档」是哪个？结合上下文与历史才能正确理解。
-  指代消解缓存（意图/域/权限/指代 四元组）、对话上下文记忆、意�…
+  指代消解缓存（意图/域/权限/指代 四元组）、对话上下文记忆、意图置信度。
+  L3 懂你（个人画像层）
+  同一个词在不同人嘴里含义不同；同一件事在不同人场景下期望不同。需要结合个人偏好、项目知识、决策历史做个性化理解。
+  用户偏好 prefs、项目地图 project-map、决策日志 decisions-log、领域知识、使用模式统计。
+核心公式：个性化 = 数据 × 规则 × 反馈闭环
+数据：每一次语音输入、每一次用户确认、每一次纠错都留痕（append-only），形成私有复利资产。
+规则：本地规则（词典、缓存、模式）优先，零模型调用，保证速度与确定性。
+反馈闭环：用户改一个字、确认一个指代、纠正一次识别 —— 系统立即学习并固化，下次直接用，越用越准。
+# 3. 系统架构（独立服务）
+# 3.1 总体架构
+┌──────────────────┐     音频      ┌────────────────────────────┐
+│  手机端 App       │ ────────────→ │  系统级/第三方 ASR 引擎     │
+│ （语音交互界面）   │               │  （豆包/系统语音转文字）     │
+└──────────────────┘               └────────────┬───────────────┘
+                                                │ 转写文本 (input_raw)
+                                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              VoiceSign 个性化 ASR 后台（Go，独立服务）            │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐  │
+│  │ 1 留底   │→│ 2 清洗   │→│ 3 词典   │→│ 4 上下文 │→│ 5 指代    │  │
+│  │ input_raw│ │ 语气词   │ │ 纠错    │ │ 相关性  │ │ 消解     │  │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └──────────┘  │
+│  ┌─────────┐ ┌─────────┐ ┌──────────────────────────────────┐  │
+│  │ 6 意图   │→│ 7 域建议 │→│ 8 输出标准化意图 JSON              │  │
+│  │ 解析     │ │ +控制语义│ │  {type,pat…
 ```
 
