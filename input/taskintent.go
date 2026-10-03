@@ -628,7 +628,63 @@ var (
 	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个"}
 	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件"}
 	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
+
+	// —— 技能调用（线 C 修订卡 2026-10-03）——
+	skillInvokeVerbs = []string{"调用", "使用", "用", "按", "按照", "依据", "根据", "让"}
+	skillNames       = []string{"校验与对齐", "校准与对齐", "validate-align", "对齐", "校验", "校准",
+		"plain-explainer", "解释", "检索", "写作", "翻译", "合规", "审阅", "报价", "文案"}
+	skillActionWords = []string{"校准", "对齐", "校验", "检查", "审阅", "分析", "检索", "总结", "翻译", "编写", "生成", "输出"}
 )
+
+// detectSkillInvocation 判定文本是否为"调用/使用某技能做某事"（线 C 修订卡）。
+// 命中返回 ORCHESTRATE + params{kind=skill, skill_name?, action?}。
+// 触发：含 "技能" 且（调用动词 ∪ 技能名直接出现）→ 技能调用意图。
+// 问句排除（"怎么用技能…"是询问不是调用）。
+func detectSkillInvocation(text string) (string, map[string]string, bool) {
+	if containsAny(text, questionExcludes) {
+		return "", nil, false
+	}
+	if !containsAny(text, []string{"技能"}) {
+		return "", nil, false
+	}
+	params := map[string]string{"kind": "skill"}
+	invoked := false
+	// ① 显式技能名出现（"校验与对齐技能"/"validate-align 技能"）→ 强信号
+	for _, n := range skillNames {
+		if strings.Contains(text, n) {
+			if !strings.Contains(text, "怎么") && !strings.Contains(text, "如何") {
+				params["skill_name"] = n
+				invoked = true
+				break
+			}
+		}
+	}
+	// ② 调用动词 + "技能" + 动作域词（"调用技能做校准/输出校准报告"）
+	//   收紧（2026-10-03 评审）：纯"使用技能做X"（X 非动作域）不判——避免
+	//   "实现一个使用技能的推荐系统"被技能检测器拦截（应走实现类）。
+	if !invoked {
+		hasInvokeVerb := false
+		for _, v := range skillInvokeVerbs {
+			if strings.Contains(text, v) {
+				hasInvokeVerb = true
+				break
+			}
+		}
+		if hasInvokeVerb {
+			for _, a := range skillActionWords {
+				if strings.Contains(text, a) {
+					params["action"] = a
+					invoked = true
+					break
+				}
+			}
+		}
+	}
+	if !invoked {
+		return "", nil, false
+	}
+	return contract.IntentOrchestrate, params, true
+}
 
 // detectImplementOrchestrate 判定文本是否为"实现/搭建某能力系统"的长程实现任务。
 // 命中返回 ORCHESTRATE + params{kind=implement, target_doc?}。
@@ -807,6 +863,11 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	//         整理/汇总 + 文档/记录 +（保存/提交）三连信号 → ORCHESTRATE。
 	// 必须先于 2b 单类触发：「沟通记录」含「记录」会命中 noteTriggers，「提交」会命中 commitTriggers——
 	// 长任务「把全部沟通记录和设计文档整理成《…》并保存提交」此前被降级为单条 NOTE 整段 append。
+	// 技能类：线 C 修订卡（2026-10-03）—— "调用/使用 XX 技能做校准" → ORCHESTRATE(kind=skill)。
+// 必须先于实现类/整理类判定（技能调用意图明确，不落入文档整理）。
+	if kind, params, ok := detectSkillInvocation(text); ok {
+		return c.fill(ti, kind, 0.9, params)
+	}
 	// 实现类：修订卡2 层1+2 —— 长程实现任务此前 UNKNOWN→need_ask（0 产出），现识别为 ORCHESTRATE。
 	if kind, params, ok := detectImplementOrchestrate(text); ok {
 		return c.fill(ti, kind, 0.9, params)

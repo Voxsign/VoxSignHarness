@@ -553,6 +553,9 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 	logDir := o.logDir()
 	switch it.Intent {
 	case contract.IntentOrchestrate:
+		if it.Params != nil && it.Params["kind"] == "skill" {
+			return o.execSkill(ctx, it, logDir) // 线 C 修订卡：技能调用真装配链
+		}
 		return o.execOrchestrate(ctx, it, logDir)
 	case contract.IntentNote:
 		path := filepath.Join(logDir, "notes.md")
@@ -706,6 +709,144 @@ func mustGetwd() string {
 		return wd
 	}
 	return "?"
+}
+
+// execSkill 技能调用链（线 C 修订卡）：发现→选择→调用→证据留痕→产出→定向提交。
+// 真装配：读技能 SKILL.md（技能系统清单的本地镜像），按其流程产出校准报告骨架。
+func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	o.ensureProjectSpace()
+	root := o.projectRootForCommit(it)
+	if root == "" {
+		return []contract.Receipt{{Tool: "skill", OK: false,
+			Err: "技能调用需注册 project 域且 scope 指向项目根"}}
+	}
+	var receipts []contract.Receipt
+	nextSeq := func() int { return len(receipts) + 1 }
+
+	name := strings.TrimSpace(it.Params["skill_name"])
+	action := strings.TrimSpace(it.Params["action"])
+	if name == "" {
+		name = "validate-align" // 缺省技能
+	}
+	if action == "" {
+		action = "校准"
+	}
+
+	// C-01 发现：意图层已识别（skill_name/action 存在）——留痕
+	recv := o.run("search", map[string]any{"pattern": "SKILL.md", "kind": "file"})
+	recv.Tool = "skill"
+	recv.Seq = nextSeq()
+	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
+		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
+
+	// C-02 选择：定位技能 SKILL.md（仓库 skills/<name>/SKILL.md 优先，缺省 validate-align）
+	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
+	skillMD := filepath.Join(skillDir, "SKILL.md")
+	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
+	if _, err := os.Stat(skillMD); err != nil {
+		// 兜底 validate-align（仓库 skills/validate-align/SKILL.md）
+		skillMD = filepath.Join(root, "skills", "validate-align", "SKILL.md")
+	}
+	if _, err := os.Stat(skillMD); err != nil {
+		sel.OK = false
+		sel.Err = "技能 SKILL.md 不存在: " + skillMD
+		receipts = append(receipts, sel)
+		return receipts
+	}
+	sel.OK = true
+	sel.Stdout = "C-02 技能选择: " + skillMD
+	receipts = append(receipts, sel)
+
+	// C-03 调用：读 SKILL.md → 按技能流程产出报告骨架（LLM 不可用走确定性）。
+	readRecv := o.run("file", map[string]any{"action": "read", "path": skillMD})
+	readRecv.Seq = nextSeq()
+	receipts = append(receipts, readRecv)
+	if !readRecv.OK {
+		return receipts
+	}
+	doc := it.Params["document"]
+	objName := strings.TrimSpace(it.Params["target_doc"])
+	if objName == "" {
+		objName = "VoiceSign-ASR"
+	}
+	report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
+		"> 由 VoiceSign Harness 技能调用链（ORCHESTRATE kind=skill：发现→选择→调用→证据）自动生成。\n\n" +
+		skillReportBody(name, action, readRecv.Stdout, doc)
+	reportName := sanitizePathPart(objName) + "-" + sanitizePathPart(action) + "报告.md"
+	reportAbs := filepath.Join(root, "harness-output", "skill-"+sanitizePathPart(name), reportName)
+	clean, ok := space.ResolveScopePath(root, reportAbs)
+	if !ok {
+		return append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: false,
+			Err: "白名单外写路径被拒绝（越界）: " + reportAbs})
+	}
+	wrecv := o.run("file", map[string]any{
+		"action": "write", "path": clean, "content": report, "log_dir": logDir,
+	})
+	wrecv.Seq = nextSeq()
+	receipts = append(receipts, wrecv)
+	if !wrecv.OK {
+		return receipts
+	}
+
+	// C-04 证据留痕：调用链逐段已入 receipts（发现/选择/调用/产出）——服务层 emit trajectory。
+	receipts = append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: true,
+		Stdout: "C-04 证据留痕: 调用链 4 段已记录（find/select/call/produce）"})
+
+	crecv := o.commitTargetPath(root, clean, "vhs(skill): 生成《"+objName+"-"+action+"报告》技能调用产出（ORCHESTRATE kind=skill）")
+	crecv.Seq = nextSeq()
+	receipts = append(receipts, crecv)
+	return receipts
+}
+
+// skillReportBody 组装技能产出报告（确定性）：技能流程骨架 + 校准对象摘要 + 判据清单占位。
+func skillReportBody(name, action, skillMDContent, doc string) string {
+	var sb strings.Builder
+	sb.WriteString("## 技能信息\n\n")
+	sb.WriteString("- 技能：" + name + "\n- 动作：" + action + "\n")
+	sb.WriteString("- 依据：技能 SKILL.md（本地镜像，见文末摘录）\n\n")
+
+	sb.WriteString("## 技能流程（从 SKILL.md 提取的步骤骨架）\n\n")
+	var steps []string
+	inCode := false
+	for _, ln := range strings.Split(skillMDContent, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "```") {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			continue
+		}
+		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "# ") {
+			steps = append(steps, strings.TrimLeft(t, "# "))
+		}
+	}
+	if len(steps) == 0 {
+		steps = []string{"（SKILL.md 未解析出章节，见文末摘录）"}
+	}
+	for _, s := range steps {
+		sb.WriteString("- " + s + "\n")
+	}
+
+	sb.WriteString("\n## 校准对象\n\n")
+	if doc != "" {
+		sb.WriteString(truncateStr(doc, 800))
+	} else {
+		sb.WriteString("（未提供校准对象全文，见任务上下文）")
+	}
+	sb.WriteString("\n\n## 判据清单（按技能流程展开，逐条双证）\n\n")
+	sb.WriteString("> 实现阶段逐条对照 SKILL.md 判据（如三层取证 D/C/R），PASS=代码证据+运行证据。\n\n")
+
+	sb.WriteString("## 证据留痕（C-04）\n\n")
+	sb.WriteString("- 发现：意图层（skill_name=" + name + " action=" + action + "）\n")
+	sb.WriteString("- 选择：" + name + "/SKILL.md（本地镜像）\n")
+	sb.WriteString("- 调用：本报告产出（读 SKILL.md → 结构化骨架）\n")
+	sb.WriteString("- 产出：本文件（harness-output/skill-" + sanitizePathPart(name) + "/）\n\n")
+
+	sb.WriteString("## SKILL.md 全文摘录\n\n```markdown\n")
+	sb.WriteString(truncateStr(skillMDContent, 4000))
+	sb.WriteString("\n```\n")
+	return sb.String()
 }
 
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
