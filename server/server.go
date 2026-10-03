@@ -282,6 +282,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// 克隆模板 Options，注入本任务的 ConfirmFn（桥接到手机 /v1/confirm）。
 	o := *s.tmpl
+	o.ConvID = ts.ConvID // 指代固化上下文槽键（2026-10-03：conversation_id 必加）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		ts.Status = stWaiting
@@ -383,6 +384,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	s.tasks[ts.ID] = ts
 	s.mu.Unlock()
 	o := *s.tmpl
+	o.ConvID = ts.ConvID // 指代固化上下文槽键（handleTasks 路径补上——根因：此前缺赋值致槽解析用 default）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		ts.Status = stWaiting
@@ -576,6 +578,10 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document, convID string) 
 	} else {
 		ts.ConvID = "default" // 指代固化上下文槽缺省会话（用户点名 conversation_id 必加）
 	}
+	// 指代固化上下文槽：任务输入落槽（append-only，方案 C 上下文槽；供后续"这份/该文档"指代解析）。
+	if text != "" || document != "" {
+		writeContextSlot(s.cfg.Global.LogDir, ts.ConvID, convSlot(ts.ConvID, text, document))
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 
@@ -594,6 +600,7 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document, convID string) 
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
 func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint string) {
 	o := *s.tmpl
+	o.ConvID = ts.ConvID // 指代固化上下文槽键（/v1/tasks 执行体——此前缺赋值致槽解析退 default，R2 指代不命中）
 	o.Document = ts.Document // 附件文档全文 → 实现类长程任务消费（修订卡2 附）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
@@ -1197,6 +1204,65 @@ func (s *Server) persist(ts *taskState) {
 		return
 	}
 	_ = os.Rename(tmp, final)
+}
+
+// —— 指代固化上下文槽（方案 C：上下文槽 + 词典沉淀；2026-10-03 用户点名 conversation_id 必加）——
+// 槽文件：<logDir>/context_slots/<conversation_id>.jsonl（append-only）。
+// 每次任务输入落一条 {ts, text, target_doc?, document_head}；指代解析从该会话读最近记录。
+
+// convSlot 构造一条槽记录。
+func convSlot(convID, text, document string) string {
+	rec := map[string]any{
+		"ts":        time.Now().UTC().Format(time.RFC3339),
+		"conv_id":   convID,
+		"text":      truncateRunes(text, 300),
+		"doc_head":  truncateRunes(document, 200),
+		"has_doc":   document != "",
+	}
+	b, _ := json.Marshal(rec)
+	return string(b)
+}
+
+// writeContextSlot append 一条槽记录（按 conversation_id 分文件隔离；越界/失败静默：
+// 槽是增强能力，不阻断任务主链）。
+func writeContextSlot(logDir, convID, line string) {
+	dir := filepath.Join(logDir, "context_slots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, convID+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line + "\n")
+	_ = f.Close()
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// readContextSlots 读会话槽记录（供 pipeline 指代解析）。
+func readContextSlots(logDir, convID string) []map[string]any {
+	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(ln), &rec) == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 // restore 启动时加载历史任务；未完成状态标 interrupted。

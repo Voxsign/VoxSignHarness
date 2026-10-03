@@ -708,6 +708,17 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 				ni = idx + vi // 还原为绝对位置
 			}
 		}
+		// 指代放宽（2026-10-03 上下文槽）：动词命中且**全文**含指代词（这份/该文档）
+		// 也视为名词信号——「按这份需求说明书继续实现并提交」无实体名词，靠槽解析目标。
+		// 查全文而非 text[vi:]：指代词常居动词前（"按这份需求说明书**继续实现**"）。
+		if ni < 0 {
+			for _, d := range []string{"这份", "该文档", "此文档", "它", "那"} {
+				if strings.Contains(text, d) {
+					ni = vi + 1
+					break
+				}
+			}
+		}
 	}
 	// 动词支配名词：动词必须存在且动词之后有名词。
 	if vi < 0 || ni < 0 || ni <= vi {

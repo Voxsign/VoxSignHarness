@@ -90,6 +90,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -126,6 +127,9 @@ type Options struct {
 	// Document 附件/需求文档全文（长程实现任务输入，修订卡2 附；server 装配时从 taskState 注入，
 	// Run 内在 classify 后塞入 intent.Params["document"] 供 execOrchestrate 实现类分支消费）。
 	Document string
+
+	// ConvID 会话标识（指代固化上下文槽键，方案 C；缺省 "default"）。
+	ConvID string
 
 	// ConfirmFn 阻塞等待人工放行（CLI=stdin / server=HTTP）；返回 false 表示拒绝。
 	ConfirmFn func(taskID, question string) (bool, error)
@@ -911,6 +915,56 @@ func defaultSkillCriteria(name, action string) []string {
 	}
 }
 
+// bracketTitle 抽取《…》书名号目标（与 input 层 extractBookTitle 语义一致）。
+var bracketTitle = regexp.MustCompile(`《([^》]+)》`)
+
+// hasDeicticDocRef 判定文本是否含文档指代（"这份/该文档/此文档/这份需求说明书"等）。
+func hasDeicticDocRef(text string) bool {
+	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "那", "它"} {
+		if strings.Contains(text, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// referTargetFromSlots 从本会话上下文槽读最近含《…》的记录，抽书名号作为指代目标。
+func (o *Options) referTargetFromSlots() string {
+	convID := strings.TrimSpace(o.ConvID)
+	if convID == "" {
+		convID = "default"
+	}
+	recs := serverReadContextSlots(o.logDir(), convID)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if t, ok := recs[i]["text"].(string); ok {
+			if m := bracketTitle.FindStringSubmatch(t); len(m) == 2 {
+				return m[1]
+			}
+		}
+	}
+	return ""
+}
+
+// serverReadContextSlots 读槽（server.go 同函数导出代理——避免 import cycle：pipeline 不依赖 server）。
+// 实际由 server 包写入；pipeline 经此只读。放在本文件尾部。
+func serverReadContextSlots(logDir, convID string) []map[string]any {
+	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(ln), &rec) == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
 // kind=implement 时走实现类分支：读附件 document → 生成实现计划 → 写 → 提交（修订卡2 层2）。
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
@@ -927,6 +981,14 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 
 	// 实现类分支（kind=implement）：附件 document → 实现计划文档 + 可编译代码骨架 → 定向提交。
 	if it.Params != nil && it.Params["kind"] == "implement" {
+		// 指代解析（方案 C 上下文槽）：无《…》书名号但含"这份/该文档"类指代时，
+		// 从本会话槽最近记录提取目标（2026-10-03：指代固化，不写死代码、用槽沉淀）。
+		if strings.TrimSpace(it.Params["target_doc"]) == "" && hasDeicticDocRef(it.RawText) {
+			if td := o.referTargetFromSlots(); td != "" {
+				it.Params["target_doc"] = td
+				log.Printf("[execOrchestrate] 指代解析：槽命中 target_doc=%s（文本含指代）", td)
+			}
+		}
 		doc := it.Params["document"]
 		if doc == "" {
 			return append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "orchestrate",

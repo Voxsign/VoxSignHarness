@@ -26,6 +26,7 @@ import (
 	"voicesign-harness/selfheal"
 	"voicesign-harness/server"
 	"voicesign-harness/space"
+	"voicesign-harness/third_party/mcpclient"
 	"voicesign-harness/tools"
 	"voicesign-harness/trajectory"
 	"voicesign-harness/verify"
@@ -56,6 +57,9 @@ func main() {
 	case "skill-ratio":
 		// 真实技能层自动化率（可复现；口径见 skill/judgement.go）
 		cmdSkillRatio(os.Args[2:])
+	case "mcp":
+		// MCP 网关工具直通（AIOps MCP：github/gmail 注册表 + 工具调用）
+		cmdMCP(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -75,6 +79,7 @@ func usage() {
   vhs task           跑 data/20-tasks.jsonl 的 20 条样例并统计通过率
   vhs summary        打印当日每日摘要（轨迹聚合）
   vhs compare        单工对比方法说明（#49，降级为报告）
+  vhs mcp            MCP 网关直通：list-servers / list-tools <server> / invoke <server> <tool> [json]
   vhs version        打印版本、Go 版本与平台`)
 }
 
@@ -347,5 +352,79 @@ func cmdCompare() {
 	}
 	for k := range allAttr {
 		fmt.Printf("  %-12s off=%d  on=%d\n", k, offAttr[k], onAttr[k])
+	}
+}
+
+// cmdMCP 直通 AIOps MCP 网关（github/gmail 工具注册表 + 调用）。
+// 用法:
+//   vhs mcp list-servers
+//   vhs mcp list-tools <server>
+//   vhs mcp invoke <server> <tool> [jsonArgs]
+// 配置: BaseURL 默认 https://aiops.peterzou.com/api/mcp（VHS_MCP_BASEURL 覆盖）;
+//       ReadKey 默认 $AIOPS_KEY（VHS_MCP_READKEY 覆盖）; Tenant 默认 voxsign（VHS_MCP_TENANT 覆盖）。
+func cmdMCP(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "用法: vhs mcp list-servers | list-tools <server> | invoke <server> <tool> [jsonArgs]")
+		os.Exit(2)
+	}
+	baseURL := os.Getenv("VHS_MCP_BASEURL")
+	if baseURL == "" {
+		baseURL = "https://aiops.peterzou.com/api/mcp"
+	}
+	readKey := os.Getenv("VHS_MCP_READKEY")
+	if readKey == "" {
+		readKey = os.Getenv("AIOPS_KEY")
+	}
+	tenant := os.Getenv("VHS_MCP_TENANT")
+	if tenant == "" {
+		tenant = "voxsign"
+	}
+	cli := mcpclient.New(mcpclient.Config{BaseURL: baseURL, ReadKey: readKey, Tenant: tenant})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	switch args[0] {
+	case "list-servers":
+		ss, err := cli.ListServers(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "list-servers:", err)
+			os.Exit(1)
+		}
+		for _, s := range ss {
+			fmt.Printf("%s — %s (%d tools)\n", s.Name, s.Desc, len(s.Tools))
+		}
+	case "list-tools":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "用法: vhs mcp list-tools <server>")
+			os.Exit(2)
+		}
+		ts, err := cli.ListTools(ctx, args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "list-tools:", err)
+			os.Exit(1)
+		}
+		for _, t := range ts {
+			fmt.Printf("%s %s\n", t.Name, t.Description)
+		}
+	case "invoke":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "用法: vhs mcp invoke <server> <tool> [jsonArgs]")
+			os.Exit(2)
+		}
+		var arguments map[string]any
+		if len(args) >= 4 {
+			if err := json.Unmarshal([]byte(args[3]), &arguments); err != nil {
+				fmt.Fprintln(os.Stderr, "jsonArgs 解析失败:", err)
+				os.Exit(2)
+			}
+		}
+		res, err := cli.Invoke(ctx, args[1], args[2], arguments)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "invoke:", err)
+			os.Exit(1)
+		}
+		fmt.Println(res.Result)
+	default:
+		fmt.Fprintln(os.Stderr, "未知 MCP 子命令:", args[0])
+		os.Exit(2)
 	}
 }
