@@ -2,7 +2,11 @@
 # evidence_collect.sh —— **C 通道：代码证据采集**（`skills/validate-align/SKILL.md` v2 承诺的脚本之一）。
 #
 # 依据（skill 原文）：
-#   ⚠️ **C 通道只认代码**：`.md/.txt/.json/.yaml` 等文档中的字样**不算 C 证据**（skill：只有文档 = ✗）。
+#   ⚠️ **C 通道只认代码**：三类都不算 C 证据（2026-10-03 实测，第 16/23 条）：
+#      ① **文档**（`.md/.txt/.json/.yaml`）
+#      ② **采集器自身**（自匹配）
+#      ③ ⚠️ **注释行**（`// 绝不执行` 之类）—— 命中注释只证"提过"，**不证"实现了"**
+#      ⇒ 而"声明/登记/校验"也算不到"写入"（第 16 条）—— **命中 ≠ 发生**。
 #   | **C 代码校准** | 判据 → 实现代码真值：存在性/结构/接线 | git grep + Read 源码：接口、结构、调用链 | 每条判据的代码证据（文件:行） |
 #   | 评分规则 | 每条判据 PASS = **C 证据 + R 证据双证齐**；只 C 无 R = ◐ 待真跑；只有文档 = ✗ |
 #
@@ -86,7 +90,8 @@ grep -vE '^\s*(#|$)' "$LIST" | while IFS= read -r line; do
   hits=$(git -C "$ROOT" grep -nE -- "$pat" -- "$path" 2>/dev/null \
            | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' \
            | grep -vE '^"?scripts/evidence_collect\.sh"?[:"]' \
-           | grep -vE '^"?\.calib-evidence' | head -5)
+           | grep -vE '^"?\.calib-evidence' \
+           | grep -vE ':[0-9]+:[[:space:]]*(//|#|\*|/\*)' | head -5)
   n=$(printf '%s' "$hits" | grep -c . 2>/dev/null || echo 0)
 
   if [ "$n" -gt 0 ]; then
@@ -106,7 +111,8 @@ grep -vE '^\s*(#|$)' "$LIST" | while IFS= read -r line; do
       ahits=$(git -C "$ROOT" grep -nE -- "$alias" -- "$path" 2>/dev/null \
                 | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' \
                 | grep -vE '^"?scripts/evidence_collect\.sh"?[:"]' \
-                | grep -vE '^"?\.calib-evidence' | head -3)
+                | grep -vE '^"?\.calib-evidence' \
+                | grep -vE ':[0-9]+:[[:space:]]*(//|#|\*|/\*)' | head -3)
     fi
     if [ -n "$ahits" ]; then
       aloc=$(printf '%s\n' "$ahits" | awk -F: '{print $1":"$2}' | tr '\n' ' ')
