@@ -70,4 +70,23 @@ if ! diff "$CALIB_BEFORE" "$CALIB_AFTER" > /tmp/.gate-calib-diff.$$ 2>&1; then
 fi
 rm -f "$CALIB_BEFORE" "$CALIB_AFTER" /tmp/.gate-calib-diff.$$
 echo "[gate] 校准 ✅ 门禁未改变被验证对象（HEAD / status / reflog / 身份 / bare 均一致）"
+
+# ============ 规范与代码对齐（2026-10-03 加）============
+# ⚠️ 为什么加：`docs/SPEC-v2` §4.1 的 space_check 伪代码**把四步判定简化成一句**，
+#   而实际代码是逐项判定 ⇒ 我据简化伪代码推理 ⇒ 把 `boundary_violation` 读成"越界"
+#   （实为"工具未授权"）⇒ **追错 10 轮**。
+# ⇒ 教训不只是"要读代码"，而是：**建好的检查必须真的跑** ——
+#   "写进文档没有约束力" 的升级版是 "**写进工具但不去跑，同样没有约束力**"。
+if [ -x scripts/spec_code_align.sh ] || [ -f scripts/spec_code_align.sh ]; then
+  if ! out=$(sh scripts/spec_code_align.sh 2>&1); then
+    echo "[gate] ❌ **规范与代码不对齐** ⇒ 拿规范当尺子会漏判："
+    printf '%s\n' "$out" | sed 's/^/       /'
+    echo "       ⇒ 处置：把缺的判定补进 docs/SPEC-v2（或修代码使其一致）"
+    exit 1
+  fi
+  echo "[gate] 规范对齐 ✅ $(printf '%s\n' "$out" | tail -1)"
+else
+  echo "[gate] ⚠️ 未找到 scripts/spec_code_align.sh ⇒ **跳过**（不代表通过）"
+fi
+
 echo "[gate] OK"
