@@ -4,6 +4,8 @@
 package asr
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,5 +111,31 @@ probe().then(()=>{
 	out := runNode(t, js)
 	if !strings.Contains(out, "NODE_OK_BANNER") {
 		t.Fatalf("未通过: %s", out)
+	}
+}
+
+// 优先级③：标点必须体现在测试页链路上（`/v1/correct` 早就有，页面这条链路原先没带）。
+func TestUIPunctuationIsExposed(t *testing.T) {
+	base, _ := newUIServer(t)
+	resp, err := http.Post(base+"/v1/testpage", "application/json",
+		strings.NewReader(`{"text":"查一下库存还有多少"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out["punctuated"]; !ok {
+		t.Fatalf("响应缺 punctuated —— 页面上看不到标点")
+	}
+	page := fetchPage(t)
+	if !strings.Contains(page, "标点：") {
+		t.Errorf("[标点] 页面没有标点显示行")
+	}
+	// 正文不变式不得被破坏：corrected（正文）不应把标点恢复进去
+	if strings.Contains(out["corrected"].(string), "，") && !strings.Contains(out["raw"].(string), "，") {
+		t.Logf("提示：corrected 含标点（若实现变更需核对 C1 v2 不变式）: %q", out["corrected"])
 	}
 }

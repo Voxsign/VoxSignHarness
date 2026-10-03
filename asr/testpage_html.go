@@ -94,6 +94,7 @@ async function run(){
   const d = await j('/v1/testpage', {text});
   let h = '<div class="row"><span class="k">原始：</span><code>'+esc(d.raw)+'</code></div>'+
           '<div class="row"><span class="k">纠错：</span><code>'+esc(d.corrected)+'</code></div>'+
+          '<div class="row"><span class="k">标点：</span><code>'+esc(d.punctuated)+'</code></div>'+
           '<div class="row"><span class="k">意图：</span>'+esc(d.intent)+
           ' ｜ 回问：'+(d.ask_back?'<b style="color:#c60">是</b>':'否')+
           ' ｜ 降级：'+(d.degraded?'<b style="color:#c60">是</b>':'否')+'</div>'+

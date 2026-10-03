@@ -21,6 +21,7 @@ type RealLogRecord struct {
 	At          string  `json:"at"`
 	Raw         string  `json:"raw"`
 	Corrected   string  `json:"corrected"`
+	Punctuated  string  `json:"punctuated"`
 	Intent      string  `json:"intent"`
 	AskBack     bool    `json:"ask_back"`
 	Degraded    bool    `json:"degraded"`
@@ -88,7 +89,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rec := RealLogRecord{
-		At: time.Now().UTC().Format(time.RFC3339Nano), Raw: req.Text, Corrected: res.Text,
+		At: time.Now().UTC().Format(time.RFC3339Nano), Raw: req.Text, Corrected: res.Text, Punctuated: res.Punctuated,
 		Intent: ir.Type, AskBack: ir.NeedDisambiguate, Degraded: ir.Degraded,
 		Level: level, Ms: ms, TaughtHit: taughtHit, Corrections: len(res.Corrections),
 	}
@@ -97,7 +98,8 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 		logErr = err.Error() // 记账失败**留痕**，不静默、不阻断
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"raw": rec.Raw, "corrected": rec.Corrected, "intent": rec.Intent,
+		"raw": rec.Raw, "corrected": rec.Corrected, "punctuated": res.Punctuated,
+		"punctuation_corrections": res.PunctuationCorrections, "intent": rec.Intent,
 		"ask_back": rec.AskBack, "degraded": rec.Degraded, "degraded_reason": ir.DegradedReason,
 		"level": rec.Level, "ms": rec.Ms, "taught_hit": rec.TaughtHit,
 		"corrections": res.Corrections, "candidates": ir.DomainSuggestion,
