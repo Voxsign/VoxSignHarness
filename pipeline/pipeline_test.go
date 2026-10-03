@@ -386,6 +386,13 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	if err := os.WriteFile(filepath.Join(projDir, "init.txt"), []byte("init\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +450,13 @@ func TestCommitRefusedNoExec(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	_ = os.WriteFile(filepath.Join(projDir, "a.txt"), []byte("a\n"), 0o644)
 	mustRun("git", "add", "-A")
 	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")

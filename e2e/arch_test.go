@@ -510,6 +510,10 @@ func archInitGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"init", "-q"},
+		// ⚠️ **--local**（2026-10-03 CI 事故，同 pipeline）：产品代码的 commit 没有 -c 注入，
+		// 依赖仓库 user 配置 ⇒ 无全局身份的 CI runner 会失败。`--local` 禁止上溯父仓库。
+		{"config", "--local", "user.email", "vhs-arch@example.com"},
+		{"config", "--local", "user.name", "vhs-arch"},
 		// ⚠️ **不许写 git config**（2026-10-03 事故，全仓最后一处）：
 		// `git config user.email` 不带 --local/--global 时写"从 cwd 上溯找到的仓库"的 config；
 		// 当 dir 的仓库不可用时会上溯到**主仓库** ⇒ 覆盖真实身份（曾把 user.email 改成
