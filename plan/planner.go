@@ -21,11 +21,13 @@ var ErrUnachievable = errors.New("plan: 超出能力边界，做不到")
 
 // Step 是计划中的一步：必须映射到清单内的真实能力，且参数明确。
 type Step struct {
-	Tool      string            `json:"tool"`   // 必须是 Manifest.Tools 里的能力名
-	Caps      []string          `json:"caps"`   // 用到的 cap（如 git 的 commit）
-	Params    map[string]string `json:"params"` // 明确参数（PL-3：不得空泛）
-	Action    string            `json:"action"` // 可执行动作（不得是"分析一下"这类空话）
-	Output    string            `json:"output"` // 产出物（PL-3）
+	Tool      string            `json:"tool"`             // 必须是 Manifest.Tools 里的能力名
+	Caps      []string          `json:"caps"`             // 用到的 cap（如 git 的 commit）
+	Params    map[string]string `json:"params"`           // 明确参数（PL-3：不得空泛）
+	Action    string            `json:"action"`           // 可执行动作（不得是"分析一下"这类空话）
+	Output    string            `json:"output"`           // 产出物（PL-3）
+	Why       string            `json:"why,omitempty"`    // PM-5：这一步的依据（不得是黑盒）
+	Domain    string            `json:"domain,omitempty"` // PM-4：目标域（本机按 AllowedSpaces 复核）
 	DependsOn []int             `json:"depends_on,omitempty"`
 }
 
@@ -38,6 +40,10 @@ type Plan struct {
 	Reason  string   `json:"reason,omitempty"`
 	Voided  bool     `json:"voided,omitempty"`  // RV-3：被域门禁拒绝 → 计划作废
 	Changes []string `json:"changes,omitempty"` // RV-2：复规时必须说明"变了什么"
+
+	Source         string `json:"source,omitempty"`          // rule | model | readonly-fallback（PM-5 可解释）
+	Degraded       bool   `json:"degraded,omitempty"`        // PM-2：模型失败已降级
+	DegradedReason string `json:"degraded_reason,omitempty"` // 降级原因（不得静默）
 }
 
 // Planner 是规划器接口。
