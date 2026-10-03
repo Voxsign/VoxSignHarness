@@ -646,6 +646,10 @@ var (
 // 长程实现任务由编排引擎去拆解，分类层只做识别（对齐修订卡2 层2）。
 var (
 	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个", "建一个"} // F1 修复：真实长叙述「建一个 OT 运营数据平台…帮我规划」→ ORCHESTRATE
+	// 修订类动词（洞 2，2026-10-04 无人工干预测试：修订/补齐/完善表述未命中 implement → 任务直接 done 0 轮无产物）。
+	// 命中修订类动词时额外要求实现域强信号（implDomainWords），防"修订文档"误判。
+	reviseVerbs      = []string{"修订", "补齐", "完善", "修正", "修复", "整改", "接着做", "继续做", "继续改", "按反馈", "根据反馈", "按验收", "根据验收"}
+	implDomainWords  = []string{"服务", "后台", "系统", "程序", "代码", "端点", "bug", "编译", "跑通", "上线", "实现", "接口", "引擎", "网关"}
 	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件", "需求说明书"}
 	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
 
@@ -714,6 +718,8 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 		return "", nil, false
 	}
 	vi, ni := -1, -1
+	// 通用实现动词（实现/搭建/开发…）照原逻辑；修订类动词（修订/补齐/完善…）
+	// 必须同时命中实现域强信号（implDomainWords），否则不是实现任务（防"修订文档"误判）。
 	for _, w := range implementVerbs {
 		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
 			// 2026-10-03 真跑发现：动词命中必须**不在书名号《…》内**——
@@ -722,7 +728,27 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 			if insideBookTitle(text, idx, idx+len(w)) {
 				continue
 			}
+			// 2026-10-04 洞2：动词后紧跟"计划/方案/文档/报告/步骤"时是名词短语
+			//（如"实现计划"），不是实现动作 → 跳过（"把实现计划修订一下…"）。
+			if strings.HasPrefix(text[idx+len(w):], "计划") || strings.HasPrefix(text[idx+len(w):], "方案") ||
+				strings.HasPrefix(text[idx+len(w):], "文档") || strings.HasPrefix(text[idx+len(w):], "报告") ||
+				strings.HasPrefix(text[idx+len(w):], "步骤") {
+				continue
+			}
 			vi = idx
+		}
+	}
+	reviseHit := false
+	for _, w := range reviseVerbs {
+		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
+			if insideBookTitle(text, idx, idx+len(w)) {
+				continue
+			}
+			if !containsAny(text, implDomainWords) {
+				continue // 修订类无实现域信号（如"修订这份文档"）→ 不是实现任务
+			}
+			vi = idx
+			reviseHit = true
 		}
 	}
 	// 名词必须在**动词之后**查找（text[vi:]）：
@@ -732,6 +758,19 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 		for _, w := range implementNouns {
 			if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
 				ni = idx + vi // 还原为绝对位置
+			}
+		}
+		// 修订类动词的名词信号放宽到实现域词（端点/代码/接口/bug/编译/跑通…）：
+		// 「把缺失的 /v1/blacklist 端点补齐」无 implementNouns 实体词，靠实现域词兜底。
+		if reviseHit {
+			for _, w := range implDomainWords {
+				if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
+					ni = idx + vi
+				}
+			}
+			if ni < 0 && containsAny(text, implDomainWords) {
+				// 修订宾语常在动词前（"把缺失的端点补齐"）：全文实现域词命中即视名词信号成立。
+				ni = vi + 1
 			}
 		}
 		// 指代放宽（2026-10-03 上下文槽）：动词命中且**全文**含指代词（这份/该文档）
