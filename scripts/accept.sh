@@ -60,6 +60,28 @@ VHS_ACCEPT_CDP_PORT="${VHS_ACCEPT_CDP_PORT:-9333}" VHS_ACCEPT_CHROME="$CHROME" \
   node "$ROOT/scripts/accept-a1a12.mjs"
 RC=$?
 kill $SRV 2>/dev/null || true
+
+# ---- 校验对齐门槛（2026-10-04 硬规则：验收输出前必经动作）----
+# 任意验收结论输出前，必须先过校验对齐（validate-align：判据双证 PASS ≥90% 且 0 FAIL）。
+# 机器可读对齐结果约定：docs/align-results/ALIGN.json（{"aligned": true|false, "score": N, ...}），
+# 由校验对齐执行后生成；accept.sh 只做门槛强制（计数），不做判断本身。
+ALIGN_FILE="${VHS_ALIGN_RESULT:-$ROOT/docs/align-results/ALIGN.json}"
+if [ "${VHS_SKIP_ALIGN:-0}" = "1" ]; then
+  echo "[accept] ⚠️ VHS_SKIP_ALIGN=1 ⇒ 跳过校验对齐门槛（仅测试/历史验收，正式交付禁止跳过）"
+elif [ ! -f "$ALIGN_FILE" ]; then
+  echo "[accept] ❌ 校验对齐门槛：未找到 $ALIGN_FILE ⇒ 禁止出验收（未对齐不许交付）"
+  RC=1
+else
+  ALIGNED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('aligned'))" "$ALIGN_FILE" 2>/dev/null || echo "parse_fail")
+  SCORE=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('score'))" "$ALIGN_FILE" 2>/dev/null || echo "?")
+  if [ "$ALIGNED" = "True" ] || [ "$ALIGNED" = "true" ]; then
+    echo "[accept] ✅ 校验对齐门槛 PASS（aligned=true · score=${SCORE}% · 见 $ALIGN_FILE）"
+  else
+    echo "[accept] ❌ 校验对齐门槛：aligned=${ALIGNED:-parse_fail} ⇒ 禁止出验收（对齐度未达标）"
+    RC=1
+  fi
+fi
+
 echo "[accept] 验收数据目录（可复核 feedback.jsonl / blacklist.json / reallog.jsonl）："
 echo "[accept]   $DATA"
 echo "[accept] 服务日志：/tmp/vhs-a12-server.log"
