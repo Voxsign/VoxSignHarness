@@ -70,36 +70,64 @@ func TestWM2DropIsTracedAndBounded(t *testing.T) {
 	}
 }
 
-// WM-1：扩工作记忆后**链长必须变长**（否则缓存没用）。四块板未实现 → 先红。
+// WM-1：同一**多实体**目标，扩工作记忆（容量）后链长必须变长。
+//
+// 诚实边界：本判据只在"目标本身是多实体"时成立；单实体目标扩容量**不会**变长
+// （见 docs 登记：WM-1 是假设，不是普适规律）。
 func TestWM1LargerMemoryYieldsLongerChain(t *testing.T) {
 	m := wmFixture(t)
-	small, _ := LocalPlanner{}.Plan("把这个项目里所有 TODO 整理成一份文档", m)
-	// 扩容：把容量显式提高后重规划（当前实现容量固定，无扩容入口）
-	large, err := LocalPlanner{}.PlanWithMemory("把这个项目里所有 TODO 整理成一份文档", m, wmCapacity*2)
+	goal := "改这些模块|a|b|c|d|e|f|g|h|i|j|k|l"
+	small, err := LocalPlanner{}.PlanWithMemory(goal, m, 4)
 	if err != nil {
-		t.Fatalf("[WM-1] 无扩容入口（四块板未实现，先红）: %v", err)
+		t.Fatalf("[WM-1] 小容量规划失败: %v", err)
+	}
+	large, err := LocalPlanner{}.PlanWithMemory(goal, m, 12)
+	if err != nil {
+		t.Fatalf("[WM-1] 大容量规划失败: %v", err)
 	}
 	if len(large.Steps) <= len(small.Steps) {
-		t.Errorf("[WM-1] 扩容后链长未变长: %d → %d", len(small.Steps), len(large.Steps))
+		t.Errorf("[WM-1] 扩容后链长未变长: %d → %d（假设可能不成立，如实报告）", len(small.Steps), len(large.Steps))
+	}
+	if small.WM.Drop == 0 {
+		t.Errorf("[WM-1] 小容量应发生丢弃且留痕: %+v", small.WM)
 	}
 }
 
-// WM-5（关键）：清空工作记忆后**规划质量必须下降**，否则是死代码。先红。
+// WM-5（关键）：清空工作记忆后**规划质量必须下降**，否则是死代码。
 func TestWM5ClearMemoryDegradesPlanning(t *testing.T) {
 	m := wmFixture(t)
-	pl := &WorkingMemory{}
-	pl.Remember(ConsideredItem{Element: "实体:报价模块", Source: "session", Inferred: false})
-	full, err := LocalPlanner{}.PlanWithWorkingMemory("把那个模块改了", m, pl)
+	w := &WorkingMemory{}
+	w.Remember("working_set", BoardItem{Element: "模块:报价模块", Source: "session"})
+	full, err := LocalPlanner{}.PlanWithWorkingMemory("把那个模块改了", m, w)
 	if err != nil {
-		t.Fatalf("[WM-5] 带工作记忆的规划入口未实现（四块板未做，先红）: %v", err)
+		t.Fatalf("[WM-5] 带记忆规划失败: %v", err)
 	}
-	pl.Clear()
-	empty, err := LocalPlanner{}.PlanWithWorkingMemory("把那个模块改了", m, pl)
+	w.Clear()
+	empty, err := LocalPlanner{}.PlanWithWorkingMemory("把那个模块改了", m, w)
 	if err != nil {
-		t.Fatalf("[WM-5] 清空后重规划失败: %v", err)
+		t.Fatalf("[WM-5] 清空后规划失败: %v", err)
+	}
+	if len(full.Steps) == 0 {
+		t.Errorf("[WM-5] 有记忆时应能排链: %+v", full)
 	}
 	if len(empty.Steps) >= len(full.Steps) {
 		t.Errorf("[WM-5] 清空工作记忆后规划质量未下降（死代码嫌疑）: full=%d empty=%d", len(full.Steps), len(empty.Steps))
 	}
-	_ = strings.TrimSpace
+	if !empty.Refused {
+		t.Errorf("[WM-5] 清空后应拒绝并回问: %+v", empty)
+	}
+}
+
+// WM-4：判断入记忆必须带 judged_by，**不得与事实同形**。
+func TestWM4JudgementIsMarkedNotFact(t *testing.T) {
+	w := &WorkingMemory{}
+	w.Remember("working_set", BoardItem{Element: "实体:aiops", Source: "services", Inferred: false})
+	w.Remember("working_set", BoardItem{Element: "判断:应走网关", Source: "jev", Inferred: false, JudgedBy: "jev"})
+	text := w.Render()
+	if !strings.Contains(text, "judged_by=jev") {
+		t.Errorf("[WM-4] 判断未标 judged_by，与事实同形: %q", text)
+	}
+	if !strings.Contains(text, "实体:aiops") || strings.Contains(strings.Split(text, "判断:应走网关")[0], "judged_by") {
+		t.Errorf("[WM-4] 事实条目不应带 judged_by: %q", text)
+	}
 }

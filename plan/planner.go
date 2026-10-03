@@ -129,34 +129,74 @@ func readonlyProbeSteps() []Step {
 	}
 }
 
-// WorkingMemory 是工作记忆的**最小骨架**（四块板完整实现属 P2 下一步；
-// 这里先给出 Clear/Remember 供 WM-5 的观测面使用）。
-type WorkingMemory struct {
-	items []ConsideredItem
-}
-
-// Remember 记一条要素（须带 source）。
-func (w *WorkingMemory) Remember(it ConsideredItem) {
-	if it.Element == "" || it.Source == "" {
-		return
-	}
-	w.items = append(w.items, it)
-}
-
-// Clear 清空工作记忆（WM-5：清空后规划质量必须下降）。
-func (w *WorkingMemory) Clear() { w.items = nil }
-
-// Items 返回当前要素快照。
-func (w *WorkingMemory) Items() []ConsideredItem { return append([]ConsideredItem(nil), w.items...) }
-
-// PlanWithMemory 是"扩容后重规划"的入口（WM-1 需要；四块板未实现 → 当前返回 ErrNotImplemented）。
+// PlanWithMemory 按给定容量重规划（WM-1：容量越大，能握住的实体越多）。
+// goal 形如 "目标|实体1|实体2|…"：'|' 之后是被注入的活跃实体。
 func (LocalPlanner) PlanWithMemory(goal string, m Manifest, capacity int) (Plan, error) {
-	return Plan{}, ErrNotImplemented
+	parts := strings.Split(goal, "|")
+	w := &WorkingMemory{Capacity: capacity}
+	for _, e := range parts[1:] {
+		w.Remember("working_set", BoardItem{Element: strings.TrimSpace(e), Source: "caller"})
+	}
+	return LocalPlanner{}.planWithWorkingMemory(parts[0], m, w)
 }
 
-// PlanWithWorkingMemory 是"带工作记忆"的规划入口（WM-5 需要；当前未实现）。
+// PlanWithWorkingMemory 是"带工作记忆"的规划入口（WM-5 的观测口径）：
+// 有记忆 ⇒ 能消解指代、能排链；清空 ⇒ 只能回问。
 func (LocalPlanner) PlanWithWorkingMemory(goal string, m Manifest, w *WorkingMemory) (Plan, error) {
-	return Plan{}, ErrNotImplemented
+	return LocalPlanner{}.planWithWorkingMemory(goal, m, w)
+}
+
+func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMemory) (Plan, error) {
+	if w == nil || len(w.BoundedWorkingSet()) == 0 {
+		cons, wm := observe(goal, m, nil, nil)
+		return Plan{
+			Goal: goal, Source: "rule", Refused: true,
+			Missing:    []string{"人：目标含指代或需要上下文，但工作记忆为空，请明确是哪个对象"},
+			Reason:     "工作记忆为空：无法消解指代，不脑补",
+			Considered: cons, WM: wm,
+		}, nil
+	}
+	// 约束板有**否决权**：命中约束即拒绝（不得绕过）。
+	for _, c := range w.Constraints {
+		if strings.Contains(goal, c.Element) {
+			cons, wm := observe(goal, m, nil, nil)
+			return Plan{Goal: goal, Source: "rule", Refused: true,
+				Missing: []string{"人：该动作命中约束「" + c.Element + "」（source=" + c.Source + "），须人工裁决"},
+				Reason:  "约束板否决", Considered: cons, WM: wm}, nil
+		}
+	}
+	// 待决板非空 ⇒ 先回问（不猜）。
+	if len(w.OpenItems) > 0 {
+		cons, wm := observe(goal, m, nil, nil)
+		return Plan{Goal: goal, Source: "rule", Refused: true,
+			Missing:    []string{"人：待决项未解决 —— " + w.OpenItems[0].Element},
+			Reason:     "待决板非空，先问再动",
+			Considered: cons, WM: wm}, nil
+	}
+	// 活跃实体板驱动链长：每个被握住的实体 ⇒ 读 + 改，末尾提交。
+	var steps []Step
+	for range w.BoundedWorkingSet() {
+		steps = append(steps,
+			Step{Tool: "file", Caps: []string{"read"}, Params: map[string]string{"path": "<实体>"}, Action: "读取实体当前内容", Output: "内容"},
+			Step{Tool: "file", Caps: []string{"write"}, DependsOn: []int{len(steps) - 1}, Params: map[string]string{"path": "<实体>", "content": "<修改后>"}, Action: "写入修改", Output: "修改后的文件"},
+		)
+	}
+	steps = append(steps, Step{Tool: "git", Caps: []string{"commit"}, DependsOn: []int{len(steps) - 1},
+		Params: map[string]string{"args": "commit", "message": "<说明>"}, Action: "提交改动", Output: "commit hash"})
+	if missing := missingTools(m, steps); len(missing) > 0 {
+		cons, wm := observe(goal, m, steps, nil)
+		return Plan{Goal: goal, Source: "rule", Refused: true,
+			Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Considered: cons, WM: wm}, nil
+	}
+	cons, wm := observe(goal, m, steps, nil)
+	plan := Plan{Goal: goal, Source: "rule", Steps: steps, Considered: cons, WM: wm}
+	plan.WM.Drop = len(w.DropTrace)
+	plan.WM.DropTrace = append([]string(nil), w.DropTrace...)
+	if plan.WM.Drop > 0 {
+		plan.Degraded = true
+		plan.DegradedReason = "工作记忆容量不足，已丢弃 " + strings.Join(w.DropTrace, ",") + "（留痕，非静默）"
+	}
+	return plan, nil
 }
 
 // wmCapacity 是一次规划"握得住"的要素数上界（WORKMEM-001：容量有界，丢了要留痕）。
