@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -44,8 +45,9 @@ func (d *Dictionary) Correct(word string) string {
 	if _, exists := d.entries[word]; exists {
 		return word
 	}
+	// Simple correction: return the first word that starts with the same letter
 	for entry := range d.entries {
-		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+		if strings.HasPrefix(entry, string(word[0])) {
 			return entry
 		}
 	}
@@ -62,17 +64,21 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+func classifyIntent(text string) Intent {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	case strings.Contains(text, "orchestrate"):
 		return ORCHESTRATE
+	default:
+		return QUERY
 	}
 }
 
@@ -81,91 +87,110 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendFeedback(filePath string, feedback Feedback) error {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func appendToFile(filename string, data interface{}) error {
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(feedback)
-}
-
-type Trace struct {
-	Input  string `json:"input"`
-	Output string `json:"output"`
-}
-
-func AppendTrace(filePath string, trace Trace) error {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	writer := bufio.NewWriter(file)
+	encoder := json.NewEncoder(writer)
+	if err := encoder.Encode(data); err != nil {
 		return err
 	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(trace)
+	return writer.Flush()
 }
+
+type Request struct {
+	Text string `json:"text"`
+}
+
+type Response struct {
+	CorrectedText string `json:"corrected_text"`
+	Intent        Intent `json:"intent"`
+}
+
+var (
+	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir = flag.String("data-dir", "./data", "Data directory")
+	dict    = NewDictionary()
+)
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(dict *Dictionary, feedbackPath, tracePath string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var request struct {
-			Text string `json:"text"`
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			http.Error(w, "Bad request", http.StatusBadRequest)
-			return
-		}
-
-		correctedText := dict.Correct(request.Text)
-		intent := ClassifyIntent(correctedText)
-
-		response := struct {
-			CorrectedText string `json:"corrected_text"`
-			Intent        Intent `json:"intent"`
-		}{
-			CorrectedText: correctedText,
-			Intent:        intent,
-		}
-
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		trace := Trace{Input: request.Text, Output: correctedText}
-		if err := AppendTrace(tracePath, trace); err != nil {
-			fmt.Println("Error appending trace:", err)
-		}
+func processHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	var req Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	correctedText := dict.Correct(req.Text)
+	intent := classifyIntent(req.Text)
+
+	resp := Response{
+		CorrectedText: correctedText,
+		Intent:        intent,
+	}
+
+	if err := appendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := appendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func feedbackHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var feedback Feedback
+	if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if err := appendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	dict := NewDictionary()
-	feedbackPath := *dataDir + "/feedback.jsonl"
-	tracePath := *dataDir + "/traces.jsonl"
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler(dict, feedbackPath, tracePath))
+	http.HandleFunc("/v1/process", processHandler)
+	http.HandleFunc("/v1/feedback", feedbackHandler)
 
-	fmt.Println("Starting server on", *addr)
+	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Server failed:", err)
+		fmt.Fprintf(os.Stderr, "Server failed: %v\n", err)
+		os.Exit(1)
 	}
 }

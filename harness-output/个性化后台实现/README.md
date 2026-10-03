@@ -1,58 +1,43 @@
-个性化后台实现 —— 运行说明
+# 个性化后台 · 运行说明
 
 环境要求
-Go 1.21+，无需外部数据库，数据全部以 JSONL 落盘。
+Go 1.21 及以上版本，无外部依赖。
 
-编译
-go build -o p13n .
+构建与启动
+go build -o personald .
+./personald -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
 
-启动
-默认启动：./p13n
-指定数据目录与端口：./p13n -data-dir ./data -addr 127.0.0.1:8080
-参数说明：
--data-dir  数据目录，默认 ./data，首次启动自动创建
--addr      监听地址，默认 127.0.0.1:8080；仅允许回环地址，非 127.0.0.1 的地址会被拒绝启动
--token     鉴权占位令牌，默认空（空表示不校验，仅作占位接口）
+调试运行（不产物化）
+go run . -addr 127.0.0.1:8080 -data-dir ./data
+
+启动参数
+-addr      监听地址，默认 127.0.0.1:8080；只接受回环地址，非 127.0.0.1 直接拒绝启动。
+-data-dir  数据目录，默认 ./data，自动创建。
+-token     鉴权占位令牌；未配置时按空令牌放行。
 
 端点
-GET  /v1/health
-  返回 {"status":"ok","time":"...","data_dir":"..."}，用于存活探测。
+GET /v1/health
+  健康检查，返回 {"status":"ok"}，不需鉴权。
 
 POST /v1/process
-  请求：Content-Type: application/json
-  {
-    "text": "待处理文本",
-    "action": "correct | intent | dict_add | dict_del | dict_get | feedback",
-    "key": "词典条目（dict_* 时使用）",
-    "value": "词典释义/别名词（可选）",
-    "feedback": true/false,
-    "trace_id": "可选，缺省自动生成"
-  }
-  响应：
-  {
-    "trace_id": "...",
-    "intent": "NOTE | QUERY | EDIT | COMMIT | ORCHESTRATE",
-    "corrected": "纠错后文本",
-    "cleaned": "清洗后文本",
-    "dict_hits": [...],
-    "ok": true
-  }
-  说明：
-  - action=correct 走清洗 + 词典纠错，命中词典才替换，未命中不改动原文，保证正常文本不被改坏；
-  - action=intent 只做意图分类，输出五类之一；
-  - action=dict_add/dict_del/dict_get 完成词典增、删、查；
-  - action=feedback 携带 feedback=true/false，写入反馈文件。
+  请求头 Authorization: Bearer <token>
+  请求体 JSON：{"text":"待处理文本","op":"note|query|edit|commit|orchestrate"}
+  op 可省略，省略时由意图分类自动判定。
+  响应 JSON：{"intent":"NOTE","corrected":"纠错后文本","hits":[词典命中项],"reply":"处理结果"}
+  若 op 为字典操作，用 "dict":"add|del|get" 与 "entry":"词条" 指定，走同一端点。
 
-鉴权
-请求头可选 Authorization: Bearer <token>。token 为空时不校验；配置了 token 则必须匹配，否则返回 401。
+词典
+  增删查均通过 /v1/process 携带 dict 字段完成；条目落盘于 data-dictionary 下的词典文件，进程重启后自动加载。
+  纠错为增量的：无把握的片段原样保留，正常文本不会被改写。
 
-数据文件（均在 -data-dir 目录下，JSONL 一律 append-only，只追加不改写）
-traces.jsonl    每次 /v1/process 的输入输出轨迹
-usage.jsonl     调用计数与耗时统计
-feedback.jsonl  反馈学习记录（✔/✘ 回馈）
-dictionary.json 个性化词典快照（增删查的唯一真源，重启后加载）
+数据文件（全部 append-only，位于 -data-dir 指定的目录）
+  traces.jsonl    每次 /v1/process 的完整轨迹
+  usage.jsonl     调用计数与耗时
+  feedback.jsonl  ✔/✘ 反馈回执，仅追加不覆盖
 
-运维提示
-查看健康：curl http://127.0.0.1:8080/v1/health
-文本处理：curl -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -d '{"text":"帮我记一下明天开会","action":"correct"}'
-日志与数据分离，删除 data-dir 即完成重置。
+反馈写入
+POST /v1/process 后附 {"feedback":"up"} 或 {"feedback":"down"}，追加一行到 feedback.jsonl。
+
+注意事项
+监听地址固定回环，不要改成 0.0.0.0。
+数据目录可用 -data-dir 指向任意可写路径，多个实例请勿共用同一目录。
