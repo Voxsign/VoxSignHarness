@@ -40,11 +40,9 @@ func (d *Dictionary) Lookup(word string) (string, bool) {
 }
 
 func (d *Dictionary) Correct(text string) string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
 	words := strings.Fields(text)
 	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
+		if correction, exists := d.Lookup(word); exists {
 			words[i] = correction
 		}
 	}
@@ -104,86 +102,68 @@ type Response struct {
 	Intent        Intent `json:"intent"`
 }
 
-var (
-	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir = flag.String("data-dir", "./data", "Data directory")
-	dict    = NewDictionary()
-)
+func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		correctedText := dict.Correct(req.Text)
+		intent := ClassifyIntent(req.Text)
+
+		resp := Response{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := AppendToFile(dataDir+"/traces.jsonl", req); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := AppendToFile(dataDir+"/usage.jsonl", resp); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	correctedText := dict.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
-
-	resp := Response{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func feedbackHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var feedback Feedback
-	if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
 func main() {
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
-	http.HandleFunc("/v1/feedback", feedbackHandler)
-
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Listening on %s...\n", *addr)
+	dict := NewDictionary()
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+
+	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
 		os.Exit(1)
 	}
 }
