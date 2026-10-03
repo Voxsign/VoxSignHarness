@@ -12,7 +12,12 @@
 #   sh scripts/run_calibration.sh <判据清单文件>
 #
 # 判据清单格式（每行一条，`|` 分隔；`#` 开头为注释）：
-#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）> [| <请求体 JSON>]
+#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）> [| <请求体 JSON>] [| <前提>]
+#
+# ⚠️ **前提列**（2026-10-03 实测第 15/18 条的同族）：
+#   V-03「线 B 不可达 ⇒ 503+degraded」**只在"线 B 不可达"时才有意义**。
+#   线 B 活着时它必然 ✗ —— 而那是**"前提不满足"，不是"产品坏"**。
+#   ⇒ 前提写 `线B不可达` / `线B可用`；不满足时标 **⚠️ 前提不满足**（不算 ✗ 也不算 ✅）。
 #
 # ⚠️ **请求体不是可选的装饰**（2026-10-03 实测）：`/v1/voice` 要求 `{"text":"…"}`，
 #    只发 `{}` ⇒ **400**（`请求体应为 JSON {text}（ASR 识别文本）`）⇒ 判据永远红。
@@ -160,6 +165,15 @@ while IFS= read -r line; do
   want=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
   body=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$6); print $6}')
   [ -z "$body" ] && body='{}'   # 缺省空对象；端点若要求字段，判据里必须显式写
+  pre=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$7); print $7}')
+  # 前提判定：**按实际状态判**，不靠人（否则又会把"前提"写成想当然）
+  PRE_OK=1
+  case "$pre" in
+    *线B不可达*|*线B.*不可达*)
+      curl -sf -m 2 "http://127.0.0.1:$ASR_PORT/v1/health" >/dev/null 2>&1 && PRE_OK=0 ;;
+    *线B可用*|*线B.*可用*)
+      curl -sf -m 2 "http://127.0.0.1:$ASR_PORT/v1/health" >/dev/null 2>&1 || PRE_OK=0 ;;
+  esac
   # ⚠️ **禁止空期望**（2026-10-03 实测事故）：
   # 我曾用 `cmd/vhs-asr` 打 `/v1/voice` 得到 **200**，就当成 PASS ——
   # 而那个 200 是**测试页的 200**（`<!doctype html>`），**不是 `handleVoice` 的 200**。
@@ -177,6 +191,11 @@ while IFS= read -r line; do
   full=$(printf '%s' "$resp" | sed '$d' | tr -d '\n')
   rbody=$(printf '%s' "$full" | cut -c1-120)
 
+  # ⚠️ **前提不满足 ⇒ 三态，不判 ✗**（否则会把"装置前提"误报成"产品红"）
+  if [ -n "$pre" ] && [ "$PRE_OK" != "1" ]; then
+    echo "| $id | $obj | \`$m $p\` | - | **（前提「${pre}」不满足）** | **⚠️ 前提不满足**（不算 ✗ 也不算 ✅） |" >> "$OUT"
+    continue
+  fi
   if printf '%s' "$full" | grep -qF -- "$want"; then
     echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（C 待补 ⇒ ◐） |" >> "$OUT"
   else
@@ -187,7 +206,11 @@ done < "$DATA/.crit"
 R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
 # ⚠️ 失败计数必须覆盖**所有** ✗ 类别 —— 我第一版只数 `✗ 期望`，
 # 于是新加的 `✗ 无效判据` **不被计入** ⇒ 退出码错误地为 0（2026-10-03 实测）
-Z=$(grep -c '✗ ' "$OUT" 2>/dev/null || echo 0)
+# ⚠️ **精确计数**（2026-10-03 第 19 条）：`grep -c '✗ '` 会把 ⚠️ 行里的
+# 「不算 ✗ 也不算 ✅」这句**说明文字**也数进去 ⇒ 统计多报 ✗。
+# ⇒ 只数**判定格**（`| **✗ …` / `| **⚠️ …`），不数叙述里的符号。
+Z=$(grep -c '| \*\*✗ ' "$OUT" 2>/dev/null || echo 0)
+W=$(grep -c '| \*\*⚠️ 前提不满足' "$OUT" 2>/dev/null || echo 0)
 T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
 {
   echo
@@ -196,6 +219,7 @@ T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' |
   echo "判据总数   : $T"
   echo "有 R 证据  : $R"
   echo "✗          : $Z"
+  echo "⚠️ 前提不满足 : $W   ← **不算 ✗ 也不算 ✅**（装置前提，不是产品结论）"
   echo "⇒ 按 skill：**PASS = C + R 双证齐**。有 R 证据仍须补 C 证据（scripts/evidence_collect.sh）。"
   echo '```'
   echo
