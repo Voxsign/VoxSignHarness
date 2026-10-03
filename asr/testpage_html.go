@@ -17,7 +17,11 @@ const testPageHTML = `<!doctype html>
 </style></head><body>
 <h2>VoxSign 本地测试页</h2>
 <p style="color:#666">把光标放进下面的框，用 macOS 听写说话（连按两下 Fn），再点「处理」。</p>
-<textarea id="t" placeholder="点这里，然后用听写说话……"></textarea>
+<textarea id="t" placeholder="点这里，用〔🎤 说话〕录音，或手动粘贴/系统听写……"></textarea>
+<div>
+ <button id="mic" type="button">🎤 说话</button>
+ <span id="michint" style="color:#666;font-size:14px"></span>
+</div>
 <div>
  <button onclick="run()">处理</button>
  <button onclick="teach()">教一个词</button>
@@ -28,6 +32,40 @@ const testPageHTML = `<!doctype html>
 <div id="metrics"></div>
 <h3>最近台账</h3><div id="recent"></div>
 <script>
+// ---- 浏览器原生语音识别（零后端、零 key、零依赖）----
+// ⚠️ 语音经 Apple/Google 的识别服务，不是本地识别（见文档说明）。
+var rec = null;
+function recSupported(){ return typeof window !== 'undefined' && ('webkitSpeechRecognition' in window); }
+function initRec(){
+  var btn = document.getElementById('mic');
+  var hint = document.getElementById('michint');
+  if(!recSupported()){
+    // 优雅降级：置灰 + 明确提示；**不白屏、不静默失败**
+    btn.disabled = true;
+    hint.textContent = '此浏览器不支持语音识别，请手动粘贴或使用系统听写（Fn）';
+    return;
+  }
+  var r = new webkitSpeechRecognition();
+  r.lang = 'zh-CN';
+  r.continuous = false;
+  r.interimResults = true;   // 边说边出字
+  r.onresult = function(e){
+    var ta = document.getElementById('t');
+    var text = '';
+    for(var i = e.resultIndex; i < e.results.length; i++){ text += e.results[i][0].transcript; }
+    ta.value = (ta.dataset.recBase || '') + text;   // **只填字，不自动提交**
+  };
+  r.onend = function(){ document.getElementById('mic').textContent = '🎤 说话'; };
+  rec = r;
+  btn.onclick = function(){
+    var ta = document.getElementById('t');
+    ta.dataset.recBase = ta.value;        // 以点击时的文本为基底（保留手动编辑）
+    btn.textContent = '⏺ 识别中…';
+    r.start();                             // 唯一动作：开始识别（不发任何请求）
+  };
+}
+window.addEventListener('load', initRec);
+
 async function j(url, body){
   const r = await fetch(url, body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
   return r.json();
