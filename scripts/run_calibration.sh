@@ -68,7 +68,7 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 2
 fi
 VHS_ASR_ADDR="127.0.0.1:$PORT" VHS_ASR_DATA="$DATA" VHS_MODEL_CENTER="$VHS_MODEL_CENTER" \
-  "$BIN" > "$LOG" 2>&1 &
+  "$BIN" serve > "$LOG" 2>&1 &
 SRV=$!
 
 # 等服务就绪（真跑不许"睡死了就当起来了"）
