@@ -31,3 +31,7 @@ config/.env*
 *.test
 *.prof
 coverage.out
+
+# 校准快照（calib.sh 生成，不入库）
+.calib-before
+.calib-after
