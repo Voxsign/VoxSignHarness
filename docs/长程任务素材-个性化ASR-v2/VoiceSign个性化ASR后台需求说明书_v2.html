@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>VoiceSign 个性化 ASR 后台 · 需求说明书 v2</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 18mm 15mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", sans-serif;
+    font-size: 11pt; line-height: 1.62; color: #1f2937; margin: 0; padding: 0;
+  }
+  .cover { text-align: left; padding: 10mm 0 6mm 0; border-bottom: 3px solid #1f3a5f; margin-bottom: 8mm; }
+  .cover .doc-title { font-size: 24pt; font-weight: 700; color: #1f3a5f; margin: 0 0 4mm 0; line-height: 1.3; }
+  .cover .doc-sub { font-size: 12pt; color: #475569; margin: 0 0 6mm 0; }
+  .cover table.meta { border-collapse: collapse; width: 100%; font-size: 10pt; }
+  .cover table.meta td { padding: 1.2mm 2mm; border: none; }
+  .cover table.meta td.k { width: 22mm; color: #64748b; font-weight: 600; }
+  h1 { font-size: 16pt; color: #1f3a5f; border-left: 4px solid #1f3a5f; padding-left: 3mm; margin: 8mm 0 3.5mm 0; page-break-after: avoid; }
+  h2 { font-size: 12.5pt; color: #1f3a5f; margin: 5.5mm 0 2.5mm 0; page-break-after: avoid; }
+  h3 { font-size: 11pt; color: #334155; margin: 4mm 0 2mm 0; page-break-after: avoid; }
+  p { margin: 1.5mm 0; }
+  ul, ol { margin: 1.5mm 0 1.5mm 0; padding-left: 6mm; }
+  li { margin: 0.8mm 0; }
+  table { border-collapse: collapse; width: 100%; margin: 2.5mm 0; font-size: 9.5pt; page-break-inside: avoid; }
+  th { background: #eef2f7; color: #1f3a5f; font-weight: 600; }
+  th, td { border: 1px solid #cbd5e1; padding: 1.6mm 2.2mm; text-align: left; vertical-align: top; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #f1f5f9; padding: 0 1mm; border-radius: 2px; color: #0f4c81; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 4mm 5mm; border-radius: 3px; font-size: 9pt; line-height: 1.5; overflow-wrap: break-word; white-space: pre-wrap; page-break-inside: avoid; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .callout { background: #f0f7ff; border: 1px solid #bcd6f5; border-left: 4px solid #1f6feb; padding: 3mm 4mm; margin: 3mm 0; border-radius: 2px; }
+  .warn { background: #fff8e6; border: 1px solid #f0d9a8; border-left: 4px solid #e8a13a; padding: 3mm 4mm; margin: 3mm 0; border-radius: 2px; }
+  .tag { display: inline-block; font-size: 8.5pt; padding: 0.3mm 2mm; border-radius: 2px; margin-right: 1.5mm; font-weight: 600; }
+  .tag.p0 { background: #fde2e2; color: #b91c1c; }
+  .tag.p1 { background: #fff0d9; color: #b45309; }
+  .tag.p2 { background: #e0f2fe; color: #0369a1; }
+  .tag.p3 { background: #e6e6fa; color: #4338ca; }
+  .footer { margin-top: 10mm; padding-top: 3mm; border-top: 1px solid #cbd5e1; font-size: 9pt; color: #94a3b8; }
+  .no-break { page-break-inside: avoid; }
+  .center { text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- ============ 封面 ============ -->
+<div class="cover">
+  <p class="doc-title">VoiceSign 个性化 ASR 后台<br>需求说明书 v2（Go 独立重构）</p>
+  <p class="doc-sub">做一套「越来越懂你」的语音输入理解后台 —— 独立服务、Go 实现、持续个性化、面向未来全双工</p>
+  <table class="meta">
+    <tr><td class="k">文档版本</td><td>v2.0（2026-10-03）</td><td class="k">文档状态</td><td>定稿待评审（可再改）</td></tr>
+    <tr><td class="k">阅读对象</td><td>需求方（本人）、开发实施人员</td><td class="k">配套材料</td><td>《VoiceSign Harness 全景审阅稿 v1》（飞书文档）</td></tr>
+    <tr><td class="k">技术栈</td><td>Go 单二进制 / 独立服务 / JSON 配置 / 零第三方依赖</td><td class="k">边界声明</td><td>本后台与 VoiceSign Harness 解耦，是<strong>独立的语音输入理解服务</strong></td></tr>
+  </table>
+</div>
+
+<!-- ============ 1 ============ -->
+<h1>1. 项目定位与核心目标</h1>
+
+<h2>1.1 一句话定义</h2>
+<p><strong>VoiceSign 个性化 ASR 后台</strong>：一套用 Go 编写的<strong>独立后台服务</strong>，接收手机端传来的语音转写文本（及原始音频），完成「纠错 → 理解 → 个性化增强 → 输出标准化意图」，并且<strong>在使用过程中持续学习用户的口语、专名、习惯与偏好，越用越懂用户</strong>。</p>
+
+<h2>1.2 与 VoiceSign Harness 的关系（重要修正）</h2>
+<div class="callout">
+<p><strong>本模块是纯粹独立的后台，不并入 VoiceSign Harness 二进制，也不与其耦合。</strong></p>
+<ul>
+<li>ASR 后台 = <strong>语音输入理解层</strong>（把用户说的变成机器能执行的意图）；Harness = <strong>任务执行层</strong>（把意图变成真实结果）。两层职责不同、迭代节奏不同，必须解耦。</li>
+<li>ASR 后台通过<strong>标准接口</strong>对外输出意图 JSON，Harness 只是它的一个消费方；未来任何语音入口（手机 App、桌面端、其他设备）都可以复用同一个 ASR 后台。</li>
+<li>两套代码独立仓库、独立部署、独立数据目录；仅共享一套「意图 JSON 契约」，契约版本化、只增不改。</li>
+</ul>
+</div>
+
+<h2>1.3 北极星目标（不可动摇）</h2>
+<ol>
+<li><strong>越来越懂你</strong>：这是本后台存在的唯一理由。系统在使用中持续沉淀你的口语说法、专有名词、指代习惯、项目背景与偏好，个性化能力逐日增强，不依赖一次性配置。</li>
+<li><strong>语音能力很强</strong>：识别结果的纠错、标点、意图理解、控制语义（打断/暂停/撤销）、语音文字双通道都要做到可用、可靠，体验对标豆包语音体系。</li>
+<li><strong>响应极快</strong>：本地规则优先，模型兜底，处理链路微秒到毫秒级，语音说完即出结果，不出现长等待。</li>
+<li><strong>面向未来全双工</strong>：架构从第一天就为「全双工实时语音交互」留好接口与数据模型（见第 9 章），未来实现边说边理解、随时打断、实时反馈。</li>
+</ol>
+
+<!-- ============ 2 ============ -->
+<h1>2. 核心设计思想：个性化的三层递进</h1>
+<p>「越来越懂你」不是一句口号，而是三层能力逐层递进、每一层都在沉淀数据、数据反过来增强下一层的闭环：</p>
+
+<table class="no-break">
+<tr><th style="width:18%">层级</th><th style="width:30%">要解决的问题</th><th>沉淀的个性化数据</th></tr>
+<tr>
+  <td><strong>L1 听清</strong><br>（文本纠错层）</td>
+  <td>语音转写常有错字、同音字、口语碎片、专名错误。例：「季总」实际是「冀总」；「那个 module」实际是某个项目名。</td>
+  <td>自定义词典（口语→标准写法）、纠错经验库、语音置信度标记。</td>
+</tr>
+<tr>
+  <td><strong>L2 听懂</strong><br>（语义理解层）</td>
+  <td>一句话的意图是什么？「它」指什么？「那个文档」是哪个？结合上下文与历史才能正确理解。</td>
+  <td>指代消解缓存（意图/域/权限/指代 四元组）、对话上下文记忆、意图置信度。</td>
+</tr>
+<tr>
+  <td><strong>L3 懂你</strong><br>（个人画像层）</td>
+  <td>同一个词在不同人嘴里含义不同；同一件事在不同人场景下期望不同。需要结合个人偏好、项目知识、决策历史做个性化理解。</td>
+  <td>用户偏好 prefs、项目地图 project-map、决策日志 decisions-log、领域知识、使用模式统计。</td>
+</tr>
+</table>
+
+<div class="callout">
+<p><strong>核心公式：个性化 = 数据 × 规则 × 反馈闭环</strong></p>
+<ul>
+<li><strong>数据</strong>：每一次语音输入、每一次用户确认、每一次纠错都留痕（append-only），形成私有复利资产。</li>
+<li><strong>规则</strong>：本地规则（词典、缓存、模式）优先，零模型调用，保证速度与确定性。</li>
+<li><strong>反馈闭环</strong>：用户改一个字、确认一个指代、纠正一次识别 —— 系统立即学习并固化，下次直接用，越用越准。</li>
+</ul>
+</div>
+
+<!-- ============ 3 ============ -->
+<h1>3. 系统架构（独立服务）</h1>
+
+<h2>3.1 总体架构</h2>
+<pre><code>┌──────────────────┐     音频      ┌────────────────────────────┐
+│  手机端 App       │ ────────────→ │  系统级/第三方 ASR 引擎     │
+│ （语音交互界面）   │               │  （豆包/系统语音转文字）     │
+└──────────────────┘               └────────────┬───────────────┘
+                                                │ 转写文本 (input_raw)
+                                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              VoiceSign 个性化 ASR 后台（Go，独立服务）            │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐  │
+│  │ 1 留底   │→│ 2 清洗   │→│ 3 词典   │→│ 4 上下文 │→│ 5 指代    │  │
+│  │ input_raw│ │ 语气词   │ │ 纠错    │ │ 相关性  │ │ 消解     │  │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └──────────┘  │
+│  ┌─────────┐ ┌─────────┐ ┌──────────────────────────────────┐  │
+│  │ 6 意图   │→│ 7 域建议 │→│ 8 输出标准化意图 JSON              │  │
+│  │ 解析     │ │ +控制语义│ │  {type,path,params,confidence}   │  │
+│  └─────────┘ └─────────┘ └──────────────────────────────────┘  │
+│  个性化数据层：custom-dictionary / context-memory / user-profile │
+│                / project-knowledge / exceptions-knowledge       │
+└────────────────────────────────────┬────────────────────────────┘
+                                     │ 意图 JSON（HTTP/WS）
+                                     ▼
+                    VoiceSign Harness（执行层） / 其他消费方</code></pre>
+
+<h2>3.2 分层设计原则</h2>
+<ul>
+<li><strong>单向依赖</strong>：管线 1→8 顺序固定，每一层只依赖前一层输出，不反向调用。</li>
+<li><strong>本地规则优先，模型兜底</strong>：只有本地规则无法解决时，才调用模型中心；模型调用带超时，超时即降级，绝不阻塞。</li>
+<li><strong>个性化数据与代码分离</strong>：全部个性化知识存 JSON/JSONL 文件，代码只提供处理逻辑，两者独立演进。</li>
+<li><strong>输出契约稳定</strong>：对外只输出标准意图 JSON，任何消费方（Harness、测试、未来应用）按契约接入。</li>
+</ul>
+
+<!-- ============ 4 ============ -->
+<h1>4. 功能需求清单（开发实施范围）</h1>
+
+<h2>4.1 基础服务能力 <span class="tag p0">P0</span></h2>
+<table>
+<tr><th style="width:22%">需求项</th><th>具体要求</th></tr>
+<tr><td>独立服务</td><td>Go 编写、独立进程/二进制部署，与 Harness 无代码耦合；提供 HTTP 接口 + 未来 WebSocket。</td></tr>
+<tr><td>原始留底</td><td>每次输入永久保存 <code>input_raw</code>（原始转写文本），append-only，不可篡改；后续所有纠错/清洗都是在其上的派生，便于归因。</td></tr>
+<tr><td>全链路日志</td><td>每一步处理（留底→清洗→纠错→上下文→指代→意图→域建议）写入轨迹 JSONL，带耗时与命中来源，可完全复现。</td></tr>
+<tr><td>性能基线</td><td>本地规则路径（无模型调用）目标 &lt; 1ms；含模型兜底路径设超时（默认 3s）与并发保护，超时自动走降级。</td></tr>
+<tr><td>配置</td><td>全部 JSON 文件，不用 YAML；支持热加载（词典/偏好变更即时生效）。</td></tr>
+</table>
+
+<h2>4.2 个性化词典 <span class="tag p0">P0</span>（L1 听清的核心）</h2>
+<ul>
+<li>条目结构：<code>{raw_speech: 口语/错词, target: 标准写法, scope: 全局|项目, priority: 优先级, source: 来源}</code>。</li>
+<li>典型场景：人名（「季总→冀总」）、项目名、专有名词、口头禅映射、方言口音修正。</li>
+<li>支持<strong>语音指令动态增删改</strong>：用户说「记住，冀总是冀中的冀」「删掉这个词」，后台解析为词典操作并落盘。</li>
+<li>匹配策略：全词优先、最长匹配优先；同词多条命中取最高优先级；命中后标记纠错来源与置信度。</li>
+<li>纠错安全：高置信纠错直接替换；低置信纠错输出「疑似纠错」标记，交上层回问，绝不静默改错。</li>
+<li>词典可导出/导入，版本可回溯（append-only + 快照）。</li>
+</ul>
+
+<h2>4.3 文本清洗与纠错 <span class="tag p0">P0</span></h2>
+<ul>
+<li>去除 ASR 常见的语气词、重复词、口误碎片（「嗯」「那个」「就是就是」），保留语义。</li>
+<li>标点恢复：为转写文本补全标点，提升下游意图解析准确率（M7 真机遗留项，必须闭环）。</li>
+<li>识别置信度标记：对 ASR 引擎返回的低置信片段打标，进入纠错或回问流程，不直接执行。</li>
+<li>清洗全过程保留原始输入，输出带清洗说明（改了哪里、为什么）。</li>
+</ul>
+
+<h2>4.4 指代消解 <span class="tag p1">P1</span>（L2 听懂的核心）</h2>
+<table>
+<tr><th style="width:22%">层级</th><th>机制</th></tr>
+<tr><td>第一层：词典/实体库</td><td>「它=最近提到的实体」「这个项目=当前域项目」，本地实体索引，零模型调用，100% 确定才替换。</td></tr>
+<tr><td>第二层：上下文规则</td><td>读取最近 N 轮对话上下文（四元组缓存 {意图, 域, 权限, 指代}），按规则匹配指代对象。</td></tr>
+<tr><td>第三层：模型兜底</td><td>仅前两层无法解决时调用模型推断；输出带置信度。</td></tr>
+</table>
+<ul>
+<li>低置信度指代 → 输出 <code>need_disambiguate</code> 标记，触发回问确认（一屏一决策，只问一次）。</li>
+<li>用户确认后<strong>自动固化进缓存</strong>，下次直接复用；缓存带过期策略（如 7 天）与容量上限。</li>
+<li>「打断/暂停/撤销」三个控制语义必须识别并优先于普通指代处理。</li>
+</ul>
+
+<h2>4.5 上下文个性化记忆 <span class="tag p1">P1</span>（L3 懂你的核心）</h2>
+<ul>
+<li>数据源：<code>user-preferences.json</code>（偏好）、<code>project-map.json</code>（项目地图）、<code>decisions-log.jsonl</code>（历史决策）、领域知识库。</li>
+<li>用法：根据当前输入做<strong>相关性检索</strong>，只把相关片段注入解析过程，<strong>绝不全量加载</strong>历史。</li>
+<li>检索结果只做理解增强，不直接改写原始输入；输出 JSON 中携带命中的上下文来源。</li>
+<li>异步低频更新（偏好/项目知识变更后增量更新索引），不阻塞实时请求。</li>
+<li>使用模式统计：高频说法、常见意图、活跃时段、确认率 —— 反哺词典权重与确认策略。</li>
+</ul>
+
+<h2>4.6 意图解析与标准化输出 <span class="tag p0">P0</span></h2>
+<ul>
+<li>输出标准化意图 JSON：<code>{type, path, params, confidence, need_disambiguate?, domain_suggestion?, control?}</code>。</li>
+<li>意图类型对齐 Harness 现有 8 类 + ORCHESTRATE（EDIT / DEBUG / QUERY / TEST / COMMIT / DEPLOY / NOTE / ASK / ORCHESTRATE），兼容现有消费方。</li>
+<li>控制语义独立输出：识别到「停/暂停/撤销」等，直接返回控制意图，不进入业务执行。</li>
+<li>规则优先分类（关键词/词典/模式），模型兜底；置信度低于阈值 → 回问或转 ASK。</li>
+</ul>
+
+<h2>4.7 域（Space）建议 <span class="tag p1">P1</span></h2>
+<ul>
+<li>根据意图与资源路径输出<strong>候选域建议</strong>（如 project / sandbox / vault-notes / global），交由上层权限门禁裁决。</li>
+<li>原则：默认拒绝；未知意图落到 global 只读域，<strong>绝不猜测高权限域</strong>。</li>
+<li>ASR 后台只建议、不授权；权限校验永远在消费方（Harness 的 Space.Check）执行，本服务不绕过。</li>
+</ul>
+
+<h2>4.8 反馈学习闭环 <span class="tag p1">P1</span>（越用越懂你的机制）</h2>
+<table class="no-break">
+<tr><th style="width:30%">反馈来源</th><th>学习动作</th></tr>
+<tr><td>用户手动修改识别结果（语音文字双通道）</td><td>差异分析 → 生成/强化词典条目（带来源与时间）→ 下次直接命中。</td></tr>
+<tr><td>用户确认/纠正指代</td><td>固化四元组缓存，提升对应指代规则权重。</td></tr>
+<tr><td>用户确认/否认纠错建议</td><td>调整词典条目优先级；否认次数超阈值 → 条目降权或移除。</td></tr>
+<tr><td>下游执行反馈（Harness 报错/成功）</td><td>写入异常知识库 / 使用模式统计，反哺词典与意图权重。</td></tr>
+<tr><td>高频反复确认（确认疲劳）</td><td>记录确认行为，缓存确认结果、限制重复弹窗；不可逆操作仍强制确认。</td></tr>
+</table>
+<p>所有学习动作<strong>可审计</strong>：来源、时间、影响条目、是否生效，全部留痕。</p>
+
+<h2>4.9 异常与降级 <span class="tag p2">P2</span></h2>
+<ul>
+<li>内部错误（词典文件损坏、缓存异常、解析失败）→ 错误指纹 → 对接诊断链路（可回写异常知识库）。</li>
+<li><strong>fail-open</strong>：任何个性化组件故障时自动跳过，返回基础处理结果，保证语音输入链路 100% 有响应。</li>
+<li>模型兜底调用失败/超时 → 降级为本地规则结果 + 标记 <code>degraded</code>，不阻塞、不空回。</li>
+</ul>
+
+<!-- ============ 5 ============ -->
+<h1>5. 数据模型与持久化</h1>
+<p>全部本地 JSON/JSONL 存储，append-only，重启不丢；独立数据目录（如 <code>~/.voicesign/asr/</code>），与 Harness 数据分离。</p>
+<table>
+<tr><th style="width:30%">文件</th><th>内容</th><th style="width:18%">类型</th></tr>
+<tr><td><code>custom-dictionary.json</code></td><td>个性化词典条目（口语→标准，作用域/优先级/来源）</td><td>JSON + 快照</td></tr>
+<tr><td><code>context-memory.json</code></td><td>指代四元组缓存、对话上下文、确认固化结果</td><td>JSON，带过期</td></tr>
+<tr><td><code>user-preferences.json</code></td><td>用户偏好（确认策略、默认域、纠错强度等）</td><td>JSON</td></tr>
+<tr><td><code>project-knowledge.json</code></td><td>项目地图、领域术语、决策摘要（供相关性检索）</td><td>JSON</td></tr>
+<tr><td><code>exceptions-knowledge.jsonl</code></td><td>异常知识库（错误指纹→根因→修正经验）</td><td>JSONL append-only</td></tr>
+<tr><td><code>traces-asr.jsonl</code></td><td>全链路轨迹（输入/每步处理/耗时/来源/输出）</td><td>JSONL append-only</td></tr>
+<tr><td><code>usage-patterns.json</code></td><td>使用模式统计（高频说法/意图/时段/确认率）</td><td>JSON 聚合</td></tr>
+</table>
+
+<!-- ============ 6 ============ -->
+<h1>6. 对外接口定义（示意）</h1>
+<pre><code>POST /v1/process            # 文本 → 标准化意图 JSON（主入口）
+POST /v1/correct            # 仅纠错：文本 → 纠错后文本 + 纠错明细
+POST /v1/dictionary         # 词典增删改查（支持语音指令转操作）
+POST /v1/feedback           # 反馈学习：用户修改/确认/否认 → 触发学习
+GET  /v1/health             # 健康检查
+WS   /v1/stream             # 流式处理（全双工预留，见第 9 章）
+
+# 请求示例（/v1/process）
+{ "text": "把那个模块的错误提示改成中文", "session_id": "s1",
+  "audio_meta": {"engine":"system","confidence":0.86,"lang":"zh"} }
+
+# 响应示例
+{ "type": "EDIT", "path": "modules/quote", "params": {"action":"i18n","target":"zh"},
+  "confidence": 0.88, "domain_suggestion": ["project:voicesign-harness"],
+  "traces": [{"step":"clean","ms":0.2},{"step":"dict","hit":"模块→报价模块","ms":0.3}] }</code></pre>
+
+<!-- ============ 7 ============ -->
+<h1>7. 非功能需求</h1>
+<table>
+<tr><th style="width:22%">维度</th><th>要求</th></tr>
+<tr><td>性能</td><td>本地路径 &lt; 1ms；模型兜底超时 3s 且并发受限；绝不阻塞语音输入链路。</td></tr>
+<tr><td>可靠性</td><td>fail-open 兜底；数据 append-only 不丢历史；重启快速恢复。</td></tr>
+<tr><td>可观测</td><td>轨迹 JSONL 全链路留痕；每步耗时、命中来源、置信度可查。</td></tr>
+<tr><td>隐私</td><td>个性化数据全部本地存储，不上传；用户可导出/清除个人数据。</td></tr>
+<tr><td>安全</td><td>接口鉴权（本地回环优先）；不执行任何业务动作，天然低风险面。</td></tr>
+<tr><td>兼容</td><td>意图 JSON 契约与 Harness 现有 8 类 + ORCHESTRATE 完全兼容，只增不改。</td></tr>
+</table>
+
+<!-- ============ 8 ============ -->
+<h1>8. 边界与红线（开发必须遵守）</h1>
+<ul>
+<li><strong>只做语音输入理解，不做业务执行</strong>：本服务永不直接执行任务（不改文件、不提交、不部署），执行永远在消费方。</li>
+<li><strong>不并入 Harness</strong>：独立仓库、独立部署、独立数据目录，仅共享意图契约。</li>
+<li><strong>不做无人自治</strong>：高风险个性化修改（删除词典、改偏好、扩权限）仍需用户确认；低置信一律回问，不静默执行。</li>
+<li><strong>不无界膨胀</strong>：缓存/知识库必须有容量上限与过期策略，防止文件无限增长。</li>
+<li><strong>纠错不过度</strong>：纠错必须带置信度与来源，低置信不直接替换用户原意。</li>
+<li><strong>不依赖外部模型做关键路径</strong>：模型只做兜底，核心路径本地规则完成。</li>
+</ul>
+
+<!-- ============ 9 ============ -->
+<h1>9. 未来能力演进路线图（全双工愿景）</h1>
+<p>架构从第一天为以下能力预留接口与数据模型，按里程碑逐步实现：</p>
+<table>
+<tr><th style="width:12%">阶段</th><th style="width:38%">能力</th><th>说明</th></tr>
+<tr>
+  <td><span class="tag p0">P0</span><br>立即可做</td>
+  <td>独立服务 + 词典纠错 + 意图 JSON + 语音文字双通道</td>
+  <td>先跑通「语音→意图」主线，纠错与双通道闭环（含标点恢复）。</td>
+</tr>
+<tr>
+  <td><span class="tag p1">P1</span><br>近期</td>
+  <td>指代消解 + 上下文注入 + 反馈学习闭环 + 域建议</td>
+  <td>三层理解全部上线，越用越懂你的复利机制开始运转。</td>
+</tr>
+<tr>
+  <td><span class="tag p2">P2</span><br>中期</td>
+  <td>流式处理（WS）+ 实时纠错预览 + 多语言（中/英/阿）</td>
+  <td>边说边出结果（partial results），体验向全双工过渡。</td>
+</tr>
+<tr>
+  <td><span class="tag p3">P3</span><br>远期</td>
+  <td><strong>全双工实时语音交互（Full-Duplex）</strong></td>
+  <td>用户说话过程中系统持续理解、可随时打断、实时反馈；支持多轮连续对话不重启；语音能力全面对标豆包并超出。</td>
+</tr>
+</table>
+<div class="callout">
+<p><strong>全双工（Full-Duplex）定义</strong>：用户与系统可以同时「说话」，系统在用户话语未说完时即开始理解，用户可随时打断系统，系统实时给出反馈 —— 这是「语音能力很强」的终极形态，也是本后台长期演进方向。当前阶段先把文本级个性化理解做扎实，全双工基于同一套个性化数据与意图契约自然生长。</p>
+</div>
+
+<!-- ============ 10 ============ -->
+<h1>10. 风险与开发注意点</h1>
+<table>
+<tr><th style="width:26%">风险</th><th>对策</th></tr>
+<tr><td>个性化数据无限膨胀</td><td>容量上限 + 过期策略 + 聚合统计，定期压缩归档。</td></tr>
+<tr><td>词典纠错过度/改错原意</td><td>置信度分级：高置信替换、低置信回问；来源留痕可回滚。</td></tr>
+<tr><td>模型兜底拖慢响应</td><td>本地优先 + 超时 + 并发限制 + fail-open 降级。</td></tr>
+<tr><td>与 Harness 契约漂移</td><td>意图契约版本化、只增不改；CI 校验两侧 schema 一致。</td></tr>
+<tr><td>旧数据迁移</td><td>v1 阶段若有词典/缓存残留，提供迁移脚本，不直接丢弃。</td></tr>
+<tr><td>成为第二个「执行引擎」</td><td>红线约束：永不执行业务动作；权限永远在消费方。</td></tr>
+</table>
+
+<!-- ============ 11 ============ -->
+<h1>11. 验收标准</h1>
+<ol>
+<li>Go 独立服务可编译、可部署，与 Harness 无代码耦合；仅通过意图契约对接。</li>
+<li>输入转写文本 → 输出标准意图 JSON，可直接被 Harness 消费；8 类 + ORCHESTRATE 全部兼容。</li>
+<li>词典支持语音指令增删改，立即生效且持久化，重启不丢。</li>
+<li>标点恢复、清洗、纠错全链路有留痕与明细，可复现。</li>
+<li>指代消解三层机制运行；低置信输出 <code>need_disambiguate</code> 并触发回问；确认后固化复用。</li>
+<li>反馈学习闭环：手动改字/确认/否认 → 词典与缓存更新 → 下次命中。</li>
+<li>模型兜底超时/失败时，系统不卡死，fail-open 返回基础结果并标记 <code>degraded</code>。</li>
+<li>全链路轨迹 JSONL 记录每一步处理与耗时；本地路径性能 &lt; 1ms（基准可测）。</li>
+<li>数据目录独立、格式为 JSON/JSONL、append-only，可导出可清除。</li>
+</ol>
+
+<div class="footer">
+<p>本文档由 VoiceSign 项目全景审阅稿 v1 中的全部个性化诉求整理而成，并依需求方最新指示修正：ASR 后台为独立服务、核心目标为个性化语音识别（越用越懂你）、面向未来全双工。文档可继续修订。</p>
+</div>
+
+</body>
+</html>
