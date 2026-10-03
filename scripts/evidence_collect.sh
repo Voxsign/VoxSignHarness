@@ -126,10 +126,13 @@ done
 
 # ⚠️ 上面的 while 在子 shell 里，rc 传不出来 ⇒ 用文件计数重算（不使用管道读 rc）
 # ⚠️ 计数必须排除表头行（`| 判据 | 要证明的事实 |…`）—— 我第一版没排除，总数多算了 1
-T=$(grep -E '^\| [^|]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
-Z=$(grep -c '✗ 无 C 证据' "$OUT" 2>/dev/null || echo 0)
-W=$(grep -c '⚠️ 命名未对上' "$OUT" 2>/dev/null || echo 0)
-C=$(grep -c 'C ✅' "$OUT" 2>/dev/null || echo 0)
+# ⚠️ 2026-10-03 bug 修复：`grep -c ... || echo 0` 在无匹配时 grep 已输出 "0" 且 exit 1，
+#    `|| echo 0` 再输出一个 "0" ⇒ 变量变 "0\n0" ⇒ `[ "$Z" -gt 0 ]` 报 integer expression expected。
+#    直接去掉 `|| echo 0`（grep -c 无匹配天然输出 0）。
+T=$(grep -E '^\| [^|]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ')
+Z=$(grep -c '✗ 无 C 证据' "$OUT" 2>/dev/null)
+W=$(grep -c '⚠️ 命名未对上' "$OUT" 2>/dev/null)
+C=$(grep -c 'C ✅' "$OUT" 2>/dev/null)
 {
   echo
   echo "## 统计"

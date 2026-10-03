@@ -332,10 +332,12 @@ R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
 # ⚠️ **精确计数**（2026-10-03 第 19 条）：`grep -c '✗ '` 会把 ⚠️ 行里的
 # 「不算 ✗ 也不算 ✅」这句**说明文字**也数进去 ⇒ 统计多报 ✗。
 # ⇒ 只数**判定格**（`| **✗ …` / `| **⚠️ …`），不数叙述里的符号。
-Z=$(grep -c '| \*\*✗ ' "$OUT" 2>/dev/null || echo 0)
-W=$(grep -c '| \*\*⚠️ 前提不满足' "$OUT" 2>/dev/null || echo 0)
-K=$(grep -c '◐ 弱断言' "$OUT" 2>/dev/null || echo 0)
-N=$(grep -c '⚠️ 不适用' "$OUT" 2>/dev/null || echo 0)
+# ⚠️ 2026-10-03 bug 修复：去掉 `|| echo 0`（grep -c 无匹配时已输出 "0" 且 exit 1，
+#    `|| echo 0` 会再加一个 "0" ⇒ "0\n0" ⇒ `[ "$Z" -gt 0 ]` integer expression expected）。
+Z=$(grep -c '| \*\*✗ ' "$OUT" 2>/dev/null)
+W=$(grep -c '| \*\*⚠️ 前提不满足' "$OUT" 2>/dev/null)
+K=$(grep -c '◐ 弱断言' "$OUT" 2>/dev/null)
+N=$(grep -c '⚠️ 不适用' "$OUT" 2>/dev/null)
 T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
 {
   echo
