@@ -35,7 +35,8 @@ func initGitRepo(t *testing.T, dir string) {
 	add := exec.Command("git", "add", "README.md")
 	add.Dir = dir
 	_ = add.Run()
-	cm := exec.Command("git", "commit", "-m", "baseline")
+	// 身份用**命令级 -c 注入**（不写任何 config ⇒ 无副作用，也不依赖全局身份）
+	cm := exec.Command("git", "-c", "user.email=vhs-test@example.com", "-c", "user.name=vhs-test", "commit", "-m", "baseline")
 	cm.Dir = dir
 	if out, err := cm.CombinedOutput(); err != nil {
 		t.Fatalf("baseline commit failed: %s", out)

@@ -516,7 +516,8 @@ func archInitGitRepo(t *testing.T, dir string) {
 		// vhs@test / vhs-test@example.com / vhs-arch@example.com 三个测试身份之一）、
 		// 并把 core.bare 置 true ⇒ 仓库被当裸库。
 		// ⇒ 身份改由**全局配置回落**；若需注入，用命令级 `-c user.email=...`。
-		{"config", "commit.gpgsign", "false"},
+		// commit.gpgsign 也**不写 config**（同因：config 会写"从 cwd 上溯找到的仓库"）
+		// ⇒ 改在 commit 时用命令级 `-c commit.gpgsign=false` 注入
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -527,7 +528,12 @@ func archInitGitRepo(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# arch fixture baseline\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-q", "-m", "baseline"}} {
+	for _, args := range [][]string{
+		{"add", "README.md"},
+		// 身份与签名开关一律**命令级 -c 注入**（不写 config ⇒ 无副作用，也不依赖全局身份）
+		{"-c", "user.email=vhs-arch@example.com", "-c", "user.name=vhs-arch",
+			"-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline"},
+	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
