@@ -58,5 +58,6 @@ func (c *Cache) ClearTaught() int {
 		kept = append(kept, a)
 	}
 	s.aliases = kept
+	c.rebuildAliasIndexesLocked(s)
 	return removed
 }
