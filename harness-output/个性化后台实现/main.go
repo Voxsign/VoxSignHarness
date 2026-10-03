@@ -73,10 +73,9 @@ func classifyIntent(text string) Intent {
 		return EDIT
 	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
-	} else if strings.HasPrefix(text, "orchestrate") {
+	} else {
 		return ORCHESTRATE
 	}
-	return NOTE
 }
 
 type Feedback struct {
@@ -114,14 +113,13 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 		var request struct {
 			Text string `json:"text"`
 		}
-
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
 		correctedText := dict.Correct(request.Text)
-		intent := classifyIntent(request.Text)
+		intent := classifyIntent(correctedText)
 
 		response := struct {
 			CorrectedText string `json:"corrected_text"`
@@ -131,10 +129,7 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 			Intent:        intent,
 		}
 
-		if err := appendToFile(dataDir+"/traces.jsonl", response); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+		appendToFile(dataDir+"/traces.jsonl", response)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -154,10 +149,7 @@ func feedbackHandler(dataDir string) http.HandlerFunc {
 			return
 		}
 
-		if err := appendToFile(dataDir+"/feedback.jsonl", feedback); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+		appendToFile(dataDir+"/feedback.jsonl", feedback)
 
 		w.WriteHeader(http.StatusOK)
 	}
