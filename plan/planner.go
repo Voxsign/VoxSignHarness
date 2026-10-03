@@ -56,17 +56,19 @@ type LocalPlanner struct{}
 
 // 目标关键词 → 必需能力。缺失即"做不到"（不猜、不编）。
 var requirementRules = []struct {
-	words  []string
-	tool   string
-	reason string
+	words []string
+	tool  string
+	auth  bool   // true = 不可逆/生产影响 ⇒ 授权在前（U1：授权才是本质）
+	kind  string // 网关请求类型：工具 | 模型（U3/C3）
 }{
-	{[]string{"部署", "上线", "deploy"}, "deploy", "网关：缺 deploy 能力（tools/registry.go 无 deploy 契约；域别名 deploy 不是可执行能力），走单一网关提需求"},
-	{[]string{"发布到生产", "生产发布"}, "release", "网关：缺 release 能力（无发布契约），走单一网关提需求"},
-	{[]string{"推到", "推送", "push", "远端分支"}, "push", "网关：缺 push 能力（git 契约只有 status/diff/log/commit/checkout），走单一网关提需求"},
-	{[]string{"上架", "app store", "软件商店", "应用商店"}, "appstore", "网关：缺上架/发布能力（无对应契约），走单一网关提需求"},
-	{[]string{"邮件", "email", "发信"}, "email", "网关：缺外发/邮件能力（清单里无 http/邮件契约；域词表 http 只是别名），走单一网关提需求"},
-	{[]string{"上传", "upload"}, "upload", "网关：缺上传能力（无对应契约），走单一网关提需求"},
-	{[]string{"删除", "删掉", "移除文件", "rm "}, "delete", "人：删除不可逆，须人工确认后另行授权；本规划器不提供 delete 能力"},
+	{[]string{"部署", "上线", "deploy"}, "deploy", true, "工具"},
+	{[]string{"发布到生产", "生产发布"}, "release", true, "工具"},
+	{[]string{"删除", "删掉", "移除文件", "rm "}, "delete", true, "工具"},
+	{[]string{"推到", "推送", "push", "远端分支"}, "push", false, "工具"},
+	{[]string{"上架", "app store", "软件商店", "应用商店"}, "appstore", false, "工具"},
+	{[]string{"邮件", "email", "发信"}, "email", false, "工具"},
+	{[]string{"上传", "upload"}, "upload", false, "工具"},
+	{[]string{"判断一下", "评估一下", "帮我判断", "帮我评估"}, "model-judgment", false, "模型"},
 }
 
 // bypassWords 是"要求跳过确认"的口语形态（F3：不得无声执行被保护动作）。
@@ -196,7 +198,10 @@ func selfServiceSteps(g string) []Step {
 	}}
 }
 
-// gapRequirements 返回目标涉及的、清单里不具备的能力（带 owner 前缀）。
+// gapRequirements 返回目标的缺口条目（C1–C4）：
+//   - 授权类 `人：`；能力类 `网关：`（并标明网关请求类型：工具/模型）；
+//   - 同一目标可同时有两类缺口，**授权在前**（C2）；
+//   - 不可逆/生产影响的动作必须有人工确认指向（C4）。
 func gapRequirements(goal string, m Manifest) []string {
 	have := map[string]bool{}
 	for _, c := range m.Tools {
@@ -205,30 +210,24 @@ func gapRequirements(goal string, m Manifest) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range requirementRules {
-		if !containsAny(goal, r.words...) || have[r.tool] || seen[r.reason] {
+		if !containsAny(goal, r.words...) || seen[r.tool] {
 			continue
 		}
-		seen[r.reason] = true
-		out = append(out, r.reason)
+		seen[r.tool] = true
+		if r.auth {
+			out = append(out, "人："+r.tool+" 属不可逆/生产影响动作，须人工授权（授权是前置）")
+		}
+		if !have[r.tool] {
+			out = append(out, "网关：且当前无 "+r.tool+" 能力（请求类型="+r.kind+"；域别名不是工具契约）")
+		}
 	}
 	return out
 }
 
-// unmetRequirement 报告目标是否要求清单里不具备的能力。
+// unmetRequirement 报告目标是否要求清单里不具备的能力（保留给模型式复核使用）。
 func unmetRequirement(goal string, m Manifest) ([]string, bool) {
-	have := map[string]bool{}
-	for _, c := range m.Tools {
-		have[c.Name] = true
-	}
-	for _, r := range requirementRules {
-		if !containsAny(goal, r.words...) {
-			continue
-		}
-		if !have[r.tool] {
-			return []string{r.reason}, false
-		}
-	}
-	return nil, true
+	gaps := gapRequirements(goal, m)
+	return gaps, len(gaps) == 0
 }
 
 func missingTools(m Manifest, steps []Step) []string {

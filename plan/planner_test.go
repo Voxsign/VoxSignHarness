@@ -62,8 +62,9 @@ func TestPlanCapabilityGapRefusedWithOwner(t *testing.T) {
 	if !got.Refused || len(got.Steps) != 0 {
 		t.Fatalf("能力缺口应拒绝且不编步骤: %+v", got)
 	}
-	if len(got.Missing) == 0 || !strings.HasPrefix(got.Missing[0], "网关：") {
-		t.Errorf("Missing 必须带 owner 前缀: %+v", got.Missing)
+	// C1/C2：授权类在前（人：），能力类随后（网关：）——deploy 当前两者都缺。
+	if len(got.Missing) < 2 || !strings.HasPrefix(got.Missing[0], "人：") || !strings.HasPrefix(got.Missing[1], "网关：") {
+		t.Errorf("deploy 应「人：授权在前 + 网关：能力在后」: %+v", got.Missing)
 	}
 }
 
@@ -87,7 +88,13 @@ func TestPlanPartialPlansReachablePrefix(t *testing.T) {
 	if len(got.Steps) == 0 {
 		t.Fatal("可达前缀应有步骤")
 	}
-	if len(got.Missing) == 0 || !strings.HasPrefix(got.Missing[0], "网关：") {
+	hasGateway := false
+	for _, mi := range got.Missing {
+		if strings.HasPrefix(mi, "网关：") {
+			hasGateway = true
+		}
+	}
+	if !hasGateway {
 		t.Errorf("不可达尾巴必须进 Missing 且带 owner: %+v", got.Missing)
 	}
 	if !got.Degraded {

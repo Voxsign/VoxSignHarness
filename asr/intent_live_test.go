@@ -60,4 +60,12 @@ func TestLiveIntentModelFallbackAndRealTimeout(t *testing.T) {
 		t.Logf("降级原因（供核对）: %s", to.DegradedReason)
 	}
 	t.Logf("live 真实超时降级 OK：%v，原因=%s", elapsed, to.DegradedReason)
+
+	// ③ 生产超时（3s）真跑：VHS_INTENT_3S=1 时执行（默认跳过以保持 live 快速）。
+	if os.Getenv("VHS_INTENT_3S") == "1" {
+		start3 := time.Now()
+		p3 := ClassifyIntentWith(context.Background(), "嗯这个东西吧", reg, DefaultIntentTimeout)
+		t.Logf("live 3s 路径：elapsed=%v degraded=%v type=%s reason=%q",
+			time.Since(start3), p3.Degraded, p3.Type, p3.DegradedReason)
+	}
 }
