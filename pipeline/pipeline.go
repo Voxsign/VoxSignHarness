@@ -749,6 +749,8 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 		if strings.Contains(catalog, name) || strings.Contains(catalog, "validate-align") {
 			catalogSource = "aiops-remote"
 		}
+	} else if err != nil {
+		log.Printf("[execSkill] aiops 清单不可用，降级本地镜像: %v", err)
 	}
 	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
 	if _, err := os.Stat(skillMD); err != nil {
@@ -777,9 +779,9 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	if objName == "" {
 		objName = "VoiceSign-ASR"
 	}
-	report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
+		report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
 		"> 由 VoiceSign Harness 技能调用链（ORCHESTRATE kind=skill：发现→选择→调用→证据）自动生成。\n\n" +
-		skillReportBody(name, action, readRecv.Stdout, doc)
+		skillReportBody(name, action, readRecv.Stdout, doc, catalogSource)
 	reportName := sanitizePathPart(objName) + "-" + sanitizePathPart(action) + "报告.md"
 	reportAbs := filepath.Join(root, "harness-output", "skill-"+sanitizePathPart(name), reportName)
 	clean, ok := space.ResolveScopePath(root, reportAbs)
@@ -807,11 +809,11 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 }
 
 // skillReportBody 组装技能产出报告（确定性）：技能流程骨架 + 校准对象摘要 + 判据清单占位。
-func skillReportBody(name, action, skillMDContent, doc string) string {
+func skillReportBody(name, action, skillMDContent, doc, catalogSource string) string {
 	var sb strings.Builder
 	sb.WriteString("## 技能信息\n\n")
 	sb.WriteString("- 技能：" + name + "\n- 动作：" + action + "\n")
-	sb.WriteString("- 依据：技能 SKILL.md（本地镜像，见文末摘录）\n\n")
+	sb.WriteString("- 依据：技能 SKILL.md（清单来源=" + catalogSource + "，见文末摘录）\n\n")
 
 	sb.WriteString("## 技能流程（从 SKILL.md 提取的步骤骨架）\n\n")
 	var steps []string
