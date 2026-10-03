@@ -151,3 +151,30 @@ func TestK6ClearAndRebuildConsistent(t *testing.T) {
 		t.Error("[K6] L1 重载后别名丢失（缓存不可重建）")
 	}
 }
+
+// K7：定期刷新（启动一次 + TTL 周期）；失败保留本地数据并标 unknown。
+func TestK7ScheduledRefreshAndFailOpen(t *testing.T) {
+	calls := 0
+	c := newTestCache(t, true, &calls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := c.StartRefresh(ctx, 20*time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for calls < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	stop()
+	if calls < 2 {
+		t.Fatalf("[K7] 定期刷新未生效: calls=%d", calls)
+	}
+	// 失败 fail-open：本地数据保留 + unknown
+	cf := newTestCache(t, false, new(int))
+	cf.PutAlias("爱ops", "aiops", "local")
+	snap := cf.Refresh(context.Background())
+	if snap.Status != StatusUnknown {
+		t.Errorf("[K7] 刷新失败未标 unknown: %+v", snap)
+	}
+	if _, ok := cf.Lookup("爱ops"); !ok {
+		t.Error("[K7] 刷新失败把本地数据清掉了（应 fail-open 保留）")
+	}
+}
