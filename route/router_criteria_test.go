@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -433,7 +434,7 @@ func TestQualityComparisonAndBackwardCompat(t *testing.T) {
 	for i := 0; i < MinSamplesForVerdict; i++ {
 		recs = append(recs, Record{
 			At: "2026-10-03T00:01:00Z", Level: LevelL1, Reason: "escalated", Escalated: true,
-			Outcome: "answered", TaskID: "t" + itoa(i), QualityBefore: &before, QualityAfter: &after,
+			Outcome: "answered", TaskID: "t" + strconv.Itoa(i), QualityBefore: &before, QualityAfter: &after,
 		})
 	}
 	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)

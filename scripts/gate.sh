@@ -8,6 +8,11 @@ echo "[gate] go build ./..."
 go build ./...
 echo "[gate] go vet ./..."
 go vet ./...
+echo "[gate] tagged 包编译+vet（默认门禁看不到 tag 文件 —— 曾经的盲区）"
+for t in asrharness vhs002 vhsext vhsplan vhsplanmodel vhswm vhscache vhsrecog vhsreal vhsroute vhsref; do
+  go vet -tags "$t" ./... >/dev/null
+  go test -tags "$t" -run XXX_NONE ./... >/dev/null
+done
 echo "[gate] go test ./... (默认门禁)"
 go test ./...
 echo "[gate] OK"
