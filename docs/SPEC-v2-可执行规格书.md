@@ -329,7 +329,14 @@ function Check(registry, in) -> Verdict:
     if registry.DetectDrift(space):         return deny("drift")          # 漂移即失效
     if space.Scope ∩ in.Intent.Boundary.Exclude ≠ ∅:
                                             return deny("boundary_violation")
+    # ⚠️ 2026-10-03 补：**逐 cap 判定**（原文漏了这一步 ⇒ 读者会以为"cap 不匹配 ⇒ default_deny"）
+    #    与 `space/space.go:28-40` 的伪代码注释、以及实际代码 `space/space.go:483/490` **逐行一致**。
+    for cap in in.ToolCaps:
+        if cap ∉ space.Tools:               return deny("boundary_violation")   # 该工具不属该域
+        if 有契约表 且 cap ∉ ∪contract.Caps: return deny("boundary_violation")   # 越界，不因确认放行
     # 有效权限 = 平台∩Manifest∩契约caps∩本次授权 交集（交集为空→default_deny）
+    #   ⚠️ 上面逐 cap 判定**先发生** ⇒ 单个 cap 不在域里时**走不到这一步** ⇒
+    #      故实测常见 `boundary_violation`，而 `default_deny` 只在**交集整体为空**时出现。
     allowedTools := space.Tools ∩ in.ToolCaps ∩ 契约caps
     if allowedTools == ∅:                   return deny("default_deny")
     if 本次动作跨域 且 space.CrossRefs 未声明: return deny("cross_ref_deny")
