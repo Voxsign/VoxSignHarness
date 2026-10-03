@@ -300,7 +300,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 // voiceReq 是 /v1/voice 的入参：**只收文本**（不碰音频编解码）。
 type voiceReq struct {
-	Text string `json:"text"`
+	Text           string `json:"text"`
+	RequestID      string `json:"request_id,omitempty"`      // 幂等重试键（OBS-11 对齐）
+	ConversationID string `json:"conversation_id,omitempty"` // 指代固化会话（OBS-11 对齐）
 }
 
 // asrEndpoint 返回线 B 地址（可配；默认本机 8123）。
@@ -355,45 +357,16 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// ④ 走既有执行路径（含域门禁 / 不可逆确认）
-	ts := &taskState{ID: fmt.Sprintf("task-%d", time.Now().UnixNano()), Status: stRunning, confirmCh: make(chan bool, 1)}
-	ts.ConvID = "default" // 指代固化上下文槽（voice 路径缺省会话）
-	ctx, cancel := context.WithCancel(context.Background())
-	ts.cancel = cancel
-	s.mu.Lock()
-	s.tasks[ts.ID] = ts
-	s.mu.Unlock()
-	o := *s.tmpl
-	o.ConvID = ts.ConvID // 指代固化上下文槽键（handleTasks 路径补上——根因：此前缺赋值致槽解析用 default）
-	o.ConfirmFn = func(taskID, question string) (bool, error) {
-		s.mu.Lock()
-		ts.Status = stWaiting
-		ts.Question = question
-		s.mu.Unlock()
-		select {
-		case approved := <-ts.confirmCh:
-			s.mu.Lock()
-			ts.Status = stRunning
-			ts.Question = ""
-			s.mu.Unlock()
-			return approved, nil
-		case <-ctx.Done():
-			return false, errors.New("任务被取消")
-		}
+	// OBS-11 修复（2026-10-03 观察报告核对）：**同一模式的第二份拷贝**——
+	// 原实现与 handleRun 同样手工构造 taskState 3 字段 + 手动入 map ⇒ 不落盘/不去重/role 空。
+	// 统一走 spawnTask（含 persist / tryDedup / Role / writeContextSlot / conversation_id）。
+	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"task_id": existingID, "intent": intent, "intent_source": "asr-intent", "status": status, "deduped": "true",
+		})
+		return
 	}
-	go func() {
-		out, err := pipeline.Run(ctx, &o, req.Text)
-		s.mu.Lock()
-		ts.Outcome = &out
-		if err != nil {
-			ts.Err = err.Error()
-			ts.Status = stCanceled
-		} else if ctx.Err() != nil {
-			ts.Status = stCanceled
-		} else {
-			ts.Status = stDone
-		}
-		s.mu.Unlock()
-	}()
+	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID)
 	// 判据 ④：执行路径同样必带 intent_source（本次意图来自线 B ⇒ asr-intent）
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"task_id": ts.ID, "intent": intent, "intent_source": "asr-intent",
