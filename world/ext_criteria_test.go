@@ -8,6 +8,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -227,4 +228,78 @@ func keysB(m map[string]Boundary) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// EXT-09：HTTP 200 + 载荷内 ok:false 不得被当成成功（评审 §1.1 缺陷 A3-2）。
+func TestEXT09PayloadOkFalseIsNotSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/summary":
+			fmt.Fprint(w, `{"ok":false,"error":"upstream degraded","hosts":{}}`)
+		case "/api/cicd/status":
+			fmt.Fprint(w, `{"ok":false,"error":"ledger unavailable"}`)
+		default:
+			fmt.Fprint(w, fakePage)
+		}
+	}))
+	defer srv.Close()
+	g := NewGateway(srv.URL, WithHTTPClient(srv.Client()), WithClock(fixedClock))
+	if sum := g.Summary(context.Background()); sum.Status != StatusUnknown || sum.Note == "" {
+		t.Errorf("[EXT-09] ok:false 的 summary 被当成成功: %+v", sum)
+	}
+	if c := g.CICD(context.Background()); c.Status != StatusUnknown || c.Note == "" {
+		t.Errorf("[EXT-09] ok:false 的 cicd 被当成成功: %+v", c)
+	}
+}
+
+// EXT-10：单台 host 解析失败必须以 unknown 出现在依赖里，且说明少了谁
+// （评审 §1.1 缺陷 A3-1：不得静默当"没有"）。
+func TestEXT10BadHostNotSilentlyDropped(t *testing.T) {
+	payload := `{"ok":true,"zone":"inner","hosts":{"good":{"hostname":"VM-1","purpose":"正常机器"},"broken":{"hostname":12345,"purpose":{"x":1}}}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/summary" {
+			fmt.Fprint(w, payload)
+			return
+		}
+		fmt.Fprint(w, fakePage)
+	}))
+	defer srv.Close()
+	g := NewGateway(srv.URL, WithHTTPClient(srv.Client()), WithClock(fixedClock))
+
+	dep := g.Dependencies(context.Background())
+	found := false
+	for _, d := range dep {
+		if d.On == "broken" {
+			found = true
+			if d.Status != StatusUnknown {
+				t.Errorf("[EXT-10] 坏 host 的状态=%q，期望 unknown", d.Status)
+			}
+			if d.Note == "" {
+				t.Error("[EXT-10] 坏 host 的依赖没有原因说明")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("[EXT-10] 坏 host 被静默丢弃，依赖里没有它的 unknown 记录: %+v", dep)
+	}
+	sum := g.Summary(context.Background())
+	if !strings.Contains(sum.Note, "broken") {
+		t.Errorf("[EXT-10] Note 未说明少了谁: %q", sum.Note)
+	}
+}
+
+// EXT-11：远端"声称"的能力不得映射为本机授权（A4 必须**可证伪**）。
+//
+// 评审指出 Grants() 恒 nil 使 A4 判据永远不会红 = 假的安全感。
+// 这里给出一条**有可失败路径**的映射 API：任何远端声称（即使是真实存在的本地工具名）
+// 都不得产生授权；一个"朴素映射"实现会在这里红。
+func TestEXT11RemoteClaimNeverGrants(t *testing.T) {
+	for _, remote := range []string{"deploy", "http", "admin", "run", "git", "file", "search", "test", "verify", "*"} {
+		if local, ok := MapRemoteCapability(remote); ok || local != "" {
+			t.Errorf("[EXT-11] 远端声称 %q 被映射为本机授权 %q —— 读 200 ≠ 写权限", remote, local)
+		}
+	}
+	if got := len(NewGateway("http://x").Grants(context.Background())); got != 0 {
+		t.Errorf("[EXT-11] Grants 不为空: %d", got)
+	}
 }
