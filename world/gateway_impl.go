@@ -79,6 +79,8 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 		return Summary{Status: StatusUnknown, Source: src, Note: "读取失败（不是「没有」）：" + err.Error()}
 	}
 	var raw struct {
+		Ok    *bool                      `json:"ok"`
+		Err   string                     `json:"error"`
 		TS    string                     `json:"ts"`
 		Zone  string                     `json:"zone"`
 		Hosts map[string]json.RawMessage `json:"hosts"`
@@ -86,19 +88,29 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return Summary{Status: StatusUnknown, Source: src, Note: "解析失败（不是「没有」）：" + err.Error()}
 	}
+	if raw.Ok != nil && !*raw.Ok {
+		return Summary{Status: StatusUnknown, Source: src,
+			Note: "网关自报 ok:false（HTTP 200 不等于成功）：" + raw.Err}
+	}
 	out := Summary{Status: StatusOK, Source: src, Zone: raw.Zone, TS: raw.TS}
 	keys := make([]string, 0, len(raw.Hosts))
 	for k := range raw.Hosts {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	var unparsed []string
 	for _, k := range keys {
 		var h Host
 		if err := json.Unmarshal(raw.Hosts[k], &h); err != nil {
-			continue // 单台机器解析失败不拖垮整份清单（元数据降级）
+			unparsed = append(unparsed, k) // 不静默丢弃：下面保留为 unknown
+			continue
 		}
 		h.Key = k
 		out.Hosts = append(out.Hosts, h)
+	}
+	if len(unparsed) > 0 {
+		out.UnparsedHosts = unparsed
+		out.Note = "以下主机载荷无法解析，已保留为 unknown（未丢弃）：" + strings.Join(unparsed, ",")
 	}
 	return out
 }
@@ -121,12 +133,18 @@ func (g *Gateway) fetchCICDLocked(ctx context.Context) CICD {
 		return CICD{Status: StatusUnknown, Source: src, Note: "读取失败（不是「没有」）：" + err.Error()}
 	}
 	var raw struct {
+		Ok         *bool    `json:"ok"`
+		Err        string   `json:"error"`
 		Status     string   `json:"status"`
 		CurrentTag string   `json:"current_tag"`
 		Ledger     []Ledger `json:"ledger"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return CICD{Status: StatusUnknown, Source: src, Note: "解析失败（不是「没有」）：" + err.Error()}
+	}
+	if raw.Ok != nil && !*raw.Ok {
+		return CICD{Status: StatusUnknown, Source: src,
+			Note: "网关自报 ok:false（HTTP 200 不等于成功）：" + raw.Err}
 	}
 	return CICD{Status: StatusOK, Source: src, CurrentTag: raw.CurrentTag, Ledger: raw.Ledger}
 }
@@ -153,6 +171,12 @@ func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 		out = append(out, Dependency{
 			On: h.Key, Kind: "host", For: forWhat, Status: StatusInferred,
 			Note: "网关自报，未独立核实", Source: sum.Source,
+		})
+	}
+	for _, k := range sum.UnparsedHosts {
+		out = append(out, Dependency{
+			On: k, Kind: "host", For: "（载荷无法解析）", Status: StatusUnknown,
+			Note: "该主机载荷解析失败，已保留为 unknown（不是「没有」）", Source: sum.Source,
 		})
 	}
 	out = append(out, Dependency{

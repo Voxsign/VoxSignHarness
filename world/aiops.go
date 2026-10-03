@@ -60,7 +60,10 @@ type Summary struct {
 	Zone   string `json:"zone,omitempty"`
 	TS     string `json:"ts,omitempty"`
 	Hosts  []Host `json:"hosts"`
-	Note   string `json:"note,omitempty"` // 失败原因（A3：不得静默）
+	// UnparsedHosts 记录**载荷无法解析**的主机 key：它们必须保留为 unknown，
+	// 不得静默丢弃（A3：读失败不得当"没有"）。
+	UnparsedHosts []string `json:"unparsed_hosts,omitempty"`
+	Note          string   `json:"note,omitempty"` // 失败原因（A3：不得静默）
 }
 
 // Ledger 是 CI/CD 台账的一条。

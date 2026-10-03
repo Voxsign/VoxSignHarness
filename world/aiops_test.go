@@ -164,3 +164,31 @@ func TestCacheClearAndRebuildDeterministic(t *testing.T) {
 		t.Fatalf("重建不一致: %+v vs %+v", first, rebuilt)
 	}
 }
+
+func TestPayloadOkFalseFailOpen(t *testing.T) {
+	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"degraded","hosts":{}}`))
+	}))
+	if sum := g.Summary(context.Background()); sum.Status != StatusUnknown || sum.Note == "" {
+		t.Fatalf("ok:false 被当成成功: %+v", sum)
+	}
+}
+
+func TestBadHostKeptAsUnknownNotDropped(t *testing.T) {
+	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"hosts":{"good":{"purpose":"x"},"broken":{"hostname":123}}}`))
+	}))
+	sum := g.Summary(context.Background())
+	if len(sum.UnparsedHosts) != 1 || sum.UnparsedHosts[0] != "broken" {
+		t.Fatalf("坏 host 未被保留: %+v", sum.UnparsedHosts)
+	}
+	found := false
+	for _, d := range g.Dependencies(context.Background()) {
+		if d.On == "broken" && d.Status == StatusUnknown {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("坏 host 未以 unknown 出现在依赖里")
+	}
+}
