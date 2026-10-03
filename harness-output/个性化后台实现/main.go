@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -41,11 +40,9 @@ func (d *Dictionary) Lookup(word string) (string, bool) {
 }
 
 func (d *Dictionary) Correct(text string) string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
 	words := strings.Fields(text)
 	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
+		if correction, exists := d.Lookup(word); exists {
 			words[i] = correction
 		}
 	}
@@ -150,42 +147,20 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func feedbackHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var feedback Feedback
-	if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
 func main() {
 	flag.Parse()
 
-	if _, err := os.Stat(*dataDir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(*dataDir, 0755); err != nil {
-			fmt.Printf("Failed to create data directory: %v\n", err)
-			return
-		}
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
+		os.Exit(1)
 	}
 
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler)
-	http.HandleFunc("/v1/feedback", feedbackHandler)
 
 	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Printf("Failed to start server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
+		os.Exit(1)
 	}
 }
