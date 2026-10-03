@@ -18,13 +18,17 @@ set -e
 CALIB_BEFORE=$(mktemp)
 CALIB_AFTER=$(mktemp)
 calib() {  # $1=输出文件
+  # ⚠️ **每条命令都必须 `set -e` 安全**（2026-10-03 CI 事故）：
+  # 本脚本头上有 `set -e`，而下面几条命令在 CI（全新 clone / 配置未设置）会返回非 0
+  # ⇒ **整脚本在打印任何 [gate] 之前就 exit 1** —— 本地（有配置）永远不会复现。
+  # ⇒ 每条都 `|| echo '(未设置/不可用)'`，**失败只影响该行内容，不影响脚本退出码**。
   {
-    git rev-parse HEAD 2>/dev/null
-    git status --porcelain 2>/dev/null | md5sum 2>/dev/null || git status --porcelain 2>/dev/null | md5
-    git reflog show --format=%H 2>/dev/null | wc -l
-    git config --show-origin user.email 2>/dev/null
-    git config --show-origin core.bare 2>/dev/null
-  } > "$1" 2>&1
+    git rev-parse HEAD 2>/dev/null || echo '(无 HEAD)'
+    git status --porcelain 2>/dev/null | md5sum 2>/dev/null || git status --porcelain 2>/dev/null | md5 || echo '(无 status)'
+    git reflog show --format=%H 2>/dev/null | wc -l || echo '0'
+    git config --show-origin user.email 2>/dev/null || echo '(未设置)'
+    git config --show-origin core.bare 2>/dev/null || echo '(未设置 ⇒ 默认 false)'
+  } > "$1" 2>&1 || true
 }
 calib "$CALIB_BEFORE"
 echo "[gate] 校准快照已取（before）"
