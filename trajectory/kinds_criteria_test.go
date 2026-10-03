@@ -1,23 +1,72 @@
 // kinds_criteria_test.go —— 判据⑪：kind 单一枚举 + 未登记必须报错（防"假绿空过"）。
 package trajectory
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
 
-// ⑪a 单一枚举：**每个 kind 常量都必须在 Kinds 里**（否则判据会引用不存在的符号）
+// ⑪a **Kinds 必须覆盖源码里所有 kind 常量** —— 用 go/parser 机械提取，**不用手写列表**。
+//
+// 理由（Lead 2026-10-03）：手写列表 = 第二个真相源，**有人新增常量而忘记登记时它会静默过期，
+// 而判据仍然绿**。这与"一个事实两处维护"同源。
 func TestKindSingleSourceOfTruth(t *testing.T) {
-	for _, k := range []string{
-		KindInputRaw, KindInputClean, KindInputCorrec, KindIntentSource, KindIntent,
-		KindStart, KindModel, KindActions, KindReceipts, KindFinal, KindError,
-	} {
-		if !KnownKind(k) {
-			t.Errorf("[⑪] kind %q 未在 Kinds 中登记（判据若引用它会空过）", k)
+	// **整包解析**（不只 kinds.go）：常量可能声明在同包其它文件里（如 trajectory.go）。
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("[⑪] 找不到包内 .go 文件: %v", err)
+	}
+	seen := 0
+	fset := token.NewFileSet()
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue // 判据自身不参与（避免自指）
 		}
+		f, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			t.Fatalf("[⑪] 解析 %s 失败: %v", path, perr)
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if !strings.HasPrefix(name.Name, "Kind") {
+						continue // 只看 kind 常量（Kind*）
+					}
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					val, _ := strconv.Unquote(lit.Value)
+					seen++
+					if !KnownKind(val) {
+						t.Errorf("[⑪] 常量 %s=%q 未在 Kinds 中登记（新增常量忘记登记 ⇒ 判据必须红）",
+							name.Name, val)
+					}
+				}
+			}
+		}
+	}
+	if seen < 11 {
+		t.Errorf("[⑪] 只解析到 %d 个 kind 常量（少于 11）—— 判据可能没真正覆盖源码", seen)
 	}
 	if KindIntentSource != "intent_source" {
 		t.Errorf("[⑪] KindIntentSource 值应为 intent_source，实际 %q", KindIntentSource)
-	}
-	if len(Kinds) < 11 {
-		t.Errorf("[⑪] Kinds 条目过少（%d）—— 疑似漏登记", len(Kinds))
 	}
 }
 

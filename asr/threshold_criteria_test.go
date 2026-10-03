@@ -1,4 +1,7 @@
-// threshold_criteria_test.go —— 判据⑫：同一字面量不得表达两个语义（必须具名）。
+// threshold_criteria_test.go
+//
+// ⚠️ **覆盖面（如实标注）**：本判据只扫描 `asr/intent_model.go` **一个文件**。
+// **全仓其它文件里是否还有裸 0.70 表达别的语义，本判据覆盖不到**（未做 ⑫b 全仓扫描）。 —— 判据⑫：同一字面量不得表达两个语义（必须具名）。
 package asr
 
 import (
