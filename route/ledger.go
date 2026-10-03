@@ -26,6 +26,12 @@ type Record struct {
 	Kind           Kind   `json:"kind,omitempty"`
 	KindFallback   bool   `json:"kind_fallback"`
 	RouteAmbiguous bool   `json:"route_ambiguous"`
+	// WMCAP 留痕（否则"为什么这次抓了 N 个"无从回答）。
+	Capacity    int     `json:"capacity,omitempty"`
+	DemandFloor int     `json:"demand_floor,omitempty"`
+	Familiarity float64 `json:"familiarity,omitempty"`
+	Capped      bool    `json:"capped,omitempty"`
+	DropCount   int     `json:"drop_count,omitempty"`
 }
 
 // Ledger 是 append-only 台账写入器。
