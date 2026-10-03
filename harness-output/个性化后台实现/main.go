@@ -73,9 +73,10 @@ func classifyIntent(text string) Intent {
 		return EDIT
 	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
-	} else {
+	} else if strings.HasPrefix(text, "orchestrate") {
 		return ORCHESTRATE
 	}
+	return QUERY
 }
 
 type Feedback struct {
@@ -160,13 +161,20 @@ func main() {
 	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		os.Exit(1)
+	}
+
 	dict := NewDictionary()
+
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
 	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Printf("Error starting server: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
 }
