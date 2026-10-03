@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"time"
 )
 
 // DefaultL2Model 是 L2 默认模型（Lead 指定；**可被 config/plan.json 或 env 覆盖**）。
@@ -15,6 +16,11 @@ const DefaultL2Model = "deepseek-v4-pro"
 
 // DefaultResearchModel 是研究默认模型。
 const DefaultResearchModel = "gpt-6-luna"
+
+// L2PlanTimeout 是 L2 规划调用的超时。
+//
+// ⚠️ **UNVALIDATED**：实测一次强模型规划 ≈59.6s（2026-10-03 手工计时），故取 120s 留余量。
+const L2PlanTimeout = 120 * time.Second
 
 // EnvPlanL2Model / EnvResearchModel 是覆盖用环境变量。
 const (
@@ -65,6 +71,9 @@ func PlanWithL2(ctx context.Context, goal string, m Manifest, model PlanModel, m
 	if model == nil || !L2Enabled(modelID) {
 		return LocalPlanner{}.Plan(goal, m) // 未启用：**不得因"加了槽位"而改变默认行为**
 	}
-	mp := ModelPlanner{Model: model, Fallback: LocalPlanner{}}
+	// ⚠️ 实测（2026-10-03）：强模型做一次规划约 **59.6s**（长提示词 + 推理），
+	// 而 ModelPlanner 的默认超时是 3s ⇒ **必然超时**，表现为上游 502/超时、永远拿不到 source=model。
+	// 这里显式给长超时；**UNVALIDATED**（未标定：多长合适需要按真实延迟分布定）。
+	mp := ModelPlanner{Model: model, Fallback: LocalPlanner{}, Timeout: L2PlanTimeout}
 	return mp.Plan(goal, m)
 }
