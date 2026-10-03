@@ -31,3 +31,11 @@ dictionary.json（JSON 对象，含 variants/category/source）/ blacklist.json 
 sh scripts/accept_asr.sh 8911   # 一键验收：12 判据真跑 → RESULT: ALL_PASS
 ```
 校验对齐报告：docs/ASR个性化后台服务-校验对齐报告-20261004.md
+
+## 安装
+
+```bash
+sh install.sh            # 默认安装到 bin/（也可指定目录：sh install.sh /usr/local/bin）
+bin/asr-service -addr 127.0.0.1:8080 -data-dir ./data   # 运行
+curl -s http://127.0.0.1:8080/v1/health                 # → {"ok":true}
+```
