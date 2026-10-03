@@ -45,9 +45,9 @@ func (d *Dictionary) Correct(word string) string {
 	if _, exists := d.entries[word]; exists {
 		return word
 	}
-	// Simple correction: return the first word that starts with the same letter
+	// Simple correction: return the first word with the same length
 	for entry := range d.entries {
-		if strings.HasPrefix(entry, string(word[0])) {
+		if len(entry) == len(word) {
 			return entry
 		}
 	}
@@ -142,28 +142,6 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 	}
 }
 
-func feedbackHandler(dataDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var feedback Feedback
-		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
-			http.Error(w, "Bad request", http.StatusBadRequest)
-			return
-		}
-
-		if err := AppendToFile(dataDir+"/feedback.jsonl", feedback); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -184,9 +162,9 @@ func main() {
 	}
 
 	dict := NewDictionary()
+
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
-	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
