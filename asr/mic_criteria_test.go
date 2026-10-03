@@ -68,7 +68,7 @@ const els = {t:makeEl('t'), mic:makeEl('mic'), michint:makeEl('michint'), out:ma
   metrics:makeEl('metrics'), recent:makeEl('recent')};
 global.document = { getElementById:id=>els[id]||makeEl(id) };
 global.window = { addEventListener:(ev,fn)=>{ if(ev==='load') global.__onload=fn; } };
-global.fetch = (url, opts)=>{ if(opts && opts.method === 'POST'){ posted++; } return Promise.resolve({json:()=>Promise.resolve({total:0, recent:[], metrics:{l0_share:0, ask_back_rate:0, degraded_rate:0, note:''}})}); };
+global.fetch = (url, opts)=>{ if(opts && opts.method === 'POST'){ posted++; } return Promise.resolve({ok:true, json:()=>Promise.resolve({total:0, recent:[], metrics:{l0_share:0, ask_back_rate:0, degraded_rate:0, note:''}})}); };
 function FakeRec(){ this.start=()=>{ started++; }; this.onresult=null; this.onend=null; }
 global.webkitSpeechRecognition = FakeRec;
 window.webkitSpeechRecognition = FakeRec; // 页面用 ('webkitSpeechRecognition' in window) 探测

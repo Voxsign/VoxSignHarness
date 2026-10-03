@@ -10,6 +10,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PORT="${VHS_ASR_PORT:-8123}"
 DATA="${VHS_ASR_DATA:-$ROOT/data/asr}"
 mkdir -p "$DATA"
+# 端口占用：**不许静默** —— 已有服务在跑就直接复用并说明；否则明确报错退出。
+if curl -fsS -m 1 "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1; then
+  echo "[dev] 端口 $PORT 上已有 VoxSign 服务在运行 ⇒ 直接打开页面（不再启动第二个）"
+  open "http://127.0.0.1:$PORT/" 2>/dev/null || true
+  exit 0
+fi
 echo "[dev] 数据目录: $DATA（真实台账: $DATA/reallog.jsonl）"
 echo "[dev] 打开: http://127.0.0.1:$PORT/"
 ( cd "$ROOT" && VHS_ASR_ADDR="127.0.0.1:$PORT" VHS_ASR_DATA="$DATA" exec go run ./cmd/vhs-asr ) &

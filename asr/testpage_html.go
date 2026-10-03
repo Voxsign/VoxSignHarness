@@ -5,7 +5,7 @@ import "net/http"
 // testPageHTML 是零依赖测试页（无框架/CDN/npm）。输入框用标准 <textarea>，
 // **不做键盘拦截** ⇒ macOS 听写（连按两下 Fn / 麦克风键）可直接用。
 const testPageHTML = `<!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><title>VoxSign 本地测试页</title>
+<html lang="zh"><head><meta charset="utf-8"><title>VoxSign 本地测试页（录音 → 纠错 → 台账）</title>
 <style>
  body{font-family:-apple-system,sans-serif;max-width:820px;margin:24px auto;padding:0 16px}
  textarea{width:100%;height:90px;font-size:18px;padding:10px}
@@ -16,7 +16,8 @@ const testPageHTML = `<!doctype html>
  table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid #ddd;padding:4px 6px}
 </style></head><body>
 <h2>VoxSign 本地测试页</h2>
-<p style="color:#666">把光标放进下面的框，用 macOS 听写说话（连按两下 Fn），再点「处理」。</p>
+<div id="banner"></div>
+<p style="color:#666">点 <b>〔🎤 说话〕</b> 录音（浏览器内置识别，零后端）；也可粘贴文本或用系统听写（Fn）。说完点「处理」，每次都会记进真实台账。</p>
 <textarea id="t" placeholder="点这里，用〔🎤 说话〕录音，或手动粘贴/系统听写……"></textarea>
 <div>
  <button id="mic" type="button">🎤 说话</button>
@@ -68,11 +69,28 @@ window.addEventListener('load', initRec);
 
 async function j(url, body){
   const r = await fetch(url, body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
+  if(!r.ok){ throw new Error('HTTP '+r.status+' '+url); }
   return r.json();
+}
+// ③ 服务可用性自检：不可用 ⇒ 顶部红色横幅（可操作提示）
+async function probe(){
+  var b = document.getElementById('banner');
+  try{
+    var r = await fetch('/v1/health');
+    if(!r.ok){ throw new Error('HTTP '+r.status); }
+    b.innerHTML = '';
+  }catch(err){
+    b.innerHTML = '<div style="background:#c00;color:#fff;padding:8px;border-radius:4px">'+
+      '<b>服务未运行</b>：请执行 <code>sh scripts/dev.sh</code>（'+esc(String(err))+'）</div>';
+  }
 }
 function esc(s){return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
 async function run(){
+  const out = document.getElementById('out');
+  // ② 立刻给"处理中"，让用户能区分"在跑"和"死了"
+  out.innerHTML = '<div class="row">处理中…</div>';
   const text = document.getElementById('t').value;
+  try{
   const d = await j('/v1/testpage', {text});
   let h = '<div class="row"><span class="k">原始：</span><code>'+esc(d.raw)+'</code></div>'+
           '<div class="row"><span class="k">纠错：</span><code>'+esc(d.corrected)+'</code></div>'+
@@ -83,8 +101,14 @@ async function run(){
   if(d.degraded && d.degraded_reason){h += '<div class="row">降级原因：'+esc(d.degraded_reason)+'</div>';}
   if(d.ask_back){h += '<div class="row">候选（回问必须给候选）：'+JSON.stringify(d.candidates||[])+'</div>';}
   if(d.log_error){h += '<div class="row" style="color:#c00">台账写入失败：'+esc(d.log_error)+'</div>';}
-  document.getElementById('out').innerHTML = h;
+  out.innerHTML = h;
   log();
+  }catch(err){
+    // ① **失败必须可见**（静默失败是这次要钉住的东西）
+    out.innerHTML = '<div class="row" style="color:#c00"><b>处理失败</b>：'+esc(String(err))+
+      '<br>请求：<code>POST /v1/testpage</code>'+
+      '<br>服务可能已停止，请重新运行 <code>sh scripts/dev.sh</code></div>';
+  }
 }
 async function teach(){
   const term = prompt('教哪个词（如 哎欧劈艾斯）？'); if(!term) return;
@@ -103,6 +127,7 @@ async function log(){
   document.getElementById('recent').innerHTML = h+'</table>';
 }
 log();
+probe();  // 加载后自检服务是否活着
 </script></body></html>`
 
 func (s *Server) handleTestPage(w http.ResponseWriter, r *http.Request) {
