@@ -8,13 +8,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"voicesign-harness/asr"
+	"voicesign-harness/hotcache"
+	"voicesign-harness/recog"
 )
 
 type fileConfig struct {
@@ -71,6 +75,13 @@ func main() {
 	defer func() { _ = tracer.Close() }()
 
 	pipe := asr.NewPipeline(asr.NewEngine(), dict, tracer)
+	// 服务侧组装缓存（K9）：L2 = /api/services（只读），K7 定期刷新。
+	servicesURL := envOr("VHS_SERVICES_URL", "https://aiops.peterzou.com/api/services")
+	hot := hotcache.New(filepath.Join(dataDir, "services-cache.json"), time.Hour,
+		hotcache.HTTPFetcher(servicesURL, os.Getenv("AIOPS_KEY"), 10*time.Second))
+	stop := hot.StartRefresh(context.Background(), time.Hour)
+	defer stop()
+	pipe.Hot = &recog.Rewriter{Engine: asr.NewEngine(), Hot: hot}
 	srv := &http.Server{Addr: addr, Handler: asr.NewServer(pipe).Handler()}
 	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）", addr, dataDir)
 	if err := srv.ListenAndServe(); err != nil {

@@ -28,6 +28,38 @@ type Rewriter struct {
 	Hot    *hotcache.Cache
 }
 
+// Rewrite 实现 asr.TextRewriter：只做缓存改写（不做基线纠错），供 Pipeline 内联调用。
+func (r *Rewriter) Rewrite(text string) (string, []asr.Correction) {
+	if r.Hot == nil {
+		return text, nil
+	}
+	out, corrs := rewriteByCache(text, r.Hot, 0.70)
+	if len(corrs) == 0 {
+		return text, nil
+	}
+	asrCorrs := make([]asr.Correction, 0, len(corrs))
+	runes := []rune(text)
+	offs := make([]int, 0, len(runes)+1)
+	for i := range string(runes) {
+		offs = append(offs, i)
+	}
+	offs = append(offs, len(string(runes)))
+	for _, c := range corrs {
+		if c.Start < 0 || c.End > len(runes) || c.Start >= c.End {
+			continue
+		}
+		asrCorrs = append(asrCorrs, asr.Correction{
+			Start: offs[c.Start], End: offs[c.End], From: c.From, To: c.To,
+			Kind: "hotword", Confidence: c.Score,
+			Evidence: "缓存关联度命中（route=" + c.Route + "，CACHE-001 K9）",
+		})
+	}
+	if len(asrCorrs) == 0 {
+		return text, nil
+	}
+	return out, asrCorrs
+}
+
 // Correct 先跑基线纠错，再用缓存做关联度改写。
 func (r *Rewriter) Correct(raw string) (string, []Correction) {
 	text := raw

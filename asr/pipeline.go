@@ -23,7 +23,15 @@ type Pipeline struct {
 	Engine *Personalized
 	Dict   *Dictionary
 	Tracer *Tracer
-	now    func() time.Time
+	// Hot 是可选的**缓存改写**钩子（热词/别名/近音）。接口定义在本包、实现由外层提供，
+	// 以避免 asr → hotcache 的反向依赖（hotcache 复用 asr 的拼音表）。
+	Hot TextRewriter
+	now func() time.Time
+}
+
+// TextRewriter 用缓存改写文本（CACHE-001 K9）。实现方：recog.Rewriter。
+type TextRewriter interface {
+	Rewrite(text string) (string, []Correction)
 }
 
 // NewPipeline 组装管线。Engine 必填；Dict/Tracer 可为 nil（则不启用对应能力）。
@@ -98,6 +106,15 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 		res.Corrections = append(res.Corrections, corrs...)
 	}
 	emit("dict", "dictionary", detail, p.now().Sub(t)+hotMs)
+
+	// 4b) 缓存改写（热词/别名/近音，CACHE-001 K9）：**真的改变输出**才算接上。
+	if p.Hot != nil {
+		t = p.now()
+		rewritten, corrs := p.Hot.Rewrite(res.Text)
+		res.Text = rewritten
+		res.Corrections = append(res.Corrections, corrs...)
+		emit("hotcache", "cache:hotword+alias+edit", "按热词/别名/近音改写（K9）", p.now().Sub(t))
+	}
 
 	// 5) 标点恢复：只写 Punctuated（正文不动，C1 v2）。
 	//    无内容噪声不恢复标点（与 Engine 的 pureNoise 守卫一致，C3）。
