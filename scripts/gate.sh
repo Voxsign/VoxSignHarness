@@ -4,6 +4,24 @@
 # 为什么存在：有一次我推了 build 断掉的提交，因为"我以为推成功了"。
 # 这是纪律防不住的坑 —— 必须由机制挡（见 docs：等价是假设）。
 set -e
+# ============ 校准（CA-1：跑门禁不得改变被验证对象）============
+# 2026-10-03：本项目一天内 7 次错、全部撤回，形状只有两个 —— 读数错 / 观察者效应。
+# 而 `core.bare` 被置 true 与"钩子里的 gate 为何失败"**至今未归因**。
+# ⇒ 门禁必须能自证"它没有改变被它验证的东西"（Peter：「校准先于测试，先于改」）。
+CALIB_BEFORE=$(mktemp)
+CALIB_AFTER=$(mktemp)
+calib() {  # $1=输出文件
+  {
+    git rev-parse HEAD 2>/dev/null
+    git status --porcelain 2>/dev/null | md5sum 2>/dev/null || git status --porcelain 2>/dev/null | md5
+    git reflog show --format=%H 2>/dev/null | wc -l
+    git config --show-origin user.email 2>/dev/null
+    git config --show-origin core.bare 2>/dev/null
+  } > "$1" 2>&1
+}
+calib "$CALIB_BEFORE"
+echo "[gate] 校准快照已取（before）"
+
 echo "[gate] go build ./..."
 go build ./...
 echo "[gate] go vet ./..."
@@ -29,4 +47,16 @@ for t in asrharness vhs002 vhsui vhsext vhsplan vhsplanmodel vhswm vhscache vhsr
 done
 echo "[gate] go test ./... (默认门禁)"
 go test ./...
+
+# ============ 校准比对（CA-1/CA-2：门禁须能自证它没改被验证对象）============
+calib "$CALIB_AFTER"
+if ! diff "$CALIB_BEFORE" "$CALIB_AFTER" > /tmp/.gate-calib-diff.$$ 2>&1; then
+  echo "[gate] ❌ **门禁改变了被验证对象**（观察者效应）—— 本次结论不可作为\"关于原对象\"的证据："
+  sed 's/^/       /' /tmp/.gate-calib-diff.$$
+  echo "       ⇒ 若要归因，看上面的差异行：哪一项变了，就去查谁改的。"
+  rm -f "$CALIB_BEFORE" "$CALIB_AFTER" /tmp/.gate-calib-diff.$$
+  exit 1
+fi
+rm -f "$CALIB_BEFORE" "$CALIB_AFTER" /tmp/.gate-calib-diff.$$
+echo "[gate] 校准 ✅ 门禁未改变被验证对象（HEAD / status / reflog / 身份 / bare 均一致）"
 echo "[gate] OK"
