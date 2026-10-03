@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -21,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -36,20 +35,23 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
+func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
-			words[i] = correction
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	// Simple correction: return the first word that starts with the same letter
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, string(word[0])) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -63,15 +65,17 @@ const (
 )
 
 func classifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	default:
 		return ORCHESTRATE
 	}
 }
@@ -91,65 +95,24 @@ type Response struct {
 }
 
 var (
-	addr     = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir  = flag.String("data-dir", "./data", "Data directory")
-	dict     = NewDictionary()
-	dictFile = "dictionary.jsonl"
+	dictionary = NewDictionary()
+	dataDir    string
 )
 
-func loadDictionary() error {
-	file, err := os.Open(fmt.Sprintf("%s/%s", *dataDir, dictFile))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
+func main() {
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
+	flag.Parse()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var entry map[string]string
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			return err
-		}
-		for k, v := range entry {
-			dict.Add(k, v)
-		}
-	}
-	return scanner.Err()
-}
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler)
 
-func saveFeedback(feedback Feedback) error {
-	file, err := os.OpenFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	data, err := json.Marshal(feedback)
-	if err != nil {
-		return err
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
 	}
 
-	_, err = file.Write(append(data, '\n'))
-	return err
-}
-
-func saveTrace(trace interface{}) error {
-	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	data, err := json.Marshal(trace)
-	if err != nil {
-		return err
-	}
-
-	_, err = file.Write(append(data, '\n'))
-	return err
+	fmt.Println("Server listening on 127.0.0.1:8080")
+	http.ListenAndServe("127.0.0.1:8080", nil)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +132,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correctedText := dict.Correct(req.Text)
+	correctedText := dictionary.Correct(req.Text)
 	intent := classifyIntent(req.Text)
 
 	resp := Response{
@@ -177,34 +140,56 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := saveTrace(resp); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	saveTrace(req.Text, correctedText, intent)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-func main() {
-	flag.Parse()
-
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+func saveTrace(originalText, correctedText string, intent Intent) {
+	trace := map[string]interface{}{
+		"original_text":  originalText,
+		"corrected_text": correctedText,
+		"intent":         intent,
 	}
 
-	if err := loadDictionary(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading dictionary: %v\n", err)
-		os.Exit(1)
+	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Error opening traces file:", err)
+		return
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	data, err := json.Marshal(trace)
+	if err != nil {
+		fmt.Println("Error marshaling trace:", err)
+		return
 	}
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
+	writer.Write(data)
+	writer.WriteString("\n")
+}
 
-	fmt.Printf("Listening on %s...\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+func saveFeedback(feedback Feedback) {
+	file, err := os.OpenFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Error opening feedback file:", err)
+		return
 	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	data, err := json.Marshal(feedback)
+	if err != nil {
+		fmt.Println("Error marshaling feedback:", err)
+		return
+	}
+
+	writer.Write(data)
+	writer.WriteString("\n")
 }
