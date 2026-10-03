@@ -7,7 +7,7 @@ L-01.3 | 词典接口处理存在 | handleDictionary | asr/server.go
 L-01.4 | 轨迹留痕实现存在 | traces | asr/trace.go | TraceRecord
 L-01.5 | 指代回问实现存在 | need_disambiguate | asr/server.go
 L-01.6 | 反馈闭环处理存在 | handleFeedback | asr/server.go
-R-01 | 永不执行红线在管线中 | execute | pipeline/
+R-01 | 永不执行红线在管线中 | execActions | pipeline/ | execOrchestrate
 R-04 | 容量机制存在 | TTL | cache/quad.go | ttl
 # 能力层（H 系列 × harness）
 H-01 | 规划器有长程任务分支 | readonly-probe | plan/
