@@ -174,13 +174,20 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	}
 	var cands []cand
 	termLen := float64(len([]rune(term)))
+	prevSeen := "" // 每条别名独立去重（与原 `seen` 的语义一致；见下）
 	for _, a := range s.aliases {
-		seen := map[string]bool{}
-		for _, c := range []string{a.Alias, a.Canonical} {
-			if c == "" || seen[c] {
+		// ⚠️ 2026-10-03（NF-1 性能债）：原先这里**每条别名**都分配 `map[string]bool{}`
+		//   与 `[]string{a.Alias, a.Canonical}` ⇒ **每条 2 次堆分配**，纯浪费 ——
+		//   而"别名与规范词相同 ⇒ 不重复计一次"只是**二元判断**，不需要 map。
+		//   ⇒ 改为"先判等再算"，去掉 map 与切片分配（**语义完全不变**）。
+		//   ⚠️ 这只去掉**分配**，未去掉**遍历与编辑距离**（那需索引化，见
+		//      `tasks/VHS-PERF-001-NF1性能债.md`）。
+		prevSeen = ""
+		for _, c := range [2]string{a.Alias, a.Canonical} {
+			if c == "" || c == prevSeen {
 				continue // 别名与规范词相同 ⇒ 不重复计一次
 			}
-			seen[c] = true
+			prevSeen = c
 			d := levenshtein(term, c)
 			if float64(d) > maxEditRatio*termLen {
 				continue // 相对差异过大 ⇒ 不作为候选（防"错配"）
