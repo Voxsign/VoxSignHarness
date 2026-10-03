@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, definition string) {
+func (d *Dictionary) Add(word, correction string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = definition
+	d.entries[word] = correction
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -34,23 +35,20 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	definition, exists := d.entries[word]
-	return definition, exists
+	correction, exists := d.entries[word]
+	return correction, exists
 }
 
-func (d *Dictionary) Correct(word string) string {
+func (d *Dictionary) Correct(text string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.entries[word]; exists {
-		return word
-	}
-	// Simple correction: return the first word that starts with the same letter
-	for entry := range d.entries {
-		if strings.HasPrefix(entry, string(word[0])) {
-			return entry
+	words := strings.Fields(text)
+	for i, word := range words {
+		if correction, exists := d.entries[word]; exists {
+			words[i] = correction
 		}
 	}
-	return word
+	return strings.Join(words, " ")
 }
 
 type Intent string
@@ -63,18 +61,16 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	text = strings.ToLower(text)
-	switch {
-	case strings.Contains(text, "note"):
+func classifyIntent(text string) Intent {
+	if strings.HasPrefix(text, "note") {
 		return NOTE
-	case strings.Contains(text, "query"):
+	} else if strings.HasPrefix(text, "query") {
 		return QUERY
-	case strings.Contains(text, "edit"):
+	} else if strings.HasPrefix(text, "edit") {
 		return EDIT
-	case strings.Contains(text, "commit"):
+	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
-	default:
+	} else {
 		return ORCHESTRATE
 	}
 }
@@ -84,36 +80,28 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendFeedback(filePath string, feedback Feedback) error {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func appendToFile(filename string, data interface{}) error {
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(feedback)
-}
-
-type Trace struct {
-	Input  string `json:"input"`
-	Output string `json:"output"`
-}
-
-func AppendTrace(filePath string, trace Trace) error {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	writer := bufio.NewWriter(file)
+	encoder := json.NewEncoder(writer)
+	if err := encoder.Encode(data); err != nil {
 		return err
 	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	return encoder.Encode(trace)
+	return writer.Flush()
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+type Request struct {
+	Text string `json:"text"`
+}
+
+type Response struct {
+	CorrectedText string `json:"corrected_text"`
+	Intent        Intent `json:"intent"`
 }
 
 func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
@@ -123,34 +111,64 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Text string `json:"text"`
-		}
+		var req Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
-		corrected := dict.Correct(req.Text)
-		intent := ClassifyIntent(req.Text)
+		correctedText := dict.Correct(req.Text)
+		intent := classifyIntent(req.Text)
 
-		trace := Trace{Input: req.Text, Output: corrected}
-		if err := AppendTrace(dataDir+"/traces.jsonl", trace); err != nil {
+		resp := Response{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := appendToFile(dataDir+"/traces.jsonl", req); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		resp := struct {
-			Corrected string `json:"corrected"`
-			Intent    Intent `json:"intent"`
-		}{
-			Corrected: corrected,
-			Intent:    intent,
+		if err := appendToFile(dataDir+"/usage.jsonl", resp); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+func feedbackHandler(dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var feedback Feedback
+		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		if err := appendToFile(dataDir+"/feedback.jsonl", feedback); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func main() {
@@ -166,6 +184,7 @@ func main() {
 	dict := NewDictionary()
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
