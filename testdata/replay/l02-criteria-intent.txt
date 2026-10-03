@@ -1,0 +1,27 @@
+# L-02 · 意图识别增强验收尺子（修订卡2 · 用户点名"目的与意图的识别"）
+# 用法：deepseek 推实现后，真装配重放以下判据；全部 PASS 才算意图链路接通。
+# 判据尺子固化于 2026-10-03，与被测版本无关，只认代码真值 + 真跑证据。
+
+## 层1+2 · 实现类长程意图（结构层 + ORCHESTRATE 扩展）
+I-01 | 能力 | text=按照需求说明书实现一个可编译可运行的Go独立后台服务，满足验收标准 | 意图=ORCHESTRATE（非 UNKNOWN，不再 need_ask）
+I-02 | 能力 | text=根据《需求说明书》搭建一个个性化ASR后台服务 | 意图=ORCHESTRATE
+I-03 | 能力 | text=开发一个语音控制后台系统 | 意图=ORCHESTRATE 或 IMPLEMENT（不得 UNKNOWN/Ask）
+I-04 | 能力 | text=重构 vhs-asr 服务模块 | 意图=ORCHESTRATE 或 IMPLEMENT
+I-05 | 能力 | text=这个系统是怎么实现的 | 意图=QUERY/INFO（**反向防误判**，不得判实现类）
+I-06 | 能力 | text=如何实现一个缓存 | 意图=QUERY/INFO（**反向防误判**，不得判实现类）
+I-07 | 能力 | text=查一下注册表 | 意图=QUERY（注册类反向保护，回归 REGISTER_TOOL 已有用例）
+
+## 层3 · 语义兜底（规则 UNKNOWN 时远程 L2 判意图，可后验）
+I-08 | 能力 | text=给我造一个后台（无实现/搭建等显式动词） | 若规则 UNKNOWN → 远程模型判意图类别，不静默 Ask（可作增强验收，不阻塞 I-01..07）
+
+## 附 · document 输入通道（L-01 前提）
+I-09 | 能力 | POST /v1/tasks 请求体含 document（需求说明书全文） | 202 且任务状态/traces 可见文档挂载（document 字段存在、上下文携带）
+I-10 | 能力 | POST /v1/tasks 无 document | 兼容（缺省空，不报错），202
+
+## 附 · SK-KH-1 接线（修订卡1）
+I-11 | 能力 | go test -tags asrharness ./skill -run TestSKKH1KnowhowShapeMatchesRemote | 真绿（Fetcher.Get 内部接 KnowhowFromRaw 或测试改用之，直解可得非 0）
+
+## 红线
+- 不许桩注入：以上全部真装配（真起 harness 服务 + 真提交 HTTP 请求）
+- 自测不算数：实现方自证无效，测试方独立重放
+- 弱断言不算 PASS：仅"有响应"不算，必须断言意图值/文档挂载事实
