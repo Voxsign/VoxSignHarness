@@ -1,47 +1,37 @@
-个性化后台实现 README
+# 个性化后台实现
 
-一、环境与构建
-需要 Go 1.21 及以上，无第三方依赖。
-在项目根目录执行：
-go build -o bin/app .
-要求 go vet ./... 与 go build ./... 均零错误。
+## 启动
+依赖 Go 1.21+。
 
-二、启动
-./bin/app -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+编译：
+go build -o personalized-backend .
 
-参数说明
--addr     监听地址，默认 127.0.0.1:8080；非 127.0.0.1 / ::1 直接拒绝启动
--data-dir 数据目录，默认 ./data，首次启动自动创建
--token    占位鉴权令牌，请求头 Authorization: Bearer <token>；未配置时仅本机放行
+运行：
+./personalized-backend --addr 127.0.0.1:8080 --data-dir ./data
 
-三、HTTP 端点
-GET  /v1/health
-返回 {"status":"ok","time":...,"data_dir":...}，用于存活探测。
+开发运行：
+go run . --addr 127.0.0.1:8080 --data-dir ./data
 
-POST /v1/process
-请求 JSON 字段：
-  text     待处理原文（必填）
-  action   可选，显式指定意图 NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-  feedback 可选，true 表示 ✔，false 表示 ✘
-响应 JSON 字段：
-  trace_id  本次处理编号
-  cleaned   清洗后文本
-  corrected 词典纠错后文本（无命中时与 cleaned 一致，正常文本不被改坏）
-  intent    意图分类结果
-  hits      命中的词典条目列表
-  safe      纠错是否被安全策略拦截（低置信度不改写）
+默认只监听 127.0.0.1；非回环地址拒绝启动。鉴权占位：Authorization: Bearer <token>，可通过配置或环境变量启用。
 
-四、数据文件（全部追加写，位于 data-dir 下）
-dictionary.json        个性化词典，增删查，写入采用临时文件 + 重命名
-traces/traces.jsonl    每次 /v1/process 的输入、输出、命中与耗时
-usage/usage.jsonl      用量计数：端点、意图、耗时
-feedback/feedback.jsonl ✔/✘ 反馈，append-only，不覆盖不删除
+## 端点
+GET /v1/health：健康检查，返回 {"status":"ok"}。
 
-五、词典管理（子命令）
-./bin/app dict add -term <词条> -replacement <替换>
-./bin/app dict del -term <词条>
-./bin/app dict list
+POST /v1/process：统一业务入口，JSON 请求/响应。通过 action 调用词典增/删/查、文本纠错、意图分类（NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE）、反馈学习。响应含 corrected、intent、trace_id 等。
 
-六、自检
-启动后执行 curl http://127.0.0.1:8080/v1/health，返回 status 为 ok 即视为可用；
-随后向 /v1/process 发送一条文本，确认 traces/traces.jsonl 新增一行且 feedback.jsonl 在提交反馈后新增一行。
+示例：
+curl http://127.0.0.1:8080/v1/health
+
+curl -X POST http://127.0.0.1:8080/v1/process -H "Content-Type: application/json" -d "{\"action\":\"classify\",\"text\":\"记一下明天开会\"}"
+
+curl -X POST http://127.0.0.1:8080/v1/process -H "Content-Type: application/json" -d "{\"action\":\"feedback\",\"trace_id\":\"...\",\"ok\":true}"
+
+## 数据文件
+默认数据目录 ./data，可用 --data-dir 指定。
+
+data/dictionary.json：个性化词典条目。
+data/feedback.jsonl：反馈 ✔/✘，append-only。
+data/traces.jsonl：请求轨迹，append-only。
+data/usage.jsonl：调用用量，append-only。
+
+文件首次写入自动创建；JSONL 只追加、不覆盖。
