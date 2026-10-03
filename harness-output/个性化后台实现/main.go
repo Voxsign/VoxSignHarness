@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -66,18 +65,18 @@ const (
 
 func ClassifyIntent(text string) Intent {
 	text = strings.ToLower(text)
-	if strings.Contains(text, "note") {
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else if strings.Contains(text, "orchestrate") {
+	default:
 		return ORCHESTRATE
 	}
-	return NOTE
 }
 
 type Feedback struct {
@@ -85,85 +84,103 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func AppendFeedback(filePath string, feedback Feedback) error {
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(feedback)
+}
+
+type Trace struct {
+	Input  string `json:"input"`
+	Output string `json:"output"`
+}
+
+func AppendTrace(filePath string, trace Trace) error {
+	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(trace)
 }
 
-type Request struct {
-	Text string `json:"text"`
+type Server struct {
+	dictionary *Dictionary
+	dataDir    string
 }
 
-type Response struct {
-	CorrectedText string `json:"corrected_text"`
-	Intent        Intent `json:"intent"`
+func NewServer(dataDir string) *Server {
+	return &Server{
+		dictionary: NewDictionary(),
+		dataDir:    dataDir,
+	}
 }
 
-var (
-	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir = flag.String("data-dir", "./data", "Data directory")
-	dict    = NewDictionary()
-)
+func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
 
-func main() {
-	flag.Parse()
-
-	http.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-
-	http.HandleFunc("/v1/process", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req Request
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Bad request", http.StatusBadRequest)
-			return
-		}
-
-		correctedText := dict.Correct(req.Text)
-		intent := ClassifyIntent(req.Text)
-
-		resp := Response{
-			CorrectedText: correctedText,
-			Intent:        intent,
-		}
-
-		if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
-		os.Exit(1)
+func (s *Server) ProcessHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	fmt.Printf("Starting server on %s\n", *addr)
+	var request struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	correctedText := s.dictionary.Correct(request.Text)
+	intent := ClassifyIntent(correctedText)
+
+	response := struct {
+		CorrectedText string `json:"corrected_text"`
+		Intent        Intent `json:"intent"`
+	}{
+		CorrectedText: correctedText,
+		Intent:        intent,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	trace := Trace{Input: request.Text, Output: correctedText}
+	if err := AppendTrace(s.dataDir+"/traces.jsonl", trace); err != nil {
+		fmt.Println("Error appending trace:", err)
+	}
+}
+
+func main() {
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
+	flag.Parse()
+
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
+	}
+
+	server := NewServer(*dataDir)
+
+	http.HandleFunc("/v1/health", server.HealthHandler)
+	http.HandleFunc("/v1/process", server.ProcessHandler)
+
+	fmt.Println("Starting server on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Server failed: %v\n", err)
+		fmt.Println("Error starting server:", err)
 	}
 }
