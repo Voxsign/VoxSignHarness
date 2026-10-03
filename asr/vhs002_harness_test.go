@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"voicesign-harness/modelcenter"
 )
 
 func TestMain(m *testing.M) {
@@ -51,7 +53,16 @@ func TestMain(m *testing.M) {
 		defer func() { _ = tracer.Close() }()
 
 		pipe := NewPipeline(NewEngine(), dict, tracer)
-		srv := httptest.NewServer(NewServer(pipe).Handler())
+		srvObj := NewServer(pipe)
+		// 有 key 就接**真实** default 通道做兜底；没有则纯本地（缺 key 不内置、不失败）。
+		if os.Getenv("AIOPS_KEY") != "" {
+			if cfg, err := modelcenter.Load("../config/model-center.json"); err == nil {
+				if reg, err := modelcenter.NewRegistry(cfg); err == nil {
+					srvObj.IntentModel = reg
+				}
+			}
+		}
+		srv := httptest.NewServer(srvObj.Handler())
 		defer srv.Close()
 
 		_ = os.Setenv("VHS_ASR_URL", srv.URL)

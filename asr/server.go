@@ -11,11 +11,15 @@ package asr
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // Server 持有管线，提供 HTTP 处理。
 type Server struct {
 	Pipe *Pipeline
+	// IntentModel 是可选的**兜底**模型（只有本地低置信时才用；nil = 纯本地）。
+	IntentModel   IntentModel
+	IntentTimeout time.Duration
 }
 
 // NewServer 构造服务。
@@ -121,7 +125,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	res := s.Pipe.Process(req.Text, req.SessionID)
 	// 本地规则解析意图（红线 #6：核心路径本地）；低置信时才由模型兜底，失败即降级。
-	ir := ClassifyIntent(res.Text)
+	ir := ClassifyIntentWith(r.Context(), res.Text, s.IntentModel, s.IntentTimeout)
 	writeJSON(w, http.StatusOK, intentResponse{
 		ContractVersion:  "1",
 		Type:             ir.Type,

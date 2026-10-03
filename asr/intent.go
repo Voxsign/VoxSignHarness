@@ -5,7 +5,6 @@
 package asr
 
 import (
-	"os"
 	"strings"
 )
 
@@ -84,14 +83,6 @@ func ClassifyIntent(text string) IntentResult {
 		Type: typ, Confidence: conf, Control: ctrl,
 		NeedDisambiguate: conf < 0.70,
 		DomainSuggestion: []string{}, // 默认拒绝：不给高权限域建议
-	}
-	if conf < 0.70 {
-		// 模型兜底是例外路径：超时/失败/不可用 ⇒ fail-open（需求 4.9 / Δ7）。
-		if os.Getenv("VHS_ASR_FORCE_MODEL_TIMEOUT") == "1" {
-			ir.Degraded = true
-			ir.DegradedReason = "模型兜底超时（注入场景）：返回本地基础结果，不阻塞链路"
-			ir.NeedDisambiguate = true
-		}
 	}
 	return ir
 }
