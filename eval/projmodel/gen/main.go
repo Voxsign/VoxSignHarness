@@ -196,7 +196,7 @@ func main() {
 	for _, d := range pm.Domains {
 		m.Domains = append(m.Domains, domain{
 			Name: d.Name, Source: d.Source, Status: "verified",
-			Perms:   perms{Read: d.Read, Write: d.Write, Exec: []string{}},
+			Perms:   perms{Read: d.Read, Write: d.Write, Exec: append([]string{}, d.Exec...)},
 			Aliases: d.Aliases, RiskDefault: d.RiskDefault,
 		})
 		for _, a := range d.Aliases {
@@ -227,10 +227,10 @@ func main() {
 		{ID: "asr-never-executes", Claim: "asr 服务不 import os/exec，只写自己配置的数据目录（红线 #1）", Source: "asr/server.go+asr/execcriteria_test.go", Status: "verified"},
 		{ID: "no-third-party-deps", Claim: "go.mod 只有 module+go，零第三方依赖", Source: "go.mod", Status: "verified"},
 		{ID: "writeback-only-learn", Claim: "知识写回唯一入口是 learn 通道；Observe 只记证据", Source: "asr/engine.go", Status: "verified"},
-		{ID: "planner-not-implemented", Claim: "规划器 LocalPlanner.Plan 是桩，返回 ErrNotImplemented", Source: "plan/planner.go", Status: "verified"},
-		{ID: "manifest-not-implemented", Claim: "ExportManifest 是桩，返回零值清单", Source: "plan/manifest.go", Status: "verified"},
+		{ID: "planner-rule-based", Claim: "LocalPlanner 是规则式规划器：离线、确定性、只用能力清单内的工具", Source: "plan/planner.go", Status: "verified"},
+		{ID: "manifest-authoritative", Claim: "ExportManifest 已实现，是能力清单的权威导出（eval 导出器只做格式映射）", Source: "plan/manifest.go", Status: "verified"},
 		{ID: "audio-path-unverified", Claim: "真实音频链路未实现、未验证", Source: "tasks/VHS-ASR-002-需求变更.md", Status: "inferred"},
-		{ID: "replan-not-implemented", Claim: "Replan 是桩，复规能力未实现", Source: "plan/replan.go", Status: "verified"},
+		{ID: "replan-bounded", Claim: "Replan 已实现（规则式）：有 MaxReplans 次数上限；域门禁拒绝时计划作废", Source: "plan/planner.go", Status: "verified"},
 	}
 	m.Dependencies = []dependency{
 		{On: "peter (人)", Kind: "human", For: "授权 / 产品取舍 / 真值签字", Status: "verified", Note: "治理文档与任务书均要求人工裁决"},
@@ -271,7 +271,7 @@ func main() {
 	for _, d := range gw.Dependencies(ctx) {
 		src := d.Source
 		m.Dependencies = append(m.Dependencies, dependency{
-			On: d.On, Kind: d.Kind, For: d.For, Status: d.Status, Note: d.Note, Source: &src,
+			On: d.On, Kind: d.Kind, For: d.For, Status: triState(d.Status), Note: d.Note, Source: &src,
 		})
 	}
 	for _, b := range gw.Boundaries(ctx) {
@@ -283,12 +283,98 @@ func main() {
 		m.State.Note += "；cicd=" + ci.Status + "（" + ci.Note + "）"
 	}
 
+	if err := selfCheck(m, root); err != nil {
+		fatal(fmt.Errorf("导出期自检失败（拒绝产出会腐烂的模型）: %w", err))
+	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
 		fatal(err)
 	}
+}
+
+// triState 把外部状态映射进三态 verified|inferred|unknown（F6：不许原样透传）。
+// world 的 "ok" 只表示"网关自报成功"，不是独立核实 ⇒ inferred。
+func triState(s string) string {
+	switch s {
+	case "ok":
+		return "inferred"
+	case "unknown", "inferred", "verified":
+		return s
+	default:
+		return "unknown"
+	}
+}
+
+// selfCheck 是**防单向腐烂**的机械自检（校验方 C10 / 缺陷 F4+F7）：
+//  1. 每条 source 指针必须解析到**存在的文件**（支持 "a.go+b.go" 复合来源）；
+//  2. "否定性声明"（含"未实现/not implemented"）必须与实现一致 —— 由 plan 包的实际
+//     行为判定：LocalPlanner.Plan / ExportManifest / Replan 现在都已实现，故模型里
+//     不应再出现这三条"未实现"陈述。
+//
+// 任一不成立 ⇒ 导出失败（宁可不产，不产会腐烂的模型）。
+func selfCheck(m model, root string) error {
+	check := func(what, src string) error {
+		if src == "" || strings.Contains(src, "://") || strings.Contains(src, ":") && !strings.Contains(src, ".go") {
+			return nil // URL / 非文件来源
+		}
+		for _, part := range strings.Split(src, "+") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if !strings.Contains(part, ".") {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(root, part)); err != nil {
+				return fmt.Errorf("%s 的 source=%q 指向不存在的文件", what, part)
+			}
+		}
+		return nil
+	}
+	for _, b := range m.Boundaries {
+		if err := check("boundary "+b.ID, b.Source); err != nil {
+			return err
+		}
+	}
+	for _, c := range m.Capabilities {
+		if err := check("capability "+c.ID, c.Source); err != nil {
+			return err
+		}
+	}
+	for _, d := range m.Domains {
+		if err := check("domain "+d.Name, d.Source); err != nil {
+			return err
+		}
+	}
+	// 否定性声明必须**显式登记**（否则会单向腐烂）：登记表 = "确认为真、且已跟踪"的清单。
+	// 实现一旦落地，必须从表里删掉该条（否则 SM-4 会红）—— 于是"腐烂"变成"导出失败"。
+	seenNegative := map[string]bool{}
+	for _, b := range m.Boundaries {
+		neg := strings.Contains(b.ID, "not-implemented") || strings.Contains(b.ID, "unverified") ||
+			strings.Contains(b.Claim, "未实现") || strings.Contains(b.Claim, "未验证") || strings.Contains(b.Claim, "是桩")
+		if !neg {
+			continue
+		}
+		if !trueNegativeClaims[b.ID] {
+			return fmt.Errorf("未登记的否定性声明 %q：请确认它现在仍为真并登记（实现落地后必须删除登记）", b.ID)
+		}
+		seenNegative[b.ID] = true
+	}
+	for id := range trueNegativeClaims {
+		if !seenNegative[id] {
+			return fmt.Errorf("否定性声明 %q 已被实现或移除，但仍留在登记表里 —— 请删除登记", id)
+		}
+	}
+	return nil
+}
+
+// trueNegativeClaims 是**显式登记**的"确认为真"的否定性声明。
+// 只允许放真正未实现且已跟踪的能力；实现落地后必须从这里删除。
+var trueNegativeClaims = map[string]bool{
+	"audio-path-unverified": true, // 真实音频链路未实现（ASR-EXT-002/004）
 }
 
 func fatal(err error) {

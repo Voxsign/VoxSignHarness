@@ -4,7 +4,7 @@
     "repo": "smithpeter/voicesign-harness",
     "commit": "88793a8f3bb269604eda5bc6ccb6169cebf590c5",
     "produced_by": "harness",
-    "produced_at": "2026-10-03T00:40:38Z",
+    "produced_at": "2026-10-03T00:53:35Z",
     "independence": "no_prior_access"
   },
   "capabilities": [
@@ -405,7 +405,10 @@
       "perms": {
         "read": true,
         "write": true,
-        "exec": []
+        "exec": [
+          "test",
+          "run"
+        ]
       },
       "aliases": [
         "read"
@@ -511,14 +514,14 @@
       "status": "verified"
     },
     {
-      "id": "planner-not-implemented",
-      "claim": "规划器 LocalPlanner.Plan 是桩，返回 ErrNotImplemented",
+      "id": "planner-rule-based",
+      "claim": "LocalPlanner 是规则式规划器：离线、确定性、只用能力清单内的工具",
       "source": "plan/planner.go",
       "status": "verified"
     },
     {
-      "id": "manifest-not-implemented",
-      "claim": "ExportManifest 是桩，返回零值清单",
+      "id": "manifest-authoritative",
+      "claim": "ExportManifest 已实现，是能力清单的权威导出（eval 导出器只做格式映射）",
       "source": "plan/manifest.go",
       "status": "verified"
     },
@@ -529,9 +532,9 @@
       "status": "inferred"
     },
     {
-      "id": "replan-not-implemented",
-      "claim": "Replan 是桩，复规能力未实现",
-      "source": "plan/replan.go",
+      "id": "replan-bounded",
+      "claim": "Replan 已实现（规则式）：有 MaxReplans 次数上限；域门禁拒绝时计划作废",
+      "source": "plan/planner.go",
       "status": "verified"
     },
     {
@@ -591,7 +594,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -602,7 +605,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -613,7 +616,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -624,7 +627,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -635,7 +638,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -646,7 +649,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -657,7 +660,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
@@ -668,18 +671,40 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
+      }
+    },
+    {
+      "on": "mac",
+      "kind": "host",
+      "for": "（载荷无法解析）",
+      "status": "unknown",
+      "note": "该主机载荷解析失败，已保留为 unknown（不是「没有」）",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:53:35Z"
+      }
+    },
+    {
+      "on": "windows-pc",
+      "kind": "host",
+      "for": "（载荷无法解析）",
+      "status": "unknown",
+      "note": "该主机载荷解析失败，已保留为 unknown（不是「没有」）",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     },
     {
       "on": "aiops 网关（外部世界模型）",
       "kind": "gateway",
       "for": "机器 / 服务 / 状态的只读真值源",
-      "status": "ok",
+      "status": "inferred",
       "note": "只读接口，不产生写权限",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:40:38Z"
+        "fetched_at": "2026-10-03T00:53:35Z"
       }
     }
   ],
