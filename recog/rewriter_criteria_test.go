@@ -10,6 +10,7 @@ package recog
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,5 +136,20 @@ func TestG2TeachRejectsEmpty(t *testing.T) {
 	}
 	if err := c.Teach("same", "same"); err == nil {
 		t.Error("[G2] 同值未被拒")
+	}
+}
+
+// 端到端：正常句子里的通用词**不得被改写**（Lead 最高优先）。
+func TestRewriteDoesNotCorruptOrdinarySentence(t *testing.T) {
+	r, c := newRewriter(t, false)
+	c.PutAlias("文件", "file-store", "remote")
+	c.PutAlias("爱ops", "aiops-portal", "remote")
+	got, _ := r.Correct("先改这个文件再提交")
+	if strings.Contains(got, "file-store") {
+		t.Fatalf("[改写域] 正常句子的「文件」被改写成 file-store: %q", got)
+	}
+	got2, _ := r.Correct("把爱ops接上")
+	if !strings.Contains(got2, "aiops-portal") {
+		t.Fatalf("[改写域] 专名变形却不再命中（治过头）: %q", got2)
 	}
 }

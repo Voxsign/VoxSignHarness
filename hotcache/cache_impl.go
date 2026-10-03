@@ -74,7 +74,10 @@ func (c *Cache) state() *state {
 // ---- 关联度四路（K3）----
 
 // Lookup 依次尝试：精确 → 别名 → 拼音近音 → 编辑距离；热度加权；不足则给升级信号（K8）。
-func (c *Cache) Lookup(term string) (Result, bool) {
+func (c *Cache) Lookup(term string) (Result, bool) { return c.lookupInternal(term, false) }
+
+// lookupInternal 是 Lookup 的实现；skipGeneric=true 时跳过通用词别名（改写用途）。
+func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	term = strings.TrimSpace(term)
 	if term == "" {
 		return Result{NeedEscalate: true}, false
@@ -99,6 +102,9 @@ func (c *Cache) Lookup(term string) (Result, bool) {
 	}
 	// ② 别名
 	for _, a := range s.aliases {
+		if skipGeneric && isGenericForRewrite(a.Alias) {
+			continue
+		}
 		if a.Alias == term {
 			return Result{Canonical: a.Canonical, Score: 0.95, Route: RouteAlias, Source: a.Source, Status: st}, true
 		}

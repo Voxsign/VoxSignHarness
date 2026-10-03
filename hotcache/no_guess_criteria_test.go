@@ -119,3 +119,26 @@ func TestG1LatinToleranceAndGuards(t *testing.T) {
 		t.Errorf("[G1-③ 防治过头] 不相干的拉丁串被匹配: %+v", r)
 	}
 }
+
+// 别名两用途分离（Lead 裁决）：通用词**可路由、不可改写**。
+func TestRewriteScopeGenericWordsNotRewritten(t *testing.T) {
+	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
+	c.PutAlias("文件", "file-store", "remote")     // 通用词（observed 导致改坏）
+	c.PutAlias("爱ops", "aiops-portal", "remote") // 专名变形
+
+	// ① 通用词：路由可命中，**改写不得命中**
+	if _, ok := c.Lookup("文件"); !ok {
+		t.Errorf("[改写域] 路由应仍能用通用词")
+	}
+	if r, ok := c.LookupForRewrite("文件"); ok {
+		t.Errorf("[改写域] 通用词被允许改写（会改坏正常句子）: %+v", r)
+	}
+	// ② 专名变形：改写仍必须命中（防治过头）
+	if r, ok := c.LookupForRewrite("爱ops"); !ok || r.Canonical != "aiops-portal" {
+		t.Errorf("[改写域] 专名变形被误杀: %+v ok=%v", r, ok)
+	}
+	// ③ 通用词清单必须显式登记
+	if _, ok := GenericRewriteBlocklist()["文件"]; !ok {
+		t.Errorf("[改写域] 通用词清单未显式登记「文件」")
+	}
+}

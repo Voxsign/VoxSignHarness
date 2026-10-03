@@ -98,7 +98,7 @@ func pass1(text string, hot *hotcache.Cache, minScore float64) (string, []Correc
 				continue
 			}
 			w := string(runes[i : i+l])
-			res, ok := hot.Lookup(w)
+			res, ok := hot.LookupForRewrite(w)
 			if !ok || res.Score < minScore || res.Canonical == w {
 				continue
 			}
@@ -139,7 +139,7 @@ func pass2(text string, hot *hotcache.Cache, minScore float64) (string, []Correc
 			j++
 		}
 		w := string(runes[i:j])
-		res, ok := hot.Lookup(w)
+		res, ok := hot.LookupForRewrite(w)
 		if ok && res.Score >= minScore && res.Canonical != w {
 			corrs = append(corrs, Correction{Start: i, End: j, From: w, To: res.Canonical, Route: res.Route, Score: res.Score})
 			b.WriteString(res.Canonical)
