@@ -1,84 +1,50 @@
-# 个性化后台实现（README）
+个性化后台 运行说明
 
-## 一、环境与构建
+一、环境
+Python 3.10+，仅标准库（可选依赖见 requirements.txt）。
+默认全部数据写入独立数据目录，不在源码目录内落任何文件。
 
-要求：Go 1.21+（仅标准库，无外部依赖）。
-
-构建命令：
-go build -o p13n ./...
-
-如无 go.mod 需先初始化：
-go mod init p13n
-
-编译必须通过（go build ./... 退出码为 0），源码中不得残留 todo/占位实现。
-
-## 二、启动命令
-
-默认监听 127.0.0.1:8099，数据目录 ./data：
-
-go run . -addr 127.0.0.1:8099 -data-dir ./data
-
+二、启动
+python -m app.server --host 127.0.0.1 --port 8088 --data-dir ./data
 可选参数：
--addr        监听地址，仅允许回环地址（127.0.0.1 / ::1 / localhost），非回环启动即拒绝
--data-dir    独立数据目录，落盘文件均在该目录下创建（不存在则自动创建）
--token       鉴权占位令牌，默认 dev-token；请求头 X-Auth-Token 或 Authorization: Bearer <token>
+--token  devtoken            占位鉴权令牌，不传则读环境变量 ADMIN_TOKEN，两者都无则鉴权关闭但仍保留校验入口
+--data-dir ./data            数据目录，不存在则自动创建
+--dict ./data/dict.json      个性化词典路径，默认取 data-dir/dict.json
 
-示例：
-go run . -addr 127.0.0.1:9000 -data-dir ./var -token mytoken
+仅允许绑定 127.0.0.1 / ::1。传入非回环地址（如 0.0.0.0）直接启动失败并报错退出。
+服务起来后打印监听地址、数据目录、鉴权状态。
 
-## 三、HTTP 端点
+三、端点
+GET  /v1/health
+     返回 {"status":"ok","version":"...","data_dir":"...","uptime_s":N}
+     不需要鉴权。
 
-1) 健康检查
-GET /v1/health
-响应：{"status":"ok","time":"...","data_dir":"..."}
-
-2) 业务处理
 POST /v1/process
-请求体（JSON）：
-{"text":"明天三点提醒我开会","action":"","feedback":"","entry":{}}
-字段说明：
-- text     待处理文本（必填）
-- action   可选：dict_add / dict_del / dict_query / feedback
-- entry    词典操作条目 {"term":"...","replacement":"...","intent":"..."}
-- feedback 反馈标记："ok" 或 "bad"（对应 ✔/✘），落盘 feedback.jsonl
+     请求：{"text":"...","action":"auto","feedback":null}
+     响应：{"trace_id":"...","intent":"NOTE","corrected":"...","edits":[...],"hits":[...]}
+     intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+     corrected 为清洗 + 词典纠错后的文本，正常文本原样返回（无改动则 corrected == text，edits 为空）
+     action 可选 dict_add / dict_del / dict_get / dict_list，用于个性化词典增删查；
+       dict_add: {"action":"dict_add","term":"...","replacement":"...","note":"..."}
+       dict_del: {"action":"dict_del","term":"..."}
+       dict_get: {"action":"dict_get","term":"..."}
+       dict_list: {"action":"dict_list"}（可选 "limit"/"offset"）
 
-响应体（JSON）：
-{"code":0,"corrected":"...","intent":"NOTE","dictionary_hits":[...],"trace_id":"..."}
+POST /v1/feedback
+     请求：{"trace_id":"...","verdict":"up"}  verdict 取 up(✔) / down(✘)，可带 "note"
+     以 append-only 方式追加到 feedback.jsonl，用于后续学习。
 
-意图取值固定为五类：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+鉴权（占位）：除 /v1/health 外，均需 Authorization: Bearer <token>。校验函数已留出接口，替换为真实实现即可。
 
-3) 词典管理（可走同一处理器）
-POST /v1/process，action 为：
-- dict_add   增条目，响应含 {"ok":true}
-- dict_del   删条目
-- dict_query 查条目，支持前缀/包含匹配
+四、数据文件（均为 JSONL append-only，除 dict.json 外）
+data/dict.json        个性化词典，结构 {"version":1,"entries":[...]}，写入用临时文件 + 原子替换
+data/feedback.jsonl   反馈记录，每行 {"ts","trace_id","verdict","note","snapshot"}
+data/traces.jsonl     每次 /v1/process 的完整轨迹：原始文本、清洗结果、纠错 edits、命中词条、最终 intent
+data/usage.jsonl      调用用量：ts、endpoint、action、耗时 ms、状态码、是否命中词典
 
-鉴权：所有 /v1/*（除 /v1/health）需携带令牌，缺失或错误返回 401。
-
-## 四、P0 能力对应
-
-① 个性化词典：add/del/query 三操作，词条做全词/边界匹配，避免子串误替换；纠错仅替换命中且安全的片段
-② 文本纠错：先清洗（去多余空白、统一全半角、去控制字符），再按词典纠错；未命中的正常文本原样返回，不做破坏性改写
-③ 意图分类：关键词+规则打分输出 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE
-④ 反馈学习：feedback=ok/bad 追加写入 feedback.jsonl（append-only），同时影响词条权重
-⑤ 数据落盘：全部 JSONL append-only 写文件，每次写入 O_APPEND，不覆盖历史
-⑥ HTTP 端点：/v1/health、/v1/process
-⑦ 仅监听 127.0.0.1，非回环拒绝；鉴权占位但强制校验
-
-## 五、数据文件（均在 -data-dir 下）
-
-data/dictionary.jsonl   词典条目，append-only，增删以事件形式记录，启动时重放
-data/feedback.jsonl     反馈回执，append-only
-data/traces.jsonl       每次 /v1/process 的请求-响应追踪
-data/usage.jsonl        调用量与耗时统计
-
-每条记录均为单行 JSON，末尾换行，字段首列带 ts（RFC3339 纳秒）与 type。
-
-## 六、快速自检
-
-启动后执行：
-curl -s http://127.0.0.1:8099/v1/health
-curl -s -X POST http://127.0.0.1:8099/v1/process -H "X-Auth-Token: dev-token" -H "Content-Type: application/json" -d "{\"text\":\"明天三点提醒我开会\"}"
-curl -s -X POST http://127.0.0.1:8099/v1/process -H "X-Auth-Token: dev-token" -H "Content-Type: application/json" -d "{\"action\":\"dict_add\",\"entry\":{\"term\":\"回意\",\"replacement\":\"回忆\"}}"
-
-预期：健康检查返回 status=ok；process 返回 corrected 与 intent；相应 JSONL 文件各新增一行。
+五、自检
+GET /v1/health 返回 ok 即服务正常。
+发送一条测试请求确认链路：
+curl -s -X POST http://127.0.0.1:8088/v1/process -H "Content-Type: application/json" -d '{"text":"帮我记一下明天开会"}'
+预期 intent=NOTE，corrected 与原文一致或仅有词典命中替换。
+确认数据目录已生成 feedback.jsonl / traces.jsonl / usage.jsonl，且每次调用行数只增不减。
