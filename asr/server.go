@@ -28,6 +28,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/correct", s.handleCorrect)
 	mux.HandleFunc("/v1/dictionary", s.handleDictionary)
 	mux.HandleFunc("/v1/process", s.handleProcess)
+	mux.HandleFunc("/v1/feedback", s.handleFeedback)
 	return mux
 }
 
@@ -97,6 +98,8 @@ type intentResponse struct {
 	NeedDisambiguate bool           `json:"need_disambiguate"`
 	DomainSuggestion []string       `json:"domain_suggestion"`
 	Control          string         `json:"control"`
+	Degraded         bool           `json:"degraded,omitempty"`
+	DegradedReason   string         `json:"degraded_reason,omitempty"`
 	Traces           []Step         `json:"traces"`
 }
 
@@ -117,18 +120,56 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := s.Pipe.Process(req.Text, req.SessionID)
-	// 第 2 批：真正的意图分类。当前按需求 4.6 兜底为低置信 ASK + 回问，绝不猜测。
+	// 本地规则解析意图（红线 #6：核心路径本地）；低置信时才由模型兜底，失败即降级。
+	ir := ClassifyIntent(res.Text)
 	writeJSON(w, http.StatusOK, intentResponse{
 		ContractVersion:  "1",
-		Type:             "ASK",
+		Type:             ir.Type,
 		Path:             "",
 		Params:           map[string]any{},
-		Confidence:       0,
-		NeedDisambiguate: true,
-		DomainSuggestion: []string{},
-		Control:          "",
+		Confidence:       ir.Confidence,
+		NeedDisambiguate: ir.NeedDisambiguate,
+		DomainSuggestion: ir.DomainSuggestion,
+		Control:          ir.Control,
+		Degraded:         ir.Degraded,
+		DegradedReason:   ir.DegradedReason,
 		Traces:           res.Steps,
 	})
+}
+
+// handleFeedback 回传一次反馈：登记为**候选词典条目**（source/created_at 可审计）。
+// 注意：按 ASR-MODEL-02 L2，用户显式反馈属 user_explicit，不过 learn 通道；
+// 隐式推断才必须过 learn（本轮未实现）。
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
+		return
+	}
+	var fb struct {
+		TextRaw   string `json:"text_raw"`
+		TextFinal string `json:"text_final"`
+		Accepted  bool   `json:"accepted"`
+		Source    string `json:"source"`
+	}
+	if err := readJSON(r, &fb); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		return
+	}
+	if s.Pipe.Dict == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "dictionary disabled"})
+		return
+	}
+	if fb.Accepted && fb.TextRaw != "" && fb.TextFinal != "" && fb.TextRaw != fb.TextFinal {
+		src := fb.Source
+		if src == "" {
+			src = "user_edit"
+		}
+		if err := s.Pipe.Dict.Add(DictionaryEntry{RawSpeech: fb.TextRaw, Target: fb.TextFinal, Source: src}); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 type dictionaryRequest struct {

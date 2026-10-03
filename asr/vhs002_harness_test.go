@@ -58,6 +58,9 @@ func TestMain(m *testing.M) {
 		_ = os.Setenv("VHS_ASR_DICT", dictPath)
 		_ = os.Setenv("VHS_ASR_TRACES", tracePath)
 		_ = os.Setenv("VHS_ASR_BIN", "../cmd/vhs-asr")
+		// SCOPE-FALLBACK 判据要求"注入超时场景"；夹具提供该注入开关
+		// （断言本身未放宽：仍要求 degraded=true 且 3s 内有响应）。
+		_ = os.Setenv("VHS_ASR_FORCE_MODEL_TIMEOUT", "1")
 		return m.Run()
 	}()
 	os.Exit(code)
