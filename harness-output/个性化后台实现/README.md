@@ -1,47 +1,81 @@
-README.md
+个性化后台实现 —— 运行说明
 
-个性化后台实现
+一、构建与启动
 
-一、启动
-  go build -o pbackend . && ./pbackend --addr 127.0.0.1:8080 --data-dir ./data --token dev-token
-  或：go run . --addr 127.0.0.1:8080 --data-dir ./data --token dev-token
-  服务只监听回环地址；绑定非 127.0.0.1 的地址会在启动时直接拒绝并退出。
-  鉴权为占位实现：请求需带 Authorization: Bearer <token>，不匹配返回 401。
+构建：
+go build -o bin/personalize ./cmd/server
 
-二、端到端自检
-  curl -s http://127.0.0.1:8080/v1/health
-  curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Authorization: Bearer dev-token' -H 'Content-Type: application/json' -d '{"text":"帮我记一下明天开会"}'
+启动（默认仅监听回环）：
+./bin/personalize -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
 
-三、HTTP 端点
-  GET  /v1/health    健康检查，返回 status、data_dir、版本等
-  POST /v1/process   业务主入口，JSON 进 JSON 出
+参数说明：
+-addr      监听地址，默认 127.0.0.1:8080；非回环地址（如 0.0.0.0、公网 IP）会在启动时直接拒绝并退出。
+-data-dir  数据目录，默认 ./data，首次启动自动创建。
+-token     鉴权占位令牌，默认 dev-token；请求需带 Authorization: Bearer <token>。
 
-  /v1/process 请求字段
-    text      必填，待处理原始文本
-    id        可选，本次请求标识，用于反馈回填
-    feedback  可选，取值 ok / bad（✔ / ✘），提供时仅记录反馈并落盘
+开发期也可直接跑：
+go run ./cmd/server -data-dir ./data
 
-  /v1/process 响应字段
-    id        请求标识
-    cleaned   清洗后文本
-    corrected 词典纠错后文本（正常文本原样返回，不误改）
-    intent    NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE 五类之一
-    matched   命中的词典条目
-    message   说明信息
+二、HTTP 端点
 
-四、数据文件（均为 append-only JSONL，重启不覆盖）
-  <data-dir>/traces.jsonl    每次 /v1/process 的处理轨迹
-  <data-dir>/usage.jsonl     调用用量记录
-  <data-dir>/feedback.jsonl  反馈学习记录（✔/✘）
-  <data-dir>/dictionary.json 个性化词典条目（增删查，写入后即生效）
+GET /v1/health
+返回服务状态、版本、数据目录可写性与各 JSONL 文件行数。
+示例响应：{"status":"ok","version":"0.1.0","data_dir":"./data","writable":true}
 
-  说明：data-dir 由 --data-dir 指定，缺省 ./data，目录不存在时自动创建。
-  JSONL 一律追加写入，不重写、不截断。
+POST /v1/process
+统一业务入口，Content-Type: application/json。按 action 分发，所有子能力共用同一端点。
 
-五、实现要点
-  词典：支持条目增、删、查，匹配时按长度优先，纠错走安全替换——仅当命中
-        词典且替换后不破坏句式时才改写，正常文本保持原样。
-  纠错：先做空白与不可见字符清洗，再做词典纠错。
-  意图：按关键词与结构规则归类为 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE，
-        无命中时归入 NOTE。
-  反馈：/v1/process 携带 feedback 时追加写入 feedback.jsonl，仅追加不修改历史。
+请求体通用结构：
+{"action":"<名称>","session_id":"<可选>","payload":{...}}
+
+action 取值与 payload：
+
+intent —— 意图分类，五类：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+payload: {"text":"记一下明天十点开会"}
+响应:    {"intent":"NOTE","confidence":0.92}
+
+correct —— 文本纠错（清洗 + 词典纠错，命中不确定时保持原文不改写）
+payload: {"text":"今天看一下 kubernets 文档"}
+响应:    {"text":"今天看一下 Kubernetes 文档","changed":true,"hits":[{"from":"kubernets","to":"Kubernetes"}]}
+
+dict.add —— 新增词条
+payload: {"term":"Kubernetes","aliases":["kubernets","k8s"],"tags":["tech"]}
+
+dict.del —— 删除词条（按 term 精确匹配）
+payload: {"term":"Kubernetes"}
+
+dict.get —— 查询词条（term 为空时列出全部，支持前缀匹配）
+payload: {"term":"Kube","prefix":true}
+
+feedback —— 反馈学习，落盘 append-only
+payload: {"session_id":"s1","trace_id":"t1","signal":"up","note":"分类正确"}
+signal 取值：up（✔）/ down（✘）。
+
+process —— 串联一步：清洗 → 纠错 → 意图分类（可选写 traces/usage）
+payload: {"text":"...","write_trace":true}
+
+响应统一形如：
+{"ok":true,"action":"correct","result":{...},"trace_id":"t1"}
+
+错误响应：{"ok":false,"error":{"code":"bad_request","message":"..."}}
+
+三、数据文件（全部 append-only JSONL，位于 data-dir）
+
+dictionary.jsonl  词典事件流（add/del），启动时回放重建内存索引
+feedback.jsonl    反馈记录，✔/✘ 逐行追加
+traces.jsonl      请求链路：trace_id、action、耗时、命中结果
+usage.jsonl       调用计数：action、session_id、时间戳
+
+示例：
+data/dictionary.jsonl
+{"ts":"2026-01-01T10:00:00Z","op":"add","term":"Kubernetes","aliases":["kubernets","k8s"]}
+data/feedback.jsonl
+{"ts":"2026-01-01T10:00:05Z","session_id":"s1","trace_id":"t1","signal":"up"}
+
+说明：文件只追加不重写；删除通过追加 op=del 事件生效；异常中断后可安全重启，回放按时间顺序合并。
+
+四、安全与边界
+
+仅绑定 127.0.0.1 / ::1；检测到非回环监听地址即拒绝启动。
+鉴权为占位实现，校验 Bearer 令牌一致性，缺失或错误返回 401。
+纠错采用高置信度替换策略：词典未命中或存在歧义时保留原文，确保正常文本不被改坏。

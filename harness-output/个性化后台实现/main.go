@@ -12,43 +12,43 @@ import (
 )
 
 type Dictionary struct {
-	entries map[string]string
-	mu      sync.RWMutex
+	words map[string]struct{}
+	mu    sync.RWMutex
 }
 
 func NewDictionary() *Dictionary {
-	return &Dictionary{entries: make(map[string]string)}
+	return &Dictionary{words: make(map[string]struct{})}
 }
 
-func (d *Dictionary) Add(word, definition string) {
+func (d *Dictionary) Add(word string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = definition
+	d.words[word] = struct{}{}
 }
 
 func (d *Dictionary) Delete(word string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	delete(d.entries, word)
+	delete(d.words, word)
 }
 
-func (d *Dictionary) Lookup(word string) (string, bool) {
+func (d *Dictionary) Exists(word string) bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	definition, exists := d.entries[word]
-	return definition, exists
+	_, exists := d.words[word]
+	return exists
 }
 
 func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.entries[word]; exists {
+	if _, exists := d.words[word]; exists {
 		return word
 	}
-	// Simple correction logic: return the first word that starts with the same letter
-	for entry := range d.entries {
-		if strings.HasPrefix(entry, string(word[0])) {
-			return entry
+	// Simple correction: return the first word that starts with the same letter
+	for w := range d.words {
+		if strings.HasPrefix(w, string(word[0])) {
+			return w
 		}
 	}
 	return word
@@ -105,35 +105,44 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var request struct {
+		var req struct {
 			Text string `json:"text"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			http.Error(w, "Bad request", http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
 
-		correctedText := dict.Correct(request.Text)
-		intent := classifyIntent(request.Text)
+		corrected := dict.Correct(req.Text)
+		intent := classifyIntent(req.Text)
 
-		response := struct {
-			CorrectedText string `json:"corrected_text"`
-			Intent        Intent `json:"intent"`
+		resp := struct {
+			Corrected string `json:"corrected"`
+			Intent    Intent `json:"intent"`
 		}{
-			CorrectedText: correctedText,
-			Intent:        intent,
+			Corrected: corrected,
+			Intent:    intent,
 		}
 
-		appendToFile(dataDir+"/traces.jsonl", request)
-		appendToFile(dataDir+"/usage.jsonl", response)
+		appendToFile(dataDir+"/traces.jsonl", req)
+		appendToFile(dataDir+"/usage.jsonl", resp)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func feedbackHandler(dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var feedback Feedback
+		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
+		appendToFile(dataDir+"/feedback.jsonl", feedback)
+
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -143,17 +152,17 @@ func main() {
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Error creating data directory:", err)
+		return
 	}
 
 	dict := NewDictionary()
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
 
-	fmt.Printf("Starting server on %s\n", *addr)
+	fmt.Println("Starting server on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Error starting server:", err)
 	}
 }
