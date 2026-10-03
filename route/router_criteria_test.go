@@ -327,3 +327,21 @@ func TestLedgerAppendOnlyAndAggregatable(t *testing.T) {
 		t.Errorf("[台账] 空/缺失台账应返回空摘要: %+v err=%v", empty, err)
 	}
 }
+
+// 台账接进主流程：**一次真实路由之后，ledger.jsonl 必须多出一条**。
+func TestLedgerWiredIntoRouting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	r := &Router{Hot: hotCache(t), Ledger: &Ledger{Path: path}}
+	r.Route(context.Background(), "爱ops", "q", Situation{})
+	r.Route(context.Background(), "写点东西", "q", Situation{})
+	s, err := Aggregate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Total != 2 {
+		t.Fatalf("[台账接线] 两次路由后应有 2 条记录，实际 %d", s.Total)
+	}
+	if s.ByLevel[LevelL0] < 1 {
+		t.Errorf("[台账接线] 层级分布缺失: %+v", s.ByLevel)
+	}
+}

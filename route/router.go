@@ -161,8 +161,10 @@ type Router struct {
 	L1 L1Model
 	// NeedsReasoning 由调用方声明"这是多步推理任务"（唯一升级触发器之一）。
 	NeedsReasoning bool
-	Threshold      float64
-	Timeout        time.Duration
+	// Ledger 非空时，**每次路由结束都自动落盘一条**（不接 = 台账在跑但记的是空的）。
+	Ledger    *Ledger
+	Threshold float64
+	Timeout   time.Duration
 	// Kind 为空时按 KindFor(question+text) 自动分派。
 	Kind Kind
 }
@@ -174,9 +176,22 @@ func (r *Router) threshold() float64 {
 	return r.Threshold
 }
 
-// Route 执行分层路由；question/situation 由调用方给（situation 由工作记忆四块板渲染）。
-// options 自动 = 各候选 id + "ambiguous"（J1/J3：允许"说不清"，且不发明答案空间）。
+// Route 执行分层路由，并在配置了 Ledger 时**自动落盘一条台账**。
 func (r *Router) Route(ctx context.Context, text, question string, sit Situation) Decision {
+	kind := r.Kind
+	if kind == "" {
+		kind = KindFor(question + " " + text)
+	}
+	d := r.routeOnce(ctx, text, question, sit)
+	if r.Ledger != nil {
+		_ = r.Ledger.Write(d, question, kind) // 落盘失败不影响路由结果（fail-open）
+	}
+	return d
+}
+
+// routeOnce 是真正的分层路由；question/situation 由调用方给。
+// options 自动 = 各候选 id + "ambiguous"（J1/J3：允许"说不清"，且不发明答案空间）。
+func (r *Router) routeOnce(ctx context.Context, text, question string, sit Situation) Decision {
 	var ledgerNote []LedgerEntry
 	options := []string{"ambiguous"}
 	for _, c := range sit.Candidates {
