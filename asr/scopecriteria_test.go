@@ -248,3 +248,35 @@ func toJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// SCOPE-PROFILE-01b（Lead 裁决）：`none` 与其它来源**互斥** —— 互相矛盾的值不该能写出来。
+//
+// `none` 的语义是「一个来源都没有」；若 handwritten 存在，那就不是"没有来源"。
+// 若将来需要"部分来源缺失"，那是**新枚举成员**，不是复用 none。
+func TestSCOPEProfileSourcesAreExclusiveWithNone(t *testing.T) {
+	base := serviceBase(t)
+	got := postJSON(t, base+"/v1/process", `{"text":"按上次的偏好处理这个报价","session_id":"p-excl"}`)
+	raw, ok := got["context_sources"].([]any)
+	if !ok {
+		t.Fatalf("[PROFILE-01b] context_sources 缺失或类型不对：%v", got["context_sources"])
+	}
+	enum := map[string]bool{"handwritten": true, "zhiji": true, "learned": true, "project-map": true, "none": true}
+	hasNone, hasOther := false, false
+	for _, v := range raw {
+		s, _ := v.(string)
+		if !enum[s] {
+			t.Errorf("[PROFILE-01b] 枚举外的来源值 %q（消费方无法穷举）：%v", s, raw)
+		}
+		if s == "none" {
+			hasNone = true
+		} else {
+			hasOther = true
+		}
+	}
+	if hasNone && hasOther {
+		t.Errorf("[PROFILE-01b] none 与其它来源并存（自相矛盾的值）：%v", raw)
+	}
+	if !hasNone && !hasOther {
+		t.Errorf("[PROFILE-01b] 来源为空 —— 必须显式说明「有没有」，不能留白：%v", raw)
+	}
+}
