@@ -25,8 +25,8 @@ func TestF1FactualQuestionNotDeploy(t *testing.T) {
 		text string
 		want string
 	}{
-		{"这个方案里 DMZ 发布是不是单向的", contract.IntentQuery},   // R2：原是 DEPLOY
-		{"OT-ODP 的六层目标架构分别是哪六层", contract.IntentQuery}, // R1：原是 UNKNOWN
+		{"这个方案里 DMZ 发布是不是单向的", contract.IntentQuery},    // R2：原是 DEPLOY
+		{"OT-ODP 的六层目标架构分别是哪六层", contract.IntentQuery},  // R1：原是 UNKNOWN
 		{"S1 振荡场景的降级模式 OT 边界是什么", contract.IntentQuery}, // R9：原是 UNKNOWN
 		{"我上次问的 OT-ODP 定位和范围是什么", contract.IntentQuery}, // R15：保持 QUERY
 	}
@@ -154,14 +154,39 @@ func TestSafetyNoRegression(t *testing.T) {
 		text string
 		want string
 	}{
-		{"不要删除外部系统数据贡献表", contract.IntentAsk}, // R11 否定拦截
+		{"不要删除外部系统数据贡献表", contract.IntentAsk},                     // R11 否定拦截
 		{"开始测试方案里 Discover 到 Scale 的五个交付阶段", contract.IntentTest}, // R12 元指令后的真测试
-		{"把这次的文档改动提交一下", contract.IntentCommit}, // R7 保持 COMMIT
+		{"把这次的文档改动提交一下", contract.IntentCommit},                   // R7 保持 COMMIT
 	}
 	for _, tc := range cases {
 		got := c.ClassifyTask(tc.text)
 		if got.Intent != tc.want {
 			t.Errorf("安全回归 %q → %s, want %s", tc.text, got.Intent, tc.want)
+		}
+	}
+}
+
+// F12（2026-10-04 真实测试收口 R6）：编辑类组合触发词——"补/加/添"类口语
+// 不再 UNKNOWN 回问；同时裸"加/补"不作为触发，防"参加/加班/增加"误判。
+func TestF12EditCompoundTriggers(t *testing.T) {
+	c := NewTaskClassifier(0.6, nil)
+	cases := []struct {
+		text string
+		want string
+	}{
+		{"在方案里补一句 SPoG 不进入保护联锁和实时控制路径", contract.IntentEdit}, // R6
+		{"把文档里补充一段部署说明", contract.IntentEdit},
+		{"在配置里加上一条限流规则", contract.IntentEdit},
+		{"给方案添加一个安全等级字段", contract.IntentEdit},
+		{"在方案里补上分布式架构说明", contract.IntentEdit},
+		// 反例：裸"加/补"不触发（普通正文高频字）。
+		{"我参加评审会议", contract.IntentUnknown},
+		{"数据量增加了需要扩容", contract.IntentUnknown},
+		{"感谢大家今天的配合", contract.IntentUnknown},
+	}
+	for _, tc := range cases {
+		if got := c.ClassifyTask(tc.text).Intent; got != tc.want {
+			t.Errorf("%q → %s, want %s", tc.text, got, tc.want)
 		}
 	}
 }

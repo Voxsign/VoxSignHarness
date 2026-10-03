@@ -107,7 +107,9 @@ var (
 	// F4 修复补充（e2e fz-07 红线）：无主语的模糊确认句「是不是可以了」不落 QUERY——
 	// 没有可查的实体，模糊→回问（宁可回问，不可猜错）。
 	fuzzyConfirmations = []string{"是不是可以了", "是不是可以", "是不是好了", "是不是行", "是不是没问题", "是不是搞定了"}
-	editTriggers     = []string{"改成", "换成", "改一下", "修改", "替换", "改", "整成"}
+	// F12 修复（真实测试 R6）：编辑类触发词只补**组合词**（补充/补一句/加上/添加…），
+	// 不补裸"补/加/添"——避免"参加/加班/增加"等普通正文高频字误判 EDIT。
+	editTriggers     = []string{"改成", "换成", "改一下", "修改", "替换", "改", "整成", "补充", "补一句", "补上", "添加", "加上", "加一条", "加一下", "添一句"}
 	debugTriggers    = []string{"报错", "为什么失败", "崩溃", "闪退", "出错", "bug", "修一下", "修这个", "修那个", "修一修", "修"}
 	testTriggers     = []string{"跑测试", "跑一下", "测一下", "跑个测试", "测试"}
 	commitTriggers   = []string{"提交", "推上去", "推到"}
@@ -966,14 +968,16 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentTest, 0.85, map[string]string{"test_kind": kind})
 	case containsAny(text, commitTriggers):
 		return c.fill(ti, contract.IntentCommit, 0.85, nil)
+	case containsAny(text, editTriggers):
+		// F12（2026-10-04）：EDIT 组合词（补充/补一句/加上/添加…）优先于 DEPLOY——
+		// "补充一段部署说明"是编辑动作，不是要部署（长词优先范式，与 F1 同源）。
+		return c.fill(ti, contract.IntentEdit, 0.85, c.editParams(text))
 	case containsAny(text, deployTriggers):
 		return c.fill(ti, contract.IntentDeploy, 0.85, nil)
 	case containsAny(text, askTriggers):
 		// 保持原语义：DEBUG（报错/为什么失败）先于 ASK（为什么/你觉得/是什么意思）；
 		// 疑问句事实查询（是不是/是什么…）已在上方 query 分支命中。
 		return c.fill(ti, contract.IntentAsk, 0.85, nil)
-	case containsAny(text, editTriggers): // 其余 EDIT 形态（改一下/修改/替换/改）
-		return c.fill(ti, contract.IntentEdit, 0.85, c.editParams(text))
 	}
 
 	// 3. F6 修复（真实测试 R14）：带时间锚点的截止/待办表述 → NOTE（时间由 applyCommon

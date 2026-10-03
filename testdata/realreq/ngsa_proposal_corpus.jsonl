@@ -13,3 +13,13 @@
 {"id":"R13","raw":"把采集安全六支柱记下来然后再提交一个想法","category":"multi_action","want_intent":"ASK","source":"pp.13 六支柱","note":"修复后多动作摊开→ASK（原 thoughtWords 抢先 NOTE 吞掉提交）"}
 {"id":"R14","raw":"下周三之前完成方案评审","category":"time","want_intent":"NOTE","source":"—","note":"修复后时间锚点+截止→NOTE 待办（time_hint 进 params，原 UNKNOWN）"}
 {"id":"R15","raw":"我上次问的 OT-ODP 定位和范围是什么","category":"refer","want_intent":"QUERY","source":"pp.03","note":"上次+是什么→QUERY 指代消解"}
+{"id":"R16","raw":"在方案里补一句：源系统替换不在 OT-ODP 范围内","category":"edit","want_intent":"EDIT","source":"pp.02 平台边界","note":"F12 组合触发词「补一句」→EDIT（不再 UNKNOWN）"}
+{"id":"R17","raw":"把 SPoG 的定位改成涵盖 AI 建议服务","category":"edit","want_intent":"EDIT","source":"pp.02/21 SPoG、AI 建议","note":"改成→EDIT"}
+{"id":"R18","raw":"给文档添加一节：企业发布要跨过批准的治理边界","category":"edit","want_intent":"EDIT","source":"pp.02 企业发布","note":"添加→EDIT（F12）"}
+{"id":"R19","raw":"把 OT-ODP 的定位和范围总结一下","category":"info","want_intent":"INFO","source":"pp.02 定位和范围","note":"总结→INFO（F2 路由）"}
+{"id":"R20","raw":"翻译一下 In scope 和 Outside the platform boundary 的区别","category":"info","want_intent":"INFO","source":"pp.02 边界","note":"翻译→INFO（F2 路由）"}
+{"id":"R21","raw":"查一下 DMZ 单向发布的机制是什么","category":"query","want_intent":"QUERY","source":"pp.06/20 受控发布、DMZ","note":"查一下→QUERY"}
+{"id":"R22","raw":"记一下：现有 OT 应用保留它们的控制职责","category":"note","want_intent":"NOTE","source":"pp.03 架构演进","note":"记一下→NOTE 落盘"}
+{"id":"R23","raw":"下周四之前完成六层架构的评审","category":"time","want_intent":"NOTE","source":"pp.04 六层架构","note":"时间锚点→NOTE 待办（F6）"}
+{"id":"R24","raw":"把 OT-ODP 核心部署到生产环境","category":"deploy","want_intent":"DEPLOY","source":"pp.04 部署视图","note":"部署→DEPLOY，默认域外拒绝"}
+{"id":"R25","raw":"为什么 SPoG 不进入保护联锁和实时控制路径","category":"ask","want_intent":"ASK","source":"pp.02 平台边界","note":"为什么→ASK 澄清"}
