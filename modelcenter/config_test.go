@@ -110,8 +110,29 @@ func TestLoadRealTemplate(t *testing.T) {
 	if !cfg.Channels["default"].Enabled || cfg.Channels["default"].ModelID != "deepseek-flash" {
 		t.Errorf("default 通道配置不符: %+v", cfg.Channels["default"])
 	}
-	if cfg.Channels["diagnose"].Enabled || cfg.Channels["learn"].Enabled {
-		t.Error("diagnose/learn 在模型未定前必须 enabled:false")
+	// **升版（Lead 2026-10-03，Peter 拍板）**：learn 用 deepseek-reasoner 启用；
+	// diagnose 按 quality 档启用。旧断言"模型未定前必须 enabled:false"已不适用。
+	if !cfg.Channels["diagnose"].Enabled {
+		t.Error("diagnose 应已启用（quality 档）")
+	}
+	l, err := cfg.ResolveModel(ChannelLearn)
+	if err != nil {
+		t.Fatalf("learn 解析失败: %v", err)
+	}
+	if !cfg.Channels["learn"].Enabled || l != "deepseek-reasoner" || !cfg.Channels["learn"].WriteBack {
+		t.Errorf("learn 应为 enabled + deepseek-reasoner + write_back: %+v → %s", cfg.Channels["learn"], l)
+	}
+	for _, ch := range []Channel{ChannelPlan, ChannelResearch, ChannelDiagnose} {
+		m, err := cfg.ResolveModel(ch)
+		if err != nil {
+			t.Fatalf("%s 解析失败: %v", ch, err)
+		}
+		if m != "deepseek-v4-pro" {
+			t.Errorf("%s 应走 quality 档，实际 %s", ch, m)
+		}
+	}
+	if d, _ := cfg.ResolveModel(ChannelDefault); d != "deepseek-flash" {
+		t.Errorf("default 应走 fast 档，实际 %s", d)
 	}
 	if cfg.Gateway.ChatPath != "/api/model/chat" {
 		t.Errorf("chat_path 必须是实测路径: %q", cfg.Gateway.ChatPath)

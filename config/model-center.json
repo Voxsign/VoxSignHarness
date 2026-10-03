@@ -16,20 +16,18 @@
       "write_back": false
     },
     "diagnose": {
-      "enabled": false,
+      "enabled": true,
       "provider": "aiops",
       "tier": "quality",
-      "model_id": "TBD",
       "timeout_ms": 30000,
       "max_concurrency": 2,
       "write_back": false
     },
     "learn": {
-      "enabled": false,
+      "enabled": true,
       "provider": "aiops",
-      "tier": "quality",
-      "model_id": "TBD",
-      "timeout_ms": 60000,
+      "model_id": "deepseek-reasoner",
+      "timeout_ms": 120000,
       "max_concurrency": 1,
       "write_back": true
     },
