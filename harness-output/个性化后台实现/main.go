@@ -64,7 +64,7 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
+func classifyIntent(text string) Intent {
 	if strings.HasPrefix(text, "note") {
 		return NOTE
 	} else if strings.HasPrefix(text, "query") {
@@ -83,7 +83,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
+func appendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -119,7 +119,7 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 		}
 
 		correctedText := dict.Correct(request.Text)
-		intent := ClassifyIntent(request.Text)
+		intent := classifyIntent(request.Text)
 
 		response := struct {
 			CorrectedText string `json:"corrected_text"`
@@ -129,10 +129,8 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 			Intent:        intent,
 		}
 
-		if err := AppendToFile(dataDir+"/traces.jsonl", response); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+		appendToFile(dataDir+"/traces.jsonl", request)
+		appendToFile(dataDir+"/usage.jsonl", response)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
@@ -145,16 +143,17 @@ func main() {
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Println("Error creating data directory:", err)
-		return
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		os.Exit(1)
 	}
 
 	dict := NewDictionary()
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
 
-	fmt.Println("Starting server on", *addr)
+	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Error starting server:", err)
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
 }

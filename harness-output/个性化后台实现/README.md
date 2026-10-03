@@ -1,68 +1,47 @@
-# 个性化后台实现 · 运行说明
+README.md
 
-## 一、环境与构建
-需要 Go 1.21 及以上。
+个性化后台实现
 
-编译：
-go build -o pbackend .
+一、启动
+  go build -o pbackend . && ./pbackend --addr 127.0.0.1:8080 --data-dir ./data --token dev-token
+  或：go run . --addr 127.0.0.1:8080 --data-dir ./data --token dev-token
+  服务只监听回环地址；绑定非 127.0.0.1 的地址会在启动时直接拒绝并退出。
+  鉴权为占位实现：请求需带 Authorization: Bearer <token>，不匹配返回 401。
 
-启动（默认监听 127.0.0.1:8080，数据目录 ./data）：
-./pbackend
+二、端到端自检
+  curl -s http://127.0.0.1:8080/v1/health
+  curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Authorization: Bearer dev-token' -H 'Content-Type: application/json' -d '{"text":"帮我记一下明天开会"}'
 
-自定义地址与数据目录：
-./pbackend -addr 127.0.0.1:9000 -data-dir /var/lib/pbackend
+三、HTTP 端点
+  GET  /v1/health    健康检查，返回 status、data_dir、版本等
+  POST /v1/process   业务主入口，JSON 进 JSON 出
 
-说明：服务只接受回环地址。若 -addr 填写的 IP 非 127.0.0.0/8 或 ::1，启动时会直接拒绝并退出。鉴权为占位实现，可通过 -token 设置；请求头带 `Authorization: Bearer <token>` 时校验，未设置时不校验。
+  /v1/process 请求字段
+    text      必填，待处理原始文本
+    id        可选，本次请求标识，用于反馈回填
+    feedback  可选，取值 ok / bad（✔ / ✘），提供时仅记录反馈并落盘
 
-## 二、HTTP 端点
+  /v1/process 响应字段
+    id        请求标识
+    cleaned   清洗后文本
+    corrected 词典纠错后文本（正常文本原样返回，不误改）
+    intent    NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE 五类之一
+    matched   命中的词典条目
+    message   说明信息
 
-1) 健康检查
-GET /v1/health
-返回：{"status":"ok","version":"...","data_dir":"..."}
+四、数据文件（均为 append-only JSONL，重启不覆盖）
+  <data-dir>/traces.jsonl    每次 /v1/process 的处理轨迹
+  <data-dir>/usage.jsonl     调用用量记录
+  <data-dir>/feedback.jsonl  反馈学习记录（✔/✘）
+  <data-dir>/dictionary.json 个性化词典条目（增删查，写入后即生效）
 
-2) 业务处理
-POST /v1/process
-请求体（JSON）：
-{
-  "text": "原始文本",
-  "session_id": "可选",
-  "op": "可选，见下",
-  "feedback": {"trace_id": "可选", "label": "up|down"}
-}
+  说明：data-dir 由 --data-dir 指定，缺省 ./data，目录不存在时自动创建。
+  JSONL 一律追加写入，不重写、不截断。
 
-op 取值：
-- 空或 "process"：文本纠错 + 意图分类（默认）
-- "dict.add"：新增词条，配合 "term"、"replacement"、"note"
-- "dict.del"：删除词条，配合 "term"
-- "dict.list"：列出词条
-
-响应体（JSON）：
-{
-  "trace_id": "本次请求 ID",
-  "intent": "NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE",
-  "text": "清洗与词典纠错后的文本",
-  "original": "原始文本",
-  "corrections": [{"from": "...", "to": "...", "term": "..."}],
-  "dict": [ ... ] // 仅 dict.list 返回
-}
-
-文本纠错遵循安全原则：仅按词典精确/近似命中替换，命中不确定或会破坏语义时保持原文不变，corrections 为空即表示未做任何修改。
-
-意图分类五类：NOTE（记录）、QUERY（查询）、EDIT（修改）、COMMIT（提交/确认）、ORCHESTRATE（编排/多步调度）；无法判定时归为 NOTE。
-
-## 三、数据文件（均在 data-dir 下，JSONL 一律 append-only）
-- data/dictionary.json：个性化词典条目，新增/删除通过临时文件+rename 原子替换
-- data/traces/traces.jsonl：每次 /v1/process 的输入、纠错结果、意图、耗时
-- data/usage/usage.jsonl：调用计数与端点用量
-- data/feedback.jsonl：✔/✘ 反馈记录，只追加不覆盖
-
-JSONL 每行一个独立 JSON 对象，写入为 O_APPEND 追加，进程重启后继续追加，不做重写。
-
-## 四、反馈学习
-在 /v1/process 请求中携带 feedback 字段即可落盘 feedback.jsonl；已落盘的反馈会在后续纠错与意图判定中被读取，用于调整词条权重。反馈文件损坏的行会被跳过，不影响启动。
-
-## 五、快速自测
-curl http://127.0.0.1:8080/v1/health
-curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -d '{"text":"明天要开会","session_id":"s1"}'
-curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -d '{"op":"dict.add","term":"开会","replacement":"评审会"}'
-curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -d '{"text":"明天要开会","feedback":{"trace_id":"上一步返回的 trace_id","label":"up"}}'
+五、实现要点
+  词典：支持条目增、删、查，匹配时按长度优先，纠错走安全替换——仅当命中
+        词典且替换后不破坏句式时才改写，正常文本保持原样。
+  纠错：先做空白与不可见字符清洗，再做词典纠错。
+  意图：按关键词与结构规则归类为 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE，
+        无命中时归入 NOTE。
+  反馈：/v1/process 携带 feedback 时追加写入 feedback.jsonl，仅追加不修改历史。
