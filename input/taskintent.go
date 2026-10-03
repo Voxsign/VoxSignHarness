@@ -626,7 +626,7 @@ var (
 // 长程实现任务由编排引擎去拆解，分类层只做识别（对齐修订卡2 层2）。
 var (
 	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个"}
-	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件"}
+	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件", "需求说明书"}
 	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
 
 	// —— 技能调用（线 C 修订卡 2026-10-03）——
@@ -712,7 +712,7 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 		// 也视为名词信号——「按这份需求说明书继续实现并提交」无实体名词，靠槽解析目标。
 		// 查全文而非 text[vi:]：指代词常居动词前（"按这份需求说明书**继续实现**"）。
 		if ni < 0 {
-			for _, d := range []string{"这份", "该文档", "此文档", "它", "那"} {
+			for _, d := range []string{"这份", "该文档", "此文档", "这个", "这些", "它", "那"} {
 				if strings.Contains(text, d) {
 					ni = vi + 1
 					break

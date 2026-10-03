@@ -359,7 +359,19 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 				approved = o.confirm(ctx, out.RequestID, "强确认："+decision.Reason+"，放行？(y/n)")
 			}
 		case contract.ConfirmHuman:
+			// OBS-02（观察报告核对 2026-10-03）：确认话术面向**目标**而非内部概念。
+			// 默认语仍含风险语义（不可逆动作），实现类长程任务则给出可决策的执行计划摘要。
 			q := "人工放行（不可逆）：" + decision.Reason
+			if it := intent; it.Intent == contract.IntentOrchestrate {
+				kind, _ := it.Params["kind"]
+				if kind == "implement" {
+					tgt := strings.TrimSpace(it.Params["target_doc"])
+					if tgt == "" {
+						tgt = "需求文档"
+					}
+					q = fmt.Sprintf("将对《%s》执行实现类长程任务：读文档 → 生成实现计划 → 写文件 → 定向提交（不可逆）。是否继续？", tgt)
+				}
+			}
 			// M4-4：COMMIT 前把未提交改动数写进确认问题，绝不覆盖/改写历史。
 			if it := intent; it.Intent == contract.IntentCommit {
 				if root := o.projectRootForCommit(it); root != "" {
@@ -368,7 +380,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 					}
 				}
 			}
-			approved = o.confirm(ctx, out.RequestID, q+"，放行？(y/n)")
+			// OBS-02：面向目标语已含问句（"是否继续？"），不再拼 "，放行？(y/n)"。
+			if strings.HasSuffix(q, "？") || strings.HasSuffix(q, "?") {
+				approved = o.confirm(ctx, out.RequestID, q)
+			} else {
+				approved = o.confirm(ctx, out.RequestID, q+"，放行？(y/n)")
+			}
 		}
 	}
 	// M4-1：是否真问过人工（auto 不打断不算等待；waitMs 的 µs 级 overhead 不计）。
@@ -920,7 +937,7 @@ var bracketTitle = regexp.MustCompile(`《([^》]+)》`)
 
 // hasDeicticDocRef 判定文本是否含文档指代（"这份/该文档/此文档/这份需求说明书"等）。
 func hasDeicticDocRef(text string) bool {
-	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "那", "它"} {
+	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "这个", "这些", "那", "它"} {
 		if strings.Contains(text, d) {
 			return true
 		}

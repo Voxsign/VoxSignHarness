@@ -253,7 +253,25 @@ func isLoopback(remoteAddr string) bool {
 // ---------- 端点 ----------
 
 type runReq struct {
-	Text string `json:"text"`
+	Text           string `json:"text"`
+	RequestID      string `json:"request_id,omitempty"`      // 幂等重试键（对齐 /v1/tasks）
+	ConversationID string `json:"conversation_id,omitempty"` // 指代固化会话（用户点名 conversation_id 必加）
+}
+
+// tryDedup M4-1 ①：同 request_id 重复提交 → 返回既有任务（不重复执行/写轨迹）。
+// 两入口（/v1/run 与 /v1/tasks）共用 —— OBS-08 核对：此前 handleRun 无此检查。
+func (s *Server) tryDedup(requestID string) (taskID, status string, found bool) {
+	if requestID == "" {
+		return "", "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existingID, ok := s.byReq[requestID]; ok {
+		if existing, ok2 := s.tasks[existingID]; ok2 {
+			return existing.ID, existing.Status, true
+		}
+	}
+	return "", "", false
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -267,55 +285,16 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ts := &taskState{
-		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		Status:    stRunning,
-		confirmCh: make(chan bool, 1),
-	}
-	// 任务生命周期独立于 HTTP 请求（响应返回后请求 ctx 会被取消）。
-	ctx, cancel := context.WithCancel(context.Background())
-	ts.cancel = cancel
-
-	s.mu.Lock()
-	s.tasks[ts.ID] = ts
-	s.mu.Unlock()
-
-	// 克隆模板 Options，注入本任务的 ConfirmFn（桥接到手机 /v1/confirm）。
-	o := *s.tmpl
-	o.ConvID = ts.ConvID // 指代固化上下文槽键（2026-10-03：conversation_id 必加）
-	o.ConfirmFn = func(taskID, question string) (bool, error) {
-		s.mu.Lock()
-		ts.Status = stWaiting
-		ts.Question = question
-		s.mu.Unlock()
-
-		select {
-		case approved := <-ts.confirmCh:
-			s.mu.Lock()
-			ts.Status = stRunning
-			ts.Question = ""
-			s.mu.Unlock()
-			return approved, nil
-		case <-ctx.Done():
-			return false, errors.New("任务被取消")
-		}
+	// M4-1 ①：request_id 去重（OBS-08 修复 —— 此前 handleRun 连字段都不收）。
+	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
+		writeJSON(w, http.StatusOK, map[string]string{"task_id": existingID, "status": status, "deduped": "true"})
+		return
 	}
 
-	go func() {
-		out, err := pipeline.Run(ctx, &o, req.Text)
-		s.mu.Lock()
-		ts.Outcome = &out
-		if err != nil {
-			ts.Err = err.Error()
-			ts.Status = stCanceled
-		} else if ctx.Err() != nil {
-			ts.Status = stCanceled
-		} else {
-			ts.Status = stDone
-		}
-		s.mu.Unlock()
-	}()
-
+	// OBS-04/08/09/10 修复（2026-10-03 观察报告核对）：统一走 spawnTask，
+	// 不再手工构造 taskState —— 补齐 persist（落盘）/ byReq（request_id 去重）/
+	// Role（初始 planner）/ Text / Document / startedAt / writeContextSlot（conversation_id 槽）。
+	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
 }
 
@@ -826,19 +805,12 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// M4-1 ①：同 request_id 重复提交 → 返回既有任务，不重复执行/写轨迹。
-	s.mu.Lock()
-	if req.RequestID != "" {
-		if existingID, ok := s.byReq[req.RequestID]; ok {
-			if existing, ok2 := s.tasks[existingID]; ok2 {
-				s.mu.Unlock()
-				writeJSON(w, http.StatusOK, map[string]string{
-					"task_id": existing.ID, "status": existing.Status, "deduped": "true",
-				})
-				return
-			}
-		}
+	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"task_id": existingID, "status": status, "deduped": "true",
+		})
+		return
 	}
-	s.mu.Unlock()
 
 	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document, req.ConvID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
