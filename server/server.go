@@ -446,12 +446,23 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/task/")
 	s.mu.Lock()
 	ts, ok := s.tasks[id]
-	s.mu.Unlock()
 	if !ok {
+		s.mu.Unlock()
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
 		return
 	}
-	writeJSON(w, http.StatusOK, ts)
+	// ⚠️ **必须在锁内 marshal**（2026-10-03）：`ts` 是共享指针，
+	//   写侧持 `s.mu` 改 `ts.*` ⇒ 锁外 `json.Marshal(ts)` 会读全部字段 ⇒ **数据竞争**。
+	//   先 marshal 成字节，再解锁写出（**不持锁做 I/O**）。
+	b, mErr := json.Marshal(ts)
+	s.mu.Unlock()
+	if mErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "任务序列化失败: " + mErr.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
 }
 
 type confirmReq struct {
@@ -933,21 +944,53 @@ func (s *Server) handleCancelSub(w http.ResponseWriter, r *http.Request, ts *tas
 }
 
 // writeTaskView 按 INTERACT-v1 形状渲染（receipt=四行，attribution=六格）。
+// writeTaskView 把任务视图写给 w。
+//
+// ⚠️ **并发纪律**（2026-10-03 · race detector 实报）：
+//
+//	本函数会从 `handleTasksSub`（SSE 订阅）在**另一个 goroutine** 被调用，
+//	而写侧（`runPipeline.func2` @ server.go:596-606）持 `s.mu` 写 `ts.*`。
+//	原先本函数**不持锁**读 `ts.Question/Options/Err/Outcome/Reversible`
+//	⇒ `WARNING: DATA RACE`（`-race -count=20` 实测 5 次）。
+//	⇒ 修法：**持锁做快照**，**锁外**装配与写出（避免持锁做 I/O 阻塞写侧）。
 func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
-	body := map[string]any{"task_id": ts.ID, "status": ts.Status, "role": ts.Role}
-	if ts.Question != "" {
-		body["question"] = ts.Question
-	}
-	if len(ts.Options) > 0 {
-		body["options"] = ts.Options
-	}
-	if ts.Err != "" {
-		body["error"] = ts.Err
-	}
+	// —— 持锁快照（只在这里读共享字段）——
+	var (
+		id, status, role, question, errStr string
+		options                            []pipeline.AskOption
+		reversible                         bool
+		receipt                            string
+		attribution                        contract.Attribution
+		hasOutcome                         bool
+	)
+	s.mu.Lock()
+	id, status, role = ts.ID, ts.Status, ts.Role
+	question = ts.Question
+	options = append([]pipeline.AskOption(nil), ts.Options...) // 复制，避免锁外再读切片
+	errStr = ts.Err
+	reversible = ts.Reversible
 	if ts.Outcome != nil {
-		body["receipt"] = contract.RenderReceipt(ts.Outcome.View)
-		body["attribution"] = ts.Outcome.Attribution
-		if ts.Reversible {
+		hasOutcome = true
+		receipt = contract.RenderReceipt(ts.Outcome.View) // 渲染也放在锁内（读 Outcome）
+		attribution = ts.Outcome.Attribution
+	}
+	s.mu.Unlock()
+
+	// —— 锁外装配与写出 ——
+	body := map[string]any{"task_id": id, "status": status, "role": role}
+	if question != "" {
+		body["question"] = question
+	}
+	if len(options) > 0 {
+		body["options"] = options
+	}
+	if errStr != "" {
+		body["error"] = errStr
+	}
+	if hasOutcome {
+		body["receipt"] = receipt
+		body["attribution"] = attribution
+		if reversible {
 			body["reversible"] = true
 		}
 	}
