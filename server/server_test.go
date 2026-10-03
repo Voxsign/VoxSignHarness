@@ -534,12 +534,23 @@ func TestAskAnswerByOptionID(t *testing.T) {
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("answer 候选 id 应 200, got %d", r.StatusCode)
 	}
-	time.Sleep(200 * time.Millisecond)
-	srv.mu.Lock()
-	got := srv.tasks["task-opt-id"]
-	srv.mu.Unlock()
-	if got.Outcome == nil {
-		t.Fatal("answer=note 应驱动续跑并产出 Outcome")
+	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 与 `:414`/`:497` 同族）：
+	//   原为 `time.Sleep(200ms)` —— **固定等待** ⇒ 慢 CI 上可能不够 ⇒ 失败信息误导
+	//   ⇒ 改为**轮询到条件成立 + 明确超时**（直接读 `srv.tasks`，**不走端点** ⇒ 无 mux 依赖）
+	var got *taskState
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		got = srv.tasks["task-opt-id"]
+		done := got != nil && got.Outcome != nil
+		srv.mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got == nil || got.Outcome == nil {
+		t.Fatal("answer=note 应驱动续跑并产出 Outcome：等最多 5s 后仍为空")
 	}
 	if got.Outcome.Intent.Intent != contract.IntentNote {
 		t.Fatalf("answer=note 应映射为 NOTE 意图, got %q", got.Outcome.Intent.Intent)
