@@ -1,39 +1,48 @@
-个性化后台实现 — 运行说明
+个性化后台实现 —— 运行说明
 
-一、启动
-构建：go build -o pbackend .
-启动：./pbackend --data-dir ./data --addr 127.0.0.1:8080
-调试：go run . --data-dir ./data
+一、环境要求
+Go 1.21+，无需外部依赖，本地运行。
 
-参数说明
---data-dir  数据目录，默认 ./data，不存在则自动创建（可配）
---addr      监听地址，默认 127.0.0.1:8080；非回环地址（如 0.0.0.0）直接拒绝启动
---auth-token 可选，鉴权占位串；配置后请求需带 Authorization 头
+二、启动命令
+1) 编译
+go build -o personald .
 
-服务只监听 127.0.0.1，无外网暴露；鉴权为占位实现，但端点校验必须存在。
+2) 运行（默认数据目录 ./data，监听 127.0.0.1:8080）
+./personald
 
-二、HTTP 端点
+3) 自定义端口与数据目录
+./personald -addr 127.0.0.1:9090 -data-dir /var/lib/personald
+
+4) 开发态直接跑
+go run . -addr 127.0.0.1:8080 -data-dir ./data
+
+说明：仅监听 127.0.0.1 / ::1，非回环地址会拒绝启动；请求需带 Authorization: Bearer <token>（占位鉴权，默认 token 为 dev-token，可用 -token 覆盖）。
+
+三、HTTP 端点
 GET  /v1/health
-     返回 {"status":"ok","version":"...","data_dir":"...","time":"..."}，用于存活探针。
+  健康检查，返回 {"status":"ok","time":...}，无需鉴权。
 
 POST /v1/process
-     请求 JSON：{"text":"原始文本","feedback":"ok|bad（可选）","top_k":3（可选）}
-     处理链：清洗 → 词典纠错（安全匹配，正常文本不被改坏）→ 意图分类
-     意图取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-     响应 JSON：{"intent":"...","corrected":"...","changed":true|false,"hits":[...],"trace_id":"..."}
-     单次请求同时触发 traces.jsonl 与 usage.jsonl 追加写入。
+  Content-Type: application/json，需鉴权。
+  请求字段：
+    text      必填，待处理文本
+    intent    可选，显式指定 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE，缺省由分类器判定
+    feedback  可选，✔/✘ 反馈，取值 "up" / "down"
+    session_id 可选
+  响应字段：
+    intent      最终意图
+    corrected   纠错后文本
+    changed     是否发生改动（正常文本应为 false）
+    dict_hits   命中的词典条目
+    feedback_id 落盘后的反馈记录 id
+    trace_id    本次请求追踪 id
 
-三、数据文件（均在 --data-dir 下，全部 append-only）
-dictionary.json   个性化词典条目：增/删/查，进程内加载 + 写回落盘
-feedback.jsonl    反馈学习流：每行一条 ✔/✘ 回馈，只追加、不覆盖、不截断
-traces.jsonl      每次 /v1/process 的处理轨迹，按 trace_id 串联
-usage.jsonl       调用计量（时间、意图、耗时、结果码）
+四、数据文件（全部 append-only JSONL，位于 -data-dir 下）
+traces.jsonl    每次 /v1/process 的请求、纠错、意图与耗时
+usage.jsonl     调用计数与维度（intent / 状态码 / 时间）
+feedback.jsonl  ✔/✘ 反馈，追加写入，不回写历史
+dictionary.json 个性化词典快照（增删查的持久化载体）
+logs/app.log    运行日志
 
-JSONL 写入采用 O_APPEND 单行完整写，重启后从尾部续写，历史记录不丢。
-
-四、自检要点
-1. 启动成功后 curl 127.0.0.1:8080/v1/health 返回 200。
-2. 用 0.0.0.0 或非回环地址启动应报错退出。
-3. 连续调用 /v1/process，确认 traces.jsonl 与 usage.jsonl 行数单调递增。
-4. 词典增删查后重启服务，条目保持一致。
-5. 正常文本经纠错后 corrected 与原文一致（changed=false），不被改坏。
+五、词典维护
+词典提供增（Add）、删（Remove）、查（Lookup）三种能力，纠错仅在安全前提下替换：命中条目长度需达标、上下文边界匹配、替换前后不改变标点与数字，确保正常文本不被改坏。
