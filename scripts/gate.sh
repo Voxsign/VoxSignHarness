@@ -10,7 +10,7 @@ echo "[gate] go vet ./..."
 go vet ./...
 echo "[gate] tagged 判据：编译 + vet + **真跑**（默认门禁看不到 tag 文件 —— 曾经的盲区）"
 # 教训：只编译不跑 ⇒ 一条 tagged 判据变红也能被推出去。**必须真跑。**
-for t in asrharness vhs002 vhsext vhsplan vhsplanmodel vhswm vhscache vhsrecog vhsreal vhsroute vhsref; do
+for t in asrharness vhs002 vhsui vhsext vhsplan vhsplanmodel vhswm vhscache vhsrecog vhsreal vhsroute vhsref; do
   go vet -tags "$t" ./... >/dev/null
   go test -tags "$t" ./... >/dev/null
 done
