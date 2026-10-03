@@ -31,27 +31,55 @@ import (
 // ⚠️ 零值 `VerdictPending` = **未回填** ⇒ 按 SK-7，**不得当成"已验证"**。
 type Verdict string
 
+// ⚠️ 取值**照抄规范**（`tasks/VHS-SKILL-001:96`）：`correct|wrong|unverified`
+//
+//	我最初自拟成 `right|wrong|pending` —— **与规范不符**（且把 `pending` 张冠李戴到了 verdict 上，
+//	而 `pending` 是 **`outcome`** 的取值）。
 const (
-	VerdictPending Verdict = "pending" // 未回填（**默认值**）
-	VerdictRight   Verdict = "right"
-	VerdictWrong   Verdict = "wrong"
+	VerdictUnverified Verdict = "unverified" // **未回填（默认值）**
+	VerdictCorrect    Verdict = "correct"
+	VerdictWrong      Verdict = "wrong"
 )
 
 // Sediment 是一条沉淀（SK-6 的字段集）。
+// ⚠️ **字段名与类型照抄规范**（`tasks/VHS-SKILL-001:93-99` 的 jsonl 样例）：
+//
+//	{"at":…, "skill_id":…, "skill_version":…, "scenario":…, "judgement":…,
+//	 "basis":[…], "outcome":…, "verdict":…, "evidence_ref":…}
+//
+// 我最初自拟成 ts/version/evidence(string)/无 evidence_ref ⇒ **5 处偏差**，已按规范改回。
 type Sediment struct {
-	ID        string  `json:"id"`
-	SkillID   string  `json:"skill_id"`
-	Version   string  `json:"version"`
-	Scenario  string  `json:"scenario"`  // 场景
-	Judgement string  `json:"judgement"` // 判断
-	Evidence  string  `json:"evidence"`  // 依据
-	Outcome   string  `json:"outcome"`
-	Verdict   Verdict `json:"verdict"`
-	TS        string  `json:"ts"`
+	ID           string   `json:"id"` // 本机内部主键（规范样例未含；用于回填寻址）
+	At           string   `json:"at"`
+	SkillID      string   `json:"skill_id"`
+	SkillVersion string   `json:"skill_version"`
+	Scenario     string   `json:"scenario"`
+	Judgement    string   `json:"judgement"`
+	Basis        []string `json:"basis"` // **数组**（依据列表）
+	Outcome      string   `json:"outcome"`
+	Verdict      Verdict  `json:"verdict"`
+	EvidenceRef  string   `json:"evidence_ref"`
+}
+
+// Outcome 的取值（规范 `:95`）：`adopted|revised|rejected|pending`。
+const (
+	OutcomeAdopted  = "adopted"
+	OutcomeRevised  = "revised"
+	OutcomeRejected = "rejected"
+	OutcomePending  = "pending"
+)
+
+// ValidOutcome 报告 outcome 是否在规范枚举内。
+func ValidOutcome(o string) bool {
+	switch o {
+	case OutcomeAdopted, OutcomeRevised, OutcomeRejected, OutcomePending:
+		return true
+	}
+	return false
 }
 
 // IsVerified 报告该条是否**可当已验证**（SK-7：未回填 ⇒ false）。
-func (s Sediment) IsVerified() bool { return s.Verdict == VerdictRight }
+func (s Sediment) IsVerified() bool { return s.Verdict == VerdictCorrect }
 
 // SedimentStore 是**append-only** 的沉淀存储（usage.jsonl）。
 //
@@ -71,10 +99,14 @@ func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 		return Sediment{}, fmt.Errorf("skill: Record 需要 skill_id（SK-6：沉淀必须可归因）")
 	}
 	if e.Verdict == "" {
-		e.Verdict = VerdictPending
+		e.Verdict = VerdictUnverified // 未回填（规范默认）
 	}
-	if e.TS == "" {
-		e.TS = time.Now().UTC().Format(time.RFC3339)
+	if e.At == "" {
+		e.At = time.Now().UTC().Format(time.RFC3339)
+	}
+	// ⚠️ outcome 必须在规范枚举内（不得自由填 ⇒ 那会让"私有评测集"无法统计）
+	if e.Outcome != "" && !ValidOutcome(e.Outcome) {
+		return Sediment{}, fmt.Errorf("skill: outcome %q 不在规范枚举内（adopted|revised|rejected|pending）", e.Outcome)
 	}
 	if e.ID == "" {
 		e.ID = fmt.Sprintf("sed-%d", time.Now().UnixNano())
@@ -93,11 +125,11 @@ func (s *SedimentStore) BackfillVerdict(id string, v Verdict) error {
 		return fmt.Errorf("skill: BackfillVerdict 需要 id")
 	}
 	switch v {
-	case VerdictRight, VerdictWrong:
-	case VerdictPending:
-		return fmt.Errorf("skill: 回填值不能是 pending（那就是「未回填」）")
+	case VerdictCorrect, VerdictWrong:
+	case VerdictUnverified:
+		return fmt.Errorf("skill: 回填值不能是 unverified（那就是「未回填」）")
 	default:
-		return fmt.Errorf("skill: 未知裁决 %q ⇒ 判不了，**不当成 right**", v)
+		return fmt.Errorf("skill: 未知裁决 %q ⇒ 判不了，**不当成 correct**", v)
 	}
 	return s.append(map[string]any{"kind": "verdict", "id": id, "verdict": v,
 		"ts": time.Now().UTC().Format(time.RFC3339)})
@@ -153,7 +185,7 @@ func (s *SedimentStore) Pending() ([]Sediment, error) {
 	}
 	var out []Sediment
 	for _, e := range all {
-		if e.Verdict == VerdictPending {
+		if e.Verdict == VerdictUnverified {
 			out = append(out, e)
 		}
 	}
@@ -173,7 +205,7 @@ func CriterionFromWrong(e Sediment) (Criterion, error) {
 	return Criterion{
 		ID:      "from-wrong-" + e.ID,
 		Skill:   e.SkillID,
-		Version: e.Version,
+		Version: e.SkillVersion,
 		Field:   "judging",
 		Text:    e.Scenario + " ⇒ " + e.Judgement,
 		Check:   "manual",

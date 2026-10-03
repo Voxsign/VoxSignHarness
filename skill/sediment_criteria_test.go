@@ -13,19 +13,19 @@ import (
 func TestSK6RecordProducesAttributableSediment(t *testing.T) {
 	st := NewSedimentStore(filepath.Join(t.TempDir(), "usage.jsonl"))
 	e, err := st.Record(Sediment{
-		SkillID: "arch-guardian", Version: "v0.1.0",
-		Scenario: "长程任务：搭建计费服务", Judgement: "先确认域", Evidence: "space_check",
-		Outcome: "拒绝并回问",
+		SkillID: "arch-guardian", SkillVersion: "v0.1.0",
+		Scenario: "长程任务：搭建计费服务", Judgement: "先确认域", Basis: []string{"space_check"},
+		Outcome: OutcomeRejected,
 	})
 	if err != nil {
 		t.Fatalf("[SK-6] Record 失败: %v", err)
 	}
 	// ① 默认必须是 pending（不得凭空"已验证"）
-	if e.Verdict != VerdictPending {
+	if e.Verdict != VerdictUnverified {
 		t.Errorf("[SK-6] 新沉淀的裁决应为 pending，实际 %q ⇒ **未回填就等于已验证**（违反 SK-7）", e.Verdict)
 	}
 	// ② 必须可归因
-	if e.SkillID == "" || e.ID == "" || e.TS == "" {
+	if e.SkillID == "" || e.ID == "" || e.At == "" {
 		t.Errorf("[SK-6] 沉淀缺归因字段: %+v", e)
 	}
 	// ③ 缺 skill_id ⇒ **报错**（不静默记一条无法归因的）
@@ -44,7 +44,7 @@ func TestSK7UnbackfilledStaysPending(t *testing.T) {
 	b, _ := st.Record(Sediment{SkillID: "s2", Scenario: "sc", Judgement: "j"})
 
 	// 回填 b 为 right，a 留 pending
-	if err := st.BackfillVerdict(b.ID, VerdictRight); err != nil {
+	if err := st.BackfillVerdict(b.ID, VerdictCorrect); err != nil {
 		t.Fatalf("[SK-7] 回填失败: %v", err)
 	}
 	all, err := st.Load()
@@ -63,7 +63,7 @@ func TestSK7UnbackfilledStaysPending(t *testing.T) {
 	if gotA == nil || gotB == nil {
 		t.Fatalf("[SK-7] 读回缺条目")
 	}
-	if gotA.Verdict != VerdictPending {
+	if gotA.Verdict != VerdictUnverified {
 		t.Errorf("[SK-7] 未回填的条目裁决=%q ⇒ 应为 pending", gotA.Verdict)
 	}
 	if gotA.IsVerified() {
@@ -76,7 +76,7 @@ func TestSK7UnbackfilledStaysPending(t *testing.T) {
 	if err := st.BackfillVerdict(b.ID, Verdict("???")); err == nil {
 		t.Errorf("[SK-7] 非法裁决竟然回填成功 ⇒ 会把「判不了」当成「已验证」")
 	}
-	if err := st.BackfillVerdict(b.ID, VerdictPending); err == nil {
+	if err := st.BackfillVerdict(b.ID, VerdictUnverified); err == nil {
 		t.Errorf("[SK-7] 用 pending 回填竟然成功 ⇒ 语义上就是「未回填」")
 	}
 	pend, err := st.Pending()
@@ -93,7 +93,7 @@ func TestSK7UnbackfilledStaysPending(t *testing.T) {
 func TestSK8WrongBecomesCriterion(t *testing.T) {
 	st := NewSedimentStore(filepath.Join(t.TempDir(), "usage.jsonl"))
 	e, _ := st.Record(Sediment{
-		SkillID: "arch-guardian", Version: "v0.1.0",
+		SkillID: "arch-guardian", SkillVersion: "v0.1.0",
 		Scenario: "对只读域发起写操作", Judgement: "应先消歧域，不得回落默认域",
 	})
 	// ① **非 wrong ⇒ 报错**（不许把 right 也转成判据）
@@ -139,7 +139,7 @@ func TestSK7SedimentIsAppendOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.BackfillVerdict(e.ID, VerdictRight); err != nil {
+	if err := st.BackfillVerdict(e.ID, VerdictCorrect); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(p)
