@@ -11,6 +11,7 @@ package asr
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -102,6 +103,7 @@ type intentResponse struct {
 	NeedDisambiguate bool           `json:"need_disambiguate"`
 	DomainSuggestion []string       `json:"domain_suggestion"`
 	Control          string         `json:"control"`
+	Confirmable      *confirmedRef  `json:"confirmable,omitempty"`
 	Degraded         bool           `json:"degraded,omitempty"`
 	DegradedReason   string         `json:"degraded_reason,omitempty"`
 	Traces           []Step         `json:"traces"`
@@ -111,6 +113,48 @@ type processRequest struct {
 	Text      string `json:"text"`
 	SessionID string `json:"session_id"`
 	AudioMeta any    `json:"audio_meta"`
+	// Context：**调用方携带的上下文**（选项 C：会话记忆由调用方带回，服务架构不变）。
+	Context []string `json:"context,omitempty"`
+	// Confirmed：**调用方带回的确认结构**（服务据此复用，但自己不记得）。
+	Confirmed *confirmedRef `json:"confirmed,omitempty"`
+}
+
+// confirmedRef 是可携带的确认结构（第一次响应给出，第二次由调用方带回）。
+type confirmedRef struct {
+	Mention   string `json:"mention"`
+	Canonical string `json:"canonical"`
+}
+
+// pickPathFromContext 从调用方给的上下文里取一个可用的路径（不猜：只认显式形态）。
+func pickPathFromContext(ctx []string) string {
+	for _, c := range ctx {
+		c = strings.TrimSpace(c)
+		for _, prefix := range []string{"打开 ", "打开", "open "} {
+			if strings.HasPrefix(c, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(c, prefix))
+			}
+		}
+		if strings.ContainsAny(c, "/.") && !strings.Contains(c, " ") {
+			return c
+		}
+	}
+	return ""
+}
+
+// detectConfirmation 识别"确认，就是 X"形态并给出可携带结构（服务不保存它）。
+func detectConfirmation(text string) *confirmedRef {
+	if !strings.Contains(text, "确认") {
+		return nil
+	}
+	for _, sep := range []string{"就是", "指的是", "是"} {
+		if i := strings.Index(text, sep); i >= 0 {
+			canon := strings.TrimSpace(strings.Trim(text[i+len(sep):], "。，,. ！!"))
+			if canon != "" {
+				return &confirmedRef{Mention: "那个模块", Canonical: canon}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
@@ -125,11 +169,24 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	res := s.Pipe.Process(req.Text, req.SessionID)
 	// 本地规则解析意图（红线 #6：核心路径本地）；低置信时才由模型兜底，失败即降级。
+	var confirmable *confirmedRef
 	ir := ClassifyIntentWith(r.Context(), res.Text, s.IntentModel, s.IntentTimeout)
+	// 选项 C：**服务不持久化会话态**；消解所需的上下文/确认全部由调用方携带。
+	var path string
+	if req.Confirmed != nil && req.Confirmed.Canonical != "" {
+		path = req.Confirmed.Canonical
+		ir.NeedDisambiguate = false
+	} else if p := pickPathFromContext(req.Context); p != "" {
+		path = p
+		ir.NeedDisambiguate = false
+	}
+	if ref := detectConfirmation(res.Text); ref != nil {
+		confirmable = ref
+	}
 	writeJSON(w, http.StatusOK, intentResponse{
 		ContractVersion:  "1",
 		Type:             ir.Type,
-		Path:             "",
+		Path:             path,
 		Params:           map[string]any{},
 		Confidence:       ir.Confidence,
 		NeedDisambiguate: ir.NeedDisambiguate,
@@ -137,6 +194,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		Control:          ir.Control,
 		Degraded:         ir.Degraded,
 		DegradedReason:   ir.DegradedReason,
+		Confirmable:      confirmable,
 		Traces:           res.Steps,
 	})
 }

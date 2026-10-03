@@ -71,11 +71,32 @@ func TestSCOPEREF01ThreeLayerDisambiguation(t *testing.T) {
 }
 
 func TestSCOPEREF02ConfirmationIsReused(t *testing.T) {
+	// **v2（VHS-DECIDE-001 选项 C，Lead 发起的 v1→v2）**：
+	// 服务**不记得**任何会话态；确认结构由调用方带回。旧版 v1（"服务自己记得"）已废弃。
 	base := serviceBase(t)
-	postJSON(t, base+"/v1/process", `{"text":"确认，就是报价模块","session_id":"ref-cache"}`)
-	got := postJSON(t, base+"/v1/process", `{"text":"把那个模块改了","session_id":"ref-cache"}`)
+
+	// ① 第一次：确认请求 → 必须返回**可携带的确认结构**
+	first := postJSON(t, base+"/v1/process", `{"text":"确认，就是报价模块","session_id":"ref-probe-2"}`)
+	conf, ok := first["confirmable"].(map[string]any)
+	if !ok || conf["canonical"] == nil || conf["canonical"] == "" {
+		t.Fatalf("[SCOPE-REF-02 v2] 第一次未返回可携带确认结构：%v", first)
+	}
+	canon, _ := conf["canonical"].(string)
+
+	// ② 第二次：**调用方带回 confirmed** → 复用（不再回问）
+	got := postJSON(t, base+"/v1/process",
+		`{"text":"把那个模块改了","session_id":"ref-probe-2","confirmed":{"mention":"那个模块","canonical":"`+canon+`"}}`)
 	if got["need_disambiguate"] == true {
-		t.Errorf("[SCOPE-REF-02] 确认后未固化复用：%v", got)
+		t.Errorf("[SCOPE-REF-02 v2] 带回 confirmed 后未复用：%v", got)
+	}
+	if got["path"] == nil || got["path"] == "" {
+		t.Errorf("[SCOPE-REF-02 v2] 带回 confirmed 后未消解出 path：%v", got)
+	}
+
+	// ③ **反例：不带 confirmed ⇒ 必须回问** —— 证明服务是"真无状态"，而不是"偷偷记了"
+	again := postJSON(t, base+"/v1/process", `{"text":"把那个模块改了","session_id":"ref-probe-2"}`)
+	if again["need_disambiguate"] != true {
+		t.Errorf("[SCOPE-REF-02 v2] 不带 confirmed 却未回问 ⇒ 服务偷偷记住了会话态：%v", again)
 	}
 }
 
