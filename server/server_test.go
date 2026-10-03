@@ -411,7 +411,33 @@ func TestTaskPersistenceRestore(t *testing.T) {
 		TaskID string `json:"task_id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
-	time.Sleep(200 * time.Millisecond)
+	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 + §7"删掉跑 N 次"验证）：
+	//   原为 `time.Sleep(200ms)` —— **固定等待**。删掉它跑 10 次 ⇒ **失败**：
+	//     `server_test.go:423: done 任务恢复后应保持 done, got "interrupted"`
+	//   ⇒ 即：任务还在跑时就 `ts.Close()` ⇒ 盘上记 `interrupted`（那是**正确行为**）
+	//   ⇒ ⚠️ 慢 CI 上 200ms 可能不够 ⇒ **同一失败会出现**，且信息**误导性强**
+	//      （它说"done 应保持 done"，真实原因是"任务根本没跑完"）
+	//   ⇒ 改为**轮询到终态再关闭**。
+	// ⚠️ 端点必须是 **`/v1/tasks/`（复数）** —— `muxV1` 只注册了 4 条路由：
+	//      `/v1/tasks` · `/v1/tasks/` · `/v1/status` · `/v1/roles`
+	//    **没有 `/v1/task/`（单数）** ⇒ 我第一次改时抄了 `:130` 的单数端点 ⇒ **5 次全 404**
+	//    ⇒ 轮询永远看不到 done ⇒ **修复反而把测试改坏了**（已回滚后重改）。
+	var state taskState
+	for i := 0; i < 250; i++ { // 250 × 20ms = **5s 上限**
+		r, err := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
+		if err != nil {
+			break
+		}
+		_ = json.NewDecoder(r.Body).Decode(&state)
+		_ = r.Body.Close()
+		if state.Status == stDone || state.Status == stCanceled {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if state.Status != stDone {
+		t.Fatalf("持久化测试的前置条件未满足：任务应 done，实际 %q（等最多 5s）", state.Status)
+	}
 	ts.Close()
 
 	// 新 Server（同一 log_dir）恢复历史任务
