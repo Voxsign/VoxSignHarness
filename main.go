@@ -53,6 +53,9 @@ func main() {
 		cmdSummary()
 	case "compare":
 		cmdCompare()
+	case "skill-ratio":
+		// 真实技能层自动化率（可复现；口径见 skill/judgement.go）
+		cmdSkillRatio(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
