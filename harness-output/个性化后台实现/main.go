@@ -20,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,18 +35,22 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.Lookup(word); exists {
-			words[i] = correction
+func (d *Dictionary) Correct(word string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -60,13 +64,13 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	if strings.Contains(text, "note") {
+	if strings.HasPrefix(text, "note") {
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	} else if strings.HasPrefix(text, "query") {
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	} else if strings.HasPrefix(text, "edit") {
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
 	} else {
 		return ORCHESTRATE
@@ -103,9 +107,8 @@ type Response struct {
 }
 
 var (
-	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir = flag.String("data-dir", "./data", "Data directory")
-	dict    = NewDictionary()
+	dictionary = NewDictionary()
+	dataDir    string
 )
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +128,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correctedText := dict.Correct(req.Text)
+	correctedText := dictionary.Correct(req.Text)
 	intent := ClassifyIntent(req.Text)
 
 	resp := Response{
@@ -133,12 +136,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
+	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", dataDir), req); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -148,19 +146,15 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
 	flag.Parse()
-
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
-		os.Exit(1)
-	}
 
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler)
 
-	fmt.Printf("Listening on %s...\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
-		os.Exit(1)
+	addr := "127.0.0.1:8080"
+	fmt.Printf("Listening on %s...\n", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		fmt.Printf("Failed to start server: %v\n", err)
 	}
 }

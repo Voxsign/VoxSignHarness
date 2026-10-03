@@ -1,45 +1,35 @@
-# 个性化后台实现
+个性化后台实现 README
 
-## 启动
-go run . -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+启动
+开发运行：
+go run . --addr 127.0.0.1:8080 --data-dir ./data
 
-或先编译：
-go build -o personal-backend .
-./personal-backend -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+编译后运行：
+go build -o personalized-backend .
+./personalized-backend --addr 127.0.0.1:8080 --data-dir ./data
 
-参数：
-- -addr：默认 127.0.0.1:8080，仅允许回环地址，非 127.0.0.1 启动会拒绝。
-- -data-dir：默认 ./data，保存词典、反馈、轨迹、用量等数据。
-- -token：占位鉴权令牌，可空；配置后请求需带 Authorization: Bearer <token>。
+服务仅监听 127.0.0.1；传入非回环地址应拒绝启动。鉴权为占位但保留校验入口，请求头使用 Authorization: Bearer <token>。
 
-## HTTP 端点
+端点
 GET /v1/health
-返回：{"ok":true,"service":"personal-backend","time":"..."}
+健康检查，返回 {"ok":true}。
 
 POST /v1/process
-请求头：Content-Type: application/json；Authorization: Bearer dev-token（若配置 token）
-请求体示例：
-{"text":"帮我记一下明天开会","feedback":null,"dict_op":null}
+JSON 请求/响应，执行文本清洗、词典纠错、意图分类；feedback 为 true/false 时追加反馈学习。意图分类为 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE。
 
-响应体示例：
-{"intent":"NOTE","corrected_text":"帮我记一下明天开会","dictionary_hit":false,"trace_id":"...","feedback_saved":false}
-
-能力说明：
-- 个性化词典增/删/查：dict_op 支持 add、del、get，例如 {"op":"add","term":"旧词","replacement":"新词"}。
-- 文本纠错：先清洗，再按词典安全替换；正常文本不会被改坏。
-- 意图分类：NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE 五类。
-- 反馈学习：feedback 传 true 或 false，✔/✘ 追加写入 feedback.jsonl。
-- 鉴权：-token 可空，但请求路径已预留 Authorization 校验。
-
-## 数据文件
-数据目录由 -data-dir 指定，默认 ./data：
-- dictionary.json：个性化词典条目。
-- feedback.jsonl：反馈学习记录，append-only。
-- traces.jsonl：请求处理轨迹，append-only。
-- usage.jsonl：调用统计，append-only。
-- corrections.jsonl：纠错记录，append-only。
-
-## 快速验证
+示例：
 curl -s http://127.0.0.1:8080/v1/health
+curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -H 'Authorization: Bearer dev-token' -d '{"text":"这各方案有问题","feedback":null}'
 
-curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -H 'Authorization: Bearer dev-token' -d '{"text":"帮我记一下明天开会"}'
+响应示例：
+{"intent":"EDIT","corrected_text":"这个方案有问题","dictionary_hits":["这各->这个"],"trace_id":"..."}
+
+数据文件
+--data-dir 默认 ./data，可配置。
+
+dictionary.json：个性化词典条目，支持增/删/查。
+traces.jsonl：处理轨迹，append-only。
+usage.jsonl：调用用量，append-only。
+feedback.jsonl：✔/✘ 反馈回馈，append-only。
+
+注意：若 main.go 仍为骨架、含 todo 或 go build 失败，需先补齐 P0 实现后再按上述命令运行。
