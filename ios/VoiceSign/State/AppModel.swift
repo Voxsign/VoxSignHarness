@@ -171,11 +171,31 @@ final class AppModel: ObservableObject {
                 //     SSE 并行只驱动执行卡 stage 高亮（P2）。两者并行不冲突：轮询命中终态/决策点即停轮询。
                 startFlow(taskId: res.taskId)
             } catch {
+                // T1 后台能力：提交失败（断网/服务不可达/后台挂起）→ 入投递队列，
+                // 网络恢复后按 request_id 幂等补投；不丢语音输入。
                 removeTyping()
-                appendHarness("提交失败：\(error.localizedDescription)（检查右上角 ⚙ server 地址/token）",
-                              view: TaskView(status: "canceled"))
+                if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "text")) {
+                    DiagLogger.shared.log("QUEUE", "提交失败已入队 reqId=\(reqId) 队列=\(DeliveryQueue.shared.count)条 err=\(error.localizedDescription)")
+                    appendHarness("网络暂不可达，已进入离线队列（\(DeliveryQueue.shared.count) 条待投递），恢复后自动补投。",
+                                  view: TaskView(status: "canceled"))
+                } else {
+                    appendHarness("提交失败：\(error.localizedDescription)（检查右上角 ⚙ server 地址/token）",
+                                  view: TaskView(status: "canceled"))
+                }
             }
         }
+    }
+
+    /// T1 后台能力：手动触发队列补投（网络恢复回调/设置页"补投"按钮共用）。
+    /// - Returns: 本次补投条数。
+    @discardableResult
+    func flushQueue() async -> Int {
+        let n = await DeliveryQueue.shared.flush()
+        if n > 0 {
+            DiagLogger.shared.log("QUEUE", "补投成功 \(n) 条，剩余 \(DeliveryQueue.shared.count)")
+            appendHarness("离线队列已补投 \(n) 条。", view: TaskView(status: "done"))
+        }
+        return n
     }
 
     /// 一轮任务的双流编排：SSE stage 流 + 轮询决策。
@@ -333,11 +353,16 @@ final class AppModel: ObservableObject {
                                    question: question, options: options)
             closeExecCard()
             decision = VSLogic.nextDecisionPoint(currentView!)
+            // T1：后台/锁屏时本地通知提醒（前台由 UI 呈现）。
+            NotificationService.shared.routeEvent("need_ask", taskId: taskId, seq: 0,
+                                                  payload: ["question": question ?? ""])
 
         case .confirm(_, let question):
             currentView = TaskView(taskId: taskId, status: "need_confirm", question: question)
             closeExecCard()
             decision = VSLogic.nextDecisionPoint(currentView!)
+            NotificationService.shared.routeEvent("need_confirm", taskId: taskId, seq: 0,
+                                                  payload: ["question": question ?? ""])
 
         case .done(_, let receipt, let attribution, let reversible, let role):
             let view = TaskView(taskId: taskId, status: "done",
@@ -348,11 +373,14 @@ final class AppModel: ObservableObject {
             closeExecCard()
             decision = nil
             renderReceipt(view)
+            NotificationService.shared.routeEvent("done", taskId: taskId, seq: 0, payload: [:])
 
         case .failed(_, let error):
             currentView = TaskView(taskId: taskId, status: "canceled", error: error)
             closeExecCard()
             decision = DecisionPoint(kind: .error, message: error ?? "执行失败")
+            NotificationService.shared.routeEvent("failed", taskId: taskId, seq: 0,
+                                                  payload: ["error": error ?? ""])
 
         case .interrupt(_, let applied, let notApplied, _):
             // 三语义 → 红色系统条（已生效/未执行/可撤销）。
@@ -367,6 +395,7 @@ final class AppModel: ObservableObject {
             if systemBar == nil {
                 decision = DecisionPoint(kind: .error, message: "任务被取消")
             }
+            NotificationService.shared.routeEvent("canceled", taskId: taskId, seq: 0, payload: [:])
 
         case .unknown:
             break

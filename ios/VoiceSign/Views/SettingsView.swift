@@ -7,10 +7,16 @@
 //
 
 import SwiftUI
+#if canImport(Speech)
+import Speech
+#endif
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var settings: SettingsStore
+    #if canImport(Speech)
+    @EnvironmentObject var speech: SpeechRecognizer
+    #endif
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -33,6 +39,17 @@ struct SettingsView: View {
                         Text(model.statusLine).font(.system(size: 12))
                     }
                 }
+                // T1 后台能力：常听开关 + 离线队列补投。
+                #if canImport(Speech)
+                Section("后台能力") {
+                    Toggle("常听模式（后台持续收音）", isOn: $speech.alwaysOn)
+                    Button("补投离线队列") {
+                        Task { _ = await model.flushQueue() }
+                    }
+                    Text("离线队列 \(DeliveryQueue.shared.count) 条待投递 · 通知已授权=\(NotificationService.shared.authorized ? "是" : "否")")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+                #endif
                 Section {
                     Text("与 Mac 同 Wi-Fi；按 M3 指引起好 vhs serve（绑 0.0.0.0:8765 + token）。").font(.system(size: 11)).foregroundColor(.secondary)
                 }

@@ -27,6 +27,9 @@ struct VoiceSignApp: App {
                     #if canImport(Speech)
                     speech.requestAuthorization()
                     #endif
+                    // T1 后台能力：请求通知权限 + 启动时补投离线队列。
+                    NotificationService.shared.requestAuthorization()
+                    Task { await model.flushQueue() }
                 }
         }
     }
