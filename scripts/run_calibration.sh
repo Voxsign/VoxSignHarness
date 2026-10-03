@@ -46,7 +46,7 @@ cleanup() { [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true; rm -rf "$BINDI
 trap cleanup EXIT INT TERM
 
 echo "[calib-R] ① **真装配**（不许桩）：build 真二进制"
-( cd "$ROOT" && go build -o "$BIN" ./cmd/vhs-asr ) || { echo "[calib-R] ❌ build 失败 ⇒ 无 R 证据"; exit 2; }
+( cd "$ROOT" && go build -o "$BIN" . ) || { echo "[calib-R] ❌ build 失败 ⇒ 无 R 证据"; exit 2; }
 
 # ⚠️ 与 accept.sh 同款：默认钉住规则式配置，并**如实说明**（不许静默变弱）
 if [ -z "${VHS_MODEL_CENTER:-}" ]; then
