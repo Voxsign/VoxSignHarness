@@ -25,22 +25,25 @@ func TestBasisVerifiedOnlyFromExecutedCheck(t *testing.T) {
 
 // ② 族规则：可追溯 > 不可追溯；已执行 > 口头；范式优先只在打平时生效
 func TestBasisFamilyRanking(t *testing.T) {
-	traceable := ClaimedByCaller("有 URL 的转述").withTraceable(true)
-	untraceable := ClaimedByCaller("听说").withTraceable(false)
+	traceable := ClaimedByCaller("有 URL 的转述").WithTraceable(true)
+	untraceable := ClaimedByCaller("听说").WithTraceable(false)
 	got, degraded := RankByEvidence([]Claim{untraceable, traceable})
 	if got.Detail != traceable.Detail || !degraded {
 		t.Errorf("[basis] 可追溯未优先（或无已执行证据时应 degraded）: %+v deg=%v", got, degraded)
 	}
 
 	executed, _ := ExecutedCheck("checkA", true, "真跑")
-	got2, deg2 := RankByEvidence([]Claim{ClaimedByCaller("口头").withTraceable(true), executed})
+	got2, deg2 := RankByEvidence([]Claim{ClaimedByCaller("口头").WithTraceable(true), executed})
 	if got2.Detail != executed.Detail || deg2 {
 		t.Errorf("[basis] 已执行未优先于可追溯口头: %+v deg=%v", got2, deg2)
 	}
 
-	// ④ 范式优先：两者都只是口头且都不可追溯时
-	paradigm := ClaimedByCaller("核电旧经验").withParadigm(true)
-	other := ClaimedByCaller("新的猜测")
+	// ④ 范式优先：**必须来自已执行的 check**（口头自称不算）
+	paradigm, err := ExecutedParadigmCheck("checkParadigm", true, "核电旧经验（经 check 认定）")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := ClaimedByCaller("自称新范式的猜测")
 	got3, _ := RankByEvidence([]Claim{other, paradigm})
 	if got3.Detail != paradigm.Detail {
 		t.Errorf("[basis] 范式优先未生效: %+v", got3)
@@ -49,7 +52,7 @@ func TestBasisFamilyRanking(t *testing.T) {
 
 // ③ 反例：**全都只有口头主张 ⇒ 必须 degraded=true**（不许当成已核实）
 func TestBasisOnlyHearsayIsDegraded(t *testing.T) {
-	a := ClaimedByCaller("一方称 A").withTraceable(true)
+	a := ClaimedByCaller("一方称 A").WithTraceable(true)
 	b := ClaimedByCaller("一方称 B")
 	_, degraded := RankByEvidence([]Claim{a, b})
 	if !degraded {
@@ -58,5 +61,24 @@ func TestBasisOnlyHearsayIsDegraded(t *testing.T) {
 	// 空证据 ⇒ degraded
 	if _, d := RankByEvidence(nil); !d {
 		t.Errorf("[basis 反例] 空证据应 degraded")
+	}
+}
+
+// ④ 反例（Lead 裁决）：**"这是新范式"不能口头主张** —— 只有已执行 check 能置 paradigm。
+func TestBasisParadigmCannotBeClaimed(t *testing.T) {
+	fake := ClaimedByCaller("我这个是 AI 原生范式")
+	if fake.IsParadigm() {
+		t.Errorf("[basis] 口头主张被判成范式（架空④）: %+v", fake)
+	}
+	ok, err := ExecutedParadigmCheck("checkParadigm", true, "经 check 认定")
+	if err != nil || !ok.IsParadigm() {
+		t.Errorf("[basis] 已执行 check 应能认定范式: %+v err=%v", ok, err)
+	}
+	failed, _ := ExecutedParadigmCheck("checkParadigm", false, "未通过")
+	if failed.IsParadigm() {
+		t.Errorf("[basis] 未通过的 check 不应认定范式")
+	}
+	if _, err := ExecutedParadigmCheck("", true, "无来源"); err == nil {
+		t.Errorf("[basis] 缺 checkID 却接受了范式认定")
 	}
 }

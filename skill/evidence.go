@@ -21,8 +21,10 @@ type Claim struct {
 	Executed  bool       // 由构造器决定
 	CheckID   string     // 已执行 check 的标识（Executed=true 时非空）
 	Traceable bool       // 是否可追溯来源（URL/文件/命令）
-	Paradigm  bool       // 范式优先（如"核电旧经验的默认正确性"）
-	Detail    string
+	// paradigm **未导出**：按 Lead 裁决，`Paradigm` 与 `verified` 同口径 ——
+	// **只能由「已执行的 check」产生**；口头主张"这是新范式"一律不算。
+	paradigm bool
+	Detail   string
 }
 
 // ClaimedByCaller 只能产生 hearsay（**无论调用方怎么自称**）。
@@ -38,6 +40,7 @@ func ExecutedCheck(checkID string, passed bool, detail string) (Claim, error) {
 	c := Claim{kind: provExecuted, Executed: true, CheckID: checkID, Detail: detail}
 	if !passed {
 		c.kind = provClaimed // 没通过 ⇒ 不算已查证
+		c.Executed = false
 	}
 	return c, nil
 }
@@ -45,9 +48,8 @@ func ExecutedCheck(checkID string, passed bool, detail string) (Claim, error) {
 // IsVerified 报告该主张是否是**已执行 check 产生的**。
 func (c Claim) IsVerified() bool { return c.kind == provExecuted && c.Executed }
 
-// withTraceable / withParadigm 是便捷包装（仍不改变 kind 规则）。
-func (c Claim) withTraceable(v bool) Claim { c.Traceable = v; return c }
-func (c Claim) withParadigm(v bool) Claim  { c.Paradigm = v; return c }
+// WithTraceable 只影响"可追溯"标记（不涉及 verified/paradigm 的产生规则）。
+func (c Claim) WithTraceable(v bool) Claim { c.Traceable = v; return c }
 
 // RankByEvidence 实现 basis 判据族（**一次实现、四处生效**）：
 //
@@ -70,6 +72,21 @@ func RankByEvidence(claims []Claim) (Claim, bool) {
 	return best, !best.IsVerified()
 }
 
+// IsParadigm 报告该主张是否**经 check 认定**为范式。
+func (c Claim) IsParadigm() bool { return c.paradigm }
+
+// ExecutedParadigmCheck 与 ExecutedCheck 同口径：**范式认定也必须来自已执行的 check**。
+func ExecutedParadigmCheck(checkID string, passed bool, detail string) (Claim, error) {
+	c, err := ExecutedCheck(checkID, passed, detail)
+	if err != nil {
+		return Claim{}, err
+	}
+	if passed {
+		c.paradigm = true
+	}
+	return c, nil
+}
+
 func better(a, b Claim) bool {
 	// ②③ 已执行/已查证优先（最强）
 	if a.IsVerified() != b.IsVerified() {
@@ -79,9 +96,9 @@ func better(a, b Claim) bool {
 	if a.Traceable != b.Traceable {
 		return a.Traceable
 	}
-	// ④ 范式优先
-	if a.Paradigm != b.Paradigm {
-		return a.Paradigm
+	// ④ 范式优先（**只有经 check 认定的范式**才参与；口头自称不算）
+	if a.paradigm != b.paradigm {
+		return a.paradigm
 	}
 	return false
 }
