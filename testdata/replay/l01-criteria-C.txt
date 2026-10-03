@@ -1,0 +1,21 @@
+# L-01 完整判据清单 · C 通道（同一把尺子，每轮重放）
+# 格式：<判据ID> | <要证明的事实> | <匹配模式> [| <限定路径>] [| <别名模式>]
+# 产物层（第11章 × vhs-asr）
+L-01.1 | 独立 Go 服务入口存在 | vhs-asr | cmd/
+L-01.2 | 意图契约 8+1 存在 | intent | contract/
+L-01.3 | 词典接口处理存在 | handleDictionary | asr/server.go
+L-01.4 | 轨迹留痕实现存在 | traces | asr/trace.go | TraceRecord
+L-01.5 | 指代回问实现存在 | need_disambiguate | asr/server.go
+L-01.6 | 反馈闭环处理存在 | handleFeedback | asr/server.go
+R-01 | 永不执行红线在管线中 | execute | pipeline/
+R-04 | 容量机制存在 | TTL | cache/quad.go | ttl
+# 能力层（H 系列 × harness）
+H-01 | 规划器有长程任务分支 | readonly-probe | plan/
+H-02 | 执行路径接线工具/技能 | skill | pipeline/ | tools
+H-03 | 意图契约有长程类 | ORCHESTRATE | contract/
+H-04 | 长程链路闭环 | executor | server/
+# 线 C（技能层 × harness）
+C-01 | 技能发现接入 | skill | pipeline/
+C-02 | 技能选择接入 | select | pipeline/
+C-03 | 技能调用接入 | execute | pipeline/
+C-04 | 证据留痕接入 | evidence | pipeline/

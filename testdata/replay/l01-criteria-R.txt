@@ -1,0 +1,7 @@
+# L-01 完整判据清单 · R 通道（同一把尺子，每轮重放）
+# 格式：<判据ID> | <对象> | <METHOD> | <路径> | <期望子串> [| <请求体>]
+R-1 | 产物 | GET | /v1/health | "ok"
+R-2 | 产物 | POST | /v1/process | "type" | {"text":"把爱ops接上"}
+R-3 | 产物 | POST | /v1/dictionary | "ok" | {"op":"list"}
+R-4 | 产物 | POST | /v1/feedback | "ok" | {"text":"把爱ops接上","correction":"把AIOps接上"}
+R-5 | 产物 | POST | /v1/voice | "intent_source" | {"text":"把爱ops接上"}
