@@ -272,6 +272,14 @@ func Load(configPath string) (Config, error) {
 		for i := range cfg.Providers {
 			cfg.Providers[i].APIKey = v
 		}
+	} else if ak := os.Getenv("AIOPS_KEY"); ak != "" {
+		// F9 修复（真实测试）：未显式设 VHS_API_KEY 时，复用统一读 Key（AIOPS_KEY）
+		// 注入 aiops.peterzou.com 端点，避免模型候选全部 401 降级（网关实测接受 Bearer）。
+		for i := range cfg.Providers {
+			if strings.Contains(cfg.Providers[i].Endpoint, "aiops.peterzou.com") {
+				cfg.Providers[i].APIKey = ak
+			}
+		}
 	}
 	if v := os.Getenv("VHS_PROVIDER"); v != "" {
 		cfg.ForcedProvider = v

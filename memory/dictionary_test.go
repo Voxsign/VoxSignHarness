@@ -14,8 +14,9 @@ func TestLoadDictionaryBuiltinDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDictionary 无文件应返回内置词典而非报错: %v", err)
 	}
-	if len(d.Terms) != 5 {
-		t.Fatalf("内置词典应有 5 条，实际 %d", len(d.Terms))
+	// F7 修复（2026-10-03 真实测试 R8）新增内置条目「In scope」，内置默认词典共 6 条。
+	if len(d.Terms) != 6 {
+		t.Fatalf("内置词典应有 6 条，实际 %d", len(d.Terms))
 	}
 	for _, term := range d.Terms {
 		if term.Source != "builtin" {

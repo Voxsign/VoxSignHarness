@@ -137,7 +137,7 @@ type Options struct {
 	// 2026-10-03 L-01 架构（对齐 dsh goal-round）：任务多轮逼近目标。
 	RoundEvidence string // 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）
 	SkipConfirm   bool   // 第 2+ 轮跳过确认桥（授权已在本轮之前生效）
-	Trace     *trajectory.Trajectory
+	Trace         *trajectory.Trajectory
 
 	// Ground（M3 #37）认知切片注入器；nil 时薄降级（空 context）。
 	Ground *ground.Ground
@@ -542,7 +542,7 @@ func defaultSpaceFor(it contract.Intent) string {
 	switch it.Intent {
 	case contract.IntentNote:
 		return "vault-notes"
-	case contract.IntentQuery, contract.IntentAsk:
+	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo:
 		return "global"
 	case contract.IntentOrchestrate:
 		return "project" // 多步编排=读文档+写文件+git 提交，落在项目域
@@ -556,7 +556,7 @@ func planCaps(it contract.Intent) []string {
 	switch it.Intent {
 	case contract.IntentNote:
 		return []string{"note", "file-append", "read"}
-	case contract.IntentQuery, contract.IntentAsk:
+	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo:
 		return []string{"read", "query"}
 	case contract.IntentEdit, contract.IntentDebug:
 		return []string{"file", "read", "run"}
@@ -597,7 +597,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			"log_dir": logDir,
 		}
 		return []contract.Receipt{o.run("file", args)}
-	case contract.IntentQuery, contract.IntentAsk:
+	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo:
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
 			pattern = it.Params["object"]
@@ -808,7 +808,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	if objName == "" {
 		objName = "VoiceSign-ASR"
 	}
-		report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
+	report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
 		"> 由 VoiceSign Harness 技能调用链（ORCHESTRATE kind=skill：发现→选择→调用→证据）自动生成。\n\n" +
 		skillReportBody(name, action, readRecv.Stdout, doc, catalogSource)
 	reportName := sanitizePathPart(objName) + "-" + sanitizePathPart(action) + "报告.md"
@@ -1532,7 +1532,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 	mainPath := filepath.Join(implRoot, "main.go")
 	mainBytes, err := os.ReadFile(mainPath)
 	if err != nil || len(mainBytes) == 0 {
-		return append(gaps, "main.go 缺失或为空（" + mainPath + "）")
+		return append(gaps, "main.go 缺失或为空（"+mainPath+"）")
 	}
 	mainSrc := string(mainBytes)
 	// 判据 2：骨架/占位检测（确定性骨架的特征注释）。
@@ -1708,11 +1708,11 @@ package main
 `
 
 	return map[string]string{
-		"README.md":  readme,
-		"go.mod":     goMod,
-		"main.go":    mainGo,
-		"router.go":  routerGo,
-		"domain.go":  domainGo,
+		"README.md": readme,
+		"go.mod":    goMod,
+		"main.go":   mainGo,
+		"router.go": routerGo,
+		"domain.go": domainGo,
 	}
 }
 
@@ -1726,7 +1726,10 @@ func deterministicImplementPlan(title, doc string) string {
 
 	sb.WriteString("## 需求要点（确定性提取）\n\n")
 	lines := strings.Split(doc, "\n")
-	type hdr struct{ level int; text string }
+	type hdr struct {
+		level int
+		text  string
+	}
 	headers := make([]hdr, 0, 32)
 	for _, ln := range lines {
 		ln = strings.TrimSpace(ln)
@@ -2298,7 +2301,7 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 //     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
 func shouldResolveRefer(it *contract.Intent) bool {
 	text := it.CorrectedText
-	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
+	if questionTone(text) {
 		return false
 	}
 	if hasFileOpVerb(text) {
@@ -2369,6 +2372,22 @@ func clarificationBlocksExecution(it *contract.Intent, referOpts []refer.Option)
 	return isBareReferent(it.CorrectedText)
 }
 
+// questionTone 判定文本是否带**问句语气**（词级匹配，2026-10-03 R10 修复）。
+//
+// 旧实现是裸字符集 ContainsAny("?？吗呢怎么如何为什么哪")：把"为什么/怎么"的构成字
+// 拆成了单字符，导致"为/么/什"等**普通正文高频字**（为国家电网、这么、什么收获…）误判
+// 为问句——R10「为国家电网南非公司建一个 OT 运营数据平台…帮我规划一下这件事」因含"为"
+// 触发 LLM 意图复查，高置信 ORCHESTRATE(0.90) 被覆盖成 NOTE（真机复现证据 req-215055）。
+//
+// 新逻辑：单字问句词（？?吗呢哪）仍按字匹配；"怎么/如何/为什么"按**完整词**匹配，
+// 不再把 为/什/么 当独立问句字。语义不变（含完整"为什么"仍判问句），误报收敛。
+func questionTone(text string) bool {
+	return strings.ContainsAny(text, "?？吗呢哪") ||
+		strings.Contains(text, "怎么") ||
+		strings.Contains(text, "如何") ||
+		strings.Contains(text, "为什么")
+}
+
 // llmIntentFallback（M7 ①）：规则低置信/UNKNOWN 且像自然语言问句时，调 fast provider 补分类。
 //
 // 【伪代码逻辑层】（新裁决逻辑）：
@@ -2412,7 +2431,7 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if it.Conflict != "" && it.Ask != "" {
 		return it
 	}
-	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
+	hasQ := questionTone(text)
 	// M7 复验补强：含问句特征时，规则未判 QUERY（UNKNOWN/低置信/误判其他意图如 NOTE）
 	// 一律调 LLM 复查——规则词典对口语长问句常误判（22:04 真机："我现在测试一下…看看效果怎么样"
 	// 被规则判 NOTE 高置信，若只看低置信则 fallback 永不触发）。已是 QUERY 则直接信任规则。
@@ -2422,10 +2441,18 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if it.Intent == contract.IntentQuery {
 		return it
 	}
+	// 2026-10-03 R10 复测补强（20样例 17/20 → 20/20）：
+	// 问句类规则结果（ASK 澄清态 / DEBUG 报错态，且**无仲裁冲突**）信任规则，不复查——
+	// 真机复现：「为什么凌晨三点那个告警一直响」「你觉得要注意哪些」规则判 ASK/DEBUG，
+	// LLM 复查一律回 QUERY，把澄清问句压平成普通问答（want=ASK/DEBUG 全变 QUERY）。
+	// 带 Conflict 的路径（仲裁已发生）仍保持可回退（ask_vs_op/delete 等既有回归不回归）。
+	if it.Conflict == "" && (it.Intent == contract.IntentAsk || it.Intent == contract.IntentDebug) {
+		return it
+	}
 	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini。
 	resp, _, err := o.Providers.ChatWithFallback(ctx, []string{"fast", "center", "strong", "gpt-mini"}, provider.ChatRequest{
 		Messages: []contract.Message{
-			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交。"},
+			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交，ORCHESTRATE=规划/编排/搭建类长任务。"},
 			{Role: "user", Content: text},
 		},
 		MaxTokens: 64,
@@ -2444,13 +2471,20 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	valid := map[string]bool{
 		contract.IntentNote: true, contract.IntentQuery: true,
 		contract.IntentEdit: true, contract.IntentCommit: true,
+		contract.IntentOrchestrate: true,
 	}
 	if !valid[parsed.Intent] {
 		return it
 	}
+	prev := it.Intent
 	it.Intent = parsed.Intent
 	if parsed.Confidence > 0 {
 		it.Confidence = parsed.Confidence
+	}
+	// 覆盖为不同意图类别时，清掉旧意图遗留的 params（如 ORCHESTRATE 的 kind=implement），
+	// 避免 NOTE+kind=implement 这类混合状态进入轨迹/回执（2026-10-03 R10 真机复现）。
+	if prev != parsed.Intent {
+		it.Params = nil
 	}
 	// 覆盖成功后清掉旧 UNKNOWN 澄清残留（否则 NeedsClarification 仍触发回问；
 	// refer 层若目标仍歧义会重新填 Ask）。
@@ -2666,10 +2700,11 @@ func reasonText(r string) string {
 }
 
 func truncateStr(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s) // F8 修复：按 rune 截断，避免切裂多字节字符产生非法 UTF-8
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
 
 func strconvItoa(n int) string {

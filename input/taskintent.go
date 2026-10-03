@@ -92,8 +92,22 @@ var (
 	statusQuestion   = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
 	debugPlanWords   = []string{"思路", "怎么做", "方案", "打算"}
 	noteTriggers     = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
-	queryTriggers    = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看"}
-	editTriggers     = []string{"改成", "换成", "改一下", "修改", "替换", "改"}
+	// F4 修复（真实测试 R1/R2/R9）：事实疑问句触发。位于 2b 单类 switch 的 query 分支、
+	// 先于 deploy/edit 判定——「DMZ 发布是不是单向的」是提问不是部署命令（原误判 DEPLOY）。
+	queryTriggers    = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
+		"是不是", "是什么", "是哪", "有哪些", "哪几", "是否", "有没有"}
+	// F2 修复（真实测试「翻译一下：…」）：M2 补 INFO 类，接通配置中 INFO 路由（翻译/总结/摘要/问答→fast）。
+	// 独立表名（M1 intent.go 已有 infoTriggers），且不含 搜索/查一下——M2 中它们维持 QUERY 语义。
+	m2InfoTriggers   = []string{"翻译", "总结", "摘要", "问答", "概括", "归纳"}
+	// F3 修复（真实测试 R5/R6、vhs task 3 条失败）：空间名词是实体名，不是"记想法"触发；
+	// 即使无空间提示（vhs task 沙箱为空）也遮蔽想法仲裁。
+	thoughtSpaceNouns = []string{"想法库", "备忘库", "笔记库", "素材库", "灵感库"}
+	// F6 修复（真实测试 R14）：带时间锚点的截止/待办表述 → NOTE（时间进 params）。
+	deadlineWords     = []string{"之前", "完成", "截止", "到期", "提醒", "安排"}
+	// F4 修复补充（e2e fz-07 红线）：无主语的模糊确认句「是不是可以了」不落 QUERY——
+	// 没有可查的实体，模糊→回问（宁可回问，不可猜错）。
+	fuzzyConfirmations = []string{"是不是可以了", "是不是可以", "是不是好了", "是不是行", "是不是没问题", "是不是搞定了"}
+	editTriggers     = []string{"改成", "换成", "改一下", "修改", "替换", "改", "整成"}
 	debugTriggers    = []string{"报错", "为什么失败", "崩溃", "闪退", "出错", "bug", "修一下", "修这个", "修那个", "修一修", "修"}
 	testTriggers     = []string{"跑测试", "跑一下", "测一下", "跑个测试", "测试"}
 	commitTriggers   = []string{"提交", "推上去", "推到"}
@@ -613,7 +627,7 @@ func intentLabel(kind string) string {
 var (
 	orchOrganizeWords = []string{"整理成", "整理", "汇总成", "汇总", "汇编"}
 	orchDocWords      = []string{"沟通记录", "设计文档", "文档", "记录"}
-	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成"}
+	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成", "放到", "输出到"} // F5 修复：真实测试 R5「整理成…文档放到 docs 目录」→ ORCHESTRATE
 )
 
 // 实现类长程任务（实现/搭建服务类）结构性识别词表 —— 修订卡2 层1+2（2026-10-03）。
@@ -625,7 +639,7 @@ var (
 // 命中后：纯实现结构或带《…》文档引用 → ORCHESTRATE(kind=implement)，
 // 长程实现任务由编排引擎去拆解，分类层只做识别（对齐修订卡2 层2）。
 var (
-	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个"}
+	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个", "建一个"} // F1 修复：真实长叙述「建一个 OT 运营数据平台…帮我规划」→ ORCHESTRATE
 	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件", "需求说明书"}
 	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
 
@@ -841,7 +855,16 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, feasibleAsk):
 		ti.Conflict = contract.ConflictAskVsOp
 		return c.fill(ti, contract.IntentAsk, 0.9, nil)
-	case containsAny(text, thoughtWords) && !c.spaceShadowsThought(text):
+	case containsAny(text, thoughtWords) && !c.spaceShadowsThought(text) && !containsAny(text, thoughtSpaceNouns):
+		// F5 修复（真实测试 R13「记下来然后再提交一个想法」）：想法类句子若含多动作连接，
+		// 先摊开让用户选，不静默吞掉第二个动作（原 thoughtWords 抢先判 NOTE）。
+		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
+			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+			got.Conflict = contract.ConflictMultiAction
+			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
+				"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+			return got
+		}
 		ti.Conflict = contract.ConflictNoteVsDeploy
 		return c.fill(ti, contract.IntentNote, 0.9, nil)
 	case containsAny(text, statusQuestion):
@@ -928,7 +951,10 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	switch {
 	case containsAny(text, noteTriggers):
 		return c.fill(ti, contract.IntentNote, 0.85, nil)
-	case containsAny(text, queryTriggers):
+	case containsAny(text, m2InfoTriggers):
+		// F2 修复：置于 queryTriggers 之前——「翻译一下：六层架构是什么」不落 QUERY。
+		return c.fill(ti, contract.IntentInfo, 0.85, nil)
+	case containsAny(text, queryTriggers) && !containsAny(text, fuzzyConfirmations):
 		return c.fill(ti, contract.IntentQuery, 0.85, c.queryParams(text))
 	case containsAny(text, debugTriggers):
 		return c.fill(ti, contract.IntentDebug, 0.85, map[string]string{"object": "debug"})
@@ -943,12 +969,20 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, deployTriggers):
 		return c.fill(ti, contract.IntentDeploy, 0.85, nil)
 	case containsAny(text, askTriggers):
+		// 保持原语义：DEBUG（报错/为什么失败）先于 ASK（为什么/你觉得/是什么意思）；
+		// 疑问句事实查询（是不是/是什么…）已在上方 query 分支命中。
 		return c.fill(ti, contract.IntentAsk, 0.85, nil)
 	case containsAny(text, editTriggers): // 其余 EDIT 形态（改一下/修改/替换/改）
 		return c.fill(ti, contract.IntentEdit, 0.85, c.editParams(text))
 	}
 
-	// 3. 无任何触发词 → UNKNOWN，回问
+	// 3. F6 修复（真实测试 R14）：带时间锚点的截止/待办表述 → NOTE（时间由 applyCommon
+	//    抽进 params：time_hint/time_date）。「下周三之前完成方案评审」= 记一条带日期的待办。
+	if hint, _, _ := ResolveTimeAnchor(text, nowFn()); hint != "" && containsAny(text, deadlineWords) {
+		return c.fill(ti, contract.IntentNote, 0.85, nil)
+	}
+
+	// 4. 无任何触发词 → UNKNOWN，回问
 	return ti
 }
 

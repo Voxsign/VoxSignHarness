@@ -41,6 +41,7 @@ func builtinDictionary() *Dictionary {
 			{Term: "model.peterzou.com", Variants: []string{"彼得周点com", "model彼得周"}, Category: "域名", Source: "builtin"},
 			{Term: "VoxSign", Variants: []string{"voxsign", "沃克斯赛因"}, Category: "产品名", Source: "builtin"},
 			{Term: "center", Variants: []string{"中枢", "森特"}, Category: "架构名", Source: "builtin"},
+			{Term: "In scope", Variants: []string{"in 死 cope", "因死 cope", "因斯科普"}, Category: "术语", Source: "builtin"}, // F7 修复：真实测试 R8 ASR 噪声「in 死 cope」→ In scope
 		},
 	}
 }

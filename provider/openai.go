@@ -227,8 +227,9 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 // truncateResp 把响应体片段截断到 n 字符，避免错误信息过长污染轨迹。
 func truncateResp(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
+	r := []rune(s) // F8 修复：按 rune 截断，避免切裂多字节字符产生非法 UTF-8
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "...(truncated)"
+	return string(r[:n]) + "...(truncated)"
 }
