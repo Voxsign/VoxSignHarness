@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"bytes"
 	"voicesign-harness/config"
 	"voicesign-harness/contract"
 	"voicesign-harness/pipeline"
@@ -178,6 +179,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/v1/roles", s.auth(s.handleRoles)) // M5-3
 	// 兼容旧端点（deprecated，保留）
 	mux.HandleFunc("/v1/run", s.auth(s.handleRun))
+	mux.HandleFunc("/v1/voice", s.auth(s.handleVoice)) // 线 A 接语音：文本 → 线 B 意图 → 执行
 	mux.HandleFunc("/v1/task/", s.auth(s.handleTaskGet))
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
@@ -307,6 +309,124 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
+}
+
+// voiceReq 是 /v1/voice 的入参：**只收文本**（不碰音频编解码）。
+type voiceReq struct {
+	Text string `json:"text"`
+}
+
+// asrEndpoint 返回线 B 地址（可配；默认本机 8123）。
+func asrEndpoint() string {
+	if v := os.Getenv("VHS_ASR_ENDPOINT"); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:8123"
+}
+
+// handleVoice：**线 A 接语音的入口**。
+//
+// 边界（Lead 2026-10-03）：
+//
+//	① 线 A **不内嵌线 B 代码**，只走 HTTP（保持 "ASR 独立、多消费方"）；
+//	② 线 B 不可达 ⇒ **明确报错 + degraded**，**不许静默降级成"直接执行原文"**；
+//	③ 红线：意图为 ASK / need_disambiguate ⇒ **绝不执行**，把问题交回；
+//	④ 其余走既有 pipeline.Run 路径（含域门禁与不可逆确认）。
+func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		return
+	}
+	var req voiceReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}（ASR 识别文本）"})
+		return
+	}
+	intent, err := s.callASRProcess(r.Context(), req.Text)
+	if err != nil {
+		// ② **不静默降级**：明确 503 + degraded，且**不创建任何任务**
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":    "ASR 服务不可达（不静默降级为直接执行原文）: " + err.Error(),
+			"degraded": true,
+			"endpoint": asrEndpoint(),
+		})
+		return
+	}
+	// ③ 红线：ASK / need_disambiguate ⇒ 绝不执行
+	needAsk, _ := intent["need_disambiguate"].(bool)
+	typ, _ := intent["type"].(string)
+	ask, _ := intent["ask"].(string)
+	if needAsk || strings.EqualFold(typ, "ASK") || ask != "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"executed": false, "reason": "意图需要澄清（ASK / 低置信）—— 红线：Ask != '' 绝不执行",
+			"intent": intent,
+		})
+		return
+	}
+	// ④ 走既有执行路径（含域门禁 / 不可逆确认）
+	ts := &taskState{ID: fmt.Sprintf("task-%d", time.Now().UnixNano()), Status: stRunning, confirmCh: make(chan bool, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	ts.cancel = cancel
+	s.mu.Lock()
+	s.tasks[ts.ID] = ts
+	s.mu.Unlock()
+	o := *s.tmpl
+	o.ConfirmFn = func(taskID, question string) (bool, error) {
+		s.mu.Lock()
+		ts.Status = stWaiting
+		ts.Question = question
+		s.mu.Unlock()
+		select {
+		case approved := <-ts.confirmCh:
+			s.mu.Lock()
+			ts.Status = stRunning
+			ts.Question = ""
+			s.mu.Unlock()
+			return approved, nil
+		case <-ctx.Done():
+			return false, errors.New("任务被取消")
+		}
+	}
+	go func() {
+		out, err := pipeline.Run(ctx, &o, req.Text)
+		s.mu.Lock()
+		ts.Outcome = &out
+		if err != nil {
+			ts.Err = err.Error()
+			ts.Status = stCanceled
+		} else if ctx.Err() != nil {
+			ts.Status = stCanceled
+		} else {
+			ts.Status = stDone
+		}
+		s.mu.Unlock()
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": ts.ID, "intent": intent})
+}
+
+// callASRProcess 调线 B 的 POST /v1/process（**只走 HTTP**）。
+func (s *Server) callASRProcess(ctx context.Context, text string) (map[string]any, error) {
+	body, _ := json.Marshal(map[string]string{"text": text, "session_id": "voice"})
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(asrEndpoint(), "/")+"/v1/process", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("线 B HTTP %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
