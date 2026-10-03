@@ -580,6 +580,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	o := *s.tmpl
 	o.ConvID = ts.ConvID // 指代固化上下文槽键（/v1/tasks 执行体——此前缺赋值致槽解析退 default，R2 指代不命中）
 	o.Document = ts.Document // 附件文档全文 → 实现类长程任务消费（修订卡2 附）
+	o.ASRDataDir = s.cfg.Global.ASRDataDir // ASR 沉淀进入记忆槽（2026-10-04）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		s.markStatus(ts, stNeedConfirm)

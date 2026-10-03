@@ -127,6 +127,8 @@ type Options struct {
 	// Document 附件/需求文档全文（长程实现任务输入，修订卡2 附；server 装配时从 taskState 注入，
 	// Run 内在 classify 后塞入 intent.Params["document"] 供 execOrchestrate 实现类分支消费）。
 	Document string
+	// ASRDataDir ASR 服务数据目录（2026-10-04：「ASR 沉淀进入记忆槽」）。空 = 不注入 ASR 记忆。
+	ASRDataDir string
 
 	// ConvID 会话标识（指代固化上下文槽键，方案 C；缺省 "default"）。
 	ConvID string
@@ -281,6 +283,20 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 				log.Printf("[refer-slot] 槽命中指代目标=%s，恢复 document %d 字符（会话 %s）", td, len(d), o.ConvID)
 			} else {
 				log.Printf("[refer-slot] 槽命中指代目标=%s（会话 %s，无 document 可恢复）", td, o.ConvID)
+			}
+		}
+	}
+
+	// ASR 沉淀进入记忆槽（2026-10-04）：ASR 学到的东西（✔/✘ 反馈、黑名单、教词）
+	// 跨会话全局注入记忆上下文（"越来越懂你"），并落一条 asr 槽记录（槽体系可查、可审计）。
+	if asrMem := o.loadASRMemory(); asrMem != "" {
+		intent.Context = append(intent.Context, "asr-memory: "+asrMem)
+		log.Printf("[asr-memory] 注入 ASR 沉淀记忆（%d 字符）：%s", len(asrMem), truncateStr(asrMem, 160))
+		if o.ConvID != "" {
+			rec := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "conv_id": "asr-global",
+				"text": "ASR 沉淀快照", "doc_head": truncateStr(asrMem, 200), "doc_full": asrMem, "has_doc": asrMem != ""}
+			if b, err := json.Marshal(rec); err == nil {
+				o.writeASRSlot(string(b))
 			}
 		}
 	}
@@ -1003,6 +1019,77 @@ func slotLatestDocument(logDir, convID string) string {
 		}
 	}
 	return ""
+}
+
+// loadASRMemory 读 ASR 服务沉淀（feedback.jsonl 最近 10 条 / blacklist.json / dictionary.json 教词），
+// 生成"我学到的用户偏好"摘要。空目录/空文件 → 返回 ""（不注入，无副作用）。
+// 2026-10-04：ASR 学到的东西跨会话全局生效 —— 这就是"越来越懂你"的记忆来源。
+func (o *Options) loadASRMemory() string {
+	if o.ASRDataDir == "" {
+		return ""
+	}
+	var parts []string
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "feedback.jsonl")); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		start := len(lines) - 10
+		if start < 0 {
+			start = 0
+		}
+		for _, ln := range lines[start:] {
+			var rec map[string]any
+			if json.Unmarshal([]byte(ln), &rec) == nil {
+				rawT, _ := rec["raw"].(string)
+				cor, _ := rec["corrected"].(string)
+				acc, _ := rec["accepted"].(bool)
+				if acc && rawT != "" && cor != "" && rawT != cor {
+					parts = append(parts, "✔确认:"+rawT+"→"+cor)
+				} else if !acc && rawT != "" {
+					parts = append(parts, "✘标错:"+rawT+"→"+cor)
+				}
+			}
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "blacklist.json")); err == nil {
+		m := map[string]string{}
+		if json.Unmarshal(raw, &m) == nil {
+			for t := range m {
+				parts = append(parts, "黑名单:"+t)
+			}
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "dictionary.json")); err == nil {
+		var d struct {
+			Terms []struct {
+				Term   string `json:"term"`
+				Source string `json:"source"`
+			} `json:"terms"`
+		}
+		if json.Unmarshal(raw, &d) == nil {
+			for _, t := range d.Terms {
+				if t.Source == "model" || t.Source == "manual" {
+					parts = append(parts, "教词:"+t.Term)
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；")
+}
+
+// writeASRSlot 把 ASR 沉淀快照 append 到 <logDir>/context_slots/asr.jsonl（槽体系内、可审计）。
+func (o *Options) writeASRSlot(line string) {
+	dir := filepath.Join(o.logDir(), "context_slots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "asr.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line + "\n")
+	_ = f.Close()
 }
 
 // serverReadContextSlots 读槽（server.go 同函数导出代理——避免 import cycle：pipeline 不依赖 server）。

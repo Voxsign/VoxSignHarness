@@ -87,6 +87,10 @@ type Global struct {
 	// 不直接降级而是带 model 名进异常诊断层（区分网络慢/预算排队/参数不当）。
 	// 默认 10000ms；<=0 归一化为 10000。
 	FastResponseMs int `json:"fast_response_ms"`
+	// ASRDataDir ASR 服务数据目录（feedback.jsonl/blacklist.json/dictionary.json）。
+	// 2026-10-04：「ASR 沉淀进入记忆槽」——harness 每个任务读 ASR 学到的东西跨会话注入记忆上下文。
+	// 空则不注入（ASR 未启用时无副作用）。
+	ASRDataDir string `json:"asr_data_dir"`
 }
 
 // Provider 一个模型端点（OpenAI 兼容或 mock）。同一网关可声明多个 provider（不同 model）实现按场景选模型。
@@ -288,6 +292,7 @@ func Load(configPath string) (Config, error) {
 		cfg.ForcedRoute = v
 	}
 	envString(&cfg.Global.LogDir, "VHS_LOG_DIR")
+	envString(&cfg.Global.ASRDataDir, "VHS_ASR_DATA")
 	envString(&cfg.Global.Addr, "VHS_ADDR")
 	envInt(&cfg.Global.MaxTurnsDefault, "VHS_MAX_TURNS")
 	envBool(&cfg.Global.AllowHighRisk, "VHS_ALLOW_HIGH_RISK")
