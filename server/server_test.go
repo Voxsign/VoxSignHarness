@@ -378,8 +378,26 @@ func TestRequestIDDedup(t *testing.T) {
 	}
 	_ = json.NewDecoder(r1.Body).Decode(&ack1)
 
-	// 等任务 done
-	time.Sleep(200 * time.Millisecond)
+	// 等任务 done。
+	//
+	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · §7"删掉跑 N 次"验证）：
+	//   原为 `time.Sleep(200ms)` —— **固定等待**。**删掉它跑 1 次即失败**：
+	//     `TempDir RemoveAll cleanup: unlinkat …/001: **directory not empty**`
+	//   ⇒ 即：任务**仍在写盘**时测试就结束了 ⇒ 与 `t.TempDir()` 清理**竞争**
+	//   ⇒ ⚠️ 而本地跑 100 次全过（200ms 够）⇒ **失败率 <1%** ⇒
+	//      **但慢 CI 上 200ms 可能不够 ⇒ 同一失败会出现**
+	//   ⇒ 改为**轮询到终态**（直接读 `srv.tasks` ⇒ 不走端点 ⇒ 无 mux 依赖）
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		got := srv.tasks[ack1.TaskID]
+		done := got != nil && (got.Status == stDone || got.Status == stCanceled)
+		srv.mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// 同 request_id 再提交
 	r2 := postJSON(t, ts.URL+"/v1/tasks", "", body)
