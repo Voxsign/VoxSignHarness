@@ -1078,6 +1078,33 @@ func (o *Options) loadASRMemory() string {
 	return strings.Join(parts, "；")
 }
 
+// memoryBlock 把 memory 拼成 prompt 后缀（空 → ""，长 → 截断 1200）。
+func memoryBlock(memory string) string {
+	if memory == "" {
+		return ""
+	}
+	return "\n\n" + truncateStr(memory, 1200)
+}
+
+// memoryContext 从 intent.Context 提取"我学到的"记忆（asr-memory / project-map），
+// 拼进 LLM prompt —— 让"越来越懂你"真正被模型消费。
+// 2026-10-04 修复：此前 Context 只有注入无消费点（纸面记忆），LLM 看不到 ASR 沉淀。
+func (o *Options) memoryContext(it contract.Intent) string {
+	var parts []string
+	for _, c := range it.Context {
+		if strings.HasPrefix(c, "asr-memory: ") {
+			parts = append(parts, "- 用户偏好（ASR 沉淀）："+strings.TrimPrefix(c, "asr-memory: "))
+		}
+		if strings.HasPrefix(c, "project-map:") {
+			parts = append(parts, "- 项目背景："+strings.TrimPrefix(c, "project-map:"))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "记忆上下文（你从用户/过往会话学到的，应尊重并在输出中体现）：\n" + strings.Join(parts, "\n")
+}
+
 // writeASRSlot 把 ASR 沉淀快照 append 到 <logDir>/context_slots/asr.jsonl（槽体系内、可审计）。
 func (o *Options) writeASRSlot(line string) {
 	dir := filepath.Join(o.logDir(), "context_slots")
@@ -1146,7 +1173,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 			title = "个性化后台实现"
 		}
 		planName := title + "-实现计划"
-		body := o.llmSummarize(ctx, planName, doc)
+		body := o.llmSummarize(ctx, planName, doc, o.memoryContext(it))
 		if strings.TrimSpace(body) == "" {
 			body = deterministicImplementPlan(title, doc)
 		}
@@ -1175,7 +1202,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		// LLM 读需求文档 → 生成多文件 Go 代码 → 写盘 → go build **真编译验证** →
 		// 编译错误回喂 LLM 修复（≤2 轮）→ 全绿才提交；LLM 不可用/迭代耗尽 → 确定性骨架兜底。
 		skelDir := filepath.Join(root, "harness-output", sanitizePathPart(title))
-		files, genNote := o.llmGenerateImplement(ctx, title, doc, skelDir)
+		files, genNote := o.llmGenerateImplement(ctx, title, doc, skelDir, o.memoryContext(it))
 		if files == nil {
 			log.Printf("[execOrchestrate] LLM 语义实现不可用（%s）→ 确定性骨架兜底", genNote)
 			files = deterministicImplementSkeleton(title, doc)
@@ -1240,7 +1267,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		title = "VoiceSign-Harness-全景开发文档"
 	}
 	merged := strings.Join(contents, "\n\n")
-	body := o.llmSummarize(ctx, title, merged)
+	body := o.llmSummarize(ctx, title, merged, o.memoryContext(it))
 	if strings.TrimSpace(body) == "" {
 		names := make([]string, 0, len(sources))
 		for _, s := range sources {
@@ -1291,7 +1318,7 @@ const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配�
 // 【推理模型预算】gpt-6-luna 是推理模型，reasoning 会吃掉 max_completion_tokens；
 // 1500 全被思考吃光→finish_reason=length、content 空。故预算给到 8000，并在 system 里
 // 要求"直接输出正文、勿长篇推理"。失败/空必须打日志（对照 queryLLMAnswer，不再吞错）。
-func (o *Options) llmSummarize(ctx context.Context, title, merged string) string {
+func (o *Options) llmSummarize(ctx context.Context, title, merged, memory string) string {
 	if o == nil || o.Providers == nil {
 		log.Printf("[llmSummarize] providers nil")
 		return ""
@@ -1300,7 +1327,7 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 	resp, _, err := o.Providers.ChatWithFallback(ctx, []string{"fast", "center", "strong", "gpt-mini"}, provider.ChatRequest{
 		Messages: []contract.Message{
 			{Role: "system", Content: "你是技术文档整理助手。把下面多份设计文档/沟通记录整理成一份结构清晰的中文《全景开发文档》，带二级分节。直接输出 Markdown 正文：不要 JSON、不要复述本指令、不要长篇推理、不要解释你做了什么。"},
-			{Role: "user", Content: "目标文档标题：" + title + "\n\n源文档内容：\n" + truncateStr(merged, 12000)},
+			{Role: "user", Content: "目标文档标题：" + title + "\n\n源文档内容：\n" + truncateStr(merged, 12000) + memoryBlock(memory)},
 		},
 		MaxTokens:      8000,
 		ResponseFormat: noJSON(),
@@ -1395,7 +1422,7 @@ func asciiSlug(s string) string {
 //
 // 返回 (files, note)：files=nil 表示 LLM 不可用/迭代耗尽（调用方回落确定性骨架）；
 // note 为失败原因或"编译全绿（N 轮）"。
-func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir string) (map[string]string, string) {
+func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir, memory string) (map[string]string, string) {
 	if o == nil || o.Providers == nil {
 		return nil, "providers nil"
 	}
@@ -1442,7 +1469,7 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 	// 2026-10-03 模型调度实证：需求全文（7966 字符）直接喂 LLM → 大 prompt + 完整生成必然
 	// 超网关 60s 上限（504）。正解：喂**能力清单摘要**（小 prompt，10s 级收敛），
 	// 语义判据由证据门（P0 关键字 + go build 真编译）兜底，缺口经 RoundEvidence 回喂。
-	req := "目标产品标题：" + title + "\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief
+	req := "目标产品标题：" + title + "\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief + memoryBlock(memory)
 	if o.RoundEvidence != "" {
 		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
 		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"voicesign-harness/contract"
 )
 
 // ASR 沉淀进入记忆槽（2026-10-04）：feedback/blacklist/dictionary 教词 → "我学到的"摘要。
@@ -39,4 +41,30 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// memoryContext 从 intent.Context 提取记忆拼进 LLM prompt（2026-10-04 修复纸面记忆）。
+func TestMemoryContext(t *testing.T) {
+	o := &Options{}
+	it := contract.Intent{Context: []string{
+		"asr-memory: ✔确认:彼得周点com→model.peterzou.com；✘标错:曼苏→Mansour",
+		"project-map:voicesign",
+	}}
+	m := o.memoryContext(it)
+	for _, want := range []string{"ASR 沉淀", "model.peterzou.com", "Mansour", "项目背景", "voicesign"} {
+		if !containsStr(m, want) {
+			t.Fatalf("memoryContext 缺 %q：got %q", want, m)
+		}
+	}
+	// 空 Context → 空（不污染 prompt）
+	if o.memoryContext(contract.Intent{}) != "" {
+		t.Fatal("空 Context 应返回空")
+	}
+	// memoryBlock：空 → ""；非空 → 带换行前缀
+	if memoryBlock("") != "" {
+		t.Fatal("memoryBlock 空应返回空")
+	}
+	if !containsStr(memoryBlock("x"), "\n\n") {
+		t.Fatal("memoryBlock 非空应带换行前缀")
+	}
 }
