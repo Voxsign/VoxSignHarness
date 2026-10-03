@@ -63,3 +63,64 @@ skill/knowhow_fixture_test.go:3  …（Header **X-AIops-Key**）
 3. 红线：**不许桩注入**（真技能、真产出）· **降级不算**
 4. 接线后**用本文同一任务重放** ⇒ 四条应转绿（**同一把尺子**）
 ```
+
+---
+
+## 附录 · 接线点侦察（2026-10-03，只读）
+
+**目的**：在动手前定清"接哪、用什么接、挂在谁旁边"。**未做任何改动。**
+
+### ① `skill/` 包的公开 API（接线可用的全部入口）
+
+```
+// 选择
+skill/select.go:8    type Skill struct{…}
+skill/select.go:16   type Filtered struct{…}
+skill/select.go:22   type Selection struct{…}
+skill/select.go:39   func Select(all []Skill, allow map[string]bool) Selection
+
+// 存储
+skill/store.go:49    func NewStore(dir string, ttl time.Duration) *Store
+skill/store.go:60    func (s *Store) SaveIndex(skills []Skill) error
+skill/store.go:73    func (s *Store) LoadIndex() (Index, string, error)
+
+// 拉取
+skill/fetch.go:14    type Fetcher struct{…}
+skill/fetch.go:49    func (f *Fetcher) List(ctx) ([]Skill, error)
+skill/fetch.go:69    func (f *Fetcher) Get(ctx, id) (json.RawMessage, error)
+skill/fetch.go:78    func Internalize(ctx, f *Fetcher, st *Store, allow map[string]bool) (int, error)
+skill/fetch.go:102   func ListOffline(ctx, st *Store, f *Fetcher) ([]Skill, string, error)
+```
+
+**⇒ `Internalize` = 拉取 + 落盘；`ListOffline` = 离线兜底（技能系统不可达时不硬失败）。**
+
+### ② `pipeline` 的接线点
+
+```
+pipeline/pipeline.go:121  Tools *tools.Registry      ← 已存在的工具接口（接线可挂旁边）
+pipeline/pipeline.go:122  Exec  *tools.Executor
+pipeline/pipeline.go:535  func (o *Options) execActions(ctx, it contract.Intent) []contract.Receipt
+pipeline/pipeline.go:698  func (o *Options) execOrchestrate(ctx, it, logDir string) []contract.Receipt
+```
+
+### ③ 建议的接线形状（**待 Peter 裁字段口径后才动手**）
+
+```
+· `Options` 增加：`Skills *skill.Store` · `SkillFetcher *skill.Fetcher`（可为 nil ⇒ 不阻断）
+· 在 Run 的规划阶段（或 execActions 之前）接四步：
+   ① 发现（C-01）：LoadIndex / ListOffline ⇒ 技能域匹配 ⇒ **落到响应/元数据 + trajectory**
+   ② 选择（C-02）：Select(allow) ⇒ 选中 ID ⇒ 落痕
+   ③ 调用（C-03）：**真调技能**（产生产物）—— 方案红线：**降级不算**
+   ④ 留痕（C-04）：trajectory emit 发现→选择→调用→产出 各步
+· 新 kind 需登记进 `trajectory/kinds.go`（如 `KindSkillDomain`）——
+  ⚠️ **口径未定 ⇒ 不实现**（否则造成"实现与判据不对齐"，正是 v1 假象的成因）
+```
+
+### ④ 阻塞项（如实）
+
+```
+1. **C-01 的字段口径未定**（我已向 Peter 提问）：
+   提议 `"skill_domain": {"name":"<域名>","confidence":0.xx}` + trajectory `KindSkillDomain`
+   ⚠️ **口径由 Peter 裁 —— 我不擅自定后据以实现**
+2. 跨包结构性改动 ⇒ 本轮上下文低，按自定规矩不做
+```
