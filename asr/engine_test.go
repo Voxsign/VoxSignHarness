@@ -199,10 +199,10 @@ func TestProperNounsOnlyCandidate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 在线学习：只登记候选、不自动改写；可审计
+// Observe 只记证据、不写回（ASR-MODEL-02 L2）；写回只走 learn
 // ---------------------------------------------------------------------------
 
-func TestObserveLearnsAsCandidateOnly(t *testing.T) {
+func TestObserveRecordsEvidenceOnly(t *testing.T) {
 	eng := NewEngine()
 	before := eng.Lexicon("dev").Version
 
@@ -211,15 +211,22 @@ func TestObserveLearnsAsCandidateOnly(t *testing.T) {
 	}
 	after := eng.Lexicon("dev").Version
 	if after == before {
-		t.Fatal("Observe 未产生新版本")
+		t.Fatal("Observe 未产生新版本（热词审计应更新）")
 	}
 
+	// 证据必须被记下（这是 learn 的输入）
+	ev := eng.Evidence()
+	if len(ev) != 1 || ev[0].Raw != "哈牛斯" || ev[0].Corrected != "harness" || !ev[0].Accepted || ev[0].Source != "user_edit" || ev[0].At == "" {
+		t.Fatalf("证据记录不完整: %+v", ev)
+	}
+
+	// 但**不得写回知识**：既不改文本，也不产生候选
 	got := eng.Correct(CorrectRequest{Raw: "把哈牛斯接上"})
 	if got.Text != "把哈牛斯接上" {
-		t.Fatalf("学习所得不得自动改写: %q", got.Text)
+		t.Fatalf("Observe 不得自动改写: %q", got.Text)
 	}
-	if !hasCandidate(got, "harness") {
-		t.Fatalf("学习所得未进入候选: %+v", got.Candidates)
+	if hasCandidate(got, "harness") {
+		t.Fatalf("Observe 不得写回候选（写回只走 learn）: %+v", got.Candidates)
 	}
 
 	lex := eng.Lexicon("dev")
@@ -227,11 +234,11 @@ func TestObserveLearnsAsCandidateOnly(t *testing.T) {
 		t.Errorf("Domain = %q", lex.Domain)
 	}
 	if !hasHotword(lex, "harness") {
-		t.Errorf("Lexicon 未记录 harness: %+v", lex.Hotwords)
+		t.Errorf("Lexicon 未记录审计热词 harness: %+v", lex.Hotwords)
 	}
 }
 
-func TestObserveRejectionUndoesLearning(t *testing.T) {
+func TestObserveEvidenceKeepsBothOutcomes(t *testing.T) {
 	eng := NewEngine()
 	must := func(err error) {
 		t.Helper()
@@ -241,9 +248,15 @@ func TestObserveRejectionUndoesLearning(t *testing.T) {
 	}
 	must(eng.Observe(Feedback{Raw: "哈牛斯", Corrected: "harness", Accepted: true, Source: "user_edit"}))
 	must(eng.Observe(Feedback{Raw: "哈牛斯", Corrected: "harness", Accepted: false, Source: "user_edit"}))
+
+	ev := eng.Evidence()
+	if len(ev) != 2 || !ev[0].Accepted || ev[1].Accepted {
+		t.Fatalf("证据应保留接受/否认两次记录: %+v", ev)
+	}
+	// 无论接受与否，都不写回知识
 	got := eng.Correct(CorrectRequest{Raw: "把哈牛斯接上"})
 	if hasCandidate(got, "harness") {
-		t.Fatalf("拒绝后仍保留学习候选: %+v", got.Candidates)
+		t.Fatalf("Observe 不得写回候选: %+v", got.Candidates)
 	}
 }
 

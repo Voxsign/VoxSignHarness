@@ -61,12 +61,30 @@ type snapshot struct {
 type Personalized struct {
 	state atomic.Pointer[snapshot]
 
-	mu      sync.Mutex
-	catal   catalog
-	learned []entry
-	seen    map[string]*Hotword
-	rev     int
+	mu       sync.Mutex
+	catal    catalog
+	learned  []entry // 只由 learn 通道写回（LEARN-02+；当前恒为空）
+	seen     map[string]*Hotword
+	evidence []Evidence // Observe 的产物：只记证据，不做写回
+	rev      int
 }
+
+// Evidence 是一次反馈的原始证据。
+//
+// 为什么单独存在：ASR-MODEL-02 的 L2 规定"只有 `learn` 通道可以写回持久知识"。
+// 于是 `Observe` **降级为只记证据**——它记录"用户改了什么、确认与否、来源与时间"，
+// 但不产生任何知识变更；真正的学习由 `learn` 通道事后消费这些证据（LEARN-02+）。
+type Evidence struct {
+	At        string `json:"at"`
+	Raw       string `json:"raw"`
+	Corrected string `json:"corrected"`
+	Accepted  bool   `json:"accepted"`
+	Source    string `json:"source"`
+}
+
+// evidenceCap 是内存证据条数的上限（红线 #4：不无界膨胀）。
+// 超出后丢弃最旧的证据；持久化证据由 learn 通道落到 usage-events.jsonl（P2）。
+const evidenceCap = 4096
 
 // NewEngine 构造默认引擎：内置人工审定的词表 + 空的学习状态。
 func NewEngine() *Personalized {
@@ -160,18 +178,29 @@ func (p *Personalized) Correct(req CorrectRequest) CorrectResult {
 	return res
 }
 
-// Observe 回传一次反馈。学习策略刻意保守：
-//   - 只把"用户接受过的改写"登记为**候选词条**，绝不自动改写；
-//   - 用户改回则撤销该映射；
-//   - 热词权重只做频次累计，供 Lexicon 审计。
+// Observe 回传一次反馈。按 ASR-MODEL-02 的 L2，**它只记证据，不写回知识**：
+//   - 追加一条 Evidence（谁、何时、改了什么、是否确认、来源）；
+//   - 热词权重只做频次累计，供 Lexicon 审计；
+//   - **不再**登记/撤销任何词条 —— 写回持久知识的唯一通道是 `learn`（LEARN-02+）。
 //
-// 自动提升（候选 → 自动）留给 P4，需先有足够样本。
+// 这样"系统变好"只有一个可审计、可关掉的入口，在线反馈不会造成不可审计的漂移。
 func (p *Personalized) Observe(fb Feedback) error {
 	if strings.TrimSpace(fb.Raw) == "" && strings.TrimSpace(fb.Corrected) == "" {
 		return errEmptyFeedback
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	p.evidence = append(p.evidence, Evidence{
+		At:        time.Now().UTC().Format(time.RFC3339Nano),
+		Raw:       fb.Raw,
+		Corrected: fb.Corrected,
+		Accepted:  fb.Accepted,
+		Source:    fb.Source,
+	})
+	if len(p.evidence) > evidenceCap {
+		p.evidence = p.evidence[len(p.evidence)-evidenceCap:]
+	}
 
 	if term := strings.TrimSpace(fb.Corrected); term != "" {
 		h := p.seen[term]
@@ -187,21 +216,17 @@ func (p *Personalized) Observe(fb Feedback) error {
 		}
 	}
 
-	if fb.Raw != "" && fb.Corrected != "" && fb.Raw != fb.Corrected {
-		if fb.Accepted {
-			p.learned = upsertLearned(p.learned, entry{
-				from: fb.Raw, to: fb.Corrected, kind: "hotword",
-				conf: sourceConf(fb.Source),
-				evidence: "在线学习：" + fb.Raw + " → " + fb.Corrected +
-					"（source=" + fb.Source + "，候选态，不自动改写）",
-			})
-		} else {
-			p.learned = removeLearned(p.learned, fb.Raw, fb.Corrected)
-		}
-	}
-
 	p.rebuildLocked()
 	return nil
+}
+
+// Evidence 导出反馈证据快照（深拷贝）。它是 `learn` 通道的输入，不是知识本身。
+func (p *Personalized) Evidence() []Evidence {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]Evidence, len(p.evidence))
+	copy(out, p.evidence)
+	return out
 }
 
 // Lexicon 导出当前个性化状态的可审计快照（深拷贝，外部改动不影响内部状态）。
@@ -277,6 +302,10 @@ func rebuild(runes []rune, offs []int, spans []span) (string, []Correction) {
 	b.WriteString(string(runes[prev:]))
 	return b.String(), corrs
 }
+
+// 以下三个 helper 供 **learn 通道的写回路径**使用（LEARN-02+，等模型与协议确定）。
+// 按 L2 只有 learn 会调用它们；`Observe` 已不再调用（它只记证据），
+// 因此目前没有调用点——这是刻意的，不是死代码。
 
 // upsertLearned 登记/强化一条学习词条（同 from→to 只留一条并加权）。
 func upsertLearned(list []entry, e entry) []entry {
