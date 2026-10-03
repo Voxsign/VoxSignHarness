@@ -50,8 +50,9 @@ func TestSelectRecordsFilteredWithReasons(t *testing.T) {
 		}
 		reasons[f.Reason]++
 	}
-	if reasons["deprecated"] != 2 {
-		t.Errorf("[SK] deprecated 应记 2 条，实际 %d", reasons["deprecated"])
+	// SK-9 升版：下线态原因带前缀 `offline:<state>`（不止 deprecated）
+	if reasons["offline:deprecated"] != 2 {
+		t.Errorf("[SK] offline:deprecated 应记 2 条，实际 %d（reasons=%v）", reasons["offline:deprecated"], reasons)
 	}
 	if reasons["not_in_whitelist"] != 4 {
 		t.Errorf("[SK] not_in_whitelist 应记 4 条，实际 %d", reasons["not_in_whitelist"])
