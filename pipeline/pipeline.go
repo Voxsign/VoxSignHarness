@@ -1531,17 +1531,22 @@ func noJSON() *bool {
 //   - err/空内容 → 先诊断（budget/network/param 分类），diag 可用且 action=retry/modify →
 //     指数退避重试（≤2 轮），成功返回回答并回写知识库；失败或 diag 不可用 → 逐字降级文案。
 func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStdout string) string {
-	degraded := "（模型服务暂不可用——今日预算可能已用尽或网络异常，无法生成回答；请明日重试或提高预算。检索结果：" + strings.TrimSpace(searchStdout) + "）"
+	// ⚠️ **归因必须来自真实错误**（Lead 实测：日志里是 HTTP 401 invalid_api_key，
+	// 对外却说"预算可能已用尽或网络异常" ⇒ 用户会去等明天、去查网络，而真正要做的是换 key）。
+	reason := ""
+	degradedNow := func() string { return degradeMsg(reason, searchStdout) }
 	if o == nil || o.Providers == nil {
-		return degraded
+		return degradedNow()
 	}
 	p, err := o.Providers.Get("fast")
 	if err != nil {
 		log.Printf("[queryLLMAnswer] fast provider unavailable: %v", err)
-		return degraded
+		reason = err.Error()
+		return degradedNow()
 	}
 
 	// callFast 发一次 fast 调用并解 JSON 壳；ok=false 表示失败/空/意外壳（与原逻辑一致）。
+	var lastErr error
 	callFast := func() (string, bool) {
 		resp, err := p.Chat(ctx, provider.ChatRequest{
 			Messages: []contract.Message{
@@ -1556,6 +1561,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		})
 		if err != nil {
 			log.Printf("[queryLLMAnswer] fast Chat err: %v", err)
+			lastErr = err // 真实错误：供归因使用（不许对外说"预算/网络"）
 			return "", false
 		}
 		if strings.TrimSpace(resp.Content) == "" {
@@ -1617,7 +1623,10 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 			}
 		}
 	}
-	return degraded
+	if lastErr != nil {
+		reason = lastErr.Error()
+	}
+	return degradedNow()
 }
 
 // mergeAskOptions 合并意图候选与 refer 目标候选（id 去重，上限 8）。
@@ -1908,5 +1917,38 @@ func writeCounts(sb *strings.Builder, title string, m map[string]int) {
 	fmt.Fprintf(sb, "%s：\n", title)
 	for _, it := range items {
 		fmt.Fprintf(sb, "  %s ×%d\n", it.k, it.v)
+	}
+}
+
+// degradeMsg 由**真实错误**生成降级文案（归因必须准确；未知才说未知）。
+func degradeMsg(rawErr, searchStdout string) string {
+	return "（" + attributeLLMError(rawErr) + "；检索结果：" + strings.TrimSpace(searchStdout) + "）"
+}
+
+// attributeLLMError 把真实错误归因成人能行动的一句话。
+//
+// 判据要求（Lead 2026-10-03）：
+//
+//	401/403 ⇒ **鉴权/API key**（不得出现"预算/网络"）；429 ⇒ 限流；5xx ⇒ 上游；
+//	超时 ⇒ 超时；**未知 ⇒ 未知 + 原始错误文本**（不许套用通用话术）。
+func attributeLLMError(rawErr string) string {
+	e := strings.ToLower(rawErr)
+	switch {
+	case strings.Contains(e, "401"), strings.Contains(e, "403"),
+		strings.Contains(e, "invalid_api_key"), strings.Contains(e, "auth_error"),
+		strings.Contains(e, "unauthorized"), strings.Contains(e, "api key"):
+		return "鉴权失败（API key 无效/未配置）—— 请更换或配置 key，重试前无需等待"
+	case strings.Contains(e, "429"), strings.Contains(e, "rate limit"), strings.Contains(e, "too many requests"):
+		return "上游限流（429）—— 稍后重试"
+	case strings.Contains(e, "500"), strings.Contains(e, "502"), strings.Contains(e, "503"), strings.Contains(e, "504"):
+		return "上游服务错误（HTTP 5xx）—— 非本机问题，稍后重试"
+	case strings.Contains(e, "timeout"), strings.Contains(e, "deadline"), strings.Contains(e, "超时"):
+		return "调用超时"
+	case strings.Contains(e, "budget"), strings.Contains(e, "预算"), strings.Contains(e, "quota"):
+		return "额度/预算用尽"
+	case strings.TrimSpace(rawErr) == "":
+		return "模型服务暂不可用（原因未知：未取得错误信息）"
+	default:
+		return "模型调用失败（原因未知）：" + rawErr
 	}
 }

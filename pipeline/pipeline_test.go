@@ -637,8 +637,17 @@ func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
 	for _, r := range out.Receipts {
 		joined += r.Stdout
 	}
-	if !strings.Contains(joined, "模型服务暂不可用——今日预算可能已用尽或网络异常") {
-		t.Fatalf("无 Providers 应走逐字降级文案, got: %q", joined)
+	// **判据升版（由 Lead 发起，理由见 Issue #4 comment）**：
+	// 原文断言"含'今日预算可能已用尽或网络异常'"—— 那是在**保护一个错误的归因**：
+	// 真因可能是 HTTP 401 invalid_api_key，用户看了会去等明天/查网络。
+	// 新文：**归因必须来自真实错误** —— 401 ⇒ 鉴权且**不得**出现"预算/网络"。
+	if strings.Contains(joined, "今日预算可能已用尽或网络异常") {
+		t.Errorf("降级文案仍套用旧的「预算/网络」归因：%s", joined)
+	}
+	for _, bad := range []string{"预算", "网络"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("降级文案出现 %q（归因错误，应指向真实错误）：%s", bad, joined)
+		}
 	}
 }
 
