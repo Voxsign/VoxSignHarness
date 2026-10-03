@@ -1,41 +1,41 @@
-个性化后台运行说明
-====================
+个性化后台实现 — 运行说明
 
 一、启动
-  go build -o p13n .        # 编译，须退出码 0
-  ./p13n --data-dir=./data  # 默认监听 127.0.0.1:8080
-  可选参数：--addr=127.0.0.1:8080  --data-dir=./data  --token=（占位鉴权）
+  go build -o pbd . && ./pbd --addr 127.0.0.1:8080 --data-dir ./data
+  或直接：go run . --addr 127.0.0.1:8080 --data-dir ./data
 
-  监听地址固定只接受回环地址，传入非 127.0.0.1/::1 时启动即失败退出。
-  所有 /v1/* 端点须带 Authorization: Bearer <token>，token 为空时放行但仍校验请求头格式。
+  参数说明
+  --addr      监听地址，默认 127.0.0.1:8080；非回环地址（如 0.0.0.0、外部 IP）启动即拒绝
+  --data-dir  数据目录，默认 ./data，首次运行自动创建
 
-二、端点
+二、HTTP 端点（均为 JSON 请求/响应）
   GET  /v1/health
-       返回 {"ok":true,"version":...,"data_dir":...,"dict_size":N}
-   POST /v1/process
-       请求 {"text":"...","op":"AUTO","feedback":null,"id":"可选"}
-       op 取值：AUTO/NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE
-       返回 {"intent":"NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE",
-             "corrected":"纠错后文本","dict_hits":[...],
-             "changed":true|false,"trace_id":"..."}
-   POST /v1/dict/add   {"term":"...","aliases":["..."]}
-   POST /v1/dict/del   {"term":"..."}
-   GET  /v1/dict/get?term=...
-   POST /v1/feedback   {"id":"...","hit":true|false,"term":"..."}
-       落盘 feedback.jsonl，供后续加权/纠错安全阈值调整。
+       健康检查，返回 {"ok":true,"version":"..."}
+       无需鉴权
 
-三、行为约束
-  纠错只做词典命中与别名替换，命中不确定时不改动原文，正常文本原样返回。
-  意图分类基于关键词+规则打分，五类全覆盖，无法判定归 ORCHESTRATE 之外的默认类需显式给出。
-  反馈学习仅 append 记录，不重写历史文件。
+  POST /v1/process
+       请求头：Authorization: Bearer <token>（当前为占位校验，未配置时放行）
+       请求体字段：
+         text      待处理文本（必填）
+         action    correct | intent | dict  （默认 correct）
+         feedback  true | false  （可选，回写反馈）
+       响应体字段：
+         ok        布尔
+         text      清洗+纠错后文本
+         intent    NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+         corrections  纠错明细列表（原词、替换词、命中词典/规则）
+         trace_id  本次请求追踪 ID
 
-四、数据文件（均在 --data-dir 下，JSONL/JSON 均为 append-only 或原子替换）
-  data/dictionary.json   词典条目（原子替换写入）
-  data/feedback.jsonl    反馈回馈，逐行 append
-  data/traces.jsonl      每次 /v1/process 调用轨迹，逐行 append
-  data/usage.jsonl       端点调用量与耗时，逐行 append
-  目录不存在时自动创建；文件以 O_APPEND 打开，进程重启不截断。
+三、数据文件（全部位于 --data-dir，JSONL 一律 append-only，不重写不覆盖）
+  dictionary.json   个性化词典条目（增/删/查），写入时原子替换
+  feedback.jsonl    ✔/✘ 反馈记录，每行一条，只追加
+  traces.jsonl      每次 /v1/process 的处理轨迹，只追加
+  usage.jsonl       调用量/耗时统计，只追加
 
-五、自检
-  go vet ./... && go test ./...    # 须全部通过
-  启动后 curl -H "Authorization: Bearer dev" http://127.0.0.1:8080/v1/health 返回 ok:true。
+四、词典操作
+  通过 /v1/process 传 action=dict 完成增/删/查；
+  条目字段：term（词条）、replacement（可选纠错替换）、enabled（布尔）。
+  纠错仅命中已启用条目，且做边界与安全校验，正常文本原样返回不改坏。
+
+五、退出
+  Ctrl+C，进程收到中断信号后刷盘并关闭监听。

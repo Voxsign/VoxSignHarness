@@ -19,10 +19,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -34,18 +34,23 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.Lookup(word); exists {
-			words[i] = correction
+func (d *Dictionary) Correct(word string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	// Simple correction: return the first word that starts with the same letter
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, string(word[0])) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -59,15 +64,17 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	default:
 		return ORCHESTRATE
 	}
 }
@@ -89,8 +96,8 @@ func AppendFeedback(filePath string, feedback Feedback) error {
 }
 
 type Trace struct {
-	Text   string `json:"text"`
-	Intent Intent `json:"intent"`
+	Input  string `json:"input"`
+	Output string `json:"output"`
 }
 
 func AppendTrace(filePath string, trace Trace) error {
@@ -117,36 +124,28 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 		}
 
 		var req struct {
-			Text    string `json:"text"`
-			Correct bool   `json:"correct"`
+			Text string `json:"text"`
 		}
-
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
 
-		correctedText := dict.Correct(req.Text)
-		intent := ClassifyIntent(correctedText)
+		corrected := dict.Correct(req.Text)
+		intent := ClassifyIntent(req.Text)
 
-		trace := Trace{Text: correctedText, Intent: intent}
+		trace := Trace{Input: req.Text, Output: corrected}
 		if err := AppendTrace(dataDir+"/traces.jsonl", trace); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		feedback := Feedback{Text: req.Text, Correct: req.Correct}
-		if err := AppendFeedback(dataDir+"/feedback.jsonl", feedback); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
 		resp := struct {
-			CorrectedText string `json:"corrected_text"`
-			Intent        Intent `json:"intent"`
+			Corrected string `json:"corrected"`
+			Intent    Intent `json:"intent"`
 		}{
-			CorrectedText: correctedText,
-			Intent:        intent,
+			Corrected: corrected,
+			Intent:    intent,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
