@@ -60,6 +60,37 @@ fi
 # 于是**我的 R 通道打到了别人的服务**（拿到测试页的 200 HTML），**差点据此判"产品红"**。
 # ⇒ 规则：**端口被占 ⇒ 拒绝跑（exit 2）**，而不是"打上去看看"。
 #   ⚠️ 这也印证「校准」：**先声明参考系，再取证** —— 拿不到干净参考系就不取证。
+# ⚠️ **线 B 必须一起起**（2026-10-03 实测，第 15 条教训）：
+# 我第一版只起线 A ⇒ 7 条判据里 5 条返回**同一个 503**（ASR 不可达）——
+# 它们**在"前置依赖缺失"处就 short-circuit 了** ⇒ **一串"看起来是红、其实没跑到"的结论。**
+# ⇒ 产品真实运行的参考系 = **线 A 与线 B 同时活着**；少了线 B 就不是那个参考系。
+ASR_PORT="${VHS_CALIB_ASR_PORT:-8123}"
+# ⚠️ **两个二进制不能同名**（2026-10-03 实测）：我第一版把线 A 与线 B 都建到
+# `$BINDIR/vhs-asr` ⇒ **线 B 的 build 覆盖了线 A** ⇒ `"$BIN" serve` 跑的其实是线 B
+# （它不认 `serve`，于是监听 8144 而非 8765）⇒ R 通道永远打不到 /v1/voice。
+ASR_BIN="$BINDIR/vhs-asr-lineB"
+echo "[calib-R] ①b **真装配线 B**（ASR 服务）build + 起服务 :$ASR_PORT"
+( cd "$ROOT" && go build -o "$ASR_BIN" ./cmd/vhs-asr ) || { echo "[calib-R] ❌ 线 B build 失败 ⇒ 无 R 证据"; exit 2; }
+if lsof -nP -iTCP:"$ASR_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[calib-R] ❌ **线 B 端口 $ASR_PORT 已被占用** ⇒ 拒绝跑（同 ②）"
+  lsof -nP -iTCP:"$ASR_PORT" -sTCP:LISTEN 2>/dev/null | tail -n +2 | awk '{print "      PID "$2" "$1}' | head -3
+  exit 2
+fi
+VHS_ASR_ADDR="127.0.0.1:$ASR_PORT" VHS_ASR_DATA="$DATA/asr" "$ASR_BIN" > "$LOG.asr" 2>&1 &
+SRV_ASR=$!
+i=0; while [ $i -lt 40 ]; do
+  curl -sf -m 2 "http://127.0.0.1:$ASR_PORT/v1/health" >/dev/null 2>&1 && break
+  i=$((i+1)); sleep 0.25
+done
+if [ $i -ge 40 ]; then
+  echo "[calib-R] ❌ 线 B 未就绪 ⇒ 拒取证（否则判据会在 ASR 不可达处 short-circuit）"
+  tail -6 "$LOG.asr" 2>/dev/null | sed 's/^/         /'
+  exit 2
+fi
+echo "[calib-R]    线 B 就绪（${i}×0.25s）"
+# 线 B 也要清理
+cleanup() { [ -n "${SRV:-}" ] && kill "$SRV" 2>/dev/null || true; [ -n "${SRV_ASR:-}" ] && kill "$SRV_ASR" 2>/dev/null || true; rm -rf "$BINDIR"; }
+
 echo "[calib-R] ② 起真服务 addr=127.0.0.1:$PORT"
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "[calib-R] ❌ **端口 $PORT 已被占用** ⇒ 拒绝跑（否则会打到别人的服务，得出假结论）"
@@ -140,9 +171,13 @@ while IFS= read -r line; do
 
   resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$PORT$p" -H 'Content-Type: application/json' -d "$body" -w '\n%{http_code}' 2>/dev/null)
   code=$(printf '%s' "$resp" | tail -1)
-  rbody=$(printf '%s' "$resp" | sed '$d' | tr -d '\n' | cut -c1-120)
+  # ⚠️ **断言必须用完整响应，截断只用于显示**（2026-10-03 实测第 18 条）：
+  # 我第一版先 `cut -c1-120` 再 grep ⇒ `intent_source` 在 120 字符之后 ⇒ **永远匹配不到 ⇒ 假红**。
+  # ⇒ 判据不得在"被自己截断过的"数据上断言。
+  full=$(printf '%s' "$resp" | sed '$d' | tr -d '\n')
+  rbody=$(printf '%s' "$full" | cut -c1-120)
 
-  if printf '%s' "$rbody" | grep -qF -- "$want"; then
+  if printf '%s' "$full" | grep -qF -- "$want"; then
     echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（C 待补 ⇒ ◐） |" >> "$OUT"
   else
     echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$want\` 未出现** |" >> "$OUT"
