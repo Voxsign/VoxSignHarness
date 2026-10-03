@@ -669,7 +669,28 @@ func TestSM3ThreeStatesAndHonestUnknowns(t *testing.T) {
 
 // ---------- SM-4：verified 的陈述必须仍与代码相符 ----------
 
+// errBaselineUnreachable：真值基线 commit **不在本参考系里**
+// （未推到远端 / 浅克隆 / 换机器 / 全新 clone）。
+//
+// ⚠️ 这与"基线可达但不是 HEAD 的祖先"是**两件不同的事**（2026-10-03 CI 事故）：
+//
+//	· 后者 = **真红**（代码变了而模型没跟着变，正是 SM-4 要抓的）
+//	· 前者 = **本参考系无法判定** ⇒ SKIP 并**显式报告**，既不算通过也不算失败
+//	  依据本项目既有原则：**SKIP 不得当通过**（docs/LHT-0002）。
+//
+// 为什么必须分开：在此之前两者都走同一条 t.Errorf ⇒
+//
+//	本地（commit 在本地历史里）永远绿，CI（全新 clone）永远红，
+//	而**判据自己不说"我依赖的参考系里没有它"** —— 于是 `main` 红了五轮没人知道为什么。
+//	⇒ 这正是「大石头」CA-2：**判据必须能说清它跑在哪个参考系里、依赖什么**。
+var errBaselineUnreachable = errors.New("真值基线 commit 不在本参考系")
+
 func pmGitAncestor(root, sha string) error {
+	// ① 先判该 commit 在本参考系里**是否存在**（不可达 ≠ 不是祖先）
+	if err := exec.Command("git", "-C", root, "cat-file", "-e", sha+"^{commit}").Run(); err != nil {
+		return fmt.Errorf("%w: %s", errBaselineUnreachable, sha)
+	}
+	// ② 存在 ⇒ 再断言祖先关系（这一条才是真红）
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", sha, "HEAD")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
@@ -787,6 +808,14 @@ func TestSM4VerifiedClaimsStillMatchCode(t *testing.T) {
 		t.Fatalf("[SM-4][防空过] subject.commit 为空 → 陈述没有真值基线")
 	}
 	if err := pmGitAncestor(root, m.Subject.Commit); err != nil {
+		if errors.Is(err, errBaselineUnreachable) {
+			// ⚠️ **SKIP，且显式报告** —— 不算通过、也不算失败（docs/LHT-0002：SKIP 不得当通过）。
+			// 本参考系看不到那个 commit，就无法判定"代码变了而模型没跟着变"。
+			t.Skipf("[SM-4] 本参考系无法判定（**既不算通过也不算失败**）：%v\n"+
+				"  ⇒ 真值基线 commit 不在本克隆可见的范围内（未推到该远端 / 浅克隆 / 换机器）。\n"+
+				"  ⇒ 要真正判定它，需让该 commit 可达（推它所在分支 / 取全历史），或在本参考系运行。\n"+
+				"  ⇒ 本判据因此声明：**它依赖「真值基线 commit 可达」这一参考系前提**（CA-2）。", err)
+		}
 		t.Errorf("[SM-4] 真值基线不可达: %v", err)
 	}
 	if _, err := time.Parse(time.RFC3339, m.Subject.ProducedAt); err != nil {
