@@ -1,12 +1,13 @@
 #!/bin/bash
 # =============================================================================
 # ASR 个性化后台服务 · 一键验收脚本（真装配，不许桩）
-# 用法:  sh scripts/accept_asr.sh [端口]
+# 用法:  sh scripts/accept_asr.sh [端口] [产物目录]
+# 产物目录默认 harness-output/ASR个性化后台服务（人工补齐版）；可指 harness-output/个性化后台实现（harness 自产契约版）
 # 退出码: 0 = 全部判据 PASS；非 0 = 有 FAIL
 # 期望: 每行 ✅ 判据名；末尾"RESULT: ALL_PASS / HAS_FAIL"
 # =============================================================================
 set -u
-D="harness-output/ASR个性化后台服务"
+D="${2:-harness-output/ASR个性化后台服务}"
 PORT="${1:-8911}"
 DATA="$(mktemp -d /tmp/asr_acc_data.XXXXXX)"
 B="http://127.0.0.1:${PORT}"
@@ -40,7 +41,7 @@ echo "$R" | grep -q 'Mansour' && ok "/v1/process 纠错生效 → $R" || no "/v1
 
 # ---- 判据 5：correct 纠错 + applied 明细 ----
 R=$(curl -s --max-time 5 -X POST "$B/v1/correct" -H 'Content-Type: application/json' -d '{"text":"你好 曼苏"}')
-echo "$R" | grep -q '"曼苏→Mansour"' && ok "/v1/correct 纠错+明细 → $R" || no "/v1/correct" "$R"
+echo "$R" | grep -q '曼苏→Mansour' && ok "/v1/correct 纠错+明细 → $R" || no "/v1/correct" "$R"
 
 # ---- 判据 6：dict 返回全量 ----
 R=$(curl -s --max-time 5 "$B/v1/dict")

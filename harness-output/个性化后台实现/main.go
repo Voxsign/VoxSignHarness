@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unicode/utf8"
 )
 
 var (
@@ -25,10 +24,11 @@ var (
 // ---------- 数据模型（契约 v3） ----------
 
 type TermEntry struct {
-	Term     string   `json:"term"`
-	Variants []string `json:"variants,omitempty"`
-	Category string   `json:"category,omitempty"`
-	Source   string   `json:"source,omitempty"`
+	Term       string   `json:"term"`                 // ASR 识别文本（错词），如 曼苏
+	Correction string   `json:"correction,omitempty"` // 正确形式，如 Mansour（映射目标）
+	Variants   []string `json:"variants,omitempty"`   // 更多错法（都映射到 Correction/Term）
+	Category   string   `json:"category,omitempty"`
+	Source     string   `json:"source,omitempty"`
 }
 
 type Dictionary struct {
@@ -167,34 +167,48 @@ func appendFeedback(fb Feedback, dir string) error {
 
 // ---------- 纠错 / 意图 ----------
 
-// correctText 应用词典映射与黑名单拦截：
-//  1. 黑名单命中 → 不纠（applied: blacklist-skip）
-//  2. 词典精确/变体命中 → 纠为规范词（applied: dict）
-//  3. 前缀相似（rune 级，中文安全）→ 纠为第一个同前缀词（applied: prefix）
-//  4. 其余原样（applied: none）
+// correctText 应用词典映射与黑名单拦截（句中子串替换，中文安全）：
+//  1. 黑名单命中 → 跳过不替换（applied: blacklist-skip）
+//  2. 词典命中（term/variants 子串）→ 替换为 Correction（非空）或 Term（applied: dict）
+//  3. 无命中 → 原样（applied: none）
 func correctText(text string, dict *Dictionary, bl *Blacklist) (string, []string) {
 	if text == "" {
 		return text, []string{"none"}
 	}
-	trimmed := strings.TrimSpace(text)
-	if bl.Contains(trimmed) {
-		return text, []string{"blacklist-skip:" + trimmed}
-	}
-	if e, ok := dict.Lookup(trimmed); ok {
-		return e.Term, []string{"dict:" + trimmed + "→" + e.Term}
-	}
-	// rune 前缀相似（不切坏 UTF-8 中文）。
-	first, _ := utf8.DecodeRuneInString(trimmed)
+	var applied []string
+	corrected := text
 	dict.mu.RLock()
+	type repl struct{ from, to string }
+	var repls []repl
 	for _, e := range dict.Terms {
-		kFirst, _ := utf8.DecodeRuneInString(e.Term)
-		if kFirst == first {
-			dict.mu.RUnlock()
-			return e.Term, []string{"prefix:" + trimmed + "→" + e.Term}
+		target := e.Correction
+		if target == "" {
+			target = e.Term
+		}
+		if e.Term != "" && e.Term != target {
+			repls = append(repls, repl{e.Term, target})
+		}
+		for _, v := range e.Variants {
+			if v != "" && v != target {
+				repls = append(repls, repl{v, target})
+			}
 		}
 	}
 	dict.mu.RUnlock()
-	return text, []string{"none"}
+	for _, rp := range repls {
+		if bl.Contains(rp.from) {
+			applied = append(applied, "blacklist-skip:"+rp.from)
+			continue
+		}
+		if strings.Contains(corrected, rp.from) {
+			corrected = strings.ReplaceAll(corrected, rp.from, rp.to)
+			applied = append(applied, "dict:"+rp.from+"→"+rp.to)
+		}
+	}
+	if len(applied) == 0 {
+		return text, []string{"none"}
+	}
+	return corrected, applied
 }
 
 func classifyIntent(text string) string {
@@ -282,7 +296,7 @@ func main() {
 			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"term": entry.Term, "saved": "dictionary.json"})
+		writeJSON(w, http.StatusCreated, map[string]interface{}{"ok": true, "term": entry.Term, "saved": "dictionary.json"})
 	})
 
 	// 4) 个性化纠错：{text} → {corrected, applied}。
@@ -338,7 +352,7 @@ func main() {
 			http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"saved": "feedback.jsonl"})
+		writeJSON(w, http.StatusCreated, map[string]interface{}{"ok": true, "saved": "feedback.jsonl"})
 	})
 
 	// 7) 黑名单：POST {term, note} → blacklist.json；GET 列表；DELETE ?term= 解除。
@@ -358,7 +372,7 @@ func main() {
 				http.Error(w, `{"error":"persist failed"}`, http.StatusInternalServerError)
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]string{"term": req.Term, "saved": "blacklist.json"})
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "term": req.Term, "saved": "blacklist.json"})
 		case http.MethodGet:
 			bl.mu.RLock()
 			terms := make([]map[string]string, 0, len(bl.Terms))
