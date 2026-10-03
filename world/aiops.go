@@ -3,9 +3,6 @@
 // 依据 ASR-EXT-005（实测+指令）：`aiops.peterzou.com` 的 `/api/*` 是**只读**真 API，
 // 内网 zone 无需 key。本包只读、不写、不调模型。
 //
-// P1（判据先于实现）：本文件先定义**形状与桩**，EXT-05..EXT-08 应当为红。
-// 实现见 gateway_impl.go。
-//
 // 硬要求（ASR-EXT-005 §3.2）：
 //
 //	A1 只缓存元数据，不囤全量响应；缓存可重建可清除
@@ -14,11 +11,13 @@
 //	A4 读接口 200 不得当成写权限的证明
 //	A5 不猜路径 —— 需要新端点时读页面的 fetch（DiscoverEndpoints）
 //	A6 单一出网配置（一个 base URL）
+//
+// 本文件只放**类型与构造**；行为在 gateway_impl.go。
 package world
 
 import (
-	"context"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -109,20 +108,30 @@ type Service struct {
 	Type    string   `json:"type"`
 }
 
-// Gateway 是 AIOps 网关的只读客户端。
-type Gateway struct {
-	BaseURL string
-	Client  *http.Client
-	now     func() time.Time
-	cache   cache
-}
-
 // cache 只存**元数据**（A1）；ClearCache 可清空、可重建。
 type cache struct {
 	summary  *Summary
 	cicd     *CICD
 	services []Service
 }
+
+// Gateway 是 AIOps 网关的只读客户端。
+type Gateway struct {
+	BaseURL string
+	Client  *http.Client
+	now     func() time.Time
+	lock    sync.Mutex
+	cache   cache
+}
+
+// Option 调整客户端（测试注入用；不影响 A6 的单一地址约束）。
+type Option func(*Gateway)
+
+// WithHTTPClient 注入 HTTP 客户端（测试用 httptest）。
+func WithHTTPClient(c *http.Client) Option { return func(g *Gateway) { g.Client = c } }
+
+// WithClock 注入时钟（让抓取时间可复现）。
+func WithClock(fn func() time.Time) Option { return func(g *Gateway) { g.now = fn } }
 
 // NewGateway 构造客户端。baseURL 是**唯一**出网配置（A6）。
 func NewGateway(baseURL string, opts ...Option) *Gateway {
@@ -132,37 +141,3 @@ func NewGateway(baseURL string, opts ...Option) *Gateway {
 	}
 	return g
 }
-
-// Option 调整客户端（测试用注入，不影响 A6 的单一地址约束）。
-type Option func(*Gateway)
-
-// WithHTTPClient 注入 HTTP 客户端（测试用 httptest）。
-func WithHTTPClient(c *http.Client) Option { return func(g *Gateway) { g.Client = c } }
-
-// WithClock 注入时钟（让抓取时间可复现）。
-func WithClock(fn func() time.Time) Option { return func(g *Gateway) { g.now = fn } }
-
-// Summary 读取主机清单（缓存感知）。失败 fail-open，返回 Status=unknown + Note。
-func (g *Gateway) Summary(ctx context.Context) Summary { return Summary{} }
-
-// CICD 读取 CI/CD 台账。失败 fail-open。
-func (g *Gateway) CICD(ctx context.Context) CICD { return CICD{} }
-
-// Dependencies 把 summary 映射成「我依赖谁」。失败时必须产出 unknown 条目（A3）。
-func (g *Gateway) Dependencies(ctx context.Context) []Dependency { return nil }
-
-// Boundaries 返回与网关相关的硬边界（至少含 no-deploy 与"读≠写"，A4）。
-func (g *Gateway) Boundaries(ctx context.Context) []Boundary { return nil }
-
-// Grants 返回"本机因网关读到的内容而获得的能力" —— 恒为空（A4：读不产生权限）。
-func (g *Gateway) Grants(ctx context.Context) []string { return nil }
-
-// DiscoverEndpoints 读首页/配置页里真实出现的 /api/* 路径（A5：不猜路径）。
-func (g *Gateway) DiscoverEndpoints(ctx context.Context) ([]string, error) { return nil, nil }
-
-// ClearCache 清空缓存（A1）。清空后再次读取应重建出相同结果。
-func (g *Gateway) ClearCache() {}
-
-// WhoHandles 回答「这件事该找谁」：在主机 purpose 与本地服务注册表 aliases 里找匹配。
-// 找不到时必须返回 Status=unknown 的条目，而不是"没有"（A3）。
-func (g *Gateway) WhoHandles(ctx context.Context, query string) []Dependency { return nil }

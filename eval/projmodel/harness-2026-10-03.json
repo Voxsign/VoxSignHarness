@@ -4,7 +4,7 @@
     "repo": "smithpeter/voicesign-harness",
     "commit": "88793a8f3bb269604eda5bc6ccb6169cebf590c5",
     "produced_by": "harness",
-    "produced_at": "2026-10-03T00:28:35Z",
+    "produced_at": "2026-10-03T00:34:37Z",
     "independence": "no_prior_access"
   },
   "capabilities": [
@@ -536,6 +536,18 @@
       "claim": "Replan 是桩，复规能力未实现",
       "source": "plan/replan.go",
       "status": "verified"
+    },
+    {
+      "id": "aiops-no-deploy",
+      "claim": "本 harness 没有 deploy 工具契约：部署不可执行",
+      "source": "tools/registry.go",
+      "status": "verified"
+    },
+    {
+      "id": "aiops-gateway-read-only",
+      "claim": "AIOps 读接口 200 不构成写权限：读 ≠ 授权",
+      "source": "world/gateway_impl.go",
+      "status": "verified"
     }
   ],
   "dependencies": [
@@ -573,6 +585,105 @@
       "for": "全部实现",
       "status": "verified",
       "note": "零第三方依赖"
+    },
+    {
+      "on": "aliyun-cn",
+      "kind": "host",
+      "for": "aliyun-cn（跨厂商异地备份目标，34 GiB）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "center",
+      "kind": "host",
+      "for": "center（voxsign.net 生产中心）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "dev-voxsign",
+      "kind": "host",
+      "for": "dev-voxsign（voxsign.net 开发机）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "provide2",
+      "kind": "host",
+      "for": "provide2（VPC 内网机）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "test-box",
+      "kind": "host",
+      "for": "test-box（测试机，SSH 端口 1995）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "trelva",
+      "kind": "host",
+      "for": "trelva（生产中枢：研究引擎/Koyee/peterzou.com/Headscale 控制面）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "voxsign-ai",
+      "kind": "host",
+      "for": "voxsign-ai（监控节点 + AIOps 发布器所在机）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "youfu-58",
+      "kind": "host",
+      "for": "youfu-58（合作方提供机）",
+      "status": "inferred",
+      "note": "网关自报，未独立核实",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
+    },
+    {
+      "on": "aiops 网关（外部世界模型）",
+      "kind": "gateway",
+      "for": "机器 / 服务 / 状态的只读真值源",
+      "status": "ok",
+      "note": "只读接口，不产生写权限",
+      "source": {
+        "endpoint": "https://aiops.peterzou.com/api/summary",
+        "fetched_at": "2026-10-03T00:34:37Z"
+      }
     }
   ],
   "state": {
@@ -588,7 +699,7 @@
     ],
     "source": "实跑 go test @ 88793a8",
     "status": "verified",
-    "note": "vhsplan 15 red = SK/PL/RV 判据先红（桩）；vhs002 7 red = 第 2 批意图/指代/兜底未实现"
+    "note": "vhsplan 15 red = SK/PL/RV 判据先红（桩）；vhs002 7 red = 第 2 批意图/指代/兜底未实现；本地服务注册表已加载 18 条（本机快照，可能过期）；cicd current_tag=release/runtime-2026-10-02-01（网关自报，status=ok）"
   },
   "open_questions": [
     {

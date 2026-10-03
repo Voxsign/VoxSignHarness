@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
+	"voicesign-harness/world"
 )
 
 // ---- 输出结构（严格对齐 VHS-PROJMODEL-001 §2） ----
@@ -83,11 +85,12 @@ type boundary struct {
 }
 
 type dependency struct {
-	On     string `json:"on"`
-	Kind   string `json:"kind"` // gateway | human | model | repo | other
-	For    string `json:"for"`
-	Status string `json:"status"`
-	Note   string `json:"note,omitempty"`
+	On     string        `json:"on"`
+	Kind   string        `json:"kind"` // gateway | human | model | repo | other | host | service
+	For    string        `json:"for"`
+	Status string        `json:"status"`
+	Note   string        `json:"note,omitempty"`
+	Source *world.Source `json:"source,omitempty"` // A2：端点 + 抓取时间
 }
 
 type state struct {
@@ -274,6 +277,32 @@ func main() {
 		{Q: "本模型（eval 导出器）与 plan.ExportManifest（生产能力）是否合并？", WhyItMatters: "格式 §6 要求先实现 ExportManifest 再产模型；本次顺序相反，存在双实现漂移风险", Status: "unknown"},
 		{Q: "L3 画像的真值来源（prefs/project-map/decisions）由谁维护？", WhyItMatters: "无真值来源则 L3 判据无法定义", Status: "unknown"},
 		{Q: "模型的时间维度：source 指向会随代码变更失效，如何版本化？", WhyItMatters: "格式 §5 已承认未解决；两份模型的 commit 不同则不可比", Status: "unknown"},
+	}
+
+	// ---- 外部世界模型：AIOps 网关（ASR-EXT-005，只读、无需 key） ----
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	aiopsURL := os.Getenv("VHS_AIOPS_URL")
+	if aiopsURL == "" {
+		aiopsURL = "https://aiops.peterzou.com" // A6：单一出网配置
+	}
+	gw := world.NewGateway(aiopsURL)
+	if gw.DefaultServiceRegistry() {
+		m.State.Note += "；本地服务注册表已加载 " + fmt.Sprint(len(gw.Services())) + " 条（本机快照，可能过期）"
+	}
+	for _, d := range gw.Dependencies(ctx) {
+		src := d.Source
+		m.Dependencies = append(m.Dependencies, dependency{
+			On: d.On, Kind: d.Kind, For: d.For, Status: d.Status, Note: d.Note, Source: &src,
+		})
+	}
+	for _, b := range gw.Boundaries(ctx) {
+		m.Boundaries = append(m.Boundaries, boundary{ID: "aiops-" + b.ID, Claim: b.Claim, Source: b.Source, Status: b.Status})
+	}
+	if ci := gw.CICD(ctx); ci.Status == world.StatusOK {
+		m.State.Note += "；cicd current_tag=" + ci.CurrentTag + "（网关自报，status=" + ci.Status + "）"
+	} else {
+		m.State.Note += "；cicd=" + ci.Status + "（" + ci.Note + "）"
 	}
 
 	enc := json.NewEncoder(os.Stdout)
