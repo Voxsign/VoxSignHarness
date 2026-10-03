@@ -510,8 +510,12 @@ func archInitGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"init", "-q"},
-		{"config", "user.email", "vhs-arch@example.com"},
-		{"config", "user.name", "vhs-arch"},
+		// ⚠️ **不许写 git config**（2026-10-03 事故，全仓最后一处）：
+		// `git config user.email` 不带 --local/--global 时写"从 cwd 上溯找到的仓库"的 config；
+		// 当 dir 的仓库不可用时会上溯到**主仓库** ⇒ 覆盖真实身份（曾把 user.email 改成
+		// vhs@test / vhs-test@example.com / vhs-arch@example.com 三个测试身份之一）、
+		// 并把 core.bare 置 true ⇒ 仓库被当裸库。
+		// ⇒ 身份改由**全局配置回落**；若需注入，用命令级 `-c user.email=...`。
 		{"config", "commit.gpgsign", "false"},
 	} {
 		cmd := exec.Command("git", args...)
