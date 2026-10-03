@@ -1,44 +1,76 @@
 个性化后台 运行说明
 
-构建
-go build -o personalized-backend .
+一、启动
+1. 直接运行
+   go run . --addr 127.0.0.1:8080 --data-dir ./data
 
-启动
-./personalized-backend -addr 127.0.0.1:8080 -data-dir ./data -auth-token dev-token
+2. 编译后运行
+   go build -o server .
+   ./server --addr 127.0.0.1:8080 --data-dir ./data
 
-开发运行
-go run . -addr 127.0.0.1:8080 -data-dir ./data -auth-token dev-token
+默认参数
+   --addr     监听地址，仅允许 127.0.0.1，默认 127.0.0.1:8080
+   --data-dir 数据目录，默认 ./data
+   --token    可选占位鉴权 token，默认空
 
-说明
-服务仅允许监听 127.0.0.1。传入非回环地址会拒绝启动。
-所有请求需带鉴权占位头：X-Auth-Token: dev-token。可用 -auth-token 修改；未配置时默认 dev-token。
+二、端点
+1. 健康检查
+   GET /v1/health
+   响应示例
+   {"status":"ok","addr":"127.0.0.1:8080","data_dir":"./data"}
 
-HTTP 端点
-GET /v1/health
-用途：健康检查。
-响应：{"status":"ok"}
+2. 业务处理
+   POST /v1/process
+   Content-Type: application/json
+   可选鉴权头
+   Authorization: Bearer <token>
+   请求示例
+   {"text":"帮我记一下明天开会","action":"classify","feedback":null}
+   响应示例
+   {"ok":true,"intent":"NOTE","corrected":"帮我记一下明天开会","changed":false}
 
-POST /v1/process
-用途：文本清洗、词典纠错、意图分类；可选反馈。
-请求 JSON 示例：
-{"text":"明天下午三点开会","user_id":"u1","action":"auto"}
-反馈示例：
-{"text":"明天下午三点开会","user_id":"u1","feedback":"ok","trace_id":"..."}
+3. 词典操作
+   通过 /v1/process 的 action 字段区分
+   action=dict_add   新增词条
+   action=dict_del   删除词条
+   action=dict_get   查询词条
+   action=correct    文本清洗与词典纠错
+   action=classify   意图分类
+   action=feedback   提交 ✔/✘ 反馈
 
-响应 JSON 示例：
-{"trace_id":"...","intent":"NOTE","corrected_text":"明天下午三点开会","matched":[],"changed":false}
+4. 意图分类取值
+   NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
 
-intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-feedback 取值：ok / bad
+三、数据文件
+数据目录由 --data-dir 指定，所有 JSONL 均为 append-only。
 
-数据文件
-默认位于 -data-dir 指定目录，示例 ./data：
-dictionary.json   个性化词典，增删查后的当前快照
-feedback.jsonl    反馈学习记录，append-only
-traces.jsonl      处理轨迹，append-only
-usage.jsonl       用量记录，append-only
+   data/dict.json       个性化词典持久化文件
+   data/feedback.jsonl  ✔/✘ 反馈记录，每行一条
+   data/traces.jsonl    处理轨迹，每行一条
+   data/usage.jsonl     调用用量，每行一条
 
-JSONL 每行一个 JSON 对象，含 ts、trace_id、user_id、intent、text 等字段。写入采用追加模式，不覆盖历史。备份或迁移时直接复制整个 data-dir。
+四、请求示例
+1. 文本纠错
+   curl -s -X POST http://127.0.0.1:8080/v1/process \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"帮我记一下明天开会","action":"correct"}'
 
-注意
-鉴权为占位实现，生产部署前请替换为真实鉴权。服务仅监听回环地址，不对外暴露。
+2. 意图分类
+   curl -s -X POST http://127.0.0.1:8080/v1/process \
+     -H 'Content-Type: application/json' \
+     -d '{"text":"帮我记一下明天开会","action":"classify"}'
+
+3. 新增词典条目
+   curl -s -X POST http://127.0.0.1:8080/v1/process \
+     -H 'Content-Type: application/json' \
+     -d '{"action":"dict_add","word":"开会","replacement":"会议"}'
+
+4. 提交反馈
+   curl -s -X POST http://127.0.0.1:8080/v1/process \
+     -H 'Content-Type: application/json' \
+     -d '{"action":"feedback","trace_id":"t-123","feedback":"✔"}'
+
+五、安全与限制
+   服务仅监听 127.0.0.1，非回环地址拒绝启动。
+   Token 鉴权为占位实现，生产环境需替换为真实校验。
+   所有落盘文件按 append-only 方式写入，不覆盖历史数据。
