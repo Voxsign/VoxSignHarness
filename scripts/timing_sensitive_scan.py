@@ -36,6 +36,14 @@ def tracked_test_files():
     return [f for f in out.splitlines() if f]
 
 
+# ⚠️ **白名单**：已人工判定为"慢只会帮它 / 余量已足够"的处，不再报红。
+#   加白名单**必须附理由**（否则就是把"没修"藏起来）。
+ALLOW = {
+    # 原先 TTL=40ms 的修复；2.5s 与"塞 30 条"的耗时差 5 个数量级 ⇒ 余量足够，可不动。
+    "cache/quad_test.go:61",
+}
+
+
 def main():
     files = tracked_test_files()
     if not files:
@@ -62,6 +70,12 @@ def main():
     for kind, path, ln, text, _ in a:
         print(f"  {path}:{ln}  [{kind}]  {text[:80]}")
 
+    allowed = [h for h in b if f"{h[1]}:{h[2]}" in ALLOW]
+    b = [h for h in b if f"{h[1]}:{h[2]}" not in ALLOW]
+    if allowed:
+        print(f"\n── 白名单（已人工判定安全）—— {len(allowed)} 处")
+        for _, path, ln, text, _ in allowed:
+            print(f"  {path}:{ln}  {text[:70]}")
     print(f"\n── B 类（**无外层 deadline**）⇒ ⚠️ **固定等待，需逐个看断言语义** —— {len(b)} 处")
     for kind, path, ln, text, _ in b:
         print(f"  {path}:{ln}  [{kind}]  {text[:80]}")

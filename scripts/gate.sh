@@ -89,4 +89,22 @@ else
   echo "[gate] ⚠️ 未找到 scripts/spec_code_align.sh ⇒ **跳过**（不代表通过）"
 fi
 
+# ============ 判据「环境速度依赖」扫描（2026-10-03 加）============
+# ⚠️ 为什么加：今天 CI 红了 **3 次，没有一次是产品缺陷** —— 全是判据自身依赖"环境速度"
+#   （`p99` 阈值落在尾部噪声带 · `TTL 50ms` 与"塞 30 条"耗时同量级）。
+#   这类缺陷**只在慢机器暴露** ⇒ **本地永远绿** ⇒ 能一路通过本地 gate 直到 CI。
+#   ⇒ 故把"扫描这一类"接进**必经之路**（与 `spec_code_align` 同一理由：
+#     "写进文档没有约束力" ⇒ "**写进工具但不去跑，同样没有约束力**"）。
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/timing_sensitive_scan.py ]; then
+  if ! out=$(python3 scripts/timing_sensitive_scan.py 2>&1); then
+    echo "[gate] ❌ **发现"固定等待"型判据**（依赖环境速度 ⇒ 慢 CI 上可能红）："
+    printf '%s\n' "$out" | sed 's/^/       /'
+    echo "       ⇒ 处置：改为「**等条件成立 + 超时上限**」；若判定安全则加进扫描器白名单（**附理由**）"
+    exit 1
+  fi
+  echo "[gate] 时序扫描 ✅ $(printf '%s\n' "$out" | grep -E '合计' | tail -1)"
+else
+  echo "[gate] ⚠️ 无 python3 或 scripts/timing_sensitive_scan.py ⇒ **跳过**（不代表通过）"
+fi
+
 echo "[gate] OK"
