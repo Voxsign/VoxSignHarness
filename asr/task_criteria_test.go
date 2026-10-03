@@ -106,3 +106,51 @@ func TestTaskPageHasUploadAndPlanOnlyLabel(t *testing.T) {
 		}
 	}
 }
+
+// #2-b：**文档必须真的影响规划结果**（同一任务：空文档 vs 有内容 ⇒ 必须不同）。
+func TestTaskDocumentActuallyAffectsPlan(t *testing.T) {
+	base, _ := newUIServer(t)
+	empty := taskCall(t, base, `{"task":"把文档里的待办整理成计划","document":""}`)
+	full := taskCall(t, base, `{"task":"把文档里的待办整理成计划","document":"# 报价文档\n- TODO: 改报价单\n- TODO: 发邮件\n库存：120 件\n客户：ABC"}`)
+
+	if empty["document_read"] != false || empty["document_note"] == "" {
+		t.Errorf("[文档] 空文档必须显式说明（document_read=false + note）: %v/%v", empty["document_read"], empty["document_note"])
+	}
+	if full["document_read"] != true {
+		t.Fatalf("[文档] 有内容却未读: %v", full)
+	}
+	pe, _ := empty["plan"].(map[string]any)
+	pf, _ := full["plan"].(map[string]any)
+	ce, _ := pe["considered"].([]any)
+	cf, _ := pf["considered"].([]any)
+	if len(cf) <= len(ce) {
+		t.Fatalf("[文档] 规划结果未因文档而变：considered %d → %d", len(ce), len(cf))
+	}
+	// ② 文档关键词必须出现在 considered 里
+	joined := ""
+	for _, c := range cf {
+		m, _ := c.(map[string]any)
+		joined += m["element"].(string) + "|"
+	}
+	if !strings.Contains(joined, "document:") || !strings.Contains(joined, "TODO") {
+		t.Errorf("[文档] considered 未见文档结构: %s", joined)
+	}
+	// 文档实体进活跃实体口径（w_used 或 considered 可见）
+	if pf["wm"] == nil || pe["wm"] == nil {
+		t.Errorf("[文档] 缺 wm")
+	}
+}
+
+// ④ 超大文档 ⇒ 降级并说明（不许静默当没有）。
+func TestTaskTooLargeDocumentDegrades(t *testing.T) {
+	base, _ := newUIServer(t)
+	huge := strings.Repeat("这是一段很长的文档内容。", 30000) // > 200k runes
+	got := taskCall(t, base, `{"task":"总结文档","document":"`+huge+`"}`)
+	p, _ := got["plan"].(map[string]any)
+	if p["degraded"] != true || p["degraded_reason"] == "" {
+		t.Errorf("[文档] 超大文档应降级并说明: %+v", p["degraded_reason"])
+	}
+	if got["document_read"] != true {
+		t.Errorf("[文档] 超大文档仍应（截断后）参与规划")
+	}
+}

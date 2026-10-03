@@ -11,6 +11,7 @@ package asr
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"voicesign-harness/plan"
 	"voicesign-harness/space"
@@ -58,15 +59,43 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := plan.ExportManifest(tr, sr)
-	// document 作为**规划输入**参与目标文本（本轮仅拼接，不解析、不落盘）。
-	goal := req.Task
-	if req.Document != "" {
-		goal = req.Task + "（附文档 " + strconv.Itoa(itoaLen(req.Document)) + " 字）"
-	}
+	// ② **让文档真的被读**：结构 + 关键词进 considered / WM（**不把全文塞进提示词**）。
+	goal := req.Task // 注意：goal **不再**写"附文档 N 字"（那是"看起来读了"）
 	p, err := plan.LocalPlanner{}.Plan(goal, m)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
+	}
+	doc := summarizeDocument(req.Document)
+	if doc.TooLarge {
+		p.Degraded = true
+		p.DegradedReason = "文档过大（>" + strconv.Itoa(maxDocRunes) + " 字），已截断摘要，未全文参与规划"
+	}
+	if doc.Read {
+		// ① 结构进 considered
+		p.Considered = append([]plan.ConsideredItem{{
+			Element: doc.Describe(), Source: "<document>", Inferred: false,
+		}}, p.Considered...)
+		// ③ 任务与文档的关键词命中可见
+		for _, kw := range doc.HitKeywords(req.Task) {
+			p.Considered = append(p.Considered, plan.ConsideredItem{
+				Element: "document_hit:" + kw, Source: "<document>", Inferred: true,
+			})
+		}
+		// ② 文档实体进活跃实体板口径：w_used 因文档而变（超容量则留痕）
+		added := 0
+		for _, e := range doc.Entities() {
+			if p.WM.Used+added >= p.WM.Max {
+				p.WM.Drop++
+				p.WM.DropTrace = append(p.WM.DropTrace, "document:"+e)
+				continue
+			}
+			added++
+			p.Considered = append(p.Considered, plan.ConsideredItem{
+				Element: "document_entity:" + e, Source: "<document>", Inferred: true,
+			})
+		}
+		p.WM.Used += added
 	}
 	steps := make([]taskPlanStep, 0, len(p.Steps))
 	for i, st := range p.Steps {
@@ -76,8 +105,14 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"execute": false, // ⚠️ 本轮只规划，不执行
-		"goal":    p.Goal,
+		"execute":       false,    // ⚠️ 本轮只规划，不执行
+		"document_read": doc.Read, // 空文档/未读 ⇒ false + note（不许静默当没有）
+		"document_note": doc.Note,
+		"document": map[string]any{
+			"lines": doc.Lines, "items": doc.Items, "todos": doc.TODOs,
+			"keywords": doc.Keywords, "too_large": doc.TooLarge,
+		},
+		"goal": p.Goal,
 		"plan": map[string]any{
 			"steps": steps, "refused": p.Refused, "reason": p.Reason,
 			"missing": p.Missing, // 拒绝原因 + **该找谁**（owner 前缀）
@@ -89,3 +124,108 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func itoaLen(s string) int { return len([]rune(s)) }
+
+// maxDocRunes 是文档参与规划的上限（**UNVALIDATED**；超限截断摘要并标降级）。
+const maxDocRunes = 200000
+
+// docSummary 是文档的**摘要**（结构 + 关键词），不是全文。
+//
+// 纪律：**不许把整个文档塞进提示词**（L3：只注入相关片段）；
+// 也**不许只换个说法说"内容已分析"**（那就是造假）——下面每个数都从内容算出来。
+type docSummary struct {
+	Read                bool
+	Lines, Items, TODOs int
+	Keywords, hit       []string
+	Note                string
+	TooLarge            bool
+}
+
+func (d docSummary) Describe() string {
+	return "document: " + strconv.Itoa(d.Lines) + " 行 / " + strconv.Itoa(d.Items) +
+		" 条目 / " + strconv.Itoa(d.TODOs) + " 个 TODO"
+}
+
+// Entities 返回可作为"活跃实体"的文档实体（有界，取前 8 个关键词）。
+func (d docSummary) Entities() []string {
+	if len(d.Keywords) > 8 {
+		return d.Keywords[:8]
+	}
+	return d.Keywords
+}
+
+// HitKeywords 返回任务里出现过的文档关键词（任务↔文档关联可见）。
+func (d docSummary) HitKeywords(task string) []string {
+	var out []string
+	for _, kw := range d.Keywords {
+		if strings.Contains(task, kw) {
+			out = append(out, kw)
+		}
+	}
+	return out
+}
+
+// summarizeDocument 从文档内容算出**结构 + 关键词**（有界、确定性）。
+func summarizeDocument(doc string) docSummary {
+	var d docSummary
+	if strings.TrimSpace(doc) == "" {
+		d.Note = "document 为空（未参与规划）"
+		return d
+	}
+	runes := []rune(doc)
+	if len(runes) > maxDocRunes {
+		d.TooLarge = true
+		doc = string(runes[:maxDocRunes])
+	}
+	d.Read = true
+	seen := map[string]bool{}
+	for _, line := range strings.Split(doc, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		d.Lines++
+		if strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "#") || strings.Contains(t, "：") {
+			d.Items++
+		}
+		if strings.Contains(strings.ToUpper(t), "TODO") {
+			d.TODOs++
+		}
+		for _, tok := range tokenize(t) {
+			if !seen[tok] {
+				seen[tok] = true
+				d.Keywords = append(d.Keywords, tok)
+			}
+		}
+	}
+	if len(d.Keywords) > 20 {
+		d.Keywords = d.Keywords[:20]
+	}
+	if d.TooLarge {
+		d.Note = "文档超限，已按前 " + strconv.Itoa(maxDocRunes) + " 字做摘要"
+	}
+	return d
+}
+
+// tokenize 抽出可比较的词（中日韩 ≥2 字、拉丁 ≥3 字），忽略标点与空白。
+func tokenize(s string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) >= 2 {
+			out = append(out, string(cur))
+		}
+		cur = nil
+	}
+	for _, r := range s {
+		switch {
+		case r >= 0x4E00 && r <= 0x9FFF: // 汉字
+			cur = append(cur, r)
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			cur = append(cur, r)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return out
+}
