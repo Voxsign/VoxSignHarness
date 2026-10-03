@@ -27,6 +27,7 @@ const (
 	RouteAlias  = "alias"
 	RoutePinyin = "pinyin"
 	RouteEdit   = "edit"
+	RouteMixed  = "mixed"
 )
 
 // Hotword 是热词表的一条（K9：Peter 点名"最近说的词要记得住"）。

@@ -53,3 +53,21 @@ func TestNoGuessUniqueNeighborStillMatches(t *testing.T) {
 		t.Fatalf("[错配门槛] 唯一近邻被误杀（门槛过严）: %+v ok=%v", res, ok)
 	}
 }
+
+// G1-② 混排规范化 + 防治过头。
+func TestG1MixedNormalizationAndGuards(t *testing.T) {
+	c := g1Cache(t)
+	// 正例：哎ops → aiops（混排归一）
+	res, ok := c.Lookup("哎ops")
+	if !ok || res.Canonical != "aiops" {
+		t.Errorf("[G1-②] 混排未归一到 aiops: %+v ok=%v", res, ok)
+	}
+	// 反例：纯拉丁串不得被误伤（voice-signn 仍走编辑距离命中 voice-sign）
+	if r, ok := c.Lookup("voice-signn"); !ok || r.Canonical != "voice-sign" {
+		t.Errorf("[G1-② 防过头] 纯拉丁串被误伤: %+v ok=%v", r, ok)
+	}
+	// 反例：`哎ops` 也不得重新错配到 aiops-portal
+	if r, ok := c.Lookup("哎ops"); ok && r.Canonical == "aiops-portal" {
+		t.Errorf("[G1-② 防回退] 又错配到 aiops-portal: %+v", r)
+	}
+}

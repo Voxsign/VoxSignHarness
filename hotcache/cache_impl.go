@@ -111,6 +111,38 @@ func (c *Cache) Lookup(term string) (Result, bool) {
 			}
 		}
 	}
+	// ③b 混排规范化（G1 第②步）：中文取拼音、拉丁保留（小写），整体归一后比较。
+	// **只做整体归一，不做拆词** ⇒ 纯拉丁串不受影响（防"治过头"）。
+	// 冲突处理（防"错配"）：若某别名的**规范词自身**归一后等于该键 ⇒ 取它（最强信号）；
+	// 否则若**多个不同 canonical** 共享同一键 ⇒ **不得匹配**（不猜）。
+	if key, ok := MixedKey(term); ok {
+		canonicalSelf := ""
+		matches := map[string]string{}
+		for _, a := range s.aliases {
+			ak, ok1 := MixedKey(a.Alias)
+			ck, ok2 := MixedKey(a.Canonical)
+			hit := (ok1 && ak == key) || (ok2 && ck == key)
+			if !hit {
+				continue
+			}
+			if ok2 && ck == key {
+				canonicalSelf = a.Canonical // 规范词自身就归一成这个键 ⇒ 最强
+			}
+			matches[a.Canonical] = a.Source
+		}
+		if canonicalSelf != "" {
+			return Result{Canonical: canonicalSelf, Score: 0.90, Route: RouteMixed, Source: matches[canonicalSelf], Status: st}, true
+		}
+		if len(matches) == 1 {
+			for c, src := range matches {
+				return Result{Canonical: c, Score: 0.90, Route: RouteMixed, Source: src, Status: st}, true
+			}
+		}
+		if len(matches) > 1 {
+			return Result{NeedEscalate: true, Status: st, Route: RouteMixed}, false // 多解 ⇒ 不猜
+		}
+	}
+
 	// ④ 编辑距离 + **错配门槛**（Lead 裁决：先治错配，再治未命中）。
 	//
 	// 通用性质：最高候选与次高候选的**分数差 < 阈值** ⇒ **不得匹配**（宁可未命中，不猜）。

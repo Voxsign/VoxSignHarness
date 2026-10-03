@@ -172,7 +172,7 @@ var pinyinGroups = []pinyinGroup{
 	{"pei", "配培陪"},
 	{"pen", "盆喷"},
 	{"peng", "朋碰"},
-	{"pi", "批皮匹"},
+	{"pi", "劈批皮匹"},
 	{"pian", "片篇偏"},
 	{"piao", "票飘"},
 	{"pin", "品拼贫"},
