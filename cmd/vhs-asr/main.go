@@ -79,6 +79,9 @@ func main() {
 	servicesURL := envOr("VHS_SERVICES_URL", "https://aiops.peterzou.com/api/services")
 	hot := hotcache.New(filepath.Join(dataDir, "services-cache.json"), time.Hour,
 		hotcache.HTTPFetcher(servicesURL, os.Getenv("AIOPS_KEY"), 10*time.Second))
+	// 启动即刷一次并**记日志**（可观测：别名条数/来源/状态）——真跑时要能看到它。
+	snap := hot.Refresh(context.Background())
+	log.Printf("L2 缓存：别名 %d 条 status=%s source=%s", len(snap.Aliases), snap.Status, snap.Source)
 	stop := hot.StartRefresh(context.Background(), time.Hour)
 	defer stop()
 	pipe.Hot = &recog.Rewriter{Engine: asr.NewEngine(), Hot: hot}
