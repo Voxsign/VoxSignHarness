@@ -251,6 +251,10 @@ func toJSON(v any) string {
 
 // SCOPE-PROFILE-01b（Lead 裁决）：`none` 与其它来源**互斥** —— 互相矛盾的值不该能写出来。
 //
+// ⚠️ 判据标记：**forward-guard（前瞻守卫）** —— 当前无数据可触发
+// （服务恒返回单值来源；zhiji/learned 尚未接入）。它只证明"禁止逻辑存在"，
+// **不证明"真实并存场景会被拦下"**。待 zhiji/learned 接入后，须补真实并存场景的判据。
+//
 // `none` 的语义是「一个来源都没有」；若 handwritten 存在，那就不是"没有来源"。
 // 若将来需要"部分来源缺失"，那是**新枚举成员**，不是复用 none。
 func TestSCOPEProfileSourcesAreExclusiveWithNone(t *testing.T) {
