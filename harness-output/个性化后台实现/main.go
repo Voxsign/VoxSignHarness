@@ -80,58 +80,63 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func appendToFile(filename string, data interface{}) error {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
-		return err
-	}
-	return writer.Flush()
+type Trace struct {
+	Text   string `json:"text"`
+	Intent Intent `json:"intent"`
 }
 
-type Server struct {
-	dictionary *Dictionary
-	dataDir    string
-}
+var (
+	addr     = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir  = flag.String("data-dir", "./data", "Data directory")
+	dict     = NewDictionary()
+	dictFile = "dictionary.jsonl"
+)
 
-func NewServer(dataDir string) *Server {
-	return &Server{
-		dictionary: NewDictionary(),
-		dataDir:    dataDir,
+func main() {
+	flag.Parse()
+
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler)
+
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
+	}
+
+	loadDictionary()
+
+	fmt.Println("Listening on", *addr)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		fmt.Println("Error starting server:", err)
 	}
 }
 
-func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
+func processHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var request struct {
-		Text    string `json:"text"`
-		Correct bool   `json:"correct"`
+	var req struct {
+		Text string `json:"text"`
 	}
-
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	correctedText := s.dictionary.Correct(request.Text)
+	correctedText := dict.Correct(req.Text)
 	intent := classifyIntent(correctedText)
 
-	response := struct {
+	trace := Trace{Text: correctedText, Intent: intent}
+	saveTrace(trace)
+
+	resp := struct {
 		CorrectedText string `json:"corrected_text"`
 		Intent        Intent `json:"intent"`
 	}{
@@ -139,41 +144,54 @@ func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := appendToFile(s.dataDir+"/traces.jsonl", response); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func saveTrace(trace Trace) {
+	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Println("Error opening traces file:", err)
+		return
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(trace)
+	if err != nil {
+		fmt.Println("Error marshaling trace:", err)
 		return
 	}
 
-	if request.Correct {
-		feedback := Feedback{Text: request.Text, Correct: request.Correct}
-		if err := appendToFile(s.dataDir+"/feedback.jsonl", feedback); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		fmt.Println("Error writing trace:", err)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir := flag.String("data-dir", "./data", "Data directory")
-	flag.Parse()
+func loadDictionary() {
+	file, err := os.Open(fmt.Sprintf("%s/%s", *dataDir, dictFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		fmt.Println("Error opening dictionary file:", err)
+		return
+	}
+	defer file.Close()
 
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var entry struct {
+			Word       string `json:"word"`
+			Correction string `json:"correction"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			fmt.Println("Error unmarshaling dictionary entry:", err)
+			continue
+		}
+		dict.Add(entry.Word, entry.Correction)
 	}
 
-	server := NewServer(*dataDir)
-
-	http.HandleFunc("/v1/health", server.healthHandler)
-	http.HandleFunc("/v1/process", server.processHandler)
-
-	fmt.Printf("Starting server on %s\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+	if err := scanner.Err(); err != nil {
+		fmt.Println("Error reading dictionary file:", err)
 	}
 }
