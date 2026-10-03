@@ -31,6 +31,22 @@ type Step struct {
 	DependsOn []int             `json:"depends_on,omitempty"`
 }
 
+// ConsideredItem 是"这次规划**考虑了哪个要素**"（P2 先决条件：没有观测面，W_* 测不出来）。
+type ConsideredItem struct {
+	Element  string `json:"element"`
+	Source   string `json:"source"`   // WM-3：每条必须有来源
+	Inferred bool   `json:"inferred"` // 推断来的（而非事实）
+}
+
+// WMStats 是工作记忆的可测指标（WORKMEM-001 §3）。
+type WMStats struct {
+	Max       int      `json:"w_max"`                  // 一次规划同时引用的要素上界（容量）
+	Used      int      `json:"w_used"`                 // 实际用到
+	Drop      int      `json:"w_drop"`                 // 因握不住被丢弃的要素数
+	DropTrace []string `json:"w_drop_trace,omitempty"` // WM-2：丢弃必须留痕
+	ChainLen  int      `json:"chain_len"`              // 计划能排到第几步
+}
+
 // Plan 是一次规划的结果。
 type Plan struct {
 	Goal    string   `json:"goal"`
@@ -41,9 +57,11 @@ type Plan struct {
 	Voided  bool     `json:"voided,omitempty"`  // RV-3：被域门禁拒绝 → 计划作废
 	Changes []string `json:"changes,omitempty"` // RV-2：复规时必须说明"变了什么"
 
-	Source         string `json:"source,omitempty"`          // rule | model | readonly-fallback（PM-5 可解释）
-	Degraded       bool   `json:"degraded,omitempty"`        // PM-2：模型失败已降级
-	DegradedReason string `json:"degraded_reason,omitempty"` // 降级原因（不得静默）
+	Considered     []ConsideredItem `json:"considered,omitempty"`      // 观测面（P2）
+	WM             WMStats          `json:"wm,omitempty"`              // 可测的 W（P2）
+	Source         string           `json:"source,omitempty"`          // rule | model | readonly-fallback（PM-5 可解释）
+	Degraded       bool             `json:"degraded,omitempty"`        // PM-2：模型失败已降级
+	DegradedReason string           `json:"degraded_reason,omitempty"` // 降级原因（不得静默）
 }
 
 // Planner 是规划器接口。
@@ -111,6 +129,77 @@ func readonlyProbeSteps() []Step {
 	}
 }
 
+// WorkingMemory 是工作记忆的**最小骨架**（四块板完整实现属 P2 下一步；
+// 这里先给出 Clear/Remember 供 WM-5 的观测面使用）。
+type WorkingMemory struct {
+	items []ConsideredItem
+}
+
+// Remember 记一条要素（须带 source）。
+func (w *WorkingMemory) Remember(it ConsideredItem) {
+	if it.Element == "" || it.Source == "" {
+		return
+	}
+	w.items = append(w.items, it)
+}
+
+// Clear 清空工作记忆（WM-5：清空后规划质量必须下降）。
+func (w *WorkingMemory) Clear() { w.items = nil }
+
+// Items 返回当前要素快照。
+func (w *WorkingMemory) Items() []ConsideredItem { return append([]ConsideredItem(nil), w.items...) }
+
+// PlanWithMemory 是"扩容后重规划"的入口（WM-1 需要；四块板未实现 → 当前返回 ErrNotImplemented）。
+func (LocalPlanner) PlanWithMemory(goal string, m Manifest, capacity int) (Plan, error) {
+	return Plan{}, ErrNotImplemented
+}
+
+// PlanWithWorkingMemory 是"带工作记忆"的规划入口（WM-5 需要；当前未实现）。
+func (LocalPlanner) PlanWithWorkingMemory(goal string, m Manifest, w *WorkingMemory) (Plan, error) {
+	return Plan{}, ErrNotImplemented
+}
+
+// wmCapacity 是一次规划"握得住"的要素数上界（WORKMEM-001：容量有界，丢了要留痕）。
+const wmCapacity = 8
+
+// observe 记录本次规划考虑了哪些要素（WM-2/WM-3），并算出可测的 W。
+func observe(goal string, m Manifest, steps []Step, gaps []string) ([]ConsideredItem, WMStats) {
+	var items []ConsideredItem
+	for _, r := range requirementRules {
+		if containsAny(goal, r.words...) {
+			for _, w := range r.words {
+				if strings.Contains(goal, strings.ToLower(w)) {
+					items = append(items, ConsideredItem{Element: "goal:" + w, Source: "plan/planner.go:requirementRules", Inferred: false})
+					break
+				}
+			}
+		}
+	}
+	for _, c := range m.Tools {
+		if len(steps) > 0 {
+			for _, s := range steps {
+				if s.Tool == c.Name {
+					items = append(items, ConsideredItem{Element: "capability:" + c.Name, Source: "tools/registry.go", Inferred: false})
+					break
+				}
+			}
+		}
+	}
+	for _, g := range gaps {
+		items = append(items, ConsideredItem{Element: "gap:" + g, Source: "plan/planner.go:gapRequirements", Inferred: true})
+	}
+	wm := WMStats{Max: wmCapacity, ChainLen: len(steps)}
+	if len(items) > wmCapacity {
+		for _, it := range items[wmCapacity:] {
+			wm.DropTrace = append(wm.DropTrace, it.Element) // WM-2：静默丢弃禁止
+		}
+		items = items[:wmCapacity]
+	}
+	wm.Used = len(items)
+	wm.Drop = len(wm.DropTrace)
+	return items, wm
+}
+
 // Plan 按规则产出一个确定性计划。
 //
 // 分类（六类）：reachable / self_service / partial / capability_gap / authorization_gap / 未识别。
@@ -137,7 +226,8 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	case len(gaps) > 0 && kind == "":
 		// capability_gap：已识别的能力缺口 ⇒ 拒绝 + 指 owner，**不编步骤**
 		//（SC-2/PL-2 要求：拒绝时不得给步骤；只读探查仅用于"未识别"目标，见下）。
-		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: gaps,
+		cons, wm := observe(goal, m, nil, gaps)
+		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: gaps, Considered: cons, WM: wm,
 			Reason: "目标需要清单外能力（Manifest 即边界），不编造可执行计划"}, nil
 	case len(gaps) > 0 && kind != "":
 		// partial：只规划可达前缀，尾巴进 Missing（既非整体照做，也非整体拒绝）
@@ -145,22 +235,25 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
 				Missing: append(gaps, "网关："+strings.Join(missing, ",")+" 不在能力清单内"), Reason: "可达前缀也需要清单外能力"}, nil
 		}
-		return Plan{Goal: goal, Source: "rule", Steps: steps, Missing: gaps,
+		cons, wm := observe(goal, m, steps, gaps)
+		return Plan{Goal: goal, Source: "rule", Steps: steps, Missing: gaps, Considered: cons, WM: wm,
 			Degraded: true, DegradedReason: "目标部分不可达：只规划可达前缀，未覆盖全部目标"}, nil
 	case kind != "":
 		if missing := missingTools(m, steps); len(missing) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
 				Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Reason: "计划需要清单外能力"}, nil
 		}
-		return Plan{Goal: goal, Source: "rule", Steps: steps}, nil
+		cons, wm := observe(goal, m, steps, nil)
+		return Plan{Goal: goal, Source: "rule", Steps: steps, Considered: cons, WM: wm}, nil
 	default:
 		// 未识别目标：Refused（拒绝承诺）+ 只读探查（去看看）+ 显式自曝。
 		probe := readonlyProbeSteps()
 		if missing := missingTools(m, probe); len(missing) > 0 {
 			probe = nil
 		}
+		cons, wm := observe(goal, m, probe, nil)
 		return Plan{
-			Goal: goal, Refused: true, Steps: probe, Source: "readonly-probe",
+			Goal: goal, Refused: true, Steps: probe, Source: "readonly-probe", Considered: cons, WM: wm,
 			Missing:  []string{"网关：无法判定该目标所需能力（不在已支持的目标形态内），不编造计划；如确需请提需求"},
 			Reason:   "无法判定目标所需能力，不编造计划",
 			Degraded: true, DegradedReason: "未识别目标：只做只读探查，不声称覆盖目标",
