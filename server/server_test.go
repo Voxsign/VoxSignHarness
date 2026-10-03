@@ -732,8 +732,22 @@ func TestSSEReconnectIdempotent(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	// 等任务完成
-	time.Sleep(300 * time.Millisecond)
+	// 等任务完成。
+	//
+	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 与 `:414`/`:497`/`:537`/`:382` 同族）：
+	//   原为 `time.Sleep(300ms)` —— **固定等待** ⇒ 慢 CI 上可能不够
+	//   ⇒ 改为**轮询到终态**（直接读 `srv.tasks` ⇒ 不走端点 ⇒ 无 mux 依赖）
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		got := srv.tasks[ack.TaskID]
+		done := got != nil && (got.Status == stDone || got.Status == stCanceled)
+		srv.mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// 重连 after=1，应只看到 seq>1 的事件
 	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=1", "secret")
