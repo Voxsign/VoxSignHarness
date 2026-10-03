@@ -20,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, definition string) {
+func (d *Dictionary) Add(word, correction string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = definition
+	d.entries[word] = correction
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,23 +35,20 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	definition, exists := d.entries[word]
-	return definition, exists
+	correction, exists := d.entries[word]
+	return correction, exists
 }
 
-func (d *Dictionary) Correct(word string) string {
+func (d *Dictionary) Correct(text string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.entries[word]; exists {
-		return word
-	}
-	// Simple correction: return the first word that starts with the same letter
-	for entry := range d.entries {
-		if strings.HasPrefix(entry, string(word[0])) {
-			return entry
+	words := strings.Fields(text)
+	for i, word := range words {
+		if correction, exists := d.entries[word]; exists {
+			words[i] = correction
 		}
 	}
-	return word
+	return strings.Join(words, " ")
 }
 
 type Intent string
@@ -65,20 +62,16 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	text = strings.ToLower(text)
-	switch {
-	case strings.Contains(text, "note"):
+	if strings.Contains(text, "note") {
 		return NOTE
-	case strings.Contains(text, "query"):
+	} else if strings.Contains(text, "query") {
 		return QUERY
-	case strings.Contains(text, "edit"):
+	} else if strings.Contains(text, "edit") {
 		return EDIT
-	case strings.Contains(text, "commit"):
+	} else if strings.Contains(text, "commit") {
 		return COMMIT
-	case strings.Contains(text, "orchestrate"):
+	} else {
 		return ORCHESTRATE
-	default:
-		return QUERY
 	}
 }
 
@@ -112,8 +105,9 @@ type Response struct {
 }
 
 var (
-	dictionary = NewDictionary()
-	dataDir    string
+	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir = flag.String("data-dir", "./data", "Data directory")
+	dict    = NewDictionary()
 )
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +127,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correctedText := dictionary.Correct(req.Text)
+	correctedText := dict.Correct(req.Text)
 	intent := ClassifyIntent(req.Text)
 
 	resp := Response{
@@ -141,7 +135,12 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		Intent:        intent,
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", dataDir), req); err != nil {
+	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -151,20 +150,19 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	flag.StringVar(&dataDir, "data-dir", "./data", "Directory to store data files")
-	addr := flag.String("addr", "127.0.0.1:8080", "Address to listen on")
 	flag.Parse()
 
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		fmt.Println("Failed to create data directory:", err)
-		return
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
+		os.Exit(1)
 	}
 
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler)
 
-	fmt.Println("Listening on", *addr)
+	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Failed to start server:", err)
+		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
+		os.Exit(1)
 	}
 }
