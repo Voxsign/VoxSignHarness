@@ -231,6 +231,48 @@ except Exception:
       else
         echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
       fi ;;
+    if:*)
+      # `if:<条件字段><op><条件值>?<结论字段>=<结论值>`
+      # 例：`if:intent.domain_suggestion>=2?intent.space=`（≥2 时 space 必须为空）
+      # 语义：**条件不成立 ⇒ ⚠️ 不适用**（不算 ✗ 也不算 ✅）；条件成立 ⇒ 判结论
+      body=${want#if:}; cond=${body%%\?*}; concl=${body#*\?}
+      ck=${cond%%[<>=]*}; op=$(printf '%s' "$cond" | grep -oE '[<>=]+' | head -1); cv=${cond#*$op}
+      ok=${concl%%=*}; ov=${concl#*=}
+      printf '%s' "$full" > "$JFILE"
+      read -r cval kval <<EOF2
+$(VHS_K="$ck" VHS_T="$ok" python3 -c '
+import json,os
+try: d=json.load(open(os.environ["VHS_JFILE"]))
+except Exception: print("__ERR__ __ERR__"); raise SystemExit
+def g(k):
+    cur=d
+    for part in k.split("."):
+        cur = cur.get(part) if isinstance(cur,dict) else None
+    return cur
+print(json.dumps(g(os.environ["VHS_K"]),ensure_ascii=False), json.dumps(g(os.environ["VHS_T"]),ensure_ascii=False))
+' 2>/dev/null)
+EOF2
+      # 条件判定
+      cmet=0
+      case "$op" in
+        ">=") [ "$cval" != "null" ] && [ "$(printf '%s' "$cval" | python3 -c 'import json,sys;v=json.load(sys.stdin);print(len(v) if isinstance(v,list) else v)' 2>/dev/null)" -ge "$cv" ] 2>/dev/null && cmet=1 ;;
+        "==") [ "$cval" = "$(VHS_V="$cv" python3 -c 'import json,os,json as j;v=os.environ["VHS_V"]
+try: print(j.dumps(j.loads(v),ensure_ascii=False))
+except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)" ] && cmet=1 ;;
+        *) cmet=1 ;;
+      esac
+      if [ "$cmet" != "1" ]; then
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **⚠️ 不适用**（条件 ${cond} 不成立；不算 ✗ 也不算 ✅） |" >> "$OUT"
+      else
+        oexp=$(VHS_V="$ov" python3 -c 'import json,os,json as j;v=os.environ["VHS_V"]
+try: print(j.dumps(j.loads(v),ensure_ascii=False))
+except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)
+        if [ "$kval" = "$oexp" ]; then
+          echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（条件成立且 ${ok}=${ov}；C 待补 ⇒ ◐） |" >> "$OUT"
+        else
+          echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 条件成立但 ${ok}：期望 ${oexp} 实际 ${kval}** |" >> "$OUT"
+        fi
+      fi ;;
     absent:*)
       a=${want#absent:}
       if printf '%s' "$full" | grep -qF -- "$a"; then
@@ -257,6 +299,7 @@ R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
 Z=$(grep -c '| \*\*✗ ' "$OUT" 2>/dev/null || echo 0)
 W=$(grep -c '| \*\*⚠️ 前提不满足' "$OUT" 2>/dev/null || echo 0)
 K=$(grep -c '◐ 弱断言' "$OUT" 2>/dev/null || echo 0)
+N=$(grep -c '⚠️ 不适用' "$OUT" 2>/dev/null || echo 0)
 T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
 {
   echo
@@ -267,6 +310,7 @@ T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' |
   echo "✗          : $Z"
   echo "⚠️ 前提不满足 : $W   ← **不算 ✗ 也不算 ✅**（装置前提，不是产品结论）"
   echo "◐ 弱断言      : $K   ← **只证"字段/子串出现"，不证判据成立** ⇒ 不得当 ✅"
+  echo "⚠️ 不适用      : $N   ← **判据的条件在当前输入下不成立**（输入问题，不是产品问题）"
   echo "⇒ 按 skill：**PASS = C + R 双证齐**。有 R 证据仍须补 C 证据（scripts/evidence_collect.sh）。"
   echo '```'
   echo
