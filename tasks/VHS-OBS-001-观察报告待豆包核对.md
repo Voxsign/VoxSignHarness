@@ -55,7 +55,9 @@ server.go:259  handleRun：**自己 `s.tasks[ts.ID] = ts`**（手动入 map）·
                      · `s.byReq[requestID] = ts.ID` ⇒ **不去重**（OBS-08）
                      · `Role: RolePlanner`          ⇒ **角色未初始化**（OBS-09）
 server.go:342  **handleVoice** ⇒ **同一模式**（`ts := &taskState{ID, Status, confirmCh}` + 手动入 map）
-               ⇒ **同样不落盘**（实测：`/v1/voice` 后目录 32 → 32）· 且**响应不返回 `task_id`**
+               ⇒ **同样不落盘**（实测：`/v1/voice` 后目录 32 → 32）
+               ⚠️ **它**会返回 `task_id`**（`:420` 附近 `writeJSON(… "task_id": ts.ID …)`）
+                  ⇒ **调用方以为拿到了可追踪的句柄，而它重启即失效**（比"不给句柄"更糟）
 server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 三件都做 ✅
 ⇒ ⇒ **三个入口里两个是手工拷贝**，只有 `/v1/tasks` 走了正确的那条
 ```
