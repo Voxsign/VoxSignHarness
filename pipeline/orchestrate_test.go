@@ -15,10 +15,13 @@ import (
 // initGitRepo 在 dir 初始化一个干净的 git 仓（带身份 + 一个基线提交）。
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
+	// ⚠️ **不许写 git config**（2026-10-03 事故）：
+	// `git config user.email` 不带 --local/--global 时，写的是"从 cwd 上溯找到的仓库"的 config；
+	// 当 dir 里的仓库不可用时会上溯到**主仓库** ⇒ 覆盖真实身份、并把 core.bare 置 true
+	// （本仓库 .git/config 里出现过 user.email=vhs-test@example.com + bare=true，指纹即此测试）。
+	// ⇒ 身份改由**全局配置回落**（不再显式设置）；若需注入，用命令级 `-c user.email=...`。
 	for _, args := range [][]string{
 		{"init"},
-		{"config", "user.email", "vhs-test@example.com"},
-		{"config", "user.name", "vhs-test"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir

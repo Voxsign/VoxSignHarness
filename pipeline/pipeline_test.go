@@ -386,13 +386,11 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	mustRun("git", "config", "user.email", "vhs@test")
-	mustRun("git", "config", "user.name", "vhs")
 	if err := os.WriteFile(filepath.Join(projDir, "init.txt"), []byte("init\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mustRun("git", "add", "-A")
-	mustRun("git", "commit", "-q", "-m", "init")
+	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
 	before := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))
 
 	// 制造未提交改动
@@ -445,11 +443,9 @@ func TestCommitRefusedNoExec(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	mustRun("git", "config", "user.email", "vhs@test")
-	mustRun("git", "config", "user.name", "vhs")
 	_ = os.WriteFile(filepath.Join(projDir, "a.txt"), []byte("a\n"), 0o644)
 	mustRun("git", "add", "-A")
-	mustRun("git", "commit", "-q", "-m", "init")
+	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
 	before := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))
 
 	_ = o.Spaces.Add(&space.Manifest{

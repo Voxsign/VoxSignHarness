@@ -1897,17 +1897,19 @@ func Summary(o *Options, since time.Time) (string, error) {
 		fmt.Fprintf(&sb, " / Net 均值 %dms（含等待/LLM 任务 %d 个）", sumWait/int64(waitN), waitN)
 	}
 	fmt.Fprintf(&sb, "\n")
-	if pureN > 0 {
-		fmt.Fprintf(&sb, "纯管线任务（无等待/LLM）%d 个，不计入 Net 均值\n", pureN)
-	}
+	// ⚠️ **无条件输出**：它是"Net 均值分母口径"的说明，属摘要**结构**，不随 pureN 是否为 0 而消失。
+	fmt.Fprintf(&sb, "纯管线任务（无等待/LLM）%d 个，不计入 Net 均值\n", pureN)
 	writeCounts(&sb, "按意图", byIntent)
 	writeCounts(&sb, "按域", bySpace)
 	writeCounts(&sb, "按归因", byAttr)
 	return sb.String(), nil
 }
 
+// writeCounts 写一个分节。⚠️ **空表也必须写标题**（写「（无）」）：
+// 摘要的**结构必须稳定**，不随数据有无而增减 —— 否则同一份摘要在不同数据下形状不同，无法被稳定断言。
 func writeCounts(sb *strings.Builder, title string, m map[string]int) {
 	if len(m) == 0 {
+		fmt.Fprintf(sb, "%s：\n  （无）\n", title)
 		return
 	}
 	type kv struct {
