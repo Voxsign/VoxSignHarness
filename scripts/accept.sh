@@ -28,7 +28,19 @@ BIN="$BINDIR/vhs-asr"
 
 echo "[accept] ① 一条命令起服务（A1）：build 真二进制 + 起服务 port=$PORT data=$DATA"
 ( cd "$ROOT" && go build -o "$BIN" ./cmd/vhs-asr )
-VHS_ASR_ADDR="127.0.0.1:$PORT" VHS_ASR_DATA="$DATA" "$BIN" > /tmp/vhs-a12-server.log 2>&1 &
+# A5–A7 判据语义 = **规则式分批**（§5.1 1/2/3，确定性）；头部在途的 L2 规划（Lead 实测不稳定：
+# 上游 502/模型拒绝/≈60s）**不属于 A1–A12 判据范围** ⇒ 验收默认钉住规则式配置，
+# **服务端如实可见**：日志 "L2 未装配（模型中心配置读取失败）" + 响应 l2_enabled=false + l2_note。
+# 若调用方显式设置了 VHS_MODEL_CENTER，则尊重之（escape hatch）。
+if [ -z "${VHS_MODEL_CENTER:-}" ]; then
+  VHS_MODEL_CENTER="$DATA/model-center.unavailable.json"
+  echo "[accept] 规划判据按规则式语义验证（A5-A7 语义 = 规则式分批，头部 L2 在途状态见验收报告 §5）"
+  echo "[accept] VHS_MODEL_CENTER=$VHS_MODEL_CENTER"
+  echo "[accept] （指向不存在的文件 ⇒ 服务端如实日志 L2 未装配 + 响应 l2_enabled=false）"
+else
+  echo "[accept] 尊重调用方 VHS_MODEL_CENTER=$VHS_MODEL_CENTER（L2 规划行为随头部在途实现）"
+fi
+VHS_ASR_ADDR="127.0.0.1:$PORT" VHS_ASR_DATA="$DATA" VHS_MODEL_CENTER="$VHS_MODEL_CENTER" "$BIN" > /tmp/vhs-a12-server.log 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true; rm -rf "$BINDIR"' EXIT INT TERM
 
@@ -48,6 +60,7 @@ VHS_ACCEPT_CDP_PORT="${VHS_ACCEPT_CDP_PORT:-9333}" VHS_ACCEPT_CHROME="$CHROME" \
   node "$ROOT/scripts/accept-a1a12.mjs"
 RC=$?
 kill $SRV 2>/dev/null || true
-echo "[accept] 验收数据目录：$DATA（可复核 feedback.jsonl / blacklist.json / reallog.jsonl）"
+echo "[accept] 验收数据目录（可复核 feedback.jsonl / blacklist.json / reallog.jsonl）："
+echo "[accept]   $DATA"
 echo "[accept] 服务日志：/tmp/vhs-a12-server.log"
 exit $RC

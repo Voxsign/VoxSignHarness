@@ -120,6 +120,24 @@ const FAKE_REC = `
 
 const btns = `[...document.querySelectorAll('button')].map(b => (b.textContent||'').trim())`;
 const clickBtn = (needle) => `(() => { const b = [...document.querySelectorAll('button')].find(b => (b.textContent||'').includes(${JSON.stringify(needle)})); if (!b) return false; b.click(); return true; })()`;
+// 规划等待：合并后 /v1/task 走真实 L2 模型（实测一次 ≈60s，服务端超时 120s），
+// 故等待上限给 150s；页面若显示「规划失败」则立即抛错（不傻等）。
+async function waitPlanSteps(cdp, timeout = 150000) {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await cdp.eval(`(() => {
+      const o = document.getElementById('planout');
+      if ((o.innerHTML || '').includes('规划失败')) return 'FAILED';
+      const rows = document.querySelectorAll('#planout table tr').length;
+      return rows > 1;
+    })()`);
+    if (v === 'FAILED') throw new Error('规划失败（页面显示）');
+    if (v === true) return;
+    if (Date.now() - t0 > timeout) throw new Error(`waitFor 超时（${timeout}ms）——步骤未渲染`);
+    await sleep(150);
+  }
+}
+
 const stepsCount = `(() => { const rows = document.querySelectorAll('#planout table tr').length; return rows > 0 ? rows - 1 : 0; })()`;
 const outText = `document.getElementById('out').innerHTML || ''`;
 // 「纠错」行的内容（#out 里的第二个 <code>；原始/纠错/标点 三个 code 依次排列）。
@@ -208,7 +226,7 @@ async function main() {
     await cdp.eval(`document.getElementById('doc').value = ${JSON.stringify(doc34)}`);
     await cdp.eval(`document.getElementById('task').value = '把这个文档里的 TODO 整理成一份计划'`);
     await cdp.eval(clickBtn('规划'));
-    await waitFor(() => cdp.eval(`${stepsCount} > 0`));
+    await waitPlanSteps(cdp);
     const n = await cdp.eval(stepsCount);
     const note = await cdp.eval(`document.getElementById('planout').innerHTML.includes('只规划')`);
     if (n > 2 && note) pass(`A5 34 条目文档 ⇒ steps=${n} > 2（分批；只规划不执行）`);
@@ -219,7 +237,7 @@ async function main() {
   try {
     await cdp.eval(`document.getElementById('doc').value = ''`);
     await cdp.eval(clickBtn('规划'));
-    await waitFor(() => cdp.eval(`${stepsCount} > 0`));
+    await waitPlanSteps(cdp);
     const n = await cdp.eval(stepsCount);
     if (n === 2) pass('A6 无文档 ⇒ steps=2（不误认分批）');
     else fail('A6', `steps=${n}（应=2）`);
@@ -230,7 +248,7 @@ async function main() {
     const docTodo = Array.from({ length: 34 }, (_, i) => `TODO: item ${String(i).padStart(2, '0')}`).join('\n');
     await cdp.eval(`document.getElementById('doc').value = ${JSON.stringify(docTodo)}`);
     await cdp.eval(clickBtn('规划'));
-    await waitFor(() => cdp.eval(`${stepsCount} > 0`));
+    await waitPlanSteps(cdp);
     const n = await cdp.eval(stepsCount);
     if (n > 2) pass(`A7 TODO 格式×34 ⇒ steps=${n} > 2（也分批）`);
     else fail('A7', `steps=${n}（应>2）`);
