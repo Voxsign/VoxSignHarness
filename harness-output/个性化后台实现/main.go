@@ -12,43 +12,42 @@ import (
 )
 
 type Dictionary struct {
-	words map[string]struct{}
-	mu    sync.RWMutex
+	entries map[string]string
+	mu      sync.RWMutex
 }
 
 func NewDictionary() *Dictionary {
-	return &Dictionary{words: make(map[string]struct{})}
+	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.words[word] = struct{}{}
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	delete(d.words, word)
+	delete(d.entries, word)
 }
 
-func (d *Dictionary) Exists(word string) bool {
+func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	_, exists := d.words[word]
-	return exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
 func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.words[word]; exists {
+	if _, exists := d.entries[word]; exists {
 		return word
 	}
-	// Simple correction: return the first word that starts with the same letter
-	for w := range d.words {
-		if strings.HasPrefix(w, string(word[0])) {
-			return w
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+			return entry
 		}
 	}
 	return word
@@ -65,15 +64,17 @@ const (
 )
 
 func classifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	default:
 		return ORCHESTRATE
 	}
 }
@@ -83,19 +84,39 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func appendToFile(filename string, data interface{}) error {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+type Request struct {
+	Text string `json:"text"`
+}
 
-	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
-		return err
+type Response struct {
+	CorrectedText string `json:"corrected_text"`
+	Intent        Intent `json:"intent"`
+}
+
+var (
+	dictionary = NewDictionary()
+	dataDir    string
+)
+
+func init() {
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
+}
+
+func main() {
+	flag.Parse()
+
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler)
+
+	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
 	}
-	return writer.Flush()
+
+	fmt.Println("Server listening on 127.0.0.1:8080")
+	if err := http.ListenAndServe("127.0.0.1:8080", nil); err != nil {
+		fmt.Println("Error starting server:", err)
+	}
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -103,66 +124,75 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Text string `json:"text"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request", http.StatusBadRequest)
-			return
-		}
-
-		corrected := dict.Correct(req.Text)
-		intent := classifyIntent(req.Text)
-
-		resp := struct {
-			Corrected string `json:"corrected"`
-			Intent    Intent `json:"intent"`
-		}{
-			Corrected: corrected,
-			Intent:    intent,
-		}
-
-		appendToFile(dataDir+"/traces.jsonl", req)
-		appendToFile(dataDir+"/usage.jsonl", resp)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-func feedbackHandler(dataDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var feedback Feedback
-		if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
-			http.Error(w, "Invalid request", http.StatusBadRequest)
-			return
-		}
-
-		appendToFile(dataDir+"/feedback.jsonl", feedback)
-
-		w.WriteHeader(http.StatusOK)
-	}
-}
-
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir := flag.String("data-dir", "./data", "Data directory")
-	flag.Parse()
-
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Println("Error creating data directory:", err)
+func processHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	dict := NewDictionary()
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
-	http.HandleFunc("/v1/feedback", feedbackHandler(*dataDir))
-
-	fmt.Println("Starting server on", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Error starting server:", err)
+	var req Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
 	}
+
+	correctedText := dictionary.Correct(req.Text)
+	intent := classifyIntent(req.Text)
+
+	resp := Response{
+		CorrectedText: correctedText,
+		Intent:        intent,
+	}
+
+	if err := logTrace(req.Text, correctedText, intent); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func logTrace(originalText, correctedText string, intent Intent) error {
+	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	trace := map[string]interface{}{
+		"original_text":  originalText,
+		"corrected_text": correctedText,
+		"intent":         intent,
+	}
+
+	data, err := json.Marshal(trace)
+	if err != nil {
+		return err
+	}
+
+	writer := bufio.NewWriter(file)
+	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+func logFeedback(feedback Feedback) error {
+	file, err := os.OpenFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(feedback)
+	if err != nil {
+		return err
+	}
+
+	writer := bufio.NewWriter(file)
+	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
 }

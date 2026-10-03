@@ -1,81 +1,85 @@
-个性化后台实现 —— 运行说明
+个性化后台运行说明
 
-一、构建与启动
+一、环境与安装
+Python 3.10+。首次运行前安装依赖：
+pip install -r requirements.txt
+（零依赖实现则可跳过）
 
-构建：
-go build -o bin/personalize ./cmd/server
+二、启动
+默认监听回环地址，仅允许 127.0.0.1 / ::1；若传入非回环地址，进程会直接拒绝启动并退出。
 
-启动（默认仅监听回环）：
-./bin/personalize -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+python -m app.server --host 127.0.0.1 --port 8080 --data-dir ./data --token dev-token
 
-参数说明：
--addr      监听地址，默认 127.0.0.1:8080；非回环地址（如 0.0.0.0、公网 IP）会在启动时直接拒绝并退出。
--data-dir  数据目录，默认 ./data，首次启动自动创建。
--token     鉴权占位令牌，默认 dev-token；请求需带 Authorization: Bearer <token>。
+等价环境变量方式：
+HOST=127.0.0.1 PORT=8080 DATA_DIR=./data AUTH_TOKEN=dev-token python -m app.server
 
-开发期也可直接跑：
-go run ./cmd/server -data-dir ./data
+参数说明
+--host      默认 127.0.0.1，非回环值将被拒绝
+--port      默认 8080
+--data-dir  数据目录，默认 ./data，不存在时自动创建
+--token     鉴权令牌（占位实现），默认从 AUTH_TOKEN 读取
 
-二、HTTP 端点
+鉴权：除 /v1/health 外，所有请求需带请求头
+Authorization: Bearer <token>
+未配置 token 时放行但会在 usage 中标记 auth=none。
 
+三、端点
+1) 健康检查
 GET /v1/health
-返回服务状态、版本、数据目录可写性与各 JSONL 文件行数。
-示例响应：{"status":"ok","version":"0.1.0","data_dir":"./data","writable":true}
+返回 {"status":"ok","version":"...","data_dir":"...","uptime_s":N}
 
+2) 文本处理
 POST /v1/process
-统一业务入口，Content-Type: application/json。按 action 分发，所有子能力共用同一端点。
+Content-Type: application/json
+请求体：
+{
+  "text": "把明天的会记一下",
+  "session_id": "s-001",
+  "feedback": null
+}
+响应体：
+{
+  "trace_id": "t-...",
+  "intent": "NOTE",
+  "corrected_text": "把明天的会记一下",
+  "dictionary_hits": [{"term":"...","action":"keep"}],
+  "changed": false,
+  "notes": []
+}
+intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE。
 
-请求体通用结构：
-{"action":"<名称>","session_id":"<可选>","payload":{...}}
+3) 反馈（写回 feedback.jsonl）
+沿用同一端点，提交时带 feedback 字段：
+{
+  "text": "把明天的会记一下",
+  "trace_id": "t-...",
+  "feedback": {"vote": "up", "comment": "可选"}
+}
+vote 取值 up(✔) 或 down(✘)。写入为 append-only，不覆盖历史。
 
-action 取值与 payload：
+4) 词典（增 / 删 / 查）
+POST /v1/dict   {"op":"add","term":"飞书","aliases":["feishu"],"replace":"飞书"}
+POST /v1/dict   {"op":"del","term":"飞书"}
+GET  /v1/dict?q=飞书
+纠错遵循安全原则：仅命中词典的确定性替换，未命中不做任何改写；长度、标点、大小写等无匹配时原样返回，changed=false。
 
-intent —— 意图分类，五类：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-payload: {"text":"记一下明天十点开会"}
-响应:    {"intent":"NOTE","confidence":0.92}
+curl 示例
+curl -s http://127.0.0.1:8080/v1/health
+curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Authorization: Bearer dev-token' -H 'Content-Type: application/json' -d '{"text":"帮我查下上周的周报","session_id":"s-001"}'
 
-correct —— 文本纠错（清洗 + 词典纠错，命中不确定时保持原文不改写）
-payload: {"text":"今天看一下 kubernets 文档"}
-响应:    {"text":"今天看一下 Kubernetes 文档","changed":true,"hits":[{"from":"kubernets","to":"Kubernetes"}]}
+四、数据文件
+全部位于 --data-dir 指定目录（默认 ./data），均为 JSONL、append-only、逐行一个 JSON 对象，写入使用追加+fsync，不做原地修改：
+data/traces.jsonl    每次 /v1/process 的输入、意图、纠错结果、trace_id、时间戳
+data/usage.jsonl     端点调用、耗时、状态码、鉴权标记
+data/feedback.jsonl  vote / comment / trace_id / 时间戳
+data/dict.json       个性化词典（增删改时原子写：临时文件 + rename）
+data/server.log       运行日志（可选）
 
-dict.add —— 新增词条
-payload: {"term":"Kubernetes","aliases":["kubernets","k8s"],"tags":["tech"]}
+清理与迁移：直接停服后移动或删除整个 data-dir 即可，服务下次启动会重建缺失文件。
 
-dict.del —— 删除词条（按 term 精确匹配）
-payload: {"term":"Kubernetes"}
-
-dict.get —— 查询词条（term 为空时列出全部，支持前缀匹配）
-payload: {"term":"Kube","prefix":true}
-
-feedback —— 反馈学习，落盘 append-only
-payload: {"session_id":"s1","trace_id":"t1","signal":"up","note":"分类正确"}
-signal 取值：up（✔）/ down（✘）。
-
-process —— 串联一步：清洗 → 纠错 → 意图分类（可选写 traces/usage）
-payload: {"text":"...","write_trace":true}
-
-响应统一形如：
-{"ok":true,"action":"correct","result":{...},"trace_id":"t1"}
-
-错误响应：{"ok":false,"error":{"code":"bad_request","message":"..."}}
-
-三、数据文件（全部 append-only JSONL，位于 data-dir）
-
-dictionary.jsonl  词典事件流（add/del），启动时回放重建内存索引
-feedback.jsonl    反馈记录，✔/✘ 逐行追加
-traces.jsonl      请求链路：trace_id、action、耗时、命中结果
-usage.jsonl       调用计数：action、session_id、时间戳
-
-示例：
-data/dictionary.jsonl
-{"ts":"2026-01-01T10:00:00Z","op":"add","term":"Kubernetes","aliases":["kubernets","k8s"]}
-data/feedback.jsonl
-{"ts":"2026-01-01T10:00:05Z","session_id":"s1","trace_id":"t1","signal":"up"}
-
-说明：文件只追加不重写；删除通过追加 op=del 事件生效；异常中断后可安全重启，回放按时间顺序合并。
-
-四、安全与边界
-
-仅绑定 127.0.0.1 / ::1；检测到非回环监听地址即拒绝启动。
-鉴权为占位实现，校验 Bearer 令牌一致性，缺失或错误返回 401。
-纠错采用高置信度替换策略：词典未命中或存在歧义时保留原文，确保正常文本不被改坏。
+五、快速自检
+python -m app.server --host 127.0.0.1 --port 8080 &
+curl -s http://127.0.0.1:8080/v1/health
+curl -s -X POST http://127.0.0.1:8080/v1/process -H 'Content-Type: application/json' -d '{"text":"记一下：周五交材料"}'
+tail -n 1 data/traces.jsonl
+tail -n 1 data/usage.jsonl
