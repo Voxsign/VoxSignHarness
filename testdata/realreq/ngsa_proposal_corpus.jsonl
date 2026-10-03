@@ -1,0 +1,15 @@
+{"id":"R1","raw":"OT-ODP 的六层目标架构分别是哪六层","category":"query","want_intent":"QUERY","source":"pp.05 六层目标架构","note":"事实查询，期望 LLM 真实回答或降级"}
+{"id":"R2","raw":"这个方案里 DMZ 发布是不是单向的","category":"query","want_intent":"QUERY","source":"pp.06/20 受控发布、DMZ","note":"事实查询，yes/no"}
+{"id":"R3","raw":"记一个想法：AI 输出只能给建议，人工批准后由授权系统执行","category":"note","want_intent":"NOTE","source":"pp.19/24 AI治理、结论","note":"记想法，期望落盘"}
+{"id":"R4","raw":"记一下：自动化控制段不在 OT-ODP 范围内，需要独立安全审批","category":"note","want_intent":"NOTE","source":"pp.02 成熟度路径","note":"记想法"}
+{"id":"R5","raw":"把技术方案里 In scope 的范围整理成一份 markdown 文档放到 docs 目录","category":"edit","want_intent":"EDIT","source":"pp.03 定位与范围","note":"写文件动作，沙箱内执行"}
+{"id":"R6","raw":"在方案里补一句 SPoG 不进入保护联锁和实时控制路径","category":"edit","want_intent":"EDIT","source":"pp.18 SPoG 边界","note":"追加内容，沙箱内执行"}
+{"id":"R7","raw":"把这次的文档改动提交一下","category":"commit","want_intent":"COMMIT","source":"—","note":"不可逆动作，期望风险门禁拦截/确认"}
+{"id":"R8","raw":"把这个方案里的 in 死 cope 范围整成文档","category":"asr_noise","want_intent":"EDIT","source":"pp.03 In scope","note":"ASR 噪声：In scope→in 死 cope，期望纠错"}
+{"id":"R9","raw":"S1 振荡场景的降级模式 OT 边界是什么","category":"query","want_intent":"QUERY","source":"pp.21 场景S1","note":"领域词查询：降级模式 OT 边界"}
+{"id":"R10","raw":"我们要为国家电网南非公司建一个 OT 运营数据平台，把 SCADA EMS WAMS 这些源系统的数据统一收上来做受治理的数据产品，通过 DMZ 单向发布给企业，AI 只给建议动作要人工批准，帮我规划一下这件事","category":"long_narrative","want_intent":"ORCHESTRATE","source":"pp.01-24 全文要旨","note":"长口语叙述真实需求，期望规划类意图"}
+{"id":"R11","raw":"不要删除外部系统数据贡献表","category":"negative","want_intent":"UNKNOWN","source":"pp.14 数据贡献表","note":"否定句，不得判成可执行删除"}
+{"id":"R12","raw":"开始测试方案里 Discover 到 Scale 的五个交付阶段","category":"meta","want_intent":"TEST","source":"pp.24 交付架构","note":"元指令，不得当普通命令执行"}
+{"id":"R13","raw":"把采集安全六支柱记下来然后再提交一个想法","category":"multi_action","want_intent":"NOTE","source":"pp.13 六支柱","note":"多动作：记+提交，期望拆解或明确回问"}
+{"id":"R14","raw":"下周三之前完成方案评审","category":"time","want_intent":"TIME","source":"—","note":"时间锚点，M1 TIME 类"}
+{"id":"R15","raw":"我上次问的 OT-ODP 定位和范围是什么","category":"refer","want_intent":"QUERY","source":"pp.03","note":"指代消解：上次→历史上下文"}
