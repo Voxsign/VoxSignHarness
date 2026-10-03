@@ -585,6 +585,7 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document string) *taskSta
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
 func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint string) {
 	o := *s.tmpl
+	o.Document = ts.Document // 附件文档全文 → 实现类长程任务消费（修订卡2 附）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		s.markStatus(ts, stNeedConfirm)

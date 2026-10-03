@@ -121,6 +121,10 @@ type Options struct {
 	Tools    *tools.Registry
 	Exec     *tools.Executor
 
+	// Document 附件/需求文档全文（长程实现任务输入，修订卡2 附；server 装配时从 taskState 注入，
+	// Run 内在 classify 后塞入 intent.Params["document"] 供 execOrchestrate 实现类分支消费）。
+	Document string
+
 	// ConfirmFn 阻塞等待人工放行（CLI=stdin / server=HTTP）；返回 false 表示拒绝。
 	ConfirmFn func(taskID, question string) (bool, error)
 	Trace     *trajectory.Trajectory
@@ -286,6 +290,16 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	})
 	b, _ := json.Marshal(verdict)
 	emit(trajectory.Entry{Kind: "space_check", Content: string(b)})
+
+	// 附件文档注入（修订卡2 附）：实现类长程任务的 document 全文 → intent.Params，
+	// 供 execOrchestrate 实现类分支消费（读文档→生成实现计划→写→提交）。
+	if o.Document != "" && intent.Intent == contract.IntentOrchestrate {
+		if intent.Params == nil {
+			intent.Params = map[string]string{}
+		}
+		intent.Params["document"] = o.Document
+	}
+
 	out.Intent = intent
 	out.Verdict = verdict
 
@@ -695,6 +709,7 @@ func mustGetwd() string {
 }
 
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
+// kind=implement 时走实现类分支：读附件 document → 生成实现计划 → 写 → 提交（修订卡2 层2）。
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空 → 惰性自动注册 project 域，
 	// scope 指向 git 仓库根，落盘到日志目录 spaces/，长任务即开即用（不覆盖已有注册）。
@@ -707,7 +722,46 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	var receipts []contract.Receipt
 	nextSeq := func() int { return len(receipts) + 1 }
 
-	// 1) 发现源文档并逐个做域内白名单校验（docs/ 下命中默认清单）。
+	// 实现类分支（kind=implement）：附件 document → 实现计划文档 → 定向提交。
+	if it.Params != nil && it.Params["kind"] == "implement" {
+		doc := it.Params["document"]
+		if doc == "" {
+			return append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "orchestrate",
+				OK: false, Err: "实现类任务缺少附件文档（请求体需带 document）"})
+		}
+		title := strings.TrimSpace(it.Params["target_doc"])
+		if title == "" {
+			title = "个性化后台实现"
+		}
+		planName := title + "-实现计划"
+		body := o.llmSummarize(ctx, planName, doc)
+		if strings.TrimSpace(body) == "" {
+			body = deterministicImplementPlan(title, doc)
+		}
+		plan := "# " + planName + "\n\n" +
+			"> 本文件由 VoiceSign Harness 多步编排（ORCHESTRATE kind=implement：读附件→生成实现计划→写→提交）自动生成。\n\n" +
+			body + "\n"
+		planAbs := filepath.Join(root, "docs", planName+".md")
+		cleanTarget, ok := space.ResolveScopePath(root, planAbs)
+		if !ok {
+			return append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "orchestrate",
+				OK: false, Err: "白名单外写路径被拒绝（越界）: " + planAbs})
+		}
+		wrecv := o.run("file", map[string]any{
+			"action": "write", "path": cleanTarget, "content": plan, "log_dir": logDir,
+		})
+		wrecv.Seq = nextSeq()
+		receipts = append(receipts, wrecv)
+		if !wrecv.OK {
+			return receipts
+		}
+		crecv := o.commitTargetPath(root, cleanTarget, "vhs(implement): 生成《"+planName+"》实现计划（ORCHESTRATE kind=implement）")
+		crecv.Seq = nextSeq()
+		receipts = append(receipts, crecv)
+		return receipts
+	}
+
+	// 文档整理分支（原路径）：读 docs/ 默认清单 → 汇总 → 写 → 提交。
 	docDir := filepath.Join(root, "docs")
 	type srcDoc struct{ abs, base string }
 	var sources []srcDoc
@@ -844,6 +898,67 @@ func deterministicSummary(title string, sourceNames []string, merged string) str
 	sb.WriteString("> 注：本次未调用 LLM 润色（模型不可用），内容为源文档结构化拼接。\n\n")
 	sb.WriteString("## 全文摘录\n\n```markdown\n")
 	sb.WriteString(truncateStr(merged, 6000))
+	sb.WriteString("\n```\n")
+	return sb.String()
+}
+
+// deterministicImplementPlan 确定性生成实现计划（LLM 不可用时的降级，仍产出真实可迭代文件）。
+// 结构：目标 → 需求要点提取（章节标题/关键词）→ 模块清单 → 接口/数据契约 → 验收映射 → 实施步骤。
+func deterministicImplementPlan(title, doc string) string {
+	var sb strings.Builder
+	sb.WriteString("## 实现目标\n\n")
+	fmt.Fprintf(&sb, "- 产品：%s\n", title)
+	sb.WriteString("- 依据：用户提供的需求文档（见文末全文摘录）\n\n")
+
+	sb.WriteString("## 需求要点（确定性提取）\n\n")
+	lines := strings.Split(doc, "\n")
+	type hdr struct{ level int; text string }
+	headers := make([]hdr, 0, 32)
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "#") {
+			level := 0
+			for _, r := range ln {
+				if r != '#' {
+					break
+				}
+				level++
+			}
+			text := strings.TrimSpace(strings.TrimLeft(ln, "#"))
+			headers = append(headers, hdr{level, text})
+		}
+	}
+	if len(headers) == 0 {
+		sb.WriteString("- 文档未含 Markdown 标题；建议人工复核需求结构。\n")
+	} else {
+		for _, h := range headers {
+			if h.level == 1 {
+				fmt.Fprintf(&sb, "- **%s**\n", h.text)
+			} else if h.level == 2 {
+				fmt.Fprintf(&sb, "  - %s\n", h.text)
+			}
+		}
+	}
+
+	sb.WriteString("\n## 建议模块划分（骨架，待实现时细化）\n\n")
+	sb.WriteString("| 模块 | 职责 | 关键接口 |\n|---|---|---|\n")
+	sb.WriteString("| cmd/ 入口 | 服务装配与启动 | main() |\n")
+	sb.WriteString("| server/ 路由 | HTTP 端点与鉴权 | /v1/* |\n")
+	sb.WriteString("| 领域逻辑 | 需求核心机制（意图/词典/反馈） | 领域服务方法 |\n")
+	sb.WriteString("| 数据层 | 持久化（文件/DB） | 读写接口 |\n")
+
+	sb.WriteString("\n## 验收映射（以需求文档验收标准为准）\n\n")
+	sb.WriteString("> 由实现阶段逐条对照需求文档验收标准展开，每达成一条回填证据。\n\n")
+
+	sb.WriteString("## 实施步骤（骨架）\n\n")
+	sb.WriteString("1. 解析需求文档，抽取模块与接口契约\n")
+	sb.WriteString("2. 搭服务骨架（路由/配置/数据目录）\n")
+	sb.WriteString("3. 实现核心机制，逐模块真跑验证\n")
+	sb.WriteString("4. 对照验收标准逐条复核，补证据\n")
+	sb.WriteString("5. 交付（含自测与验收报告）\n\n")
+
+	sb.WriteString("## 需求文档全文摘录\n\n```markdown\n")
+	sb.WriteString(truncateStr(doc, 6000))
 	sb.WriteString("\n```\n")
 	return sb.String()
 }
