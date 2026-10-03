@@ -31,6 +31,7 @@ cat docs/观察报告-待豆包核对-2026-10-03.md     # 完整 9 条（含复�
 ### OBS-04 `/v1/run` 创建的任务**不落盘** ⇒ 重启后丢失　（高）
 ### OBS-08 `/v1/run` **不做 `request_id` 去重** ⇒ 重复提交 = 重复执行　（高）
 ### OBS-09 `/v1/run` 的 `role` **为空**，`/v1/tasks` 的为 `verifier`　（中）
+### OBS-11 ⭐ **`/v1/voice` 是同一模式的第二份拷贝** ⇒ 根因影响 **两个**入口　（高）
 
 **实测（对照同时成立）**
 ```
@@ -53,7 +54,10 @@ server.go:259  handleRun：**自己 `s.tasks[ts.ID] = ts`**（手动入 map）·
                      · `s.persist(ts)`              ⇒ **不落盘**（OBS-04）
                      · `s.byReq[requestID] = ts.ID` ⇒ **不去重**（OBS-08）
                      · `Role: RolePlanner`          ⇒ **角色未初始化**（OBS-09）
+server.go:342  **handleVoice** ⇒ **同一模式**（`ts := &taskState{ID, Status, confirmCh}` + 手动入 map）
+               ⇒ **同样不落盘**（实测：`/v1/voice` 后目录 32 → 32）· 且**响应不返回 `task_id`**
 server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 三件都做 ✅
+⇒ ⇒ **三个入口里两个是手工拷贝**，只有 `/v1/tasks` 走了正确的那条
 ```
 **OBS-09 实测**
 ```
