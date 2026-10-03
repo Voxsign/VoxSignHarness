@@ -12,7 +12,11 @@
 #   sh scripts/run_calibration.sh <判据清单文件>
 #
 # 判据清单格式（每行一条，`|` 分隔；`#` 开头为注释）：
-#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）>
+#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）> [| <请求体 JSON>]
+#
+# ⚠️ **请求体不是可选的装饰**（2026-10-03 实测）：`/v1/voice` 要求 `{"text":"…"}`，
+#    只发 `{}` ⇒ **400**（`请求体应为 JSON {text}（ASR 识别文本）`）⇒ 判据永远红。
+#    ⇒ 一条 R 证据必须**同时**说明"打什么路径、带什么体、期望什么内容"。
 #
 # 例（产物验收）：
 #   R-1 | 产物 | GET | /v1/health | "ok"
@@ -97,6 +101,8 @@ while IFS= read -r line; do
   m=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$3); print toupper($3)}')
   p=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')
   want=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
+  body=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$6); print $6}')
+  [ -z "$body" ] && body='{}'   # 缺省空对象；端点若要求字段，判据里必须显式写
   # ⚠️ **禁止空期望**（2026-10-03 实测事故）：
   # 我曾用 `cmd/vhs-asr` 打 `/v1/voice` 得到 **200**，就当成 PASS ——
   # 而那个 200 是**测试页的 200**（`<!doctype html>`），**不是 `handleVoice` 的 200**。
@@ -106,14 +112,14 @@ while IFS= read -r line; do
     continue
   fi
 
-  resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$PORT$p" -H 'Content-Type: application/json' -d '{}' -w '\n%{http_code}' 2>/dev/null)
+  resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$PORT$p" -H 'Content-Type: application/json' -d "$body" -w '\n%{http_code}' 2>/dev/null)
   code=$(printf '%s' "$resp" | tail -1)
-  body=$(printf '%s' "$resp" | sed '$d' | tr -d '\n' | cut -c1-120)
+  rbody=$(printf '%s' "$resp" | sed '$d' | tr -d '\n' | cut -c1-120)
 
-  if printf '%s' "$body" | grep -qF -- "$want"; then
-    echo "| $id | $obj | \`$m $p\` | $code | \`$body\` | **R ✅**（C 待补 ⇒ ◐） |" >> "$OUT"
+  if printf '%s' "$rbody" | grep -qF -- "$want"; then
+    echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（C 待补 ⇒ ◐） |" >> "$OUT"
   else
-    echo "| $id | $obj | \`$m $p\` | $code | \`$body\` | **✗ 期望 \`$want\` 未出现** |" >> "$OUT"
+    echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$want\` 未出现** |" >> "$OUT"
   fi
 done < "$DATA/.crit"
 
