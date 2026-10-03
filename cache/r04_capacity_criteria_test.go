@@ -68,7 +68,14 @@ func TestR04ExpiredEntriesAreSwept(t *testing.T) {
 // R-04 补充：`Set` 触发的自动淘汰**不得**删掉仍在有效期内的条目，除非真的超上限。
 func TestR04EvictionPrefersExpired(t *testing.T) {
 	dir := t.TempDir()
-	st, err := Open(filepath.Join(dir, "quad.json"), 50*time.Millisecond)
+	// ⚠️ 2026-10-03 修正（**CI 红过一次**：`TestR04EvictionPrefersExpired`）：
+	//   原用 **TTL=50ms + sleep 70ms** ⇒ **只留 30ms 余量**，而判据要"塞 30 条"。
+	//   而 `Set` **每次都调 `evictLocked()`**，后者**无条件先 `sweepExpiredLocked()`**
+	//   ⇒ 若"塞 30 条"在**慢 CI** 上耗时接近 50ms ⇒ **最早塞的 new 条目在检查前已过期、被清掉**
+	//     ⇒ `Get(new00)` 失败 ⇒ 判据报"未过期条目被误删"（**而实现其实是对的**）。
+	//   ⇒ 改为 **TTL=2s + sleep 2.5s**：塞入耗时（微秒级）与 TTL 差 **5 个数量级** ⇒ 免疫环境速度。
+	//   ⚠️ 这是**判据缺陷**，不是实现缺陷 —— R-04 的淘汰语义（先清过期、再按最早 ExpiresAt）正确。
+	st, err := Open(filepath.Join(dir, "quad.json"), 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +85,7 @@ func TestR04EvictionPrefersExpired(t *testing.T) {
 		k := QuadKey{Space: "s", Intent: fmt.Sprintf("old%02d", i), Perm: "p", Ref: "r"}
 		_ = st.Set(k, "allow")
 	}
-	time.Sleep(70 * time.Millisecond) // 这 30 条过期
+	time.Sleep(2500 * time.Millisecond) // 这 30 条过期（TTL=2s ⇒ 余量 500ms，且远大于塞入耗时）
 	// 再塞 30 条新的（未超上限 100）
 	for i := 0; i < 30; i++ {
 		k := QuadKey{Space: "s", Intent: fmt.Sprintf("new%02d", i), Perm: "p", Ref: "r"}
