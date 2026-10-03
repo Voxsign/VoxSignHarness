@@ -8,6 +8,10 @@
 #   ⇒ 共同点：**判据把"环境速度"当成了常量。**
 #   ⇒ 而这类缺陷**只在慢机器上暴露** ⇒ **本地永远绿** ⇒ **能一路通过本地 gate 直到 CI**。
 #
+# ⚠️ 2026-10-03：三处正则原用 `\s` —— **`\s` 不是 POSIX ERE**（`git grep -E` 行为不定）
+#   ⇒ **① 与 ③ 静默失配**（探针验证：三种模式各放一处，只命中 1 处）
+#   ⇒ 已改 `[[:space:]]`。**教训：正则写完后必须用探针验证它真的能命中**。
+#
 # 用法：  sh scripts/timing_sensitive_scan.sh
 # 退出码：0 = 未发现；1 = **发现可疑判据**（列出）；2 = 装置不可用
 set -u
@@ -20,26 +24,26 @@ n=0
 
 echo
 echo "── ① 短 sleep（<200ms）—— 与"待测动作耗时"可能同量级"
-git grep -nE "time\.Sleep\([0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null \
+git grep -nE "time\.Sleep\([0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null \
   | sed 's/^/  /'
-c=$(git grep -cE "time\.Sleep\([0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
+c=$(git grep -nE "time\.Sleep\([0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
 n=$((n+c))
 
 echo
 echo "── ② 短 TTL（<1s）传给 Open/New —— 过期时刻取决于塞入耗时"
-git grep -nE "(Open|New)\([^)]*[0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null \
+git grep -nE "(Open|New)\([^)]*[0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null \
   | sed 's/^/  /'
-c=$(git grep -cE "(Open|New)\([^)]*[0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
+c=$(git grep -nE "(Open|New)\([^)]*[0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
 n=$((n+c))
 
 echo
 echo "── ③ 耗时断言用的绝对阈值（可能落在噪声带）"
-git grep -nE "(p99|p50|Latency|Elapsed|Duration)\s*[<>]=?\s*[0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | sed 's/^/  /'
-c=$(git grep -cE "(p99|p50|Latency|Elapsed|Duration)\s*[<>]=?\s*[0-9]+\s*\*\s*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
+git grep -nE "(p99|p50|Latency|Elapsed|Duration)[[:space:]]*[<>]=?[[:space:]]*[0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | sed 's/^/  /'
+c=$(git grep -nE "(p99|p50|Latency|Elapsed|Duration)[[:space:]]*[<>]=?[[:space:]]*[0-9]+[[:space:]]*\*[[:space:]]*time\.(Milli|Micro)second" -- '*_test.go' 2>/dev/null | wc -l | tr -d ' ')
 n=$((n+c))
 
 echo
-echo "[timing] ---- 命中文件数（去重前）：${n}"
+echo "[timing] ---- 命中**处数**（三个模式各自计数之和；⚠️ 原为"文件数"⇒ 同文件多模式会互相掩盖）: ${n}"
 if [ "$n" -gt 0 ]; then
   echo "[timing] ⚠️ **有可疑判据** ⇒ 逐个判断："
   echo "         · 它的**成败**是否会因机器慢而改变？"
