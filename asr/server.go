@@ -110,12 +110,19 @@ type intentResponse struct {
 	Control          string         `json:"control"`
 	Confirmable      *confirmedRef  `json:"confirmable,omitempty"`
 	// ContextSources 是**注入来源归因**（SCOPE-PROFILE-01：能否说清从哪来）。
-	// 枚举：handwritten | zhiji | learned | project-map；无画像时给显式值，**不得缺字段**。
+	// 枚举：handwritten | zhiji | learned | project-map | none —— **none 是正规成员**（可穷举）。
 	ContextSources []string `json:"context_sources"`
-	Degraded       bool     `json:"degraded,omitempty"`
-	DegradedReason string   `json:"degraded_reason,omitempty"`
-	Traces         []Step   `json:"traces"`
+	// ContextSourcesDetails 放**原因**（如 no_profile），不塞进枚举值。
+	ContextSourcesDetails string `json:"context_sources_details,omitempty"`
+	// ConfirmPatternMiss：确认话术**落空留痕**（匹配不上时必须可见，否则命中率无从得知）。
+	ConfirmPatternMiss bool   `json:"confirm_pattern_miss,omitempty"`
+	Degraded           bool   `json:"degraded,omitempty"`
+	DegradedReason     string `json:"degraded_reason,omitempty"`
+	Traces             []Step `json:"traces"`
 }
+
+// SourceNone 是 context_sources 的**正规枚举成员**：确实没有来源。
+const SourceNone = "none"
 
 type processRequest struct {
 	Text      string `json:"text"`
@@ -154,15 +161,19 @@ func pickPathFromContext(ctx []string) string {
 // 要求（SCOPE-PROFILE-01）：**永远非 nil**；无画像文件时给**显式值**（不是缺字段）；
 // 且**绝不做全量历史加载**（需求 4.5）。
 // ⚠️ L3 的 zhiji / learned / project-map 三类**尚未实现**（等真值来源裁决）。
-func profileSources(dataDir string) []string {
+//
+// `none` 是**正规枚举成员**（不是 "none:no_profile" 这种哨兵字符串）——
+// 哨兵在枚举之外，等于"一个表示没有来源的值看起来像一个来源"，按枚举穷举的消费方会漏掉它。
+// **"没有"与"有"必须分列**；原因（no_profile）放 details，不塞进枚举值。
+func profileSources(dataDir string) (sources []string, details string) {
 	if dataDir == "" {
-		return []string{"none:no_profile"}
+		return []string{SourceNone}, "no_data_dir"
 	}
 	p := filepath.Join(dataDir, "profile", "handwritten.json")
 	if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
-		return []string{"handwritten"}
+		return []string{"handwritten"}, ""
 	}
-	return []string{"none:no_profile"}
+	return []string{SourceNone}, "no_profile"
 }
 
 // detectConfirmation 识别"确认，就是 X"形态并给出可携带结构（服务不保存它）。
@@ -193,7 +204,11 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	res := s.Pipe.Process(req.Text, req.SessionID)
 	// 本地规则解析意图（红线 #6：核心路径本地）；低置信时才由模型兜底，失败即降级。
+	var cs []string
+	var csDetails string
+	cs, csDetails = profileSources(s.DataDir)
 	var confirmable *confirmedRef
+	missConfirm := false
 	ir := ClassifyIntentWith(r.Context(), res.Text, s.IntentModel, s.IntentTimeout)
 	// 选项 C：**服务不持久化会话态**；消解所需的上下文/确认全部由调用方携带。
 	var path string
@@ -206,21 +221,26 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	if ref := detectConfirmation(res.Text); ref != nil {
 		confirmable = ref
+	} else if strings.Contains(res.Text, "确认") {
+		// 用户想确认，但话术没匹配上 ⇒ **落空留痕**（不静默）。
+		missConfirm = true
 	}
 	writeJSON(w, http.StatusOK, intentResponse{
-		ContractVersion:  "1",
-		Type:             ir.Type,
-		Path:             path,
-		Params:           map[string]any{},
-		Confidence:       ir.Confidence,
-		NeedDisambiguate: ir.NeedDisambiguate,
-		DomainSuggestion: ir.DomainSuggestion,
-		Control:          ir.Control,
-		Degraded:         ir.Degraded,
-		DegradedReason:   ir.DegradedReason,
-		Confirmable:      confirmable,
-		ContextSources:   profileSources(s.DataDir),
-		Traces:           res.Steps,
+		ContractVersion:       "1",
+		Type:                  ir.Type,
+		Path:                  path,
+		Params:                map[string]any{},
+		Confidence:            ir.Confidence,
+		NeedDisambiguate:      ir.NeedDisambiguate,
+		DomainSuggestion:      ir.DomainSuggestion,
+		Control:               ir.Control,
+		Degraded:              ir.Degraded,
+		DegradedReason:        ir.DegradedReason,
+		Confirmable:           confirmable,
+		ContextSources:        cs,
+		ContextSourcesDetails: csDetails,
+		ConfirmPatternMiss:    missConfirm,
+		Traces:                res.Steps,
 	})
 }
 
