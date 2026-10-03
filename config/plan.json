@@ -1,0 +1,6 @@
+{
+  "_comment": "规划/研究用模型（一行可改；env 可覆盖）。默认值同时写进代码，便于无配置运行。",
+  "l2_model": "deepseek-v4-pro",
+  "research_model": "gpt-6-luna",
+  "_note": "l2_model 置空或 \"off\" ⇒ L2 不启用，行为与纯规则式一致。"
+}
