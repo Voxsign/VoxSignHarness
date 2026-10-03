@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,42 +11,66 @@ import (
 	"sync"
 )
 
-// Dictionary 用户教词词典（term → correction），线程安全，JSONL 持久化。
+// TermEntry 词典词条（需求契约字段：term/variants/category/source + 兼容 correction）。
+// term = 标准形式；variants = 该词的识别变体（文本中命中 variants → 纠为 term）。
+type TermEntry struct {
+	Term       string   `json:"term"`
+	Correction string   `json:"correction"`
+	Variants   []string `json:"variants"`
+	Category   string   `json:"category"`
+	Source     string   `json:"source"`
+}
+
+// Dictionary 用户教词词典，线程安全，持久化为 dictionary.json（JSON 对象）。
 type Dictionary struct {
-	entries map[string]string
-	mu      sync.RWMutex
+	canon map[string]TermEntry // term → entry
+	alias map[string]string    // variant/term → canon term（纠错查找）
+	mu    sync.RWMutex
 }
 
 func NewDictionary() *Dictionary {
-	return &Dictionary{entries: make(map[string]string)}
+	return &Dictionary{canon: make(map[string]TermEntry), alias: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+// Add 增词：term 标准形式，variants 变体（含 term 本身），source 来源。
+func (d *Dictionary) Add(term, correction string, variants []string, source string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	if correction == "" {
+		correction = term
+	}
+	if len(variants) == 0 {
+		variants = []string{term}
+	}
+	d.canon[term] = TermEntry{
+		Term: term, Correction: correction, Variants: variants,
+		Category: "user", Source: source,
+	}
+	for _, v := range variants {
+		d.alias[v] = term
+	}
+	d.alias[term] = term
 }
 
-func (d *Dictionary) Delete(word string) {
+func (d *Dictionary) Delete(term string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	delete(d.entries, word)
+	if e, ok := d.canon[term]; ok {
+		for _, v := range e.Variants {
+			delete(d.alias, v)
+		}
+		delete(d.alias, term)
+	}
+	delete(d.canon, term)
 }
 
-func (d *Dictionary) Lookup(word string) (string, bool) {
+// Snapshot 返回全量词条（/v1/dict 用，字段含 term/variants/category/source）。
+func (d *Dictionary) Snapshot() []TermEntry {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
-}
-
-// Snapshot 返回全量词条（dict 端点用）。
-func (d *Dictionary) Snapshot() []map[string]string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	out := make([]map[string]string, 0, len(d.entries))
-	for w, c := range d.entries {
-		out = append(out, map[string]string{"word": w, "correction": c})
+	out := make([]TermEntry, 0, len(d.canon))
+	for _, e := range d.canon {
+		out = append(out, e)
 	}
 	return out
 }
@@ -58,7 +81,7 @@ func (d *Dictionary) Correct(text string) string {
 	return corrected
 }
 
-// CorrectWithApplied 返回纠错结果 + 实际应用的映射列表（correct 端点用）。
+// CorrectWithApplied 返回纠错结果 + 实际应用的映射列表（/v1/correct 用）。
 func (d *Dictionary) CorrectWithApplied(text string) (string, []string) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -68,28 +91,74 @@ func (d *Dictionary) CorrectWithApplied(text string) (string, []string) {
 		if _, blocked := blookup(word); blocked {
 			continue
 		}
-		if correction, exists := d.entries[word]; exists {
-			words[i] = correction
-			applied = append(applied, word+"→"+correction)
+		if canon, ok := d.alias[word]; ok {
+			e := d.canon[canon]
+			words[i] = e.Correction
+			applied = append(applied, word+"→"+e.Correction)
 		}
 	}
 	return strings.Join(words, " "), applied
 }
 
-// Save 全量写回 dictionary.jsonl（重启不丢）。
+// Save 全量写回 dictionary.json（JSON 对象，重启不丢）。
 func (d *Dictionary) Save(path string) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	var buf bytes.Buffer
-	for w, c := range d.entries {
-		b, err := json.Marshal(map[string]string{"word": w, "correction": c})
-		if err != nil {
-			return err
-		}
-		buf.Write(b)
-		buf.WriteByte('\n')
+	terms := make(map[string]TermEntry, len(d.canon))
+	for t, e := range d.canon {
+		terms[t] = e
 	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	b, err := json.MarshalIndent(map[string]any{"terms": terms}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0644)
+}
+
+// Load 读取 dictionary.json（新格式）；若不存在则尝试迁移旧 dictionary.jsonl。
+func (d *Dictionary) Load(path string) error {
+	b, err := os.ReadFile(path)
+	if err == nil {
+		var doc struct {
+			Terms map[string]TermEntry `json:"terms"`
+		}
+		if err := json.Unmarshal(b, &doc); err == nil && len(doc.Terms) > 0 {
+			for t, e := range doc.Terms {
+				e.Term = t
+				d.Add(e.Term, e.Correction, e.Variants, e.Source)
+			}
+			return nil
+		}
+		// 旧版直接 map：term → correction
+		var legacy map[string]string
+		if json.Unmarshal(b, &legacy) == nil && len(legacy) > 0 {
+			for w, c := range legacy {
+				d.Add(c, c, []string{w}, "legacy")
+			}
+			return nil
+		}
+	}
+	// 兼容旧 jsonl（{"word":…,"correction":…} 每行）
+	file, ferr := os.Open(strings.TrimSuffix(path, ".json") + ".jsonl")
+	if ferr != nil {
+		if os.IsNotExist(ferr) {
+			return nil
+		}
+		return ferr
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var entry struct {
+			Word       string `json:"word"`
+			Correction string `json:"correction"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		d.Add(entry.Correction, entry.Correction, []string{entry.Word}, "legacy")
+	}
+	return scanner.Err()
 }
 
 // Blacklist "这个改错了"黑名单（term → note），JSON 持久化。
@@ -163,11 +232,6 @@ func classifyIntent(text string) Intent {
 	}
 }
 
-type Feedback struct {
-	Text    string `json:"text"`
-	Correct bool   `json:"correct"`
-}
-
 // FeedbackRec 反馈学习记录（append-only feedback.jsonl；✘ 必带 reason）。
 type FeedbackRec struct {
 	Raw       string `json:"raw"`
@@ -185,7 +249,7 @@ var (
 	addr     = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
 	dataDir  = flag.String("data-dir", "./data", "Data directory")
 	dict     = NewDictionary()
-	dictFile = "dictionary.jsonl"
+	dictFile = "dictionary.json"
 )
 
 func main() {
@@ -204,7 +268,9 @@ func main() {
 		return
 	}
 
-	loadDictionary()
+	if err := dict.Load(fmt.Sprintf("%s/%s", *dataDir, dictFile)); err != nil {
+		fmt.Println("Error loading dictionary:", err)
+	}
 	if err := blacklistLoad(fmt.Sprintf("%s/blacklist.json", *dataDir)); err != nil {
 		fmt.Println("Error loading blacklist:", err)
 	}
@@ -241,33 +307,39 @@ func correctHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"corrected": corrected, "applied": applied})
 }
 
-// termHandler POST /v1/term {term, correction} → 增词并持久化
+// termHandler POST /v1/term {term, variants, source, correction?} → 增词并持久化
+// 契约：term=标准形式，variants=识别变体（text 命中 variants → 纠为 term），correction 兼容缺省=term。
 func termHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		Term       string `json:"term"`
-		Correction string `json:"correction"`
+		Term       string   `json:"term"`
+		Correction string   `json:"correction"`
+		Variants   []string `json:"variants"`
+		Source     string   `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	if req.Term == "" || req.Correction == "" {
-		writeJSON(w, map[string]any{"ok": false, "error": "term 与 correction 均必填"})
+	if req.Term == "" {
+		writeJSON(w, map[string]any{"ok": false, "error": "term 必填"})
 		return
 	}
-	dict.Add(req.Term, req.Correction)
+	if req.Source == "" {
+		req.Source = "manual"
+	}
+	dict.Add(req.Term, req.Correction, req.Variants, req.Source)
 	if err := dict.Save(fmt.Sprintf("%s/%s", *dataDir, dictFile)); err != nil {
 		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "term": req.Term, "correction": req.Correction})
+	writeJSON(w, map[string]any{"ok": true, "term": req.Term, "variants": req.Variants, "source": req.Source})
 }
 
-// dictHandler GET /v1/dict → 全量词典
+// dictHandler GET /v1/dict → 全量词典（terms 数组：term/variants/category/source）
 func dictHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"terms": dict.Snapshot()})
 }
@@ -330,6 +402,8 @@ func blacklistHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "term": req.Term, "note": req.Note})
 }
 
+// processHandler POST /v1/process {text} → {intent, corrected, corrected_text}
+// 契约：intent ∈ NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE；corrected = 纠错结果（corrected_text 兼容保留）。
 func processHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -350,16 +424,11 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	trace := Trace{Text: correctedText, Intent: intent}
 	saveTrace(trace)
 
-	resp := struct {
-		CorrectedText string `json:"corrected_text"`
-		Intent        Intent `json:"intent"`
-	}{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, map[string]any{
+		"intent":        intent,
+		"corrected":     correctedText,
+		"corrected_text": correctedText, // 兼容旧字段
+	})
 }
 
 func saveTrace(trace Trace) {
@@ -378,34 +447,5 @@ func saveTrace(trace Trace) {
 
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		fmt.Println("Error writing trace:", err)
-	}
-}
-
-func loadDictionary() {
-	file, err := os.Open(fmt.Sprintf("%s/%s", *dataDir, dictFile))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		fmt.Println("Error opening dictionary file:", err)
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var entry struct {
-			Word       string `json:"word"`
-			Correction string `json:"correction"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			fmt.Println("Error unmarshaling dictionary entry:", err)
-			continue
-		}
-		dict.Add(entry.Word, entry.Correction)
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Println("Error reading dictionary file:", err)
 	}
 }

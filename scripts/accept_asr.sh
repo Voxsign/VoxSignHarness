@@ -6,7 +6,7 @@
 # 期望: 每行 ✅ 判据名；末尾"RESULT: ALL_PASS / HAS_FAIL"
 # =============================================================================
 set -u
-D="harness-output/个性化后台实现"
+D="harness-output/ASR个性化后台服务"
 PORT="${1:-8911}"
 DATA="$(mktemp -d /tmp/asr_acc_data.XXXXXX)"
 B="http://127.0.0.1:${PORT}"
