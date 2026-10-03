@@ -9,7 +9,7 @@
 
 ## 使用
 ```bash
-cd harness-output/VoiceSign个性化ASR后台需求说明书v2
+cd harness-output/VoiceSign---ASR-------v2
 go build ./...   # 骨架可编译
 ```
 
