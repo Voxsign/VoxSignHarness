@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -21,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -36,20 +35,22 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
+func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
-			words[i] = correction
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -62,16 +63,18 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	if strings.Contains(text, "note") {
+func classifyIntent(text string) Intent {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	default:
 		return ORCHESTRATE
 	}
 }
@@ -79,21 +82,6 @@ func ClassifyIntent(text string) Intent {
 type Feedback struct {
 	Text   string `json:"text"`
 	Correct bool   `json:"correct"`
-}
-
-func AppendToFile(filename string, data interface{}) error {
-	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
-		return err
-	}
-	return writer.Flush()
 }
 
 type Request struct {
@@ -106,10 +94,30 @@ type Response struct {
 }
 
 var (
-	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir = flag.String("data-dir", "./data", "Data directory")
-	dict    = NewDictionary()
+	dictionary = NewDictionary()
+	dataDir    string
 )
+
+func init() {
+	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
+}
+
+func main() {
+	flag.Parse()
+
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler)
+
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
+	}
+
+	fmt.Println("Server listening on 127.0.0.1:8080")
+	if err := http.ListenAndServe("127.0.0.1:8080", nil); err != nil {
+		fmt.Println("Error starting server:", err)
+	}
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
@@ -128,20 +136,15 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correctedText := dict.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
+	correctedText := dictionary.Correct(req.Text)
+	intent := classifyIntent(req.Text)
 
 	resp := Response{
 		CorrectedText: correctedText,
 		Intent:        intent,
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
+	if err := logTrace(req.Text, correctedText, intent); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -150,21 +153,46 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func main() {
-	flag.Parse()
+func logTrace(originalText, correctedText string, intent Intent) error {
+	file, err := os.OpenFile(fmt.Sprintf("%s/traces.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
 
-	if _, err := os.Stat(*dataDir); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(*dataDir, 0755); err != nil {
-			fmt.Printf("Failed to create data directory: %v\n", err)
-			return
-		}
+	trace := map[string]interface{}{
+		"original_text":  originalText,
+		"corrected_text": correctedText,
+		"intent":         intent,
 	}
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
-
-	fmt.Printf("Starting server on %s\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Printf("Server failed: %v\n", err)
+	data, err := json.Marshal(trace)
+	if err != nil {
+		return err
 	}
+
+	writer := bufio.NewWriter(file)
+	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+func logFeedback(feedback Feedback) error {
+	file, err := os.OpenFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.Marshal(feedback)
+	if err != nil {
+		return err
+	}
+
+	writer := bufio.NewWriter(file)
+	if _, err := writer.WriteString(string(data) + "\n"); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
