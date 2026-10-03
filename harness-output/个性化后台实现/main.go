@@ -62,19 +62,18 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note:") {
+func classifyIntent(text string) Intent {
+	if strings.HasPrefix(text, "note") {
 		return NOTE
-	} else if strings.HasPrefix(text, "query:") {
+	} else if strings.HasPrefix(text, "query") {
 		return QUERY
-	} else if strings.HasPrefix(text, "edit:") {
+	} else if strings.HasPrefix(text, "edit") {
 		return EDIT
-	} else if strings.HasPrefix(text, "commit:") {
+	} else if strings.HasPrefix(text, "commit") {
 		return COMMIT
-	} else if strings.HasPrefix(text, "orchestrate:") {
+	} else {
 		return ORCHESTRATE
 	}
-	return NOTE
 }
 
 type Feedback struct {
@@ -82,7 +81,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendJSONL(filename string, data interface{}) error {
+func appendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -90,15 +89,11 @@ func AppendJSONL(filename string, data interface{}) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
+	encoder := json.NewEncoder(writer)
+	if err := encoder.Encode(data); err != nil {
 		return err
 	}
-
-	_, err = writer.WriteString(string(jsonData) + "\n")
-	return err
+	return writer.Flush()
 }
 
 type Request struct {
@@ -134,14 +129,19 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	correctedText := dict.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
+	intent := classifyIntent(req.Text)
 
 	resp := Response{
 		CorrectedText: correctedText,
 		Intent:        intent,
 	}
 
-	if err := AppendJSONL(*dataDir+"/traces.jsonl", req); err != nil {
+	if err := appendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := appendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -162,7 +162,7 @@ func feedbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := AppendJSONL(*dataDir+"/feedback.jsonl", feedback); err != nil {
+	if err := appendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -175,7 +175,7 @@ func main() {
 
 	if _, err := os.Stat(*dataDir); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(*dataDir, 0755); err != nil {
-			fmt.Println("Failed to create data directory:", err)
+			fmt.Printf("Failed to create data directory: %v\n", err)
 			return
 		}
 	}
@@ -184,8 +184,8 @@ func main() {
 	http.HandleFunc("/v1/process", processHandler)
 	http.HandleFunc("/v1/feedback", feedbackHandler)
 
-	fmt.Println("Server is listening on", *addr)
+	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Failed to start server:", err)
+		fmt.Printf("Failed to start server: %v\n", err)
 	}
 }
