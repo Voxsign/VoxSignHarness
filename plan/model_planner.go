@@ -76,7 +76,7 @@ func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	}
 
 	// ---- 本机边界复核（模型不得越界）----
-	steps, violations := reviewSteps(cand.Steps, m)
+	steps, violations := reviewStepsFor(cand.Steps, m, goal)
 	if len(violations) > 0 {
 		return degrade(goal, m, fb, "本机复核拒绝模型计划："+strings.Join(violations, "; ")), nil
 	}
@@ -114,6 +114,11 @@ func parseModelPlan(raw string) (modelPlanJSON, error) {
 // reviewSteps 逐条复核：工具在清单内、cap 属于该工具、域在 AllowedSpaces 内、
 // 参数/产出/依据齐备（PM-1/PM-4/PM-5）。任一条不合规即记录 violation。
 func reviewSteps(in []modelPlanStep, m Manifest) ([]Step, []string) {
+	return reviewStepsFor(in, m, "") // 无目标文本 ⇒ 跳过 PM-6 的目标相关判断
+}
+
+// reviewStepsFor 是 reviewSteps 的完整版：带 goal 时可做 PM-6（最小风险工具优先）。
+func reviewStepsFor(in []modelPlanStep, m Manifest, goal string) ([]Step, []string) {
 	tools := map[string]Capability{}
 	for _, c := range m.Tools {
 		tools[c.Name] = c
@@ -141,6 +146,9 @@ func reviewSteps(in []modelPlanStep, m Manifest) ([]Step, []string) {
 			Tool: s.Tool, Caps: s.Caps, Params: s.Params,
 			Action: s.Action, Output: s.Output, Why: s.Why, Domain: s.Domain,
 		})
+	}
+	if goal != "" {
+		bad = append(bad, reviewMinRisk(goal, out, m)...) // PM-6（本机硬复核）
 	}
 	return out, bad
 }
