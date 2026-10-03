@@ -45,9 +45,8 @@ func (d *Dictionary) Correct(word string) string {
 	if _, exists := d.entries[word]; exists {
 		return word
 	}
-	// Simple correction: return the first word that starts with the same letter
 	for entry := range d.entries {
-		if strings.HasPrefix(entry, string(word[0])) {
+		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
 			return entry
 		}
 	}
@@ -64,7 +63,7 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func classifyIntent(text string) Intent {
+func ClassifyIntent(text string) Intent {
 	text = strings.ToLower(text)
 	switch {
 	case strings.Contains(text, "note"):
@@ -75,10 +74,8 @@ func classifyIntent(text string) Intent {
 		return EDIT
 	case strings.Contains(text, "commit"):
 		return COMMIT
-	case strings.Contains(text, "orchestrate"):
-		return ORCHESTRATE
 	default:
-		return QUERY
+		return ORCHESTRATE
 	}
 }
 
@@ -87,7 +84,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func appendToFile(filename string, data interface{}) error {
+func AppendJSONL(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -95,60 +92,66 @@ func appendToFile(filename string, data interface{}) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	encoder := json.NewEncoder(writer)
-	if err := encoder.Encode(data); err != nil {
+	defer writer.Flush()
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
 		return err
 	}
-	return writer.Flush()
+
+	_, err = writer.WriteString(string(jsonData) + "\n")
+	return err
 }
 
-type Request struct {
-	Text string `json:"text"`
+type Server struct {
+	dictionary *Dictionary
+	dataDir    string
 }
 
-type Response struct {
-	CorrectedText string `json:"corrected_text"`
-	Intent        Intent `json:"intent"`
-}
-
-func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req Request
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Bad request", http.StatusBadRequest)
-			return
-		}
-
-		correctedText := dict.Correct(req.Text)
-		intent := classifyIntent(req.Text)
-
-		resp := Response{
-			CorrectedText: correctedText,
-			Intent:        intent,
-		}
-
-		if err := appendToFile(dataDir+"/traces.jsonl", req); err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+func NewServer(dataDir string) *Server {
+	return &Server{
+		dictionary: NewDictionary(),
+		dataDir:    dataDir,
 	}
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+func (s *Server) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func (s *Server) ProcessHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+
+	var request struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	correctedText := s.dictionary.Correct(request.Text)
+	intent := ClassifyIntent(correctedText)
+
+	response := struct {
+		CorrectedText string `json:"corrected_text"`
+		Intent        Intent `json:"intent"`
+	}{
+		CorrectedText: correctedText,
+		Intent:        intent,
+	}
+
+	if err := AppendJSONL(s.dataDir+"/traces.jsonl", response); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func main() {
@@ -157,17 +160,17 @@ func main() {
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Error creating data directory:", err)
+		return
 	}
 
-	dict := NewDictionary()
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+	server := NewServer(*dataDir)
 
-	fmt.Printf("Starting server on %s\n", *addr)
+	http.HandleFunc("/v1/health", server.HealthHandler)
+	http.HandleFunc("/v1/process", server.ProcessHandler)
+
+	fmt.Println("Server is listening on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+		fmt.Println("Error starting server:", err)
 	}
 }
