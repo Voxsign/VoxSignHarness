@@ -40,9 +40,11 @@ func (d *Dictionary) Lookup(word string) (string, bool) {
 }
 
 func (d *Dictionary) Correct(text string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	words := strings.Fields(text)
 	for i, word := range words {
-		if correction, exists := d.Lookup(word); exists {
+		if correction, exists := d.entries[word]; exists {
 			words[i] = correction
 		}
 	}
@@ -137,13 +139,28 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", dataDir), resp); err != nil {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func feedbackHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var feedback Feedback
+	if err := json.NewDecoder(r.Body).Decode(&feedback); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", dataDir), feedback); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
@@ -153,9 +170,15 @@ func main() {
 
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler)
+	http.HandleFunc("/v1/feedback", feedbackHandler)
 
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Println("Error creating data directory:", err)
+		return
+	}
+
+	fmt.Println("Server is listening on", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Failed to start server:", err)
-		os.Exit(1)
+		fmt.Println("Error starting server:", err)
 	}
 }
