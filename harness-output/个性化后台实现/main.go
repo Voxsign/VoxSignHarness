@@ -45,8 +45,9 @@ func (d *Dictionary) Correct(word string) string {
 	if _, exists := d.entries[word]; exists {
 		return word
 	}
+	// Simple correction: return the first word that starts with the same letter
 	for entry := range d.entries {
-		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
+		if strings.HasPrefix(entry, string(word[0])) {
 			return entry
 		}
 	}
@@ -63,17 +64,21 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func ClassifyIntent(text string) Intent {
-	if strings.HasPrefix(text, "note") {
+func classifyIntent(text string) Intent {
+	text = strings.ToLower(text)
+	switch {
+	case strings.Contains(text, "note"):
 		return NOTE
-	} else if strings.HasPrefix(text, "query") {
+	case strings.Contains(text, "query"):
 		return QUERY
-	} else if strings.HasPrefix(text, "edit") {
+	case strings.Contains(text, "edit"):
 		return EDIT
-	} else if strings.HasPrefix(text, "commit") {
+	case strings.Contains(text, "commit"):
 		return COMMIT
-	} else {
+	case strings.Contains(text, "orchestrate"):
 		return ORCHESTRATE
+	default:
+		return QUERY
 	}
 }
 
@@ -82,7 +87,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func AppendToFile(filename string, data interface{}) error {
+func appendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -106,55 +111,63 @@ type Response struct {
 	Intent        Intent `json:"intent"`
 }
 
-var (
-	dictionary = NewDictionary()
-	dataDir    string
-)
+func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		correctedText := dict.Correct(req.Text)
+		intent := classifyIntent(req.Text)
+
+		resp := Response{
+			CorrectedText: correctedText,
+			Intent:        intent,
+		}
+
+		if err := appendToFile(dataDir+"/traces.jsonl", req); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}
+}
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func processHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	correctedText := dictionary.Correct(req.Text)
-	intent := ClassifyIntent(req.Text)
-
-	resp := Response{
-		CorrectedText: correctedText,
-		Intent:        intent,
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
 func main() {
-	flag.StringVar(&dataDir, "data-dir", "./data", "Directory for data storage")
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler)
+	if err := os.MkdirAll(*dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		os.Exit(1)
+	}
 
-	addr := "127.0.0.1:8080"
-	fmt.Printf("Listening on %s...\n", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		fmt.Printf("Failed to start server: %v\n", err)
+	dict := NewDictionary()
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
+
+	fmt.Printf("Starting server on %s\n", *addr)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
 }
