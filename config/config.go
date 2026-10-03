@@ -153,6 +153,11 @@ func Default() Config {
 			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-v4-pro", ResponseFormat: &trueVal},
 			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
+				// 模型调度（docs/模型调度-设计.md）：gpt-mini = 线上最弱兜底（gpt-4o-mini 实测 10s 可用）；
+				// deepseek 系列若 402 欠费 → ChatWithFallback 一次即 down → 自动切 gpt-mini，不再卡死。
+				{Name: "gpt-mini", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
+				// 2026-10-03 质量链：gpt4o（gpt-4o）裸调实测 6s/3461 字符生成成功，编译质量优于 gpt-4o-mini。
+				{Name: "gpt4o", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "gpt-4o", ResponseFormat: &trueVal},
 			{Name: "openai", Kind: OpenAIKind, Endpoint: "https://api.openai.com/v1", Model: "gpt-5.4-mini", ResponseFormat: &trueVal},
 			{Name: "gemini", Kind: OpenAIKind, Endpoint: "https://generativelanguage.googleapis.com/v1beta/openai", Model: "gemini-3.8-flash", ResponseFormat: &trueVal},
 			{Name: "mock", Kind: MockKind, Model: "mock"},

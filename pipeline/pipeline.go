@@ -1153,6 +1153,16 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	return receipts
 }
 
+// implCapabilityBrief 是实现类任务的 P0 能力清单摘要（小 prompt 正解，2026-10-03 模型调度实证：
+// 全文需求直接喂 LLM 必然超网关 60s 上限；清单驱动生成 + 证据门验收才是可收敛的闭环）。
+const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配与纠错安全）
+②文本纠错：清洗 + 词典纠错（正常文本不被改坏）
+③意图分类：NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 五类
+④反馈学习：✔/✘ 回馈落盘 feedback.jsonl（append-only）
+⑤数据落盘：traces/usage 等 JSONL append-only，独立数据目录（data-dir 可配）
+⑥HTTP 端点：/v1/health、/v1/process（JSON 请求/响应）
+⑦只监听 127.0.0.1（非回环拒绝），鉴权可占位但须有`
+
 // llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
 // 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
 //
@@ -1164,12 +1174,8 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 		log.Printf("[llmSummarize] providers nil")
 		return ""
 	}
-	p, err := o.Providers.Get("fast")
-	if err != nil {
-		log.Printf("[llmSummarize] fast provider unavailable: %v", err)
-		return ""
-	}
-	resp, err := p.Chat(ctx, provider.ChatRequest{
+	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini，不再单点卡死。
+	resp, _, err := o.Providers.ChatWithFallback(ctx, []string{"fast", "center", "strong", "gpt-mini"}, provider.ChatRequest{
 		Messages: []contract.Message{
 			{Role: "system", Content: "你是技术文档整理助手。把下面多份设计文档/沟通记录整理成一份结构清晰的中文《全景开发文档》，带二级分节。直接输出 Markdown 正文：不要 JSON、不要复述本指令、不要长篇推理、不要解释你做了什么。"},
 			{Role: "user", Content: "目标文档标题：" + title + "\n\n源文档内容：\n" + truncateStr(merged, 12000)},
@@ -1271,12 +1277,23 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 	if o == nil || o.Providers == nil {
 		return nil, "providers nil"
 	}
-	p, err := o.Providers.Get("fast")
-	if err != nil {
-		return nil, "fast provider unavailable: " + err.Error()
+	// 清掉骨架残留 .go（2026-10-03 实证：骨架 domain.go/router.go 与 LLM 自包含 main.go 冲突，
+	// 编译报 ./router.go:21 undefined: writeJSON → 修复轮永远修不掉非 LLM 生成的文件）。
+	// LLM 自包含生成后只保留 LLM 产物（main.go/go.mod/README），目录内其他 .go 一律移除。
+	if ents, err := os.ReadDir(skelDir); err == nil {
+		for _, e := range ents {
+			n := e.Name()
+			if strings.HasSuffix(n, ".go") {
+				_ = os.Remove(filepath.Join(skelDir, n))
+			}
+		}
 	}
-	gen := func(sysMsg, usrMsg string) (string, string) {
-		resp, err := p.Chat(ctx, provider.ChatRequest{
+	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini，不再单点卡死。
+	// genWithPref：按 pref 降级链调度（fast=deepseek 等；gpt4o/gpt-mini 质量最稳）。
+	// 2026-10-03 真跑实证：①fast 曾 1.8s 返回<200 字符短输出 → 判无效（输出质量无法被调度层感知）；
+	// ②gpt-4o 输出必带 ```go Markdown 围栏 → 直接写盘必编译失败（expected 'package'）→ stripCodeFence 剥离。
+	genWithPref := func(pref []string, minLen int, sysMsg, usrMsg string) (string, string) {
+		resp, _, err := o.Providers.ChatWithFallback(ctx, pref, provider.ChatRequest{
 			Messages: []contract.Message{
 				{Role: "system", Content: sysMsg},
 				{Role: "user", Content: usrMsg},
@@ -1288,14 +1305,22 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 		if err != nil {
 			return "", "fast Chat err: " + err.Error()
 		}
-		c := strings.TrimSpace(resp.Content)
-		if c == "" {
-			return "", "LLM 空输出"
+		c := stripCodeFence(resp.Content)
+		if len(c) < minLen {
+			return "", fmt.Sprintf("LLM 输出过短(%d 字符)判为无效，调度跳过", len(c))
 		}
 		return c, ""
 	}
+	// 质量门按文件分级：main.go≥200（完整服务）；go.mod≥20（module+go 行仅 ~35 字符，
+	// 2026-10-03 实证 200 会误杀合法 go.mod → 整个实现失败）；README≥50。
+	gen := func(sysMsg, usrMsg string) (string, string) {
+		return genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 200, sysMsg, usrMsg)
+	}
 
-	req := "目标产品标题：" + title + "\n\n需求文档：\n" + truncateStr(doc, 14000)
+	// 2026-10-03 模型调度实证：需求全文（7966 字符）直接喂 LLM → 大 prompt + 完整生成必然
+	// 超网关 60s 上限（504）。正解：喂**能力清单摘要**（小 prompt，10s 级收敛），
+	// 语义判据由证据门（P0 关键字 + go build 真编译）兜底，缺口经 RoundEvidence 回喂。
+	req := "目标产品标题：" + title + "\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief
 	if o.RoundEvidence != "" {
 		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
 		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"
@@ -1307,14 +1332,14 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 		"硬性要求：①仅用标准库，零第三方依赖；②不许留 TODO/占位/伪代码；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
 		"④提供 /v1/health 与需求要求的业务端点；⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
 		"纯文本输出，不要 Markdown 围栏、不要 JSON、不要解释。"
-	mainCode, note := gen(sysMain, req)
+	mainCode, note := genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain, req)
 	if mainCode == "" {
 		return nil, "main.go 生成失败: " + note
 	}
 	files["main.go"] = mainCode
 
 	// ② go.mod：小文件独立调用。
-	modCode, note := gen("你是 Go 工程师。只输出 go.mod 的完整文本：module 名用 harness-output/impl（ASCII 小写，中文 module 非法），go 版本 1.21。纯文本，不要围栏。", req)
+	modCode, note := genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 20, "你是 Go 工程师。只输出 go.mod 的完整文本：module 名用 harness-output/impl（ASCII 小写，中文 module 非法），go 版本 1.21。纯文本，不要围栏。", req)
 	if modCode == "" {
 		return nil, "go.mod 生成失败: " + note
 	}
@@ -1335,14 +1360,40 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 	if buildRecv.OK {
 		return files, "编译全绿（0 轮修复）"
 	}
-	// 编译失败 → 回喂 LLM 修复 main.go（≤2 轮）。
-	lastErr := truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
-	for i := 1; i <= 2; i++ {
-		mainCode, note = gen(sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
+	// 编译失败 → ①确定性清理未使用 import（机械错误，LLM 修复不稳定——2026-10-03 实证 3 轮仍失败）；
+	// ②仍失败才回喂 LLM（≤3 轮）。
+	log.Printf("[llmGenerate] 编译失败（首轮），错误：\n%s", truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 1200))
+	// 调试保留：LLM 产物副本（骨架兜底会覆盖写盘产物，这里留一份供编译错误分析）。
+	_ = os.WriteFile("/tmp/llm_main_debug.go", []byte(files["main.go"]), 0o644)
+	cleanErrs := buildRecv.Stdout + "\n" + buildRecv.Stderr
+	lastErr := truncateStr(cleanErrs, 2500)
+	if cleaned, n := removeUnusedImports(files["main.go"], cleanErrs); cleaned != "" {
+		log.Printf("[llmGenerate] 确定性清理 %d 个未使用 import，重编译", n)
+		files["main.go"] = cleaned
+		if err := writeFilesToDisk(skelDir, files); err == nil {
+			recv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
+			if recv.OK {
+				return files, fmt.Sprintf("编译全绿（确定性清理 %d 个未使用 import）", n)
+			}
+			// 关键：清理后仍有错误（非 import），必须更新 lastErr——
+			// 否则修复轮拿旧错误（import）修，永远修不掉清理后暴露的真实错误（2026-10-03 实证循环）。
+			log.Printf("[llmGenerate] 清理后仍失败，更新修复轮错误信息：\n%s", truncateStr(recv.Stdout+"\n"+recv.Stderr, 800))
+			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
 		if mainCode == "" {
 			return nil, "main.go 修复失败: " + note
 		}
-		files["main.go"] = mainCode
+		// 修复轮产物同样先做确定性 import 清理（LLM 重生成必带未用 import——
+		// 2026-10-03 实证：不清理则修复轮永远卡在 "imported and not used"，3 轮耗尽）。
+		if c2, n2 := removeUnusedImports(mainCode, lastErr); c2 != "" {
+			log.Printf("[llmGenerate] 修复轮 %d 确定性清理 %d 个未使用 import", i, n2)
+			files["main.go"] = c2
+		} else {
+			files["main.go"] = mainCode
+		}
 		if err := writeFilesToDisk(skelDir, files); err != nil {
 			return nil, "写盘失败: " + err.Error()
 		}
@@ -1352,7 +1403,7 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir 
 		}
 		lastErr = truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
 	}
-	return nil, "编译迭代 2 轮仍未通过"
+	return nil, "编译迭代 3 轮仍未通过"
 }
 
 // parseGenFiles 解析 LLM 返回的 {"files":{...}} JSON（容忍 ```json 围栏与前后杂质）。
@@ -1403,6 +1454,41 @@ func writeFilesToDisk(dir string, files map[string]string) error {
 	return nil
 }
 
+// removeUnusedImports 从 Go 源码确定性移除编译错误报告中的未使用 import（机械错误）。
+// 匹配 go build 错误形如 `./main.go:4:2: "bufio" imported and not used`；import 块内的
+// `	"bufio"` 行逐行删除。2026-10-03 实证：LLM 修复轮对这类错误修复不稳定（3 轮仍失败），
+// 确定性清理是 harness 的工程兜底（不依赖 LLM 运气）。返回清理后的源码与清理数量。
+func removeUnusedImports(src, buildOut string) (string, int) {
+	unused := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"(.*?)" imported and not used`).FindAllStringSubmatch(buildOut, -1) {
+		if len(m) == 2 && m[1] != "" {
+			unused[m[1]] = true
+		}
+	}
+	if len(unused) == 0 {
+		return "", 0
+	}
+	var sb strings.Builder
+	removed := 0
+	for _, line := range strings.Split(src, "\n") {
+		trim := strings.TrimSpace(line)
+		skip := false
+		for imp := range unused {
+			if trim == `"`+imp+`"` {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			removed++
+			continue
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSuffix(sb.String(), "\n"), removed
+}
+
 // EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
 // 返回缺口列表；空列表 = 证据门全过（产物存在且非空、真编译通过、P0 能力存在性）。
 //
@@ -1416,10 +1502,17 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		return []string{"任务无产物（Outcome 为空）"}
 	}
 	// 从回执提取 harness-output/ 产物根目录（stdout 形如 "writed: /abs/harness-output/<title>/main.go"）。
+	// 2026-10-03 修复：stdout 多行（writed 路径 + VHS_BACKUP_PATH: ...），TrimPrefix 后 line 是整块，
+	// HasSuffix(main.go) 永远失败 → implRoot 空 → Glob 回退取错目录（读到别的任务骨架 → 判"含 todo"假 FAIL）。
+	// 只取第一行（writed 路径行）。
 	implRoot := ""
 	for _, r := range out.Receipts {
-		line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Stdout), "writed:"))
-		if p := filepath.Clean(strings.TrimSpace(line)); strings.Contains(p, "harness-output") {
+		stdout := strings.TrimSpace(r.Stdout)
+		if nl := strings.IndexByte(stdout, '\n'); nl > 0 {
+			stdout = stdout[:nl]
+		}
+		line := strings.TrimSpace(strings.TrimPrefix(stdout, "writed:"))
+		if p := filepath.Clean(line); strings.Contains(p, "harness-output") {
 			if strings.HasSuffix(p, "main.go") || strings.HasSuffix(p, "go.mod") {
 				implRoot = filepath.Dir(p)
 			}
@@ -2329,11 +2422,8 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if it.Intent == contract.IntentQuery {
 		return it
 	}
-	p, err := o.Providers.Get("fast")
-	if err != nil {
-		return it
-	}
-	resp, err := p.Chat(ctx, provider.ChatRequest{
+	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini。
+	resp, _, err := o.Providers.ChatWithFallback(ctx, []string{"fast", "center", "strong", "gpt-mini"}, provider.ChatRequest{
 		Messages: []contract.Message{
 			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交。"},
 			{Role: "user", Content: text},
@@ -2369,6 +2459,25 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 }
 
 // noJSON 返回 false 指针：显式关闭本次调用的 response_format（QUERY 回答层要纯文本）。
+// stripCodeFence 剥离 LLM 常见的 Markdown 代码围栏（```go ... ```）。
+// 2026-10-03 真跑实证：gpt-4o 对"纯文本输出不要围栏"仍输出 ```go 围栏 → 直接写盘必编译失败
+// （expected 'package'）；gpt-4o-mini 偶尔也带。写盘前统一剥离，是生成质量门控的一环。
+func stripCodeFence(s string) string {
+	t := strings.TrimSpace(s)
+	if strings.HasPrefix(t, "```") {
+		if nl := strings.IndexByte(t, '\n'); nl > 0 {
+			t = t[nl+1:]
+		}
+		if i := strings.LastIndex(t, "```"); i >= 0 {
+			if pre := strings.TrimSpace(t[:i]); pre != "" {
+				t = pre
+			}
+		}
+		return strings.TrimSpace(t)
+	}
+	return t
+}
+
 func noJSON() *bool {
 	v := false
 	return &v
@@ -2389,17 +2498,11 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	if o == nil || o.Providers == nil {
 		return degradedNow()
 	}
-	p, err := o.Providers.Get("fast")
-	if err != nil {
-		log.Printf("[queryLLMAnswer] fast provider unavailable: %v", err)
-		reason = err.Error()
-		return degradedNow()
-	}
-
-	// callFast 发一次 fast 调用并解 JSON 壳；ok=false 表示失败/空/意外壳（与原逻辑一致）。
+	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini，不再单点卡死。
+	// callFast 发一次调用并解 JSON 壳；ok=false 表示失败/空/意外壳（与原逻辑一致）。
 	var lastErr error
 	callFast := func() (string, bool) {
-		resp, err := p.Chat(ctx, provider.ChatRequest{
+		resp, _, err := o.Providers.ChatWithFallback(ctx, []string{"fast", "center", "strong", "gpt-mini"}, provider.ChatRequest{
 			Messages: []contract.Message{
 				{Role: "system", Content: "你是 VoxSign 助手。根据用户问题和检索结果给简洁中文回答。只输出回答文本本身，不要输出 JSON、不要做意图分类、不要输出任何结构化格式。"},
 				{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
