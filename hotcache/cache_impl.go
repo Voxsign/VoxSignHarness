@@ -149,6 +149,11 @@ func (c *Cache) Lookup(term string) (Result, bool) {
 	// 与 VHS-ZHIJI-001 §2.1「宁可回问，不猜」同机制。
 	// ⚠️ 两个阈值 **UNVALIDATED**（未标定）。
 	const editMaxDistance = 1
+	// ③ 拉丁近似：**有界放宽** —— 仅当输入足够长（≥8 字符）才允许 dist≤2。
+	// ⚠️ UNVALIDATED：8 / 2 都是未标定的取值。放宽可能带来错配 ⇒ 由差距门槛与
+	// "同距不同 canonical ⇒ 拒绝" 兜底。
+	const longInputLen = 8
+	const editMaxDistanceLong = 2
 	const minScoreGap = 2
 	// 相对相似度门槛：短串上一字符之差（哎ops vs 爱ops）不足以作为"改写"的证据。
 	// ⚠️ UNVALIDATED：0.15 是我取的，未标定。
@@ -172,7 +177,11 @@ func (c *Cache) Lookup(term string) (Result, bool) {
 			if float64(d) > maxEditRatio*termLen {
 				continue // 相对差异过大 ⇒ 不作为候选（防"错配"）
 			}
-			if d <= editMaxDistance {
+			maxD := editMaxDistance
+			if len([]rune(term)) >= longInputLen {
+				maxD = editMaxDistanceLong
+			}
+			if d <= maxD {
 				cands = append(cands, cand{canonical: a.Canonical, dist: d, source: a.Source})
 			}
 		}
