@@ -250,17 +250,30 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// M7 修复（Codex/gpt-6-luna 外部诊断 2026-10-02）：按意图门控——
 	// QUERY 高置信（>=0.8）的"这个/那个"是普通口语代词，跳过指代消解，
 	// 否则 refer 候选为空会写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
+	//
+	// 多轮指代接线（2026-10-04）：解析前从会话槽加载最近实体注入 resolver——
+	// RecentEntity 生产路径此前零构造，"这个方案"无论上文如何都回问。现在按 ConvID
+	// 读 context_slots/<convID>.jsonl 中 type=recent_entity 的记录（会话隔离；缺省 default）。
+	// 门控同步放宽：QUERY 高置信非裸指代在"有上下文"（hasRecent）时解析，无上下文行为不变。
 	var referOpts []refer.Option
-	if o.Refer != nil && shouldResolveRefer(&intent) {
-		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
-		if err == nil && resolved != nil {
-			prevAsk := intent.Ask
-			intent = *resolved
-			referOpts = opts
-			// Codex 收紧（2026-10-02）：refer 新写 Ask（"指的是哪个"）时，
-			// 若歧义不阻止执行（陈述/查询有实体/记录类）→ 清掉继续执行，不因指代 Ask。
-			if intent.Ask != "" && intent.Ask != prevAsk && !clarificationBlocksExecution(&intent, referOpts) {
-				intent.Ask = ""
+	if o.Refer != nil {
+		convID := o.ConvID
+		if convID == "" {
+			convID = "default" // Options 注释缺省值；CLI 多轮 run 共享 default 槽，server 按会话隔离
+		}
+		o.Refer.Recent = loadRecentEntities(o.logDir(), convID)
+		hasRecent := len(o.Refer.Recent) > 0
+		if shouldResolveRefer(&intent, hasRecent) {
+			resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
+			if err == nil && resolved != nil {
+				prevAsk := intent.Ask
+				intent = *resolved
+				referOpts = opts
+				// Codex 收紧（2026-10-02）：refer 新写 Ask（"指的是哪个"）时，
+				// 若歧义不阻止执行（陈述/查询有实体/记录类）→ 清掉继续执行，不因指代 Ask。
+				if intent.Ask != "" && intent.Ask != prevAsk && !clarificationBlocksExecution(&intent, referOpts) {
+					intent.Ask = ""
+				}
 			}
 		}
 	}
@@ -462,6 +475,24 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+
+	// 多轮指代接线（2026-10-04）：执行成功的轮次把对话核心实体写入会话槽，
+	// 供下一轮 refer 消解（"这个方案"→ 上一轮的 OT-ODP）。会话隔离：按 ConvID 写槽，
+	// 缺省 default（CLI 多轮 run 共享；server 按真实会话隔离）。回问轮不执行，不写。
+	if ents := extractRecentEntities(intent.CorrectedText); len(ents) > 0 {
+		convID := o.ConvID
+		if convID == "" {
+			convID = "default"
+		}
+		if intent.Target != nil && intent.Target.Entity != "" {
+			ents = append(ents, refer.RecentEntity{
+				Space: "default", Entity: intent.Target.Entity, Kind: "project",
+				Ts: time.Now().Format(time.RFC3339),
+			})
+		}
+		writeRecentEntities(o.logDir(), convID, ents)
+		log.Printf("[refer-recent] 会话 %s 写入 %d 个最近实体", convID, len(ents))
+	}
 
 	// ⑨-bis 异常自愈层（可选）：有失败回执 → 诊断 + 只读安全重放（限 2 轮）。
 	// 诊断层未配置/失败一律不阻断；重放成功的新回执合并进 out.Receipts，诊断结论供归因。
@@ -1135,6 +1166,98 @@ func serverReadContextSlots(logDir, convID string) []map[string]any {
 		if json.Unmarshal([]byte(ln), &rec) == nil {
 			out = append(out, rec)
 		}
+	}
+	return out
+}
+
+// ---------- 多轮指代接线（2026-10-04）：refer.Recent 会话槽读写 ----------
+//
+// 背景：refer.Resolver 的 Recent（跨轮上下文）生产路径此前**零构造**——grep RecentEntity{
+// 仅出现在测试代码，"这个方案"永远回问。此处补上"写入端 + 读取端"：
+//   - 执行成功的轮次把对话核心实体 append 到 <logDir>/context_slots/<convID>.jsonl
+//     （与文档槽/ASR 槽同体系：append-only、会话隔离、可审计）；
+//   - 下一轮 refer 解析前从同槽读回，注入 resolver.Recent。
+// 会话隔离：按 ConvID 分文件；CLI 缺省 "default"（同 logDir 下多轮 run 共享），
+// server 按真实会话 ID 隔离，不跨会话猜（与 358b2f0 指代固化槽同范式）。
+
+const recentSlotMax = 16 // 上下文窗口上限（防槽无限膨胀）
+
+// extractRecentEntities 从文本提取可作指代上下文的核心实体：
+// 拉丁专名（OT-ODP/SPoG/DMZ…）+ 书名号《…》内容 + 引号短语。去重、带时间戳。
+func extractRecentEntities(text string) []refer.RecentEntity {
+	seen := map[string]bool{}
+	var out []refer.RecentEntity
+	now := time.Now().Format(time.RFC3339)
+	add := func(e, kind string) {
+		if e == "" || seen[e] {
+			return
+		}
+		seen[e] = true
+		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
+	}
+	// 拉丁大写专名（含 - 连接可 0..N 段）：OT-ODP / SPoG / DMZ / NGSA
+	re := regexp.MustCompile(`[A-Z][A-Z0-9]{1,}(?:-[A-Z0-9]+)*`)
+	for _, m := range re.FindAllString(text, -1) {
+		add(m, "project")
+	}
+	// 《…》书名号文档（2-30 字）
+	re2 := regexp.MustCompile(`《([^》]{2,30})》`)
+	for _, m := range re2.FindAllStringSubmatch(text, -1) {
+		add(m[1], "file")
+	}
+	// 引号短语（4-30 字，像实体名/专有表述）
+	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
+	for _, m := range re3.FindAllStringSubmatch(text, -1) {
+		add(m[1], "project")
+	}
+	return out
+}
+
+// writeRecentEntities 把最近实体 append 到会话槽（append-only、可审计）。
+func writeRecentEntities(logDir, convID string, ents []refer.RecentEntity) {
+	dir := filepath.Join(logDir, "context_slots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, convID+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	for _, e := range ents {
+		rec := map[string]any{"type": "recent_entity", "space": e.Space, "entity": e.Entity, "kind": e.Kind, "ts": e.Ts}
+		if b, err := json.Marshal(rec); err == nil {
+			_, _ = f.Write(append(b, '\n'))
+		}
+	}
+}
+
+// loadRecentEntities 从会话槽读最近实体（type=recent_entity），ts 倒序取前 N。
+func loadRecentEntities(logDir, convID string) []refer.RecentEntity {
+	recs := serverReadContextSlots(logDir, convID)
+	var out []refer.RecentEntity
+	for _, r := range recs {
+		if r["type"] != "recent_entity" {
+			continue
+		}
+		ent, _ := r["entity"].(string)
+		if ent == "" {
+			continue
+		}
+		kind, _ := r["kind"].(string)
+		if kind == "" {
+			kind = "project"
+		}
+		sp, _ := r["space"].(string)
+		if sp == "" {
+			sp = "default"
+		}
+		ts, _ := r["ts"].(string)
+		out = append(out, refer.RecentEntity{Space: sp, Entity: ent, Kind: kind, Ts: ts})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ts > out[j].Ts })
+	if len(out) > recentSlotMax {
+		out = out[:recentSlotMax]
 	}
 	return out
 }
@@ -2448,7 +2571,7 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 //  5. NOTE/EDIT/COMMIT/DEBUG → true（真操作指代消解保持原行为）。
 //
 //     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
-func shouldResolveRefer(it *contract.Intent) bool {
+func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
 	if questionTone(text) {
 		return false
@@ -2458,9 +2581,11 @@ func shouldResolveRefer(it *contract.Intent) bool {
 	}
 	switch it.Intent {
 	case contract.IntentQuery:
-		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 不解析
+		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→
+		// 无上下文不解析（普通口语代词，M7 外部诊断），但已有会话上下文
+		// （Recent 非空，多轮指代接线）时解析——指向上一轮出现的实体。
 		if it.Confidence >= 0.8 {
-			return isBareReferent(text)
+			return isBareReferent(text) || hasRecent
 		}
 		return true
 	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit, contract.IntentDebug:

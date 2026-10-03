@@ -528,33 +528,36 @@ func TestQueryHighConfidenceSkipsReferAsk(t *testing.T) {
 	}
 }
 
-// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断）。
+// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断；
+// 2026-10-04 多轮指代接线新增 hasRecent 参数——有会话上下文时 QUERY 非裸指代也解析）。
 func TestShouldResolveReferGate(t *testing.T) {
 	cases := []struct {
-		name   string
-		intent string
-		conf   float64
-		text   string
-		want   bool
+		name      string
+		intent    string
+		conf      float64
+		text      string
+		hasRecent bool
+		want      bool
 	}{
-		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false},
-		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", true},
-		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", true},
-		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false},
-		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", true},
-		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", true},
-		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false},
-		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", true},
-		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false},
-		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", true},
-		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", true},
+		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false, false},
+		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", false, true},
+		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", false, true},
+		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false, false},
+		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", false, true},
+		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", false, true},
+		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false, false},
+		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", false, true},
+		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 有实体+有上下文（多轮指代接线）", contract.IntentQuery, 0.9, "查一下这个方案", true, true},
+		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false, false},
+		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", false, true},
+		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", false, true},
 	}
 	for _, c := range cases {
 		it := contract.Intent{Intent: c.intent, Confidence: c.conf, CorrectedText: c.text}
-		if got := shouldResolveRefer(&it); got != c.want {
-			t.Errorf("shouldResolveRefer(%s conf=%v text=%q) = %v, want %v", c.name, c.conf, c.text, got, c.want)
+		if got := shouldResolveRefer(&it, c.hasRecent); got != c.want {
+			t.Errorf("shouldResolveRefer(%s conf=%v text=%q hasRecent=%v) = %v, want %v", c.name, c.conf, c.text, c.hasRecent, got, c.want)
 		}
 	}
 }
