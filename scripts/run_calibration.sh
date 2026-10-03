@@ -12,7 +12,13 @@
 #   sh scripts/run_calibration.sh <判据清单文件>
 #
 # 判据清单格式（每行一条，`|` 分隔；`#` 开头为注释）：
-#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）> [| <请求体 JSON>] [| <前提>]
+#   <判据ID> | <对象：产物|能力> | <METHOD> | <路径> | <期望（子串，命中即 PASS）> [| <请求体 JSON>] [| <前提>] [| <服务>]
+#
+# ⚠️ **服务列**（2026-10-03 第 21 条）：清单可能**混两条线**的端点：
+#   `A` = harness（线 A，`main.go serve`，实测 :8765）—— `/v1/health` `/v1/voice`
+#   `B` = vhs-asr（线 B，`cmd/vhs-asr`，实测 :8123）—— `/v1/process` `/v1/dictionary` `/v1/feedback`
+#   **缺省 = A**。不写 ⇒ 打线 A；写 `B` ⇒ 打线 B。
+#   ⇒ 若不声明，混线清单必然有一半 404 —— 而那是**装置/清单**的问题，会被误报成**产品红**。
 #
 # ⚠️ **前提列**（2026-10-03 实测第 15/18 条的同族）：
 #   V-03「线 B 不可达 ⇒ 503+degraded」**只在"线 B 不可达"时才有意义**。
@@ -164,9 +170,14 @@ while IFS= read -r line; do
   p=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')
   want=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
   body=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$6); print $6}')
+  [ "$body" = "-" ] && body='{}'
   [ -z "$body" ] && body='{}'   # 缺省空对象；端点若要求字段，判据里必须显式写
   JFILE="$DATA/.resp.json"; export VHS_JFILE="$JFILE"
+  svc=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$8); print toupper($8)}')
+  [ -z "$svc" ] && svc=A
+  if [ "$svc" = "B" ]; then TPORT="$ASR_PORT"; else TPORT="$PORT"; fi
   pre=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$7); print $7}')
+  [ "$pre" = "-" ] && pre="" 
   # 前提判定：**按实际状态判**，不靠人（否则又会把"前提"写成想当然）
   PRE_OK=1
   case "$pre" in
@@ -180,11 +191,11 @@ while IFS= read -r line; do
   # 而那个 200 是**测试页的 200**（`<!doctype html>`），**不是 `handleVoice` 的 200**。
   # ⇒ **"HTTP 200" ≠ "走到了那个 handler"** ⇒ R 证据必须断言**响应内容**（契约字段）。
   if [ -z "$want" ]; then
-    echo "| $id | $obj | \`$m $p\` | - | **（清单未写期望子串）** | **✗ 判据无效**（R 证据必须断言响应内容，不能只验状态码） |" >> "$OUT"
+    echo "| $id | $obj | $svc | \`$m $p\` | - | **（清单未写期望子串）** | **✗ 判据无效**（R 证据必须断言响应内容，不能只验状态码） |" >> "$OUT"
     continue
   fi
 
-  resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$PORT$p" -H 'Content-Type: application/json' -d "$body" -w '\n%{http_code}' 2>/dev/null)
+  resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$TPORT$p" -H 'Content-Type: application/json' -d "$body" -w '\n%{http_code}' 2>/dev/null)
   code=$(printf '%s' "$resp" | tail -1)
   # ⚠️ **断言必须用完整响应，截断只用于显示**（2026-10-03 实测第 18 条）：
   # 我第一版先 `cut -c1-120` 再 grep ⇒ `intent_source` 在 120 字符之后 ⇒ **永远匹配不到 ⇒ 假红**。
@@ -194,7 +205,7 @@ while IFS= read -r line; do
 
   # ⚠️ **前提不满足 ⇒ 三态，不判 ✗**（否则会把"装置前提"误报成"产品红"）
   if [ -n "$pre" ] && [ "$PRE_OK" != "1" ]; then
-    echo "| $id | $obj | \`$m $p\` | - | **（前提「${pre}」不满足）** | **⚠️ 前提不满足**（不算 ✗ 也不算 ✅） |" >> "$OUT"
+    echo "| $id | $obj | $svc | \`$m $p\` | - | **（前提「${pre}」不满足）** | **⚠️ 前提不满足**（不算 ✗ 也不算 ✅） |" >> "$OUT"
     continue
   fi
   # ⚠️ **断言分强弱**（2026-10-03 第 20 条）：字段名存在 ⇒ 只证"字段在"，
@@ -227,9 +238,9 @@ except Exception:
     print(json.dumps(v,ensure_ascii=False))               # 自由文本
 ' 2>/dev/null)
       if [ "$got" = "$exp" ]; then
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（eq ${k}=${v} 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（eq ${k}=${v} 成立；C 待补 ⇒ ◐） |" >> "$OUT"
       else
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
       fi ;;
     if:*)
       # `if:<条件字段><op><条件值>?<结论字段>=<结论值>`
@@ -262,30 +273,30 @@ except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)" ] && cmet=
         *) cmet=1 ;;
       esac
       if [ "$cmet" != "1" ]; then
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **⚠️ 不适用**（条件 ${cond} 不成立；不算 ✗ 也不算 ✅） |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **⚠️ 不适用**（条件 ${cond} 不成立；不算 ✗ 也不算 ✅） |" >> "$OUT"
       else
         oexp=$(VHS_V="$ov" python3 -c 'import json,os,json as j;v=os.environ["VHS_V"]
 try: print(j.dumps(j.loads(v),ensure_ascii=False))
 except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)
         if [ "$kval" = "$oexp" ]; then
-          echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（条件成立且 ${ok}=${ov}；C 待补 ⇒ ◐） |" >> "$OUT"
+          echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（条件成立且 ${ok}=${ov}；C 待补 ⇒ ◐） |" >> "$OUT"
         else
-          echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 条件成立但 ${ok}：期望 ${oexp} 实际 ${kval}** |" >> "$OUT"
+          echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 条件成立但 ${ok}：期望 ${oexp} 实际 ${kval}** |" >> "$OUT"
         fi
       fi ;;
     absent:*)
       a=${want#absent:}
       if printf '%s' "$full" | grep -qF -- "$a"; then
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 不应出现 \`$a\`** |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 不应出现 \`$a\`** |" >> "$OUT"
       else
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（`absent:$a` 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（`absent:$a` 成立；C 待补 ⇒ ◐） |" >> "$OUT"
       fi ;;
     *)
       t=${want#contains:}
       if printf '%s' "$full" | grep -qF -- "$t"; then
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **◐ 弱断言**（仅证 \`$t\` 出现，**不证判据成立**） |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **◐ 弱断言**（仅证 \`$t\` 出现，**不证判据成立**） |" >> "$OUT"
       else
-        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$t\` 未出现** |" >> "$OUT"
+        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$t\` 未出现** |" >> "$OUT"
       fi ;;
   esac
 done < "$DATA/.crit"
