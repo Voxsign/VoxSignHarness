@@ -55,7 +55,18 @@ if [ -z "${VHS_MODEL_CENTER:-}" ]; then
   echo "[calib-R]    ⇒ **本次 R 证据只覆盖规则式路径**；L2/模型路径**未被本次真跑覆盖**（如实标注）"
 fi
 
+# ⚠️ **起前必须断言端口空闲**（2026-10-03 实测事故；本项目实例集里记过同一个坑）：
+# 我并发跑 gate 时 `go test -tags vhsui ./...` 也在起服务；而 `--addr` 被忽略，
+# 于是**我的 R 通道打到了别人的服务**（拿到测试页的 200 HTML），**差点据此判"产品红"**。
+# ⇒ 规则：**端口被占 ⇒ 拒绝跑（exit 2）**，而不是"打上去看看"。
+#   ⚠️ 这也印证「校准」：**先声明参考系，再取证** —— 拿不到干净参考系就不取证。
 echo "[calib-R] ② 起真服务 addr=127.0.0.1:$PORT"
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "[calib-R] ❌ **端口 $PORT 已被占用** ⇒ 拒绝跑（否则会打到别人的服务，得出假结论）"
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | tail -n +2 | awk '{print "      PID "$2" "$1}' | head -5
+  echo "[calib-R]    ⇒ 处置：停掉占用者，或设 VHS_CALIB_PORT 换端口。"
+  exit 2
+fi
 VHS_ASR_ADDR="127.0.0.1:$PORT" VHS_ASR_DATA="$DATA" VHS_MODEL_CENTER="$VHS_MODEL_CENTER" \
   "$BIN" > "$LOG" 2>&1 &
 SRV=$!
@@ -72,6 +83,13 @@ if [ $i -ge 40 ]; then
   exit 2
 fi
 echo "[calib-R]    服务就绪（${i}×0.25s）"
+# 起后自证：该端口只应有 1 个监听者（就是我刚起的 $SRV）
+nlisten=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')
+echo "[calib-R]    端口 $PORT 监听者数 = $nlisten（应为 1；我起的 PID=$SRV）"
+if [ "$nlisten" -gt 1 ]; then
+  echo "[calib-R] ❌ 端口 $PORT 有多个监听者 ⇒ **响应未必来自我起的进程** ⇒ 拒绝取证"
+  exit 2
+fi
 
 {
   echo "# R 通道运行证据（run_calibration.sh）"
