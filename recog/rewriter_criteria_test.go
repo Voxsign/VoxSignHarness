@@ -61,3 +61,79 @@ func TestK9ClearRevertsOutput(t *testing.T) {
 	}
 	_ = context.Background()
 }
+
+// ---- G2：用户临时教的词必须在纠错路径上真的改变输出（照 K9 三条）----
+
+// 正例：教过 ⇒ 输出改变，且来源可审计为 user_taught。
+func TestG2TaughtWordChangesOutput(t *testing.T) {
+	r, c := newRewriter(t, false)
+	if got, _ := r.Correct("把哎欧劈艾斯接上"); got != "把哎欧劈艾斯接上" {
+		t.Fatalf("[G2-反例] 未教却改了输出: %q", got)
+	}
+	if err := c.Teach("哎欧劈艾斯", "aiops"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Correct("把哎欧劈艾斯接上"); got != "把aiops接上" {
+		t.Fatalf("[G2-正例] 教过却未改变输出: %q", got)
+	}
+	taught := c.Taught()
+	if len(taught) != 1 || taught[0].Source != hotcache.SourceUserTaught {
+		t.Errorf("[G2] 教的词来源不可审计: %+v", taught)
+	}
+}
+
+// 反例一：空表 ⇒ 输出与基线一致。
+func TestG2EmptyTableUnchanged(t *testing.T) {
+	r, _ := newRewriter(t, false)
+	if got, corrs := r.Correct("把哎欧劈艾斯接上"); got != "把哎欧劈艾斯接上" || len(corrs) != 0 {
+		t.Fatalf("[G2-反例一] 空表改变了输出: %q %+v", got, corrs)
+	}
+}
+
+// 反例二：清空 ⇒ 输出回退（证明变化真的来自教的词）。
+func TestG2ClearRevertsTaughtWord(t *testing.T) {
+	r, c := newRewriter(t, false)
+	if err := c.Teach("哎欧劈艾斯", "aiops"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Correct("把哎欧劈艾斯接上"); got != "把aiops接上" {
+		t.Fatalf("[G2-反例二] 前提失败: %q", got)
+	}
+	c.Clear()
+	if got, _ := r.Correct("把哎欧劈艾斯接上"); got != "把哎欧劈艾斯接上" {
+		t.Fatalf("[G2-反例二] 清空后未回退: %q", got)
+	}
+}
+
+// 教的词必须能落 L1 持久（否则"教了下次就忘"——这是 Peter 需求的要点）。
+func TestG2TaughtWordPersists(t *testing.T) {
+	r, c := newRewriter(t, false)
+	if err := c.Teach("沃克body", "workbuddy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	fresh := hotcache.New(c.L1Path(), time.Minute, nil)
+	if err := fresh.Load(); err != nil {
+		t.Fatal(err)
+	}
+	r2 := &Rewriter{Engine: r.Engine, Hot: fresh}
+	if got, _ := r2.Correct("沃克body在哪"); got != "workbuddy在哪" {
+		t.Fatalf("[G2] 重载后教的词丢失: %q", got)
+	}
+}
+
+// 教空词必须被拒（否则缓存被污染成"什么都能命中"）。
+func TestG2TeachRejectsEmpty(t *testing.T) {
+	_, c := newRewriter(t, false)
+	if err := c.Teach("", "aiops"); err == nil {
+		t.Error("[G2] 空 term 未被拒")
+	}
+	if err := c.Teach("x", ""); err == nil {
+		t.Error("[G2] 空 canonical 未被拒")
+	}
+	if err := c.Teach("same", "same"); err == nil {
+		t.Error("[G2] 同值未被拒")
+	}
+}

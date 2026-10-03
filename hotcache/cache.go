@@ -81,4 +81,7 @@ func New(l1Path string, ttl time.Duration, fetcher func(ctx context.Context) (Sn
 	return &Cache{l1Path: l1Path, ttl: ttl, fetcher: fetcher, now: time.Now}
 }
 
+// L1Path 返回 L1 落盘路径（持久化测试用）。
+func (c *Cache) L1Path() string { return c.l1Path }
+
 // 行为实现见 cache_impl.go。
