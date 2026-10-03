@@ -60,35 +60,158 @@ var requirementRules = []struct {
 	tool   string
 	reason string
 }{
-	{[]string{"部署", "上线", "发布", "deploy"}, "deploy", "缺 deploy 工具契约（域别名 deploy 不是可执行能力）"},
-	{[]string{"删除", "删掉", "移除文件", "rm "}, "delete", "缺 delete 工具契约（删除不可逆，须人工确认后另行授权）"},
+	{[]string{"部署", "上线", "deploy"}, "deploy", "网关：缺 deploy 能力（tools/registry.go 无 deploy 契约；域别名 deploy 不是可执行能力），走单一网关提需求"},
+	{[]string{"发布到生产", "生产发布"}, "release", "网关：缺 release 能力（无发布契约），走单一网关提需求"},
+	{[]string{"推到", "推送", "push", "远端分支"}, "push", "网关：缺 push 能力（git 契约只有 status/diff/log/commit/checkout），走单一网关提需求"},
+	{[]string{"上架", "app store", "软件商店", "应用商店"}, "appstore", "网关：缺上架/发布能力（无对应契约），走单一网关提需求"},
+	{[]string{"邮件", "email", "发信"}, "email", "网关：缺外发/邮件能力（清单里无 http/邮件契约；域词表 http 只是别名），走单一网关提需求"},
+	{[]string{"上传", "upload"}, "upload", "网关：缺上传能力（无对应契约），走单一网关提需求"},
+	{[]string{"删除", "删掉", "移除文件", "rm "}, "delete", "人：删除不可逆，须人工确认后另行授权；本规划器不提供 delete 能力"},
+}
+
+// bypassWords 是"要求跳过确认"的口语形态（F3：不得无声执行被保护动作）。
+var bypassWords = []string{"不用确认", "不用我确认", "无须确认", "别问", "不用问", "直接提交", "自行决定", "不用请示"}
+
+// protectedCapsIn 找出目标里涉及的被保护动作（不可逆/需授权）。
+func protectedCapsIn(goal string) []string {
+	var out []string
+	if containsAny(goal, "提交", "commit") {
+		out = append(out, "commit")
+	}
+	if containsAny(goal, "部署", "上线", "发布", "deploy") {
+		out = append(out, "deploy")
+	}
+	if containsAny(goal, "删除", "删掉") {
+		out = append(out, "delete")
+	}
+	return out
+}
+
+// selfServiceWords 是"只读自服务"目标形态（SC-1：必须有模板）。
+var selfServiceWords = []string{"读一下", "看一下", "看看", "列出", "数一下", "几个", "跑一下", "查一下", "告诉我"}
+
+// readonlyProbeSteps 返回**只读探查**步骤（F1 裁决：拒绝承诺，但可以去看看）。
+// 只允许 file.read / search.text / test.run / git.status；Action 与 Why 不得声称"完成/达成"。
+func readonlyProbeSteps() []Step {
+	return []Step{
+		{
+			Tool: "search", Caps: []string{"text"},
+			Params: map[string]string{"pattern": ".", "path": "."},
+			Action: "查看相关文件与上下文（只读探查）", Output: "匹配结果（供判断）",
+			Why: "收集信息以便判断该目标是否可做（只读探查）",
+		},
+		{
+			Tool: "git", Caps: []string{"status"},
+			Params: map[string]string{"args": "status"},
+			Action: "查看工作区状态（只读探查）", Output: "git status 输出",
+			Why: "收集当前仓库状态供后续判断（只读探查）",
+		},
+	}
 }
 
 // Plan 按规则产出一个确定性计划。
+//
+// 分类（六类）：reachable / self_service / partial / capability_gap / authorization_gap / 未识别。
+// 未识别 ⇒ Refused + **只读探查**（Source=readonly-probe，且不得声称覆盖目标）。
 func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	g := strings.ToLower(strings.TrimSpace(goal))
 	if g == "" {
-		return Plan{Goal: goal, Refused: true, Missing: []string{"非空目标"}, Reason: "目标为空，不做任何假设"}, nil
+		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: []string{"无外部依赖：目标为空"},
+			Reason: "目标为空，不做任何假设"}, nil
 	}
-	// PL-2：先判可达性 —— Manifest 即边界。
-	if missing, ok := unmetRequirement(g, m); !ok {
-		return Plan{Goal: goal, Refused: true, Missing: missing, Reason: "目标需要清单外能力；本规划器不编造可执行计划"}, nil
+	// authorization_gap（F3）：要求绕过确认 + 被保护动作 ⇒ 拒绝并指人。
+	if containsAny(g, bypassWords...) {
+		if caps := protectedCapsIn(g); len(caps) > 0 {
+			return Plan{Goal: goal, Source: "rule", Refused: true,
+				Missing: []string{"人：被保护动作（" + strings.Join(caps, ",") + "）不可逆/需授权，必须人工确认；规划器不得自行授权"},
+				Reason:  "目标要求绕过确认；拒绝静默执行"}, nil
+		}
 	}
 
-	var steps []Step
+	gaps := gapRequirements(g, m)
+	steps, kind := classify(g)
+
+	switch {
+	case len(gaps) > 0 && kind == "":
+		// capability_gap：已识别的能力缺口 ⇒ 拒绝 + 指 owner，**不编步骤**
+		//（SC-2/PL-2 要求：拒绝时不得给步骤；只读探查仅用于"未识别"目标，见下）。
+		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: gaps,
+			Reason: "目标需要清单外能力（Manifest 即边界），不编造可执行计划"}, nil
+	case len(gaps) > 0 && kind != "":
+		// partial：只规划可达前缀，尾巴进 Missing（既非整体照做，也非整体拒绝）
+		if missing := missingTools(m, steps); len(missing) > 0 {
+			return Plan{Goal: goal, Source: "rule", Refused: true,
+				Missing: append(gaps, "网关："+strings.Join(missing, ",")+" 不在能力清单内"), Reason: "可达前缀也需要清单外能力"}, nil
+		}
+		return Plan{Goal: goal, Source: "rule", Steps: steps, Missing: gaps,
+			Degraded: true, DegradedReason: "目标部分不可达：只规划可达前缀，未覆盖全部目标"}, nil
+	case kind != "":
+		if missing := missingTools(m, steps); len(missing) > 0 {
+			return Plan{Goal: goal, Source: "rule", Refused: true,
+				Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Reason: "计划需要清单外能力"}, nil
+		}
+		return Plan{Goal: goal, Source: "rule", Steps: steps}, nil
+	default:
+		// 未识别目标：Refused（拒绝承诺）+ 只读探查（去看看）+ 显式自曝。
+		probe := readonlyProbeSteps()
+		if missing := missingTools(m, probe); len(missing) > 0 {
+			probe = nil
+		}
+		return Plan{
+			Goal: goal, Refused: true, Steps: probe, Source: "readonly-probe",
+			Missing:  []string{"网关：无法判定该目标所需能力（不在已支持的目标形态内），不编造计划；如确需请提需求"},
+			Reason:   "无法判定目标所需能力，不编造计划",
+			Degraded: true, DegradedReason: "未识别目标：只做只读探查，不声称覆盖目标",
+		}, nil
+	}
+}
+
+// classify 按目标形态返回模板步骤与类别（"" = 未识别）。
+func classify(g string) ([]Step, string) {
 	switch {
 	case containsAny(g, "todo", "整理", "汇总", "文档"):
-		steps = summarizeSteps()
+		return summarizeSteps(), "reachable"
 	case containsAny(g, "改", "修改", "编辑", "替换") && containsAny(g, "提交", "commit"):
-		steps = editThenCommitSteps()
+		return editThenCommitSteps(), "partial_or_reachable"
+	case containsAny(g, selfServiceWords...):
+		return selfServiceSteps(g), "self_service"
 	default:
-		steps = searchSteps() // 搜索类与兜底：只读（默认拒绝高风险动作）
+		return nil, ""
 	}
-	// 计划里只允许出现清单内的能力。
-	if missing := missingTools(m, steps); len(missing) > 0 {
-		return Plan{Goal: goal, Refused: true, Missing: missing, Reason: "计划需要清单内不存在的能力，已拒绝"}, nil
+}
+
+// selfServiceSteps 给出只读自服务模板（SC-1）。
+func selfServiceSteps(g string) []Step {
+	if containsAny(g, "跑", "测试", "go test") {
+		return []Step{{
+			Tool: "test", Caps: []string{"run"}, Params: map[string]string{"command": "go test ./..."},
+			Action: "运行测试并查看结果（只读）", Output: "测试输出",
+			Why: "自服务：读取项目当前测试状态",
+		}}
 	}
-	return Plan{Goal: goal, Steps: steps}, nil
+	return []Step{{
+		Tool: "search", Caps: []string{"text"}, Params: map[string]string{"pattern": ".", "path": "."},
+		Action: "查看相关文件内容（只读）", Output: "匹配结果",
+		Why: "自服务：读取项目信息",
+	}}
+}
+
+// gapRequirements 返回目标涉及的、清单里不具备的能力（带 owner 前缀）。
+func gapRequirements(goal string, m Manifest) []string {
+	have := map[string]bool{}
+	for _, c := range m.Tools {
+		have[c.Name] = true
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range requirementRules {
+		if !containsAny(goal, r.words...) || have[r.tool] || seen[r.reason] {
+			continue
+		}
+		seen[r.reason] = true
+		out = append(out, r.reason)
+	}
+	return out
 }
 
 // unmetRequirement 报告目标是否要求清单里不具备的能力。

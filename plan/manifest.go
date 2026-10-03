@@ -55,6 +55,7 @@ type DomainCapability struct {
 	RiskDefault string   `json:"risk_default"`
 	Read        bool     `json:"read"`
 	Write       bool     `json:"write"`
+	Exec        []string `json:"exec"`
 	Aliases     []string `json:"aliases"`
 	Source      string   `json:"source"`
 }
@@ -108,7 +109,8 @@ func ExportManifest(reg *tools.Registry, sp *space.Registry) Manifest {
 			}
 			d := DomainCapability{
 				Name: name, Type: man.Type, RiskDefault: man.RiskDefault,
-				Read: man.Perms.Read, Write: man.Perms.Write, Source: "space/space.go",
+				Read: man.Perms.Read, Write: man.Perms.Write,
+				Exec: append([]string(nil), man.Perms.Exec...), Source: "space/space.go",
 			}
 			for _, t := range man.Tools {
 				if realTools[t] {
