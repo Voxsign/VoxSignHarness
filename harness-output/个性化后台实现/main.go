@@ -20,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, definition string) {
+func (d *Dictionary) Add(word, correction string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = definition
+	d.entries[word] = correction
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,22 +35,20 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	definition, exists := d.entries[word]
-	return definition, exists
+	correction, exists := d.entries[word]
+	return correction, exists
 }
 
-func (d *Dictionary) Correct(word string) string {
+func (d *Dictionary) Correct(text string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if _, exists := d.entries[word]; exists {
-		return word
-	}
-	for entry := range d.entries {
-		if strings.HasPrefix(entry, word) || strings.HasSuffix(entry, word) {
-			return entry
+	words := strings.Fields(text)
+	for i, word := range words {
+		if correction, exists := d.entries[word]; exists {
+			words[i] = correction
 		}
 	}
-	return word
+	return strings.Join(words, " ")
 }
 
 type Intent string
@@ -63,18 +61,16 @@ const (
 	ORCHESTRATE Intent = "ORCHESTRATE"
 )
 
-func classifyIntent(text string) Intent {
-	text = strings.ToLower(text)
-	switch {
-	case strings.Contains(text, "note"):
+func ClassifyIntent(text string) Intent {
+	if strings.Contains(text, "note") {
 		return NOTE
-	case strings.Contains(text, "query"):
+	} else if strings.Contains(text, "query") {
 		return QUERY
-	case strings.Contains(text, "edit"):
+	} else if strings.Contains(text, "edit") {
 		return EDIT
-	case strings.Contains(text, "commit"):
+	} else if strings.Contains(text, "commit") {
 		return COMMIT
-	default:
+	} else {
 		return ORCHESTRATE
 	}
 }
@@ -84,7 +80,7 @@ type Feedback struct {
 	Correct bool   `json:"correct"`
 }
 
-func appendToFile(filename string, data interface{}) error {
+func AppendToFile(filename string, data interface{}) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -99,58 +95,61 @@ func appendToFile(filename string, data interface{}) error {
 	return writer.Flush()
 }
 
-type Server struct {
-	dictionary *Dictionary
-	dataDir    string
+type Request struct {
+	Text string `json:"text"`
 }
 
-func NewServer(dataDir string) *Server {
-	return &Server{
-		dictionary: NewDictionary(),
-		dataDir:    dataDir,
-	}
+type Response struct {
+	CorrectedText string `json:"corrected_text"`
+	Intent        Intent `json:"intent"`
 }
 
-func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+var (
+	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir = flag.String("data-dir", "./data", "Data directory")
+	dict    = NewDictionary()
+)
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
-func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
+func processHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var request struct {
-		Text string `json:"text"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	var req Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	correctedText := s.dictionary.Correct(request.Text)
-	intent := classifyIntent(request.Text)
+	correctedText := dict.Correct(req.Text)
+	intent := ClassifyIntent(req.Text)
 
-	response := struct {
-		CorrectedText string `json:"corrected_text"`
-		Intent        Intent `json:"intent"`
-	}{
+	resp := Response{
 		CorrectedText: correctedText,
 		Intent:        intent,
 	}
 
-	if err := appendToFile(s.dataDir+"/traces.jsonl", request); err != nil {
+	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(resp)
 }
 
-func (s *Server) feedbackHandler(w http.ResponseWriter, r *http.Request) {
+func feedbackHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -162,7 +161,7 @@ func (s *Server) feedbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := appendToFile(s.dataDir+"/feedback.jsonl", feedback); err != nil {
+	if err := AppendToFile(fmt.Sprintf("%s/feedback.jsonl", *dataDir), feedback); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -171,24 +170,20 @@ func (s *Server) feedbackHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
+	http.HandleFunc("/v1/health", healthHandler)
+	http.HandleFunc("/v1/process", processHandler)
+	http.HandleFunc("/v1/feedback", feedbackHandler)
+
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	server := NewServer(*dataDir)
-
-	http.HandleFunc("/v1/health", server.healthHandler)
-	http.HandleFunc("/v1/process", server.processHandler)
-	http.HandleFunc("/v1/feedback", server.feedbackHandler)
-
-	fmt.Printf("Starting server on %s\n", *addr)
+	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
 		os.Exit(1)
 	}
 }
