@@ -74,7 +74,15 @@ SRV=$!
 # 等服务就绪（真跑不许"睡死了就当起来了"）
 i=0
 while [ $i -lt 40 ]; do
-  if curl -sf -m 2 "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1; then break; fi
+  # ⚠️ 线 A 的端口**来自配置**（`--addr` 被忽略）⇒ 必须**从日志读**，不能假定 $PORT
+  RP=$(grep -oE 'listening on [0-9.]+:[0-9]+' "$LOG" 2>/dev/null | tail -1 | grep -oE '[0-9]+$')
+  if [ -n "$RP" ]; then
+    if [ "$RP" != "$PORT" ]; then
+      echo "[calib-R] ⚠️ 配置端口 ${PORT}，实际监听 **${RP}**（--addr 被忽略）⇒ 用实际端口"
+      PORT="$RP"
+    fi
+    break
+  fi
   i=$((i+1)); sleep 0.25
 done
 if [ $i -ge 40 ]; then
