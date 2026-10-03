@@ -1387,6 +1387,11 @@ func shouldResolveRefer(it *contract.Intent) bool {
 	case contract.IntentUnknown:
 		// 陈述引用/元指令（"我那个前端的问题又不过来"）→ 不因指代 Ask，走分类器回问
 		return false
+	case contract.IntentOrchestrate:
+		// 长程任务（ORCHESTRATE，2026-10-03 修订卡2 层2 接通）→ 不因指代 Ask 阻塞：
+		// "按照这份需求说明书实现…"中的"这份"是文档引用词（长程上下文/文档输入承载），
+		// 不是待消解的歧义指代。此前 default=true 让 refer 对它写 Ask → need_ask（0 产出）。
+		return false
 	default:
 		return true
 	}
