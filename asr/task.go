@@ -96,6 +96,17 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		p.WM.Used += added
+
+		// #2-c ① **文档影响步骤**：条目数 ⇒ 批处理粒度（规则式能做的那一档）。
+		// ② 反例防线：批数**只由条目数**决定 ⇒ 内容等价但措辞不同的文档得到相同 steps。
+		batches := (doc.Items + batchSizeItems - 1) / batchSizeItems
+		if batches > 1 {
+			p.Steps = expandBatchedSteps(p.Steps, batches)
+			p.Considered = append(p.Considered, plan.ConsideredItem{
+				Element: "document_batches: " + strconv.Itoa(batches) + "（每批 " +
+					strconv.Itoa(batchSizeItems) + " 条）", Source: "<document>", Inferred: true,
+			})
+		}
 	}
 	steps := make([]taskPlanStep, 0, len(p.Steps))
 	for i, st := range p.Steps {
@@ -124,6 +135,49 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func itoaLen(s string) int { return len([]rune(s)) }
+
+// batchSizeItems 是每个"批处理"步骤覆盖的文档条目数。
+// ⚠️ **UNVALIDATED**（我取的 10，未标定）。
+const batchSizeItems = 10
+
+// expandBatchedSteps 把计划里**最后一个写文件步骤**按批数展开（其余步骤不变）。
+// 规则式规划器能表达的粒度就到这里：**批数由文档条目数决定**。
+func expandBatchedSteps(steps []plan.Step, batches int) []plan.Step {
+	idx := -1
+	for i := len(steps) - 1; i >= 0; i-- {
+		if steps[i].Tool == "file" && containsCap(steps[i].Caps, "write") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || batches < 2 {
+		return steps
+	}
+	orig := steps[idx]
+	out := append([]plan.Step(nil), steps[:idx]...)
+	prev := idx - 1
+	for b := 1; b <= batches; b++ {
+		step := orig
+		if b > 1 {
+			step.DependsOn = []int{prev}
+		}
+		step.Output = orig.Output + "（第 " + strconv.Itoa(b) + "/" + strconv.Itoa(batches) + " 批）"
+		step.Action = orig.Action + "（第 " + strconv.Itoa(b) + "/" + strconv.Itoa(batches) + " 批）"
+		out = append(out, step)
+		prev = len(out) - 1
+	}
+	out = append(out, steps[idx+1:]...)
+	return out
+}
+
+func containsCap(caps []string, want string) bool {
+	for _, c := range caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
 
 // maxDocRunes 是文档参与规划的上限（**UNVALIDATED**；超限截断摘要并标降级）。
 const maxDocRunes = 200000

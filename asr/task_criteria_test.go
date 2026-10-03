@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -152,5 +153,40 @@ func TestTaskTooLargeDocumentDegrades(t *testing.T) {
 	}
 	if got["document_read"] != true {
 		t.Errorf("[文档] 超大文档仍应（截断后）参与规划")
+	}
+}
+
+// #2-c：**文档必须影响 steps**。
+func TestTaskDocumentAffectsSteps(t *testing.T) {
+	base, _ := newUIServer(t)
+	// ① 空文档 vs 34 条目文档 ⇒ steps 必须不同
+	empty := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":""}`)
+	var b strings.Builder
+	for i := 0; i < 34; i++ {
+		b.WriteString("- TODO: 条目 " + strconv.Itoa(i) + "\n")
+	}
+	big := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":"`+strings.ReplaceAll(b.String(), "\n", "\\n")+`"}`)
+	es, _ := empty["plan"].(map[string]any)["steps"].([]any)
+	bs, _ := big["plan"].(map[string]any)["steps"].([]any)
+	if len(es) == len(bs) {
+		t.Fatalf("[#2-c] 34 条目文档未改变步骤数量: 空=%d 有=%d", len(es), len(bs))
+	}
+
+	// ② **防乱变**：内容等价、措辞不同的两个文档 ⇒ 步骤数量必须相同
+	var c strings.Builder
+	for i := 0; i < 34; i++ {
+		c.WriteString("任务事项：" + strconv.Itoa(i) + "\n")
+	}
+	other := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":"`+strings.ReplaceAll(c.String(), "\n", "\\n")+`"}`)
+	os, _ := other["plan"].(map[string]any)["steps"].([]any)
+	if len(os) != len(bs) {
+		t.Errorf("[#2-c 防乱变] 等价内容的两个文档得到不同步数: %d vs %d", len(bs), len(os))
+	}
+
+	// ③ 未读文档（空）⇒ 与"完全不带 document 字段"一致
+	none := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+	ns, _ := none["plan"].(map[string]any)["steps"].([]any)
+	if len(ns) != len(es) {
+		t.Errorf("[#2-c] 未读文档时步骤应与无文档一致: %d vs %d", len(es), len(ns))
 	}
 }
