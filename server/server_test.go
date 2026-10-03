@@ -883,3 +883,64 @@ func TestCORSNoOriginUnaffected(t *testing.T) {
 		t.Fatal("无 Origin 请求不应加 ACAO 头")
 	}
 }
+
+// TestSSEHeadersArriveBeforeFirstEvent（2026-10-03）：
+// **运行中**任务的 SSE 流应在收到**首个事件之前**就返回响应头。
+//
+// ⚠️ 为什么需要它：
+//
+//	`handleEvents`（`server.go:857+`）只在**终态路径**与**收到事件时** `flusher.Flush()` ——
+//	**"等待首个事件"期间不 flush 响应头** ⇒ 客户端的 `http.Do` **阻塞到首个事件**。
+//	⇒ 后果：调用方**无法观测「流已建立」** ⇒ `TestSSEInterruptImmediacy` 只能用
+//	  `go { time.Sleep(100ms); cancel }` **并发**发 cancel，否则 `getSSE` 永不返回
+//	  ⇒ 那是**时序耦合**（慢机器上 100ms 可能不够 ⇒ 会把 cancel 发在"流建立"之前 ⇒ 事件错过）。
+//	⇒ 本判据若**先红**，则证明上述机制成立；修 `handleEvents`（订阅后立刻 flush 头）后应**转绿**，
+//	  届时 `:808`/`:736` 的时序耦合可从根上移除。
+func TestSSEHeadersArriveBeforeFirstEvent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	// 造一个**运行中、无事件**的任务（与 `TestSSEInterruptImmediacy` 同形）
+	srv.mu.Lock()
+	fake := &taskState{ID: "task-sse-hdr", Status: stRunning, confirmCh: make(chan bool, 1)}
+	fake.cancel = func() {}
+	srv.tasks[fake.ID] = fake
+	srv.mu.Unlock()
+
+	type res struct {
+		got  bool
+		took time.Duration
+	}
+	done := make(chan res, 1)
+	go func() {
+		start := time.Now()
+		req, _ := http.NewRequest("GET", ts.URL+"/v1/tasks/task-sse-hdr/events", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- res{false, time.Since(start)}
+			return
+		}
+		_ = r.Body.Close()
+		done <- res{true, time.Since(start)}
+	}()
+
+	const budget = 1 * time.Second
+	select {
+	case got := <-done:
+		if !got.got {
+			t.Fatalf("[SSE-HDR] 请求出错（%v）", got.took)
+		}
+		t.Logf("[SSE-HDR] 响应头在 %v 内返回 ✅（预算 %v）", got.took, budget)
+	case <-time.After(budget):
+		t.Fatalf("[SSE-HDR] **运行中任务的 SSE 在 %v 内未返回响应头** ⇒ "+
+			"`Do` 阻塞到首个事件 ⇒ 调用方无法观测「流已建立」 ⇒ "+
+			"测试只能用 `go{sleep;cancel}` 并发发 cancel（**时序耦合**）。\n"+
+			"⇒ 修法：`handleEvents` 在**订阅建立后立刻 flush 一次响应头**（SSE 惯例）。", budget)
+	}
+}

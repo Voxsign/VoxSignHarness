@@ -890,6 +890,20 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, ts *taskSt
 	ts.listeners = append(ts.listeners, ch)
 	s.mu.Unlock()
 
+	// ⚠️ 2026-10-03（判据 `TestSSEHeadersArriveBeforeFirstEvent` **先红**后修）：
+	//   **订阅建立后立刻 flush 一次响应头**。
+	//
+	// 为什么：原先只在**终态路径**与**收到事件时**才 `flusher.Flush()` ——
+	//   ⇒ **"等待首个事件"期间响应头不送出** ⇒ 客户端的 `http.Do` **阻塞到首个事件**
+	//   ⇒ 后果（实测，判据先红成立）：
+	//      · 调用方**无法观测「SSE 流已建立」**（这不是测试写法问题，**任何 SSE 客户端都会中招**）
+	//      · `TestSSEInterruptImmediacy` 只能用 `go { time.Sleep(100ms); cancel }` **并发**发 cancel，
+	//        否则 `getSSE` 永不返回 ⇒ **时序耦合**（慢机器上 100ms 可能不够 ⇒ 事件错过）
+	//   ⇒ 按 SSE 惯例，流应在建立后**立即**把头送出（客户端据此确认"流已开"）。
+	//
+	// ⚠️ 首次 Flush 会**隐式写 200 响应头** ⇒ 此后 `w.Header()` 的改动不再生效（本函数后续不再改头）。
+	flusher.Flush()
+
 	defer func() {
 		s.mu.Lock()
 		for i, l := range ts.listeners {
