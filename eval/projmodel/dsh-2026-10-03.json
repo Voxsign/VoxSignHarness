@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.0",
+  "subject": {
+    "repo": "smithpeter/voicesign-harness",
+    "commit": "3e1dd9fd18b3bdac1ad13f8f71de22f9dcef92a9",
+    "produced_by": "dsh",
+    "produced_at": "2026-10-03T00:25:00Z",
+    "independence": "no_prior_access",
+    "note": "本份由 DSH 独立产出；harness 侧产出时不得参照本份（F3）。"
+  },
+
+  "capabilities": [
+    { "id": "file", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": ["append:low", "write:high"], "needs_confirm": true,
+      "note": "6 个内置契约之一；由实现方探针实测（cmd/capprobe）" },
+    { "id": "git", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": ["commit:irreversible", "checkout:medium"], "needs_confirm": true,
+      "note": "**无 push**（1.0 边界①，刻意）" },
+    { "id": "run", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": ["exec:high"], "needs_confirm": true },
+    { "id": "search", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": [], "needs_confirm": false },
+    { "id": "test", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": ["run:low"], "needs_confirm": false },
+    { "id": "verify", "kind": "tool", "source": "tools/registry.go", "status": "verified",
+      "limits": [], "needs_confirm": false,
+      "note": "独立校验器：读文件系统实际状态，不读执行器自报（架构桩 A2 实测通过）" },
+    { "id": "ORCHESTRATE", "kind": "intent", "source": "contract/contract.go", "status": "verified",
+      "limits": [], "needs_confirm": false,
+      "note": "**是写死的 5 步流水线，不是规划**——固定编排≠规划，不要混" }
+  ],
+
+  "dormant": [
+    { "id": "FILE_WRITE", "source": "contract/contract.go", "status": "verified",
+      "why": "有常量声明，无生产代码引用（live 17 / declared 18）；不得当作可执行能力，否则规划会规划出管线产不出的意图" }
+  ],
+
+  "unresolved": [
+    { "id": "deploy", "seen_in": "space.Manifest.Tools / pipeline.go:503", "status": "unknown",
+      "why": "域词表别名，工具注册表中不存在" },
+    { "id": "http", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "read", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "query", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "ask", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "note", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "file-append", "seen_in": "space.Manifest.Tools", "status": "unknown", "why": "同上" },
+    { "id": "(另 4 处别名)", "seen_in": "space.Manifest.Tools", "status": "unknown",
+      "why": "共 11 处；由实现方探针枚举，我未逐个核对" }
+  ],
+
+  "domains": [
+    { "name": "global", "source": "space/", "status": "verified", "perms": {"read": true, "write": false, "exec": false} },
+    { "name": "project", "source": "space/", "status": "verified", "perms": {"read": true, "write": true, "exec": true} },
+    { "name": "sandbox", "source": "space/", "status": "verified", "perms": {"read": true, "write": true, "exec": true} },
+    { "name": "vault-notes", "source": "space/", "status": "verified", "perms": {"read": true, "write": true, "exec": false} },
+    { "name": "vault-creds", "source": "space/", "status": "inferred", "perms": {"read": true, "write": false, "exec": false} },
+    { "name": "external", "source": "space/", "status": "inferred", "perms": {"read": false, "write": false, "exec": false} }
+  ],
+
+  "boundaries": [
+    { "id": "no-push", "claim": "git 工具无 push 能力", "source": "tools/registry.go", "status": "verified" },
+    { "id": "no-deploy", "claim": "无部署工具；「部署到服务器」不可达", "source": "tools/registry.go", "status": "verified",
+      "note": "与判据 VHS-PLAN-001 §7 的期望独立吻合" },
+    { "id": "default-deny", "claim": "域=权限交集，默认拒绝", "source": "space/ + pipeline", "status": "verified",
+      "note": "架构桩 A3 实测通过" },
+    { "id": "irreversible-needs-human", "claim": "不可逆操作必须人工确认", "source": "risk/", "status": "verified" },
+    { "id": "no-exec-in-asr", "claim": "ASR 后台永不执行任务（只出意图 JSON）", "source": "需求 v2 红线#1 + ASR-EXEC-01..06", "status": "verified",
+      "note": "结构上：不 import os/exec，无回调端点" },
+    { "id": "no-planning", "claim": "**本 harness 目前没有规划能力**", "source": "plan/ 全为桩（15 条判据全红）", "status": "verified",
+      "note": "这是本项目当前最大的能力缺口" }
+  ],
+
+  "dependencies": [
+    { "on": "aiops.peterzou.com", "kind": "gateway", "for": "模型 / 工具 / 内容（单入口单 key）",
+      "status": "inferred", "note": "DNS 可解析但指向**私有 IP**；DSH 沙箱不可达，**未实测**" },
+    { "on": "model.peterzou.com", "kind": "gateway-face", "for": "模型调用",
+      "status": "verified", "note": "实测：根端点 200；/v1/models 401 且**错误结构化**（code/type/param）" },
+    { "on": "peterzou.com", "kind": "content-api", "for": "研究内容 / llms.txt",
+      "status": "verified", "note": "实测 /api/public/catalog 与 /llms.txt 均 200" },
+    { "on": "peter (人)", "kind": "human", "for": "授权 / 产品取舍 / 仓库归属 / key",
+      "status": "verified" },
+    { "on": "DeepSeek V4.1 flash", "kind": "model", "for": "default 通道（候选）",
+      "status": "unknown", "note": "**精确模型标识未核实**；diagnose/learn 的模型完全未知" }
+  ],
+
+  "state": {
+    "tests": { "default": "23 pkg PASS", "asrharness": "0 FAIL", "vhsplan": "15 red", "vhs002": "7 red", "evaldrift": "8 条漂移待人工重签" },
+    "branches": ["main", "integration/merge-20261003"],
+    "task_docs": 17,
+    "asr_go_files": 23,
+    "plan_go_files": 6,
+    "source": "远端全新克隆实跑 + git ls-tree",
+    "status": "verified"
+  },
+
+  "open_questions": [
+    { "q": "代码真值与意图真值不一致时以谁为准？",
+      "why_it_matters": "这是 C 类分歧的主要来源；代码可能错、可能过时",
+      "status": "unknown" },
+    { "q": "项目模型如何过期？代码变了，模型何时失效、谁来更新？",
+      "why_it_matters": "没有时间维度的模型会静默腐化",
+      "status": "unknown" },
+    { "q": "aiops.peterzou.com 的实际接口是什么？",
+      "why_it_matters": "单网关是架构核心，但我一次都没测到",
+      "status": "unknown" },
+    { "q": "三条模型通道（default/diagnose/learn）各自用哪个底层模型？",
+      "why_it_matters": "缺失则 ASR-MODEL-01 的归因失效",
+      "status": "unknown" },
+    { "q": "「learn 通道真的学到了」如何验证？",
+      "why_it_matters": "现有 LEARN-01 只证明判据可跑通，**语料全是 constructed**",
+      "status": "unknown" },
+    { "q": "标点恢复与 obs-08 fidelity 的矛盾，最终口径是什么？",
+      "why_it_matters": "DSH 已出 C1 v2 升版，但**需 Peter 确认**",
+      "status": "unknown" },
+    { "q": "ASR 后台迁独立仓库的 owner/名称/时机？",
+      "why_it_matters": "需求 §1.2 要求独立仓库，但未指定",
+      "status": "unknown" },
+    { "q": "11 处域别名（deploy/http/…）到底是历史遗留还是别有所指？",
+      "why_it_matters": "决定它们是该清理还是该升格为一等能力",
+      "status": "unknown" },
+    { "q": "「编排」与「规划」的边界在哪里？",
+      "why_it_matters": "ORCHESTRATE 是写死流水线；若把它当规划会造成虚假能力感",
+      "status": "inferred" },
+    { "q": "DSH 自己也是被校验方——我的模型同样可能错，如何防止我把自己的错误当成真值？",
+      "why_it_matters": "本会话我已错 6 次（判据混类）",
+      "status": "unknown" }
+  ]
+}
