@@ -1,69 +1,58 @@
-个性化后台 运行说明（README）
+个性化后台 运行说明
 
-一、环境与构建
-要求：Go 1.21+
-构建：
-  go build -o p13n ./cmd/p13n
-  （若为单文件入口，则 go build -o p13n .）
-运行：
-  go run . -addr 127.0.0.1:8787 -data-dir ./data -token dev-token
+环境
+Go 1.21+。默认数据目录 ./data，可用 -data-dir 或环境变量 DATA_DIR 覆盖，进程启动时自动创建。
 
-启动参数
-  -addr       监听地址，默认 127.0.0.1:8787；非回环地址（如 0.0.0.0、局域网 IP）启动即拒绝并退出非零
-  -data-dir   数据目录，默认 ./data，首次启动自动创建
-  -token      鉴权占位令牌，默认 dev-token；请求头 X-Auth-Token 必须匹配，否则 401
-  说明：鉴权为占位实现（静态令牌），仅用于占位与联调，不构成生产级认证。
+编译与启动
+go build -o pbackend .
+./pbackend -addr 127.0.0.1:8080 -data-dir ./data -token <可选占位令牌>
 
-二、HTTP 端点（均为 JSON 请求/响应）
+仅允许监听回环地址；传入非 127.0.0.1 的 -addr 将直接拒绝启动。鉴权为占位实现：配置 -token 后，请求需带 Authorization: Bearer <token>，未配置则不校验。
 
-1) 健康检查
-  GET /v1/health
-  200 {"status":"ok","version":"...","data_dir":"./data","uptime_s":12}
+端点
+GET  /v1/health              返回 {"status":"ok","version":"...","data_dir":"..."}
+POST /v1/process             JSON 请求/响应，统一业务入口
 
-2) 主处理端点
-  POST /v1/process
-  请求 {"text":"明天三点开会 记一下","user_id":"u1","session_id":"s1"}
-  响应 {"intent":"NOTE","corrected":"明天三点开会 记一下","changed":false,
-        "matches":[{"term":"开会","kind":"dict"}],"trace_id":"...","usage":{"tokens_in":9,"tokens_out":9}}
-  处理链路：清洗 -> 词典纠错（命中即替换，未命中保守保留原文）-> 意图分类（NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE）
-  安全约束：正常文本不被改坏；纠错仅在词典命中且满足匹配规则时生效，否则原样返回且 changed=false。
+/v1/process 请求示例
+{"text":"帮我记一下明天十点开会","op":"process","feedback":null}
 
-3) 个性化词典
-  POST   /v1/dict      增：{"term":"开会","alias":["开个会"],"note":"..."} -> 201
-  GET    /v1/dict      查：可选 ?q=开会；不传则列表
-  DELETE /v1/dict      删：{"term":"开会"} -> 200 {"deleted":1}
+字段说明
+text      待处理文本（必填）
+op        可选：process（默认，清洗+纠错+意图分类）/dict_add /dict_del /dict_get /feedback
+word      词典操作时的词条
+intent    显式指定意图，缺省由分类器推断
+feedback  "ok" 或 "bad"，写入反馈学习日志
 
-4) 反馈学习
-  POST /v1/feedback
-  请求 {"trace_id":"...","label":"ok"}   // label: ok = ✔ / bad = ✘
-  200 {"recorded":true}
+响应示例
+{"intent":"NOTE","corrected":"帮我记一下明天十点开会","changed":false,"matches":[{"word":"明天十点","correct":true}],"trace_id":"..."}
 
-三、数据文件（独立数据目录，全部 append-only JSONL，仅追加、不重写）
-  <data-dir>/traces.jsonl    每次 /v1/process 一条：trace_id、时间、intent、原文、纠错后文本、changed、匹配项
-  <data-dir>/usage.jsonl     每次请求一条：端点、耗时、tokens、状态码
-  <data-dir>/feedback.jsonl  每条反馈一条：trace_id、label(ok/bad)、时间
-  <data-dir>/dictionary.json 词典持久化快照（增删后原子重写，非 JSONL）
+意图分类
+NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE 五类，按关键词与句式规则打分，取最高分；无法判定时回落 NOTE 并在响应中标记 low_confidence。
 
-追加语义：以 O_APPEND 打开并写入完整单行 JSON，进程崩溃不产生半行破坏；文件按需创建，权限 0600。
-查看示例：
-  tail -n 5 ./data/feedback.jsonl
-  grep '"intent":"COMMIT"' ./data/traces.jsonl
+纠错策略
+先做清洗（去零宽字符、合并空白、全半角归一），再按个性化词典做替换与模糊纠正。命中词典的原词不重复改写，未命中且置信度低于阈值的片段保持原样，保证正常文本不被改坏。
 
-四、快速自检
-  curl -s http://127.0.0.1:8787/v1/health -H 'X-Auth-Token: dev-token'
-  curl -s -X POST http://127.0.0.1:8787/v1/dict -H 'X-Auth-Token: dev-token' \
-       -d '{"term":"开会","alias":["开个会"]}'
-  curl -s -X POST http://127.0.0.1:8787/v1/process -H 'X-Auth-Token: dev-token' \
-       -d '{"text":"开个会吧","user_id":"u1"}'
-  curl -s -X POST http://127.0.0.1:8787/v1/feedback -H 'X-Auth-Token: dev-token' \
-       -d '{"trace_id":"<上一步返回>","label":"ok"}'
+数据文件（均在 -data-dir 下，全部 append-only JSONL，逐行 JSON，不重写历史）
+dictionary.jsonl   词典增删记录，启动时重放得到当前词典
+feedback.jsonl     反馈学习记录，✔/✘ 均落盘
+traces.jsonl       每次 /v1/process 的请求、纠错结果、意图与耗时
+usage.jsonl        端点调用计数与状态码
 
-五、验收对应
-  词典增/删/查：/v1/dict 三个方法 + dictionary.json
-  纠错：process 链路中的 clean + dict correct，保守不破坏正常文本
-  意图分类：五类 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE
-  反馈落盘：feedback.jsonl append-only
-  数据落盘：traces.jsonl、usage.jsonl，data-dir 可配
-  HTTP：/v1/health、/v1/process
-  监听安全：仅 127.0.0.1 回环，非回环拒绝；X-Auth-Token 占位鉴权
-  编译：go build 通过
+词典增删查示例
+curl -s -X POST 127.0.0.1:8080/v1/process -H 'Content-Type: application/json' \
+  -d '{"op":"dict_add","word":"十点","intent":"NOTE"}'
+curl -s -X POST 127.0.0.1:8080/v1/process -H 'Content-Type: application/json' \
+  -d '{"op":"dict_get","word":"十点"}'
+curl -s -X POST 127.0.0.1:8080/v1/process -H 'Content-Type: application/json' \
+  -d '{"op":"dict_del","word":"十点"}'
+
+反馈示例
+curl -s -X POST 127.0.0.1:8080/v1/process -H 'Content-Type: application/json' \
+  -d '{"op":"feedback","trace_id":"<上一步返回的 trace_id>","feedback":"ok"}'
+
+健康检查
+curl -s 127.0.0.1:8080/v1/health
+
+退出后直接查看落盘结果
+tail -n 5 ./data/traces.jsonl
+tail -n 5 ./data/feedback.jsonl
