@@ -34,7 +34,7 @@ echo "[accept] ① 一条命令起服务（A1）：build 真二进制 + 起服�
 # 若调用方显式设置了 VHS_MODEL_CENTER，则尊重之（escape hatch）。
 if [ -z "${VHS_MODEL_CENTER:-}" ]; then
   VHS_MODEL_CENTER="$DATA/model-center.unavailable.json"
-  echo "[accept] 规划判据按规则式语义验证（A5-A7 语义 = 规则式分批，头部 L2 在途状态见验收报告 §5）"
+  echo "[accept] 规划判据按规则式语义验证（A5-A7 语义 = 规则式分批，头部 L2 在途状态见验收报告 §6）"
   echo "[accept] VHS_MODEL_CENTER=$VHS_MODEL_CENTER"
   echo "[accept] （指向不存在的文件 ⇒ 服务端如实日志 L2 未装配 + 响应 l2_enabled=false）"
 else
