@@ -40,3 +40,23 @@ func (c *Cache) Taught() []Alias {
 	}
 	return out
 }
+
+// ClearTaught 只清**用户临时教的词**（Source=user_taught），
+// **不得误清服务别名**（那是从 /api/services 拉来的远端真值）。
+// 返回清除条数。
+func (c *Cache) ClearTaught() int {
+	s := c.state()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var kept []Alias
+	removed := 0
+	for _, a := range s.aliases {
+		if a.Source == SourceUserTaught {
+			removed++
+			continue
+		}
+		kept = append(kept, a)
+	}
+	s.aliases = kept
+	return removed
+}

@@ -58,3 +58,36 @@ func postJSONStatus(t *testing.T, url, body string) int {
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }
+
+// G2 · HTTP 清空：教 → 变；清 → 回退；**服务别名仍在**（证明清得准，不是一把全清）。
+func TestG2ClearTaughtRevertsButKeepsServiceAliases(t *testing.T) {
+	base := serviceBase(t)
+	const term, canon = "沃克bodyx", "workbuddyx"
+
+	if err := func() error {
+		obs := postJSON(t, base+"/v1/observe", `{"term":"`+term+`","canonical":"`+canon+`"}`)
+		if obs["ok"] != true {
+			t.Fatalf("[G2-清空] 教词失败: %v", obs)
+		}
+		return nil
+	}(); err != nil {
+		t.Fatal(err)
+	}
+	if got := postJSON(t, base+"/v1/correct", `{"text":"`+term+`在哪"}`); got["text"] != canon+"在哪" {
+		t.Fatalf("[G2-清空] 教过后输出未变: %v", got["text"])
+	}
+
+	cl := postJSON(t, base+"/v1/lexicon", `{"op":"clear_taught"}`)
+	if cl["ok"] != true || cl["scope"] != "user_taught" {
+		t.Fatalf("[G2-清空] 清空响应异常: %v", cl)
+	}
+
+	// 回退
+	if got := postJSON(t, base+"/v1/correct", `{"text":"`+term+`在哪"}`); got["text"] != term+"在哪" {
+		t.Errorf("[G2-清空] 清空后未回退: %v", got["text"])
+	}
+	// **服务别名仍在**（预置 remote 别名 爱ops → aiops-portal）
+	if got := postJSON(t, base+"/v1/correct", `{"text":"把爱ops接上"}`); got["text"] != "把aiops-portal接上" {
+		t.Errorf("[G2-清空] 清空**误清了服务别名**（清得过头）: %v", got["text"])
+	}
+}

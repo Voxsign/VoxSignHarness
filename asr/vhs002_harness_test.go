@@ -24,15 +24,33 @@ import (
 
 // teachStore 是夹具内的"教的词"存储 + 改写器（来源语义 user_taught）。
 type teachStore struct {
-	mu sync.Mutex
-	m  map[string]string
+	mu     sync.Mutex
+	m      map[string]string
+	taught map[string]bool // 哪些是"用户教的"（清空只清这些）
 }
 
 func (t *teachStore) Teach(term, canonical string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.m[term] = canonical
+	if t.taught == nil {
+		t.taught = map[string]bool{}
+	}
+	t.taught[term] = true
 	return nil
+}
+
+// ClearTaught 只清用户教的词，服务别名（remote）保留。
+func (t *teachStore) ClearTaught() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for term := range t.taught {
+		delete(t.m, term)
+		delete(t.taught, term)
+		n++
+	}
+	return n
 }
 
 func (t *teachStore) Rewrite(text string) (string, []Correction) {
@@ -85,8 +103,10 @@ func TestMain(m *testing.M) {
 		pipe := NewPipeline(NewEngine(), dict, tracer)
 		srvObj := NewServer(pipe)
 		// G2 教词后端已接线（ASR-EXEC-05 v2 起 hotcache 属"零副作用纠错步骤"，天然合法）。
-		store := &teachStore{m: map[string]string{}}
+		// 预置一条**服务别名**（来源 remote）——用于验证"清空"不得误清它。
+		store := &teachStore{m: map[string]string{"爱ops": "aiops-portal"}, taught: map[string]bool{}}
 		srvObj.Teach = store.Teach
+		srvObj.ClearTaught = store.ClearTaught
 		pipe.Hot = store
 		// 有 key 就接**真实** default 通道做兜底；没有则纯本地（缺 key 不内置、不失败）。
 		if os.Getenv("AIOPS_KEY") != "" {

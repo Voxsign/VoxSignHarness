@@ -30,6 +30,8 @@ type Server struct {
 	// 路径用规范里已有的 `/v1/observe`（VHS-ASR-001 P3 端点清单），**不新造路径**。
 	// 为空 ⇒ 该端点返回 503（不假装支持）。
 	Teach func(term, canonical string) error
+	// ClearTaught 清空"用户教的词"（**不得误清服务别名**）。
+	ClearTaught func() int
 }
 
 // NewServer 构造服务。
@@ -44,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/process", s.handleProcess)
 	mux.HandleFunc("/v1/feedback", s.handleFeedback)
 	mux.HandleFunc("/v1/observe", s.handleObserve)
+	mux.HandleFunc("/v1/lexicon", s.handleLexicon)
 	return mux
 }
 
@@ -281,6 +284,33 @@ func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "source": "user_taught"})
+}
+
+// handleLexicon 是词表管理入口（路径取自规范 VHS-ASR-001 P3 的端点清单）。
+// 当前支持 {"op":"clear_taught"}：**只清用户教的词**，不碰服务别名。
+func (s *Server) handleLexicon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
+		return
+	}
+	var req struct {
+		Op string `json:"op"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		return
+	}
+	switch req.Op {
+	case "clear_taught":
+		if s.ClearTaught == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "lexicon disabled"})
+			return
+		}
+		n := s.ClearTaught()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": n, "scope": "user_taught"})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown op: " + req.Op})
+	}
 }
 
 // handleFeedback 回传一次反馈：登记为**候选词典条目**（source/created_at 可审计）。
