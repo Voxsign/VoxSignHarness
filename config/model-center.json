@@ -19,7 +19,7 @@
       "enabled": true,
       "provider": "aiops",
       "tier": "quality",
-      "timeout_ms": 30000,
+      "timeout_ms": 180000,
       "max_concurrency": 2,
       "write_back": false
     },
@@ -35,7 +35,7 @@
       "enabled": true,
       "provider": "aiops",
       "tier": "quality",
-      "timeout_ms": 60000,
+      "timeout_ms": 180000,
       "max_concurrency": 2,
       "write_back": false
     },
@@ -43,7 +43,7 @@
       "enabled": true,
       "provider": "aiops",
       "tier": "quality",
-      "timeout_ms": 60000,
+      "timeout_ms": 180000,
       "max_concurrency": 2,
       "write_back": false
     }
@@ -51,5 +51,6 @@
   "tiers": {
     "fast": "deepseek-flash",
     "quality": "deepseek-v4-pro"
-  }
+  },
+  "_timeout_note": "UNVALIDATED：plan/research/diagnose 原为 60s/60s/30s，而实测强模型一次规划 ≈59.6s ⇒ 余量仅 0.4s ⇒ 时好时坏（Lead 实测定位）。现统一 180s，且必须 > L2PlanTimeout(120s)，否则客户端先于规划器掐断。"
 }
