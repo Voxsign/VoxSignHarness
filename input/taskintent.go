@@ -643,13 +643,18 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 			vi = idx
 		}
 	}
-	for _, w := range implementNouns {
-		if idx := strings.Index(text, w); idx >= 0 && (ni < 0 || idx < ni) {
-			ni = idx
+	// 名词必须在**动词之后**查找（text[vi:]）：
+	// 「《个性化ASR后台需求说明书v2》实现一个…后台服务」里书名号中的"后台"是定语成分，
+	// 若全句找最早名词会得到 ni<vi 的假阴性（2026-10-03 真跑发现，见 zz_debug 探针）。
+	if vi >= 0 {
+		for _, w := range implementNouns {
+			if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
+				ni = idx + vi // 还原为绝对位置
+			}
 		}
 	}
-	// 动词支配名词：动词必须存在且位于名词之前。
-	if vi < 0 || ni < 0 || ni < vi {
+	// 动词支配名词：动词必须存在且动词之后有名词。
+	if vi < 0 || ni < 0 || ni <= vi {
 		return "", nil, false
 	}
 	params := map[string]string{"kind": "implement"}
