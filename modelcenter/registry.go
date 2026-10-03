@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -20,6 +21,10 @@ import (
 
 // Response 是一次模型调用的最小信封（与 OpenAI 兼容格式对齐）。
 type Response struct {
+	// RequestedModel/ActualModel/Substituted 用于**如实记录实际生效的模型**。
+	RequestedModel   string
+	ActualModel      string
+	Substituted      bool
 	Channel          Channel `json:"channel"`
 	ModelID          string  `json:"model_id"` // L5：每次调用必须可归因
 	Content          string  `json:"content"`
@@ -108,7 +113,14 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 	if err := json.Unmarshal(data, &cr); err != nil {
 		return Response{}, fmt.Errorf("响应不是 OpenAI 兼容 JSON: %w", err)
 	}
-	out := Response{ModelID: cr.Model, FinishReason: "", TotalTokens: cr.Usage.TotalTokens,
+	// ⚠️ **模型替换检测**（Lead 2026-10-03 实测：请求 deepseek-reasoner，响应 model=deepseek-flash）。
+	// 台账若只记"我请求的模型"，model_id 就是假的 ⇒ ASR-MODEL-01 的归因作废。
+	substituted := cr.Model != "" && !strings.EqualFold(cr.Model, c.model)
+	if substituted {
+		log.Printf("模型替换：请求 %s，响应 %s（model_substituted=true）", c.model, cr.Model)
+	}
+	out := Response{ModelID: cr.Model, RequestedModel: c.model, ActualModel: cr.Model,
+		Substituted: substituted, FinishReason: "", TotalTokens: cr.Usage.TotalTokens,
 		PromptTokens: cr.Usage.PromptTokens, CompletionTokens: cr.Usage.CompletionTokens}
 	if out.ModelID == "" {
 		out.ModelID = c.model
@@ -148,7 +160,13 @@ func NewRegistry(cfg Config) (*Registry, error) {
 		if timeout <= 0 {
 			timeout = 30 * time.Second
 		}
-		r.clients[ch] = &chatClient{endpoint: endpoint, key: key, model: cc.ModelID, timeout: timeout, hc: &http.Client{}}
+		// ⚠️ 必须走 **ResolveModel**（model_id 优先，否则取 tier）——
+		// 只读 cc.ModelID 会让 tier-only 通道发出 **model:""** ⇒ 上游 502（本轮实测根因）。
+		model, err := r.cfg.ResolveModel(ch)
+		if err != nil {
+			return nil, fmt.Errorf("通道 %q 模型解析失败（fail-closed）: %w", ch, err)
+		}
+		r.clients[ch] = &chatClient{endpoint: endpoint, key: key, model: model, timeout: timeout, hc: &http.Client{}}
 	}
 	r.tokens[ChannelLearn] = WriteToken{channel: ChannelLearn}
 	return r, nil
@@ -172,7 +190,19 @@ func (r *Registry) Invoke(ctx context.Context, ch Channel, prompt string) (Respo
 	}
 	resp.Channel = ch
 	// L5：模型标识以配置为准（若上游回显不同，仍记录**配置值**以便归因）。
-	resp.ModelID = r.cfg.Channels[string(ch)].ModelID
+	// ⚠️ **不得用配置值覆盖实际模型**（否则 model_id 记的是"我请求的"，不是"实际生效的"）。
+	// 响应没带 model 时才回退配置值；有则一律以**响应权威**为准。
+	if resp.ActualModel == "" {
+		resp.ActualModel = r.cfg.Channels[string(ch)].ModelID
+	}
+	if resp.RequestedModel == "" {
+		resp.RequestedModel = resp.ActualModel
+	}
+	resp.ModelID = resp.ActualModel
+	if resp.RequestedModel != "" && resp.ActualModel != "" &&
+		!strings.EqualFold(resp.RequestedModel, resp.ActualModel) {
+		resp.Substituted = true
+	}
 	return resp, nil
 }
 
