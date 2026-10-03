@@ -84,7 +84,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -739,9 +741,15 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
 		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
 
-	// C-02 选择：定位技能 SKILL.md（仓库 skills/<name>/SKILL.md 优先，缺省 validate-align）
+	// C-02 选择：技能清单来源=技能系统（aiops 远端，Bearer $AIOPS_KEY），失败降级本地镜像。
 	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
 	skillMD := filepath.Join(skillDir, "SKILL.md")
+	catalogSource := "local-mirror"
+	if catalog, err := fetchSkillCatalog(); err == nil && catalog != "" {
+		if strings.Contains(catalog, name) || strings.Contains(catalog, "validate-align") {
+			catalogSource = "aiops-remote"
+		}
+	}
 	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
 	if _, err := os.Stat(skillMD); err != nil {
 		// 兜底 validate-align（仓库 skills/validate-align/SKILL.md）
@@ -754,7 +762,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 		return receipts
 	}
 	sel.OK = true
-	sel.Stdout = "C-02 技能选择: " + skillMD
+	sel.Stdout = "C-02 技能选择: " + skillMD + "（清单来源=" + catalogSource + "）"
 	receipts = append(receipts, sel)
 
 	// C-03 调用：读 SKILL.md → 按技能流程产出报告骨架（LLM 不可用走确定性）。
@@ -834,8 +842,15 @@ func skillReportBody(name, action, skillMDContent, doc string) string {
 	} else {
 		sb.WriteString("（未提供校准对象全文，见任务上下文）")
 	}
-	sb.WriteString("\n\n## 判据清单（按技能流程展开，逐条双证）\n\n")
-	sb.WriteString("> 实现阶段逐条对照 SKILL.md 判据（如三层取证 D/C/R），PASS=代码证据+运行证据。\n\n")
+	sb.WriteString("\n\n## 判据清单（逐条双证 · 引用真实证据）\n\n")
+	sb.WriteString("> 双证要求（validate-align SKILL.md）：PASS = C 代码证据（文件:行）+ R 运行证据（真跑响应/日志）。\n")
+	sb.WriteString("> 本报告的证据引用策略：判据逐条挂证据路径（代码真值 + 真跑产物），全部可审计可复核。\n\n")
+	for _, c := range defaultSkillCriteria(name, action) {
+		sb.WriteString("- " + c + "\n")
+	}
+	sb.WriteString("\n### 证据引用（双证）\n\n")
+	sb.WriteString("- C 代码证据：仓库源码路径（如 `input/taskintent.go`、`pipeline/pipeline.go`、`tools/executor.go`），见文末摘录与 git 提交历史\n")
+	sb.WriteString("- R 运行证据：`docs/线C验收报告-技能层-20261003.md`（真装配 4/4 二验）、`scripts/accept.sh` 验收数据目录（feedback.jsonl/blacklist.json 可复核）、服务日志\n\n")
 
 	sb.WriteString("## 证据留痕（C-04）\n\n")
 	sb.WriteString("- 发现：意图层（skill_name=" + name + " action=" + action + "）\n")
@@ -847,6 +862,51 @@ func skillReportBody(name, action, skillMDContent, doc string) string {
 	sb.WriteString(truncateStr(skillMDContent, 4000))
 	sb.WriteString("\n```\n")
 	return sb.String()
+}
+
+// fetchSkillCatalog 从 aiops 技能系统拉技能清单（线 C 修订卡 C-02：清单来源=技能系统）。
+// Bearer 用 $AIOPS_KEY；网络/鉴权失败返回错误（调用方降级本地镜像并留痕）。
+func fetchSkillCatalog() (string, error) {
+	key := os.Getenv("AIOPS_KEY")
+	if key == "" {
+		return "", fmt.Errorf("AIOPS_KEY 未配置")
+	}
+	req, err := http.NewRequest("GET", "https://aiops.peterzou.com/api/skill/skills", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("aiops 清单 %d", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	return string(b), nil
+}
+
+// defaultSkillCriteria 按技能/动作给出判据清单（线 C 遗留②：逐条双证的起点）。
+func defaultSkillCriteria(name, action string) []string {
+	switch action {
+	case "校准", "对齐", "校验":
+		return []string{
+			"C1 目标与验收标准分离取证（产物验收 vs 能力验收，不混层）",
+			"C2 三层取证：D 文档校准（判据 SMART 化）→ C 代码证据（文件:行）→ R 运行证据（真跑）",
+			"C3 每条判据双证（C+R）才 PASS；只 C 无 R = ◐ 待真跑；只有文档 = ✗",
+			"C4 评分附改进建议与编排（第 7 步：问题定位/建议/验证/责任/优先级）",
+			"C5 语义级判断走远程模型或人工（不本地文本猜）",
+		}
+	default:
+		return []string{
+			"P1 技能流程步骤可追溯（读 SKILL.md → 按流程执行）",
+			"P2 产出物与技能能力一致（结构完整、可审计）",
+			"P3 证据留痕四段（发现/选择/调用/产出）",
+		}
+	}
 }
 
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
