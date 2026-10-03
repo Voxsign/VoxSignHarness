@@ -1,0 +1,111 @@
+//go:build vhs002
+
+// restart_criteria_test.go —— SCOPE-REF-02 的**行为证据**：服务真无状态。
+//
+// 代码审查结论"没有全局 map"*不是*证据；**重启后仍然回问**才是。
+// 真二进制：带 confirmed → 杀进程 → 重启（同一 dataDir）→ 不带 confirmed ⇒ 必须回问。
+package asr
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	return fmt.Sprintf("127.0.0.1:%d", l.Addr().(*net.TCPAddr).Port)
+}
+
+func startRealServer(t *testing.T, bin, addr, dataDir string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), "VHS_ASR_ADDR="+addr, "VHS_ASR_DATA="+dataDir)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("启动真进程失败: %v", err)
+	}
+	base := "http://" + addr
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err := http.Get(base + "/v1/health"); err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return cmd
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = cmd.Process.Kill()
+	t.Fatal("真进程未在 10s 内就绪")
+	return nil
+}
+
+func postProcess(t *testing.T, base, body string) map[string]any {
+	t.Helper()
+	resp, err := http.Post(base+"/v1/process", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestSCOPEREF02StatelessAcrossRestart(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "vhs-asr")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/vhs-asr")
+	build.Dir = ".."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("编译真二进制失败: %v\n%s", err, out)
+	}
+	dataDir := t.TempDir() // **同一 dataDir 跨重启**：若服务把会话态落盘，这里就会复用
+	addr := freePort(t)
+
+	// 第一次：确认请求 ⇒ 拿到可携带结构
+	cmd1 := startRealServer(t, bin, addr, dataDir)
+	first := postProcess(t, "http://"+addr, `{"text":"确认，就是报价模块","session_id":"restart-probe"}`)
+	conf, ok := first["confirmable"].(map[string]any)
+	if !ok || conf["canonical"] == nil {
+		_ = cmd1.Process.Kill()
+		t.Fatalf("[重启] 第一次未返回可携带确认结构: %v", first)
+	}
+	canon, _ := conf["canonical"].(string)
+
+	// 带回 confirmed 的同进程请求 ⇒ 复用（基线）
+	got := postProcess(t, "http://"+addr, `{"text":"把那个模块改了","session_id":"restart-probe","confirmed":{"mention":"那个模块","canonical":"`+canon+`"}}`)
+	if got["need_disambiguate"] == true {
+		_ = cmd1.Process.Kill()
+		t.Fatalf("[重启] 同进程带 confirmed 未复用: %v", got)
+	}
+
+	// 杀进程 → 重启（同一 dataDir）
+	if err := cmd1.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cmd1.Process.Wait()
+
+	addr2 := freePort(t)
+	cmd2 := startRealServer(t, bin, addr2, dataDir)
+	defer func() { _ = cmd2.Process.Kill() }()
+
+	// **不带 confirmed** ⇒ 必须回问：证明重启前那次"确认"没有被服务记住（也没落盘）
+	after := postProcess(t, "http://"+addr2, `{"text":"把那个模块改了","session_id":"restart-probe"}`)
+	if after["need_disambiguate"] != true {
+		t.Fatalf("[重启] 重启后不带 confirmed 却未回问 ⇒ 服务记住了会话态（行为证据证伪）: %v", after)
+	}
+}

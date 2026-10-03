@@ -6,11 +6,19 @@
 config/.env*
 
 # ===== runtime artifacts (never publish user data) =====
-data/
-cache/
-ground/
-dist/
-bench/out/
+# 注意：cache/ 与 ground/ 里同时放着**源码**（quad.go / ground.go 及其测试），
+# 整目录忽略会导致全新克隆编译不过（go build ./... 报 package not in std）——
+# 因此只忽略运行期产物，不再忽略源码目录。
+# data/ 同理：里面是合成评测集 20-tasks.jsonl 与域清单 data/spaces/，必须可复现。
+/data/*
+!/data/20-tasks.jsonl
+!/data/spaces/
+/cache/*.json
+/cache/*.jsonl
+/ground/*.json
+/ground/*.jsonl
+/dist/
+/bench/out/
 *.log
 
 # ===== OS / editor =====

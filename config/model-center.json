@@ -1,0 +1,55 @@
+{
+  "contract_version": "1",
+  "gateway": {
+    "base_url": "https://aiops.peterzou.com",
+    "chat_path": "/api/model/chat",
+    "api_key_env": "AIOPS_KEY"
+  },
+  "channels": {
+    "default": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "fast",
+      "model_id": "deepseek-flash",
+      "timeout_ms": 30000,
+      "max_concurrency": 4,
+      "write_back": false
+    },
+    "diagnose": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 30000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "learn": {
+      "enabled": true,
+      "provider": "aiops",
+      "model_id": "deepseek-reasoner",
+      "timeout_ms": 120000,
+      "max_concurrency": 1,
+      "write_back": true
+    },
+    "plan": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 60000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "research": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 60000,
+      "max_concurrency": 2,
+      "write_back": false
+    }
+  },
+  "tiers": {
+    "fast": "deepseek-flash",
+    "quality": "deepseek-v4-pro"
+  }
+}

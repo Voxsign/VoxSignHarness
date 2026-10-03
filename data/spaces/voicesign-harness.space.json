@@ -1,0 +1,13 @@
+{
+  "name": "voicesign-harness",
+  "type": "project",
+  "scope": ["/Users/zouyongming/DoubaoWork/chats/2026-10-01/new-chat-23/voicesign-harness/**"],
+  "exclude": ["dist/**", "**/*.bak", ".env*"],
+  "tools": ["file", "git", "search", "test", "run", "read"],
+  "context": ["project-map:voicesign-harness"],
+  "perms": { "read": true, "write": true, "exec": ["test", "run"] },
+  "acceptance": "改动限定在 voicesign-harness 内，无越界改动，go test ./... 全绿",
+  "risk_default": "light",
+  "cross_refs": ["vault-notes"],
+  "version": 1
+}

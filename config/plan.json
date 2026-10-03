@@ -1,0 +1,7 @@
+{
+  "_comment": "规划/研究用模型（一行可改；env 可覆盖）。默认值同时写进代码，便于无配置运行。",
+  "l2_model": "deepseek-v4-pro",
+  "research_model": "gpt-5.6-luna",
+  "_note": "l2_model 置空或 \"off\" ⇒ L2 不启用，行为与纯规则式一致。",
+  "_availability_note": "可用性以 /api/model/chat 实测为准，不以 /api/model/models 列表为准（gpt-6-luna 在列表里但调用 502）"
+}

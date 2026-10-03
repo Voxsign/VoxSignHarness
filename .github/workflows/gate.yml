@@ -1,0 +1,15 @@
+name: gate
+# 兜底：本地没装 pre-push hook（或用了 --no-verify）时，CI 仍跑同一入口。
+on:
+  push:
+    branches: ["integration/**", "main"]
+  pull_request:
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: sh scripts/gate.sh

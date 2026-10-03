@@ -82,6 +82,9 @@ func NewTaskClassifier(conf float64, spaces []SpaceHint) *TaskClassifier {
 const taskAskTemplate = "你是想让我做什么？请再说清楚一点（记想法/查代码/改代码/修 bug/跑测试/提交/部署/问问题）"
 
 var (
+	// registerTriggers 是历史触发词表：保留给 actionWords（否定/条件的动作全集）
+	// 与非结构化兜底使用。新判定一律走 registerToolRequest 的结构性判据 ——
+	// 见下方"注册工具意图（架构缺口 A1）"。
 	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具"}
 	deleteTriggers   = []string{"删掉", "删除", "去掉", "移除", "清空"}
 	feasibleAsk      = []string{"能不能", "可不可以", "是否可以", "行不行"}
@@ -98,6 +101,508 @@ var (
 	askTriggers      = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何"}
 	defaultExcludes  = []string{".env*", "node_modules"}
 )
+
+// ---------------------------------------------------------------------------
+// 注册工具意图（架构缺口 A1 · 决策 #7「契约注册机制可被语音调用」）
+//
+// 问题：「注册一个命令，用来压缩图片」被判 UNKNOWN —— 自举链条从入口就断了。
+// 根因不是"少收了几个词"，而是把"注册意图"实现成了对固定短语的词表匹配
+// （加一个工具/注册工具/新增工具…）。用户不会迁就系统的词表：同一个意图
+// 可以说成「注册一个命令」「新增一个技能」「添加个插件」「创建一个脚本」。
+//
+// 真特征（结构性）：**注册动词**直接支配**能力名词** —— 两者之间只允许
+// 量化/虚词（一个/个/一条/新的…），不得夹带实义成分。据此：
+//
+//	「注册一个命令」      注册 + 一个 + 命令   → ✅ REGISTER_TOOL
+//	「加个新工具」        加 + 个新 + 工具     → ✅ REGISTER_TOOL
+//	「查一下注册表」      注册 后面是"表"，不支配任何能力名词 → ❌ 保持 QUERY
+//	「查一下已注册的工具」 注册 与 工具 之间夹着"的"，是描述不是注册动作 → ❌
+//
+// 注意：判据刻意**不**允许"的"等实义成分跨过动词与名词之间，否则
+// 「查一下已注册的工具」这类问句会被误判成注册指令（回归保护见
+// input/registertool_regression_test.go）。
+// ---------------------------------------------------------------------------
+
+// registerVerbs 是"把一项新能力登记进系统"的动词。
+// "加/做/搞"是口语中的泛化动词，必须靠"紧邻能力名词"才判定，故不能单独用。
+var registerVerbs = []string{"注册", "新增", "添加", "增加", "创建", "新建", "加", "做", "搞", "上架", "接入"}
+
+// registerCapabilityNouns 是可被注册的能力类别名词（需紧邻在动词/量词之后）。
+var registerCapabilityNouns = []string{"工具", "小工具", "工具链", "命令", "子命令", "指令", "技能", "能力", "插件", "功能", "脚本"}
+
+// registerGapFillers 是注册动词与能力名词之间允许出现的量化/虚词。
+// **必须按长度降序**：registerGapThenNoun 取首个前缀命中，长词优先才不会被
+// "一个"先把"一个新的"截断（否则"一个新的工具"剥成"新的工具"后判失败）。
+var registerGapFillers = []string{
+	"一个全新的",
+	"一个新的", "一种新的", "一款新的",
+	"个新的",
+	"一个", "一条", "一款", "一种", "一支", "一项", "个新", "新的",
+	"新", "个", "条", "款", "种", "支", "项",
+}
+
+// registerVerbWordPart 报告单字动词 v 在 pos 处是否只是某个词的一部分，而非独立动词。
+// 「参加一个工具培训」里的"加"属于"参加"（去参加培训），不是"加一个工具"——
+// 不加此闸会把它误判成注册意图。只有单字泛化动词需要这个词部分判断。
+func registerVerbWordPart(text string, pos int, v string) bool {
+	if v != "加" || pos == 0 {
+		return false
+	}
+	runes := []rune(text[:pos])
+	return runes[len(runes)-1] == '参'
+}
+
+// registerToolRequest 报告文本是否为"注册一项新能力"的语音指令（结构性判据）。
+func registerToolRequest(text string) bool {
+	lower := strings.ToLower(text)
+	for _, v := range registerVerbs {
+		from := 0
+		for {
+			i := strings.Index(lower[from:], v)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			if registerVerbWordPart(lower, pos, v) {
+				from = pos + len(v)
+				continue
+			}
+			if registerGapThenNoun(lower[pos+len(v):]) {
+				return true
+			}
+			from = pos + len(v)
+		}
+	}
+	return false
+}
+
+// registerGapThenNoun 报告 after 是否以「(量化虚词)* 能力名词」开头。
+func registerGapThenNoun(after string) bool {
+	rest := after
+	for {
+		matched := false
+		for _, g := range registerGapFillers {
+			if strings.HasPrefix(rest, g) {
+				rest = rest[len(g):]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			break
+		}
+	}
+	for _, n := range registerCapabilityNouns {
+		if strings.HasPrefix(rest, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// 否定仲裁（缺口 G1）
+//
+// 问题：`不要删除那个文件` 被 deleteTriggers 抢先判成 EDIT(action=delete)，
+// 否定词完全没被看见 —— 目标一旦可解析就会真的删。
+// 依据：SPEC-v2:49「Ask != '' → 绝不执行」；
+//
+//	VS-HARNESS-001:314「该回问、该拒绝也算正确，单纯 JSON 合法不算」。
+//
+// 设计：否定词**直接支配动作**时一律转为 ASK 确认，绝不执行。
+// ---------------------------------------------------------------------------
+
+// negationMarkers 是多字否定词（长词在前，避免"不要再"被"不要"抢先）。
+// 刻意**不含**"不能"：它是"能不能"的一部分，收了会把可行性问句判错。
+// 评审 P1 补齐：勿/请勿/切勿/无需/不再/免了 —— 原先漏收，会导致
+// 「请勿删除」「无需提交」「不再部署」仍被判成可执行动作。
+var negationMarkers = []string{
+	"不需要", "不要再", "请勿", "切勿", "无需", "不再",
+	"不要", "不用", "先别", "别再", "免了",
+}
+
+// markerIsNegation 排除"形似否定、实非否定"的上下文（评审 P2）。
+//
+//	要不要删除那个文件   → "不要"只是"要不要"的一部分，不是否定
+//	不要紧，帮我删除它   → "不要紧"= 没关系，整句是"帮我删除"
+func markerIsNegation(text string, pos int, marker string) bool {
+	if marker != "不要" {
+		return true
+	}
+	if pos > 0 && strings.HasSuffix(text[:pos], "要") {
+		return false // 要不要…
+	}
+	if strings.HasPrefix(text[pos+len("不要"):], "紧") {
+		return false // 不要紧
+	}
+	return true
+}
+
+// bieFollowingVerbs 是单字"别"后面紧跟时才认定为否定的动作动词。
+// 评审 P1 补：去/管/乱/忘（「别去删除…」「别管那个删除操作」）。
+var bieFollowingVerbs = []rune("删发改动碰关停做执提交部署记看查修跑送去管乱忘")
+
+// bieBlockPrefixes 是裸"别"前面出现时说明它属于词的一部分（不是否定）的字：
+// 特/告/分/个/差/类/级/区/性/离/作/识/辨 —— 如"特别关注""识别"里的"别"。
+var bieBlockPrefixes = []rune("特告分个差类级区性离作识辨")
+
+// hasNegation 报告文本里是否有否定，并说明该否定是否**本身就绑定了动作**。
+//
+// 返回值：(命中的否定形式, 是否自带动作, 是否命中)
+//   - 多字否定词（不要/不用/…）→ 自带动作=false，调用方需确认句中另有动作词，
+//     以免把「不用担心」这类寒暄变成决策点；
+//   - 裸"别"+动作动词（别删/别发/…）→ 自带动作=true，本身就是"否定+动作"的证据。
+func hasNegation(text string) (string, bool, bool) {
+	for _, m := range negationMarkers {
+		from := 0
+		for {
+			i := strings.Index(text[from:], m)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			if markerIsNegation(text, pos, m) {
+				return m, false, true
+			}
+			from = pos + len(m)
+		}
+	}
+	runes := []rune(text)
+	for i, r := range runes {
+		// 单字否定前缀：别 / 勿。它们必须**紧邻动作动词**才算否定，
+		// 否则会命中"特别/识别/勿忘"这类词的一部分（评审 P1/P7）。
+		if r != '别' && r != '勿' {
+			continue
+		}
+		if r == '别' && bieIsWordPart(runes, i) {
+			continue
+		}
+		if i+1 >= len(runes) {
+			continue
+		}
+		for _, v := range bieFollowingVerbs {
+			if runes[i+1] == v {
+				return string(r) + string(runes[i+1]), true, true
+			}
+		}
+	}
+	return "", false, false
+}
+
+// bieIsWordPart 报告 runes[i]（'别'）是否只是某个词的一部分（如"特别"）。
+func bieIsWordPart(runes []rune, i int) bool {
+	if i == 0 {
+		return false
+	}
+	for _, p := range bieBlockPrefixes {
+		if runes[i-1] == p {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAnyReturn 与 containsAny 同义，但返回命中的关键词（用于回问文案）。
+func containsAnyReturn(text string, keywords []string) (string, bool) {
+	lower := strings.ToLower(text)
+	for _, k := range keywords {
+		if strings.Contains(lower, strings.ToLower(k)) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// actionWords 是"否定词要支配的动作"全集。只有当否定与动作同时出现时才回问，
+// 避免把「不用担心」这类无动作的寒暄也变成决策点。
+var actionWords = func() []string {
+	var all []string
+	for _, group := range [][]string{
+		registerTriggers, deleteTriggers, noteTriggers, queryTriggers,
+		debugTriggers, testTriggers, commitTriggers, deployTriggers,
+		askTriggers, editTriggers,
+	} {
+		all = append(all, group...)
+	}
+	return all
+}()
+
+// ---------------------------------------------------------------------------
+// 元指令仲裁（缺口 G3）
+//
+// 问题：「开始测试」「继续测试」被判 TEST 0.85 且 test_kind="go test ./..." —— 真的去跑测试。
+// 但这两句在对话里说的是「进入测试阶段 / 继续推进」，是**对话控制**，不是执行命令。
+//
+// 歧义不猜：命中即回问消歧，既不误执行，也不假装听懂了。
+// ---------------------------------------------------------------------------
+
+// metaPrefixes 是对话控制类前缀。
+var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下来", "推进", "开工", "先这样", "暂停", "停一下"}
+
+// metaInstruction 报告文本是否为"元指令 + 动作"的形态。
+//
+// 三个前提同时成立才判元指令：
+//  1. 元指令出现在**句首附近**（前面不超过 2 个字符），否则它只是句子的一部分；
+//  2. 其后确实跟着一个动作词——纯元指令（如「开始」）没有动作可误执行，
+//     交回 UNKNOWN 处理即可，不必多问一句；
+//  3. 元词之后**除了动作本身没有别的实质内容**（评审 P1：不用字数当代理判据）。
+//     长句里的「开始/推进」是叙述（M7 真机教训，见
+//     pipeline.TestCodexNineRegressions#8：长句元指令必须保持不 Ask）——
+//     长句天然带有大量实质内容，会被本条自动排除。
+
+// ---------------------------------------------------------------------------
+// 条件句仲裁（缺口 G6）
+//
+// 问题：「如果测试通过就提交」被判 TEST 0.85 直接执行 —— **前提被完全忽略**。
+// 系统不替用户守条件，也不该把"有前提的动作"当无条件命令做掉。
+// ---------------------------------------------------------------------------
+
+// conditionalMarkers 是前置条件标记。"就"是中文最典型的条件连接词，
+// 但它太常见（就是/就这个），必须配合**后随动作窗口**才判定。
+var conditionalMarkers = []string{"如果", "只要", "除非", "一旦", "要是", "假如", "就"}
+
+// conditionalWindow 是条件标记之后允许出现动作词的字数窗口。
+//
+// 为什么必须限窗口：M7 真机长句
+// 「我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进…」
+// 同时含"如果""就"和动作词，但它是一段口语陈述，**必须保持 Ask 为空**
+// （既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+// 条件句的特征是"后果紧跟条件"（如果测试通过**就提交**），而不是句子里恰好都有。
+const conditionalWindow = 12
+
+// conditionalClause 报告文本是否含"条件 + 紧跟其后的动作"，返回命中的标记。
+func conditionalClause(text string) (string, bool) {
+	for _, m := range conditionalMarkers {
+		from := 0
+		for {
+			i := strings.Index(text[from:], m)
+			if i < 0 {
+				break
+			}
+			pos := from + i
+			after := text[pos+len(m):]
+			if r := []rune(after); len(r) > conditionalWindow {
+				after = string(r[:conditionalWindow])
+			}
+			if containsAny(after, actionWords) || registerToolRequest(after) {
+				return m, true
+			}
+			from = pos + len(m)
+		}
+	}
+	return "", false
+}
+
+// metaMaxPrefixRunes 是元指令词之前允许的前置字数（"好的，""我们先""嗯，"）。
+const metaMaxPrefixRunes = 4
+
+// metaTrailingNoise 是元指令句尾的语气/征询成分，剥掉后不算"实质内容"。
+var metaTrailingNoise = []string{
+	"好不好", "行吗", "可以吗", "一下吧", "一下",
+	"吧", "呢", "啊", "呀", "了", "嗯", "那", "好", "不",
+	"。", "，", "、", "！", "？", "!", "?", " ",
+}
+
+func metaInstruction(text string) (string, bool) {
+	for _, m := range metaPrefixes {
+		i := strings.Index(text, m)
+		if i < 0 {
+			continue
+		}
+		if len([]rune(text[:i])) > metaMaxPrefixRunes {
+			continue
+		}
+		rest := text[i+len(m):]
+		if rest == "" || !containsAny(rest, actionWords) {
+			continue
+		}
+		// 剥掉动作词与句尾语气成分；什么都不剩 = 用户没给对象 = 元指令。
+		residual := rest
+		for _, w := range append(append([]string{}, actionWords...), metaTrailingNoise...) {
+			residual = strings.ReplaceAll(residual, w, "")
+		}
+		if strings.TrimSpace(residual) == "" {
+			return m, true
+		}
+	}
+	return "", false
+}
+
+// metaActionText 给出与该元指令词相称的文案（评审 P4：「暂停测试」不该被说成"是让我继续推进"）。
+func metaActionText(meta string) string {
+	switch meta {
+	case "暂停", "停一下", "先这样":
+		return "先停一下 / 收尾"
+	default:
+		return "继续推进"
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 多动作检测（缺口 G5）
+//
+// 问题：「查一下库存，然后记一下结果，最后提交」只执行第一个命中的意图，
+// 其余动作**既不执行也不提示**，无声消失 —— 用户以为三件事都做了。
+//
+// 判据刻意用**顺序连接词**而不是"句子里出现两个动作词"：
+// M7 真机长句「我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进…」
+// 同时含 TEST 与 QUERY 词，却是一段口语独白，必须保持不 Ask
+// （既有回归 pipeline.TestColloquialQuestionNoReferAsk）。它没有顺序连接词。
+// ---------------------------------------------------------------------------
+
+// sequenceConnectors 是中文口述里表示"下一步"的连接词。
+var sequenceConnectors = []string{"然后", "接着", "之后", "随后", "最后", "再"}
+
+// actionIntentGroups 是参与多动作计数的意图分组（ASK 不算动作，故不含 askTriggers）。
+var actionIntentGroups = []struct {
+	intent   string
+	triggers []string
+}{
+	{contract.IntentRegisterTool, registerTriggers},
+	{contract.IntentNote, noteTriggers},
+	{contract.IntentQuery, queryTriggers},
+	{contract.IntentDebug, debugTriggers},
+	{contract.IntentTest, testTriggers},
+	{contract.IntentCommit, commitTriggers},
+	{contract.IntentDeploy, deployTriggers},
+	{contract.IntentEdit, editTriggers},
+}
+
+// clauseActions 返回单个分句命中的**全部**动作意图。
+//
+// 评审 G5-P1-4：原实现按词表顺序只取第一个命中（词表里 Query 在 Debug/Edit 之前，
+// 且 queryTriggers 含单字"看/查/找"），会把「查一下这个报错」判成纯 QUERY、
+// 把「改一下顺便查一下」判成纯 QUERY —— 既让回问文案说不准，也**低估动作数**。
+func clauseActions(clause string) []string {
+	var out []string
+	for _, g := range actionIntentGroups {
+		// REGISTER_TOOL 用结构性判据（动词支配能力名词），不再用固定短语词表 ——
+		// 否则「注册一个命令，然后跑测试」会被算成 1 个动作而漏报多动作。
+		hit := containsAny(clause, g.triggers)
+		if g.intent == contract.IntentRegisterTool {
+			hit = registerToolRequest(clause)
+		}
+		if hit {
+			out = append(out, g.intent)
+		}
+	}
+	return out
+}
+
+// multiActionClauses 按顺序连接词切分文本，返回：
+//   - 含动作的**分句数**（评审 G5-P0-2：按分句数计，不按"不同意图数"计 ——
+//     「先查 A 再查 B」是两个动作，若按不同意图去重会算成 1，第二个仍被静默丢弃）
+//   - 这些分句里出现过的动作意图（去重，仅用于回问文案）
+func multiActionClauses(text string) (int, []string, bool) {
+	// 评审 G5-P2-6：先剥掉引号内容 —— 「把提示语改成「然后提交」」里的"然后"
+	// 是**被引用的文本**，不是顺序连接词，切它会误报多动作。
+	clean := stripQuotedSpans(text)
+	hadConnector := false
+	for _, c := range sequenceConnectors {
+		if strings.Contains(clean, c) {
+			hadConnector = true
+			break
+		}
+	}
+
+	parts := []string{clean}
+	// 先按顺序连接词切，再按分句标点切（评审 G5-P2-5：ASR 常把连接词吞掉，
+	// 「查一下库存，记一下结果，提交」只靠逗号分层）。
+	for _, sep := range append(append([]string{}, sequenceConnectors...), clauseSeparators...) {
+		var next []string
+		for _, p := range parts {
+			next = append(next, strings.Split(p, sep)...)
+		}
+		parts = next
+	}
+
+	n := 0
+	seen := map[string]bool{}
+	var labels []string
+	for _, p := range parts {
+		acts := clauseActions(p)
+		if len(acts) == 0 {
+			continue
+		}
+		n++
+		for _, a := range acts {
+			if !seen[a] {
+				seen[a] = true
+				labels = append(labels, a)
+			}
+		}
+	}
+	return n, labels, hadConnector
+}
+
+// multiActionTrips 是**决策**（与上面的测量分离）：
+//   - 有顺序连接词 → 2 段带动作即算多动作；
+//   - 纯标点分层 → 要求 ≥3 段。
+//
+// 后者是为了保住 M7 口语长句：它用逗号分层，但只有 2 段带动作，且是一段独白 ——
+// 必须保持 Ask 为空（既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+func multiActionTrips(n int, hadConnector bool) bool {
+	if hadConnector {
+		return n >= 2
+	}
+	return n >= 3
+}
+
+// clauseSeparators 是分句标点。
+var clauseSeparators = []string{"，", "；", "。", ",", ";"}
+
+// stripQuotedSpans 去掉被引号包裹的内容（引号本身也去掉），
+// 避免把"被引用的文本"当成真实指令。
+func stripQuotedSpans(text string) string {
+	pairs := [][2]string{{"「", "」"}, {"“", "”"}, {"\"", "\""}}
+	for _, q := range pairs {
+		for {
+			i := strings.Index(text, q[0])
+			if i < 0 {
+				break
+			}
+			j := strings.Index(text[i+len(q[0]):], q[1])
+			if j < 0 {
+				break
+			}
+			text = text[:i] + text[i+len(q[0])+j+len(q[1]):]
+		}
+	}
+	return text
+}
+
+// joinIntentLabels 把动作意图列表拼成"查、记、提交"这样的中文串。
+func joinIntentLabels(kinds []string) string {
+	labels := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		labels = append(labels, intentLabel(k))
+	}
+	return strings.Join(labels, "、")
+}
+
+// intentLabel 给用户看的中文动作名。
+func intentLabel(kind string) string {
+	switch kind {
+	case contract.IntentQuery:
+		return "查"
+	case contract.IntentNote:
+		return "记"
+	case contract.IntentEdit:
+		return "改"
+	case contract.IntentDebug:
+		return "修"
+	case contract.IntentTest:
+		return "跑测试"
+	case contract.IntentCommit:
+		return "提交"
+	case contract.IntentDeploy:
+		return "部署"
+	case contract.IntentRegisterTool:
+		return "注册工具"
+	default:
+		return kind
+	}
+}
 
 // 复合/长任务（ORCHESTRATE）三连信号词表——组织者式路由的命中条件：
 //
@@ -162,9 +667,41 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		ti.CorrectedText = text
 	}
 
+	// 0. 否定仲裁（缺口 G1，必须排在删除仲裁**之前**）。
+	//    `不要删除那个文件` 若先撞上 deleteTriggers，就会被判成可执行的 EDIT(action=delete)；
+	//    否定词直接支配动作时一律转 ASK 确认 —— SPEC-v2:49「Ask != '' → 绝不执行」。
+	if neg, actionBound, ok := hasNegation(text); ok && (actionBound ||
+		containsAny(text, actionWords) || registerToolRequest(text)) {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictNegation
+		got.Ask = "我听到的是「" + neg + "」——确认不执行这个动作吗？" +
+			"确认不做请说「取消」；确实要做请重新说一遍完整指令"
+		return got
+	}
+
+	// 0.5 元指令仲裁（缺口 G3）：「开始测试」是推进对话，不是"跑 go test ./..."。
+	//     必须有动作词才算（纯「开始」不过这里），命中即回问消歧。
+	if meta, ok := metaInstruction(text); ok {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictMeta
+		got.Ask = "「" + meta + "」是让我" + metaActionText(meta) + "，还是要我现在就执行后面的动作？" +
+			"要执行请直接说完整指令（例如「跑一下测试」）"
+		return got
+	}
+
+	// 0.6 条件句仲裁（缺口 G6）：「如果测试通过就提交」的前提不能被忽略。
+	//     系统不替用户守条件 —— 明确告知，请用户先完成前提再下指令。
+	if cond, ok := conditionalClause(text); ok {
+		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+		got.Conflict = contract.ConflictConditional
+		got.Ask = "「" + cond + "」是带前提的动作。我不会替你守着条件——" +
+			"请先完成前提（例如先把测试跑完），再直接说指令"
+		return got
+	}
+
 	// 1. 冲突仲裁（优先级最高）
 	switch {
-	case containsAny(text, registerTriggers):
+	case registerToolRequest(text):
 		return c.fill(ti, contract.IntentRegisterTool, 0.95, nil)
 	case containsAny(text, deleteTriggers):
 		ti.Conflict = contract.ConflictDelete
@@ -183,6 +720,34 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		ti.Ask = "你是想让我给修 bug 的思路，还是直接动手修？"
 		ti.Conflict = contract.ConflictDebugPlan
 		return ti
+	}
+
+	// 2a-pre. 多动作检测（缺口 G5）：「查一下库存，然后记一下结果，最后提交」
+	// 若只执行第一个命中的意图，其余动作会**无声消失**，用户以为都做了。
+	//
+	// 必须排在 2a（extractReplace 提前返回）**之前** —— 否则
+	// 「把报价模板改成新的公司抬头，然后跑一下测试」会先命中 EDIT 直接返回。
+	//
+	// 一次只做一件是产品的既有约束（一屏一决策点），所以这里**不猜顺序**，
+	// 直接把几件事摊开让用户选先做哪个。
+	// 评审 G5-P1-3：编排任务本身多动作、由计划承载，**必须豁免**。
+	// 原实现靠"恰好没有顺序连接词"才没被抢走 —— 保护是偶然的，不是结构性的：
+	// 「…整理成《全景开发文档》，然后再保存提交」会被截成 NOTE+COMMIT 而永远不走编排。
+	// 评审 G5-P2-6 延伸：**自我修正链不是多动作**。
+	// 「把标题改成中文，不对，改成英文，说错了，改成阿拉伯语」按逗号会切出 3 段 EDIT，
+	// 但它是同一个意图被反复修正，应交给 G7 的修正逻辑处理。
+	corrections := 0
+	if cut, _ := lastCorrection(text); cut >= 0 {
+		corrections = 1
+	}
+	if _, _, isOrchestrate := detectOrchestrate(text); !isOrchestrate && corrections == 0 {
+		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
+			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
+			got.Conflict = contract.ConflictMultiAction
+			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
+				"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+			return got
+		}
 	}
 
 	// 2a. 显式「把 X 改成/换成 Y」→ EDIT（优先于 COMMIT/DEPLOY 等触发词，如「把提交按钮改成中文」）
@@ -255,7 +820,71 @@ func (c *TaskClassifier) fill(ti contract.Intent, kind string, conf float64, par
 		ti.Params = params
 	}
 	c.applyCommon(&ti, kind, conf)
+
+	// 缺口 G2：零信息句子即便高置信也必须回问。
+	// 原行为：单类触发恒 0.85，恒高于默认阈值 0.6，于是 applyCommon 里那条
+	// "低置信回问"在默认配置下几乎不可达 —— 「改一下」「修」「查」直接进执行通道。
+	if ti.Ask == "" && slotGateTrips(kind, ti.CorrectedText) {
+		ti.Ask = askForKind(kind)
+	}
 	return ti
+}
+
+// slotGateFillers 是剥除时一并去掉的虚词/填充词。
+var slotGateFillers = []string{
+	"一下", "一遍", "这个", "那个", "它", "帮我", "麻烦", "请", "吧", "呢", "啊", "呀",
+	"了", "的", "，", "。", "、", "！", "？", ",", ".", "!", "?", " ",
+}
+
+// slotGateTrips 报告该意图的句子除了触发词本身之外是否几乎不剩信息。
+//
+// 只对 EDIT / DEBUG / QUERY 生效：这三类的"对象"是必需槽位，缺了就无从执行。
+// TEST/COMMIT/DEPLOY/NOTE/ASK 有默认值或本身就无需对象，不在本闸范围内。
+//
+// 实现要点：**不能**把触发词从文本里剥掉再量长度 —— 触发词常常就是信息本身。
+// 例如 DEBUG 的触发词表里有 "bug"，「修一下这个 bug」剥完只剩空，会被误判为零信息。
+// 因此改为：剥掉虚词后，看**残留长度是否不超过句中命中的最长触发词**。
+//
+//	"改一下"            → 残留"改"(1) ≤ 最长触发词"改一下"(3) → 回问
+//	"修一下这个 bug"     → 残留"修bug"(4) > 最长触发词"bug"(3)  → 不回问
+//	"查"                → 残留"查"(1) ≤ "查"(1)              → 回问
+func slotGateTrips(kind, text string) bool {
+	triggers := slotGateTriggers(kind)
+	if triggers == nil {
+		return false
+	}
+	residual := text
+	for _, f := range slotGateFillers {
+		residual = strings.ReplaceAll(residual, f, "")
+	}
+	residual = strings.TrimSpace(residual)
+
+	longest := 0
+	for _, t := range triggers {
+		if strings.Contains(text, t) {
+			if n := len([]rune(t)); n > longest {
+				longest = n
+			}
+		}
+	}
+	if longest == 0 {
+		return false
+	}
+	return len([]rune(residual)) <= longest
+}
+
+// slotGateTriggers 返回该意图参与槽位闸的触发词表；不在闸内返回 nil。
+func slotGateTriggers(kind string) []string {
+	switch kind {
+	case contract.IntentEdit:
+		return editTriggers
+	case contract.IntentDebug:
+		return debugTriggers
+	case contract.IntentQuery:
+		return queryTriggers
+	default:
+		return nil
+	}
 }
 
 // applyCommon 填充 空间候选/目标/时间锚点/边界基线/风险基线/确认基线/验收模板/低置信回问。
@@ -387,6 +1016,51 @@ func (c *TaskClassifier) queryParams(text string) map[string]string {
 // extractReplace 抽取「把 X 改成 Y / 把 X 换成 Y」三槽位：
 //   - before 段先取「把」之后的部分（object），再剥离「在 X 里/中」前置子句（其承载空间信息）。
 func extractReplace(text string) (object, value string, ok bool) {
+	// 缺口 G7：口述自我修正。用户在"不对/说错了"之前的表述作废，只有其后才是真实意图。
+	//
+	// 原行为：`记一下A，不对，改成记B` 会把"记一下A，不对"整段当成 object。
+	//
+	// 修正后常省略对象（`把标题改成中文，不对，改成英文`），故承接修正前的对象。
+	carry := ""
+	if cut, end := lastCorrection(text); cut >= 0 {
+		if obj, _, okPre := extractReplaceRaw(text[:cut]); okPre {
+			carry = obj
+		}
+		text = strings.TrimLeft(text[end:], "，。、, ")
+	}
+	object, value, ok = extractReplaceRaw(text)
+	if !ok {
+		return "", "", false
+	}
+	if object == "" {
+		object = carry
+	}
+	if object == "" || value == "" {
+		return "", "", false
+	}
+	return object, value, true
+}
+
+// correctionMarkers 是自我修正信号（缺口 G7）。取其**最后一次**出现，支持连续修正。
+var correctionMarkers = []string{"不对", "说错了", "打错了", "重新说", "我是说", "应该是"}
+
+// lastCorrection 返回最后一个自我修正标记的起始与结束**字节**下标；无则 (-1, -1)。
+func lastCorrection(s string) (int, int) {
+	bestStart, bestEnd := -1, -1
+	for _, m := range correctionMarkers {
+		if i := strings.LastIndex(s, m); i >= 0 && i > bestStart {
+			bestStart, bestEnd = i, i+len(m)
+		}
+	}
+	return bestStart, bestEnd
+}
+
+// extractReplaceRaw 是未做自我修正处理的原始实现。
+//
+// 与旧版唯一的语义差别：**对象为空不再直接判失败**（只要求 value 非空），
+// 以便 extractReplace 在"改口后省略对象"时承接修正前的对象。
+// 是否最终成立由 extractReplace 决定。
+func extractReplaceRaw(text string) (object, value string, ok bool) {
 	low := strings.ToLower(text)
 	for _, sep := range []string{"改成", "换成"} {
 		if i := strings.Index(low, sep); i >= 0 {
@@ -399,7 +1073,7 @@ func extractReplace(text string) (object, value string, ok bool) {
 				before = stripped
 			}
 			object = strings.Trim(before, "，。、  ")
-			if object == "" || value == "" {
+			if value == "" {
 				return "", "", false
 			}
 			return object, value, true
