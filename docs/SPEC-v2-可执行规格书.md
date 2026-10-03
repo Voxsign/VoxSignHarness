@@ -329,9 +329,19 @@ function Check(registry, in) -> Verdict:
     if registry.DetectDrift(space):         return deny("drift")          # 漂移即失效
     if space.Scope ∩ in.Intent.Boundary.Exclude ≠ ∅:
                                             return deny("boundary_violation")
-    # 有效权限 = 平台∩Manifest∩契约caps∩本次授权 交集（交集为空→default_deny）
+    # ⚠️ 2026-10-03 补：**逐 cap 判定**（原文漏了这一步 ⇒ 读者会以为"cap 不匹配 ⇒ default_deny"）
+    #    与 `space/space.go:28-40` 的伪代码注释、以及实际代码 `space/space.go:483/490` **逐行一致**。
+    for cap in in.ToolCaps:
+        if cap ∉ space.Tools:               return deny("boundary_violation")   # 该工具不属该域
+        if 有契约表 且 cap ∉ ∪contract.Caps: return deny("boundary_violation")   # 越界，不因确认放行
+    # ⚠️ 2026-10-03 补：原文把下面四步**简化成了一句"交集为空⇒default_deny"**，
+    #    而**实际代码是逐项判定**（`space/space.go:500-512`）。补全如下，与代码逐行一致。
+    if !in.Grant.Authorized:                return deny("default_deny")   # 本次未授权
+    if !space.Perms.Read:                   return deny("default_deny")
+    if needsWrite(in.Intent) && !space.Perms.Write:
+                                            return deny("default_deny")   # 写意图但域无写权限
+    # 有效权限 = 平台∩Manifest∩契约caps∩本次授权 交集（**供 allow() 返回 allowedTools 用**）
     allowedTools := space.Tools ∩ in.ToolCaps ∩ 契约caps
-    if allowedTools == ∅:                   return deny("default_deny")
     if 本次动作跨域 且 space.CrossRefs 未声明: return deny("cross_ref_deny")
     return allow(space.ID, allowedTools)
     # 裁决语义（什么算越界/默认拒绝）→ 搬 VSL（freeze §13 三模型共识）

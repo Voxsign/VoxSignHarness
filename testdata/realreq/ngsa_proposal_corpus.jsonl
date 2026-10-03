@@ -1,0 +1,25 @@
+{"id":"R1","raw":"OT-ODP 的六层目标架构分别是哪六层","category":"query","want_intent":"QUERY","source":"pp.05 六层目标架构","note":"修复后规则触发「是哪」→QUERY，不再 UNKNOWN"}
+{"id":"R2","raw":"这个方案里 DMZ 发布是不是单向的","category":"query","want_intent":"QUERY","source":"pp.06/20 受控发布、DMZ","note":"修复后「是不是」→QUERY，不再因「发布」误判 DEPLOY"}
+{"id":"R3","raw":"记一个想法：AI 输出只能给建议，人工批准后由授权系统执行","category":"note","want_intent":"NOTE","source":"pp.19/24 AI治理、结论","note":"想法仲裁→NOTE 落盘"}
+{"id":"R4","raw":"记一下：自动化控制段不在 OT-ODP 范围内，需要独立安全审批","category":"note","want_intent":"NOTE","source":"pp.02 成熟度路径","note":"记一下→NOTE 落盘+备份"}
+{"id":"R5","raw":"把技术方案里 In scope 的范围整理成一份 markdown 文档放到 docs 目录","category":"edit","want_intent":"ORCHESTRATE","source":"pp.03 定位与范围","note":"修复后整理成+文档+放到→ORCHESTRATE（原 UNKNOWN）"}
+{"id":"R6","raw":"在方案里补一句 SPoG 不进入保护联锁和实时控制路径","category":"edit","want_intent":"EDIT","source":"pp.18 SPoG 边界","note":"待查：无改/整成触发，可能仍需回问（未列入 F 修复）"}
+{"id":"R7","raw":"把这次的文档改动提交一下","category":"commit","want_intent":"COMMIT","source":"—","note":"COMMIT→BOUNDARY_VIOLATION 默认拒绝（安全）"}
+{"id":"R8","raw":"把这个方案里的 in 死 cope 范围整成文档","category":"asr_noise","want_intent":"EDIT","source":"pp.03 In scope","note":"修复后词典纠错 in 死 cope→In scope，整成→EDIT"}
+{"id":"R9","raw":"S1 振荡场景的降级模式 OT 边界是什么","category":"query","want_intent":"QUERY","source":"pp.21 场景S1","note":"修复后「是什么」→QUERY"}
+{"id":"R10","raw":"我们要为国家电网南非公司建一个 OT 运营数据平台，把 SCADA EMS WAMS 这些源系统的数据统一收上来做受治理的数据产品，通过 DMZ 单向发布给企业，AI 只给建议动作要人工批准，帮我规划一下这件事","category":"long_narrative","want_intent":"ORCHESTRATE","source":"pp.01-24 全文要旨","note":"修复后「建一个…平台」→ORCHESTRATE(kind=implement)，不再误判 DEPLOY"}
+{"id":"R11","raw":"不要删除外部系统数据贡献表","category":"negative","want_intent":"ASK","source":"pp.14 数据贡献表","note":"否定拦截→ASK，不执行"}
+{"id":"R12","raw":"开始测试方案里 Discover 到 Scale 的五个交付阶段","category":"meta","want_intent":"TEST","source":"pp.24 交付架构","note":"TEST→BOUNDARY_VIOLATION 默认拒绝（安全）"}
+{"id":"R13","raw":"把采集安全六支柱记下来然后再提交一个想法","category":"multi_action","want_intent":"ASK","source":"pp.13 六支柱","note":"修复后多动作摊开→ASK（原 thoughtWords 抢先 NOTE 吞掉提交）"}
+{"id":"R14","raw":"下周三之前完成方案评审","category":"time","want_intent":"NOTE","source":"—","note":"修复后时间锚点+截止→NOTE 待办（time_hint 进 params，原 UNKNOWN）"}
+{"id":"R15","raw":"我上次问的 OT-ODP 定位和范围是什么","category":"refer","want_intent":"QUERY","source":"pp.03","note":"上次+是什么→QUERY 指代消解"}
+{"id":"R16","raw":"在方案里补一句：源系统替换不在 OT-ODP 范围内","category":"edit","want_intent":"EDIT","source":"pp.02 平台边界","note":"F12 组合触发词「补一句」→EDIT（不再 UNKNOWN）"}
+{"id":"R17","raw":"把 SPoG 的定位改成涵盖 AI 建议服务","category":"edit","want_intent":"EDIT","source":"pp.02/21 SPoG、AI 建议","note":"改成→EDIT"}
+{"id":"R18","raw":"给文档添加一节：企业发布要跨过批准的治理边界","category":"edit","want_intent":"EDIT","source":"pp.02 企业发布","note":"添加→EDIT（F12）"}
+{"id":"R19","raw":"把 OT-ODP 的定位和范围总结一下","category":"info","want_intent":"INFO","source":"pp.02 定位和范围","note":"总结→INFO（F2 路由）"}
+{"id":"R20","raw":"翻译一下 In scope 和 Outside the platform boundary 的区别","category":"info","want_intent":"INFO","source":"pp.02 边界","note":"翻译→INFO（F2 路由）"}
+{"id":"R21","raw":"查一下 DMZ 单向发布的机制是什么","category":"query","want_intent":"QUERY","source":"pp.06/20 受控发布、DMZ","note":"查一下→QUERY"}
+{"id":"R22","raw":"记一下：现有 OT 应用保留它们的控制职责","category":"note","want_intent":"NOTE","source":"pp.03 架构演进","note":"记一下→NOTE 落盘"}
+{"id":"R23","raw":"下周四之前完成六层架构的评审","category":"time","want_intent":"NOTE","source":"pp.04 六层架构","note":"时间锚点→NOTE 待办（F6）"}
+{"id":"R24","raw":"把 OT-ODP 核心部署到生产环境","category":"deploy","want_intent":"DEPLOY","source":"pp.04 部署视图","note":"部署→DEPLOY，默认域外拒绝"}
+{"id":"R25","raw":"为什么 SPoG 不进入保护联锁和实时控制路径","category":"ask","want_intent":"ASK","source":"pp.02 平台边界","note":"为什么→ASK 澄清"}

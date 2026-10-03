@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://voicesign.local/contracts/intent-v1.schema.json",
+  "title": "VoiceSign 意图契约 v1",
+  "description": "ASR 后台与消费方（Harness 等）之间唯一的共享契约。只增不改：破坏性变更必须新开 intent-v2 并由消费方显式选择。本契约只描述**声明式意图**，不含任何执行字段（红线 #1：本服务永不直接执行任务）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "confidence"],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "const": "1",
+      "description": "契约版本；只增不改"
+    },
+    "type": {
+      "type": "string",
+      "description": "意图类型：8 类 + ORCHESTRATE",
+      "enum": ["EDIT", "DEBUG", "QUERY", "TEST", "COMMIT", "DEPLOY", "NOTE", "ASK", "ORCHESTRATE"]
+    },
+    "path": {
+      "type": ["string", "null"],
+      "description": "目标资源路径（消费方仍需自行做权限校验）"
+    },
+    "params": {
+      "type": "object",
+      "description": "意图参数（只读数据，不是命令）"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "need_disambiguate": {
+      "type": "boolean",
+      "description": "低置信/指代不明时为 true：消费方必须回问，不得直接执行（红线 #3）"
+    },
+    "domain_suggestion": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "域**建议**；本服务只建议不授权，权限永远在消费方（需求 4.7）"
+    },
+    "control": {
+      "type": "string",
+      "description": "交互层控制语义（打断/暂停/撤销上一轮输入）。与业务 type 互斥，不进入消费方执行路由。",
+      "enum": ["", "interrupt", "pause", "undo"]
+    },
+    "degraded": {
+      "type": "boolean",
+      "description": "模型兜底超时/失败时为 true：返回本地基础结果（需求 4.9 fail-open）"
+    },
+    "traces": {
+      "type": "array",
+      "description": "本次处理各步的耗时与命中来源（可复现）",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "step": { "type": "string" },
+          "ms": { "type": "number" },
+          "source": { "type": "string" },
+          "detail": { "type": "string" }
+        },
+        "required": ["step", "ms"]
+      }
+    }
+  }
+}

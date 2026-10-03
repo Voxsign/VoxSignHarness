@@ -215,6 +215,11 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 		} else {
 			flag = os.O_CREATE | os.O_TRUNC | os.O_WRONLY
 		}
+		// 父目录自动创建（2026-10-03 真跑发现：harness-output/ 等新目录 write 失败
+		// "no such file or directory"——execOrchestrate 骨架分支首次建目录被拒）。
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return "", "创建父目录失败: " + err.Error(), false
+		}
 		f, err := os.OpenFile(abs, flag, 0o644)
 		if err != nil {
 			return "", err.Error(), false

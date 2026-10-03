@@ -22,6 +22,11 @@ func initGitRepo(t *testing.T, dir string) {
 	// ⇒ 身份改由**全局配置回落**（不再显式设置）；若需注入，用命令级 `-c user.email=...`。
 	for _, args := range [][]string{
 		{"init"},
+		// ⚠️ **--local**（2026-10-03 CI 事故）：产品代码 Run() 的 `git commit` 没有 -c 注入，
+		// 依赖仓库 user 配置 ⇒ 无全局身份的 CI runner 会 `fatal: empty ident name`。
+		// `--local` 禁止上溯父仓库 ⇒ 既提供身份，又不污染主仓库 .git/config。
+		{"config", "--local", "user.email", "vhs-test@example.com"},
+		{"config", "--local", "user.name", "vhs-test"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -35,7 +40,8 @@ func initGitRepo(t *testing.T, dir string) {
 	add := exec.Command("git", "add", "README.md")
 	add.Dir = dir
 	_ = add.Run()
-	cm := exec.Command("git", "commit", "-m", "baseline")
+	// 身份用**命令级 -c 注入**（不写任何 config ⇒ 无副作用，也不依赖全局身份）
+	cm := exec.Command("git", "-c", "user.email=vhs-test@example.com", "-c", "user.name=vhs-test", "commit", "-m", "baseline")
 	cm.Dir = dir
 	if out, err := cm.CombinedOutput(); err != nil {
 		t.Fatalf("baseline commit failed: %s", out)

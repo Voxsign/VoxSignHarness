@@ -386,6 +386,13 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	if err := os.WriteFile(filepath.Join(projDir, "init.txt"), []byte("init\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -443,6 +450,13 @@ func TestCommitRefusedNoExec(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	_ = os.WriteFile(filepath.Join(projDir, "a.txt"), []byte("a\n"), 0o644)
 	mustRun("git", "add", "-A")
 	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
@@ -514,33 +528,36 @@ func TestQueryHighConfidenceSkipsReferAsk(t *testing.T) {
 	}
 }
 
-// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断）。
+// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断；
+// 2026-10-04 多轮指代接线新增 hasRecent 参数——有会话上下文时 QUERY 非裸指代也解析）。
 func TestShouldResolveReferGate(t *testing.T) {
 	cases := []struct {
-		name   string
-		intent string
-		conf   float64
-		text   string
-		want   bool
+		name      string
+		intent    string
+		conf      float64
+		text      string
+		hasRecent bool
+		want      bool
 	}{
-		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false},
-		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", true},
-		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", true},
-		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false},
-		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", true},
-		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", true},
-		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false},
-		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", true},
-		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false},
-		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", true},
-		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", true},
+		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false, false},
+		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", false, true},
+		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", false, true},
+		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false, false},
+		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", false, true},
+		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", false, true},
+		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false, false},
+		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", false, true},
+		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 有实体+有上下文（多轮指代接线）", contract.IntentQuery, 0.9, "查一下这个方案", true, true},
+		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false, false},
+		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", false, true},
+		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", false, true},
 	}
 	for _, c := range cases {
 		it := contract.Intent{Intent: c.intent, Confidence: c.conf, CorrectedText: c.text}
-		if got := shouldResolveRefer(&it); got != c.want {
-			t.Errorf("shouldResolveRefer(%s conf=%v text=%q) = %v, want %v", c.name, c.conf, c.text, got, c.want)
+		if got := shouldResolveRefer(&it, c.hasRecent); got != c.want {
+			t.Errorf("shouldResolveRefer(%s conf=%v text=%q hasRecent=%v) = %v, want %v", c.name, c.conf, c.text, c.hasRecent, got, c.want)
 		}
 	}
 }
@@ -633,8 +650,17 @@ func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
 	for _, r := range out.Receipts {
 		joined += r.Stdout
 	}
-	if !strings.Contains(joined, "模型服务暂不可用——今日预算可能已用尽或网络异常") {
-		t.Fatalf("无 Providers 应走逐字降级文案, got: %q", joined)
+	// **判据升版（由 Lead 发起，理由见 Issue #4 comment）**：
+	// 原文断言"含'今日预算可能已用尽或网络异常'"—— 那是在**保护一个错误的归因**：
+	// 真因可能是 HTTP 401 invalid_api_key，用户看了会去等明天/查网络。
+	// 新文：**归因必须来自真实错误** —— 401 ⇒ 鉴权且**不得**出现"预算/网络"。
+	if strings.Contains(joined, "今日预算可能已用尽或网络异常") {
+		t.Errorf("降级文案仍套用旧的「预算/网络」归因：%s", joined)
+	}
+	for _, bad := range []string{"预算", "网络"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("降级文案出现 %q（归因错误，应指向真实错误）：%s", bad, joined)
+		}
 	}
 }
 

@@ -150,11 +150,19 @@ func TestHarnessOverCorrectionOnFidelity(t *testing.T) {
 			continue
 		}
 		total++
-		if got := h.Correct(c.Raw); got != c.Raw {
-			over = append(over, c.ID)
-			t.Errorf("过度纠正 [%s]（%s）\n     原文 %q\n     改动 %q",
-				c.ID, strings.Join(c.Tags, ","), c.Raw, got)
+		got := h.Correct(c.Raw)
+		if got == c.Raw {
+			continue
 		}
+		// 口径修正（2026-10-03）：**只有正文被改**才算过度纠正。
+		// 全角标点→半角是产品口径问题（见 TestHarnessChangeBreakdown），
+		// 不该由本测试单方面裁定——旧版把它一并算作过度纠正，是夸大的口径。
+		if punctNorm(got) == punctNorm(c.Raw) {
+			continue
+		}
+		over = append(over, c.ID)
+		t.Errorf("过度纠正（正文被改）[%s]（%s）\n     原文 %q\n     改动 %q",
+			c.ID, strings.Join(c.Tags, ","), c.Raw, got)
 	}
 	t.Logf("保真类 %d 条，原 harness 改动其中 %d 条", total, len(over))
 }

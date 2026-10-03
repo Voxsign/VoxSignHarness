@@ -1,0 +1,56 @@
+{
+  "contract_version": "1",
+  "gateway": {
+    "base_url": "https://aiops.peterzou.com",
+    "chat_path": "/api/model/chat",
+    "api_key_env": "AIOPS_KEY"
+  },
+  "channels": {
+    "default": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "fast",
+      "model_id": "deepseek-flash",
+      "timeout_ms": 30000,
+      "max_concurrency": 4,
+      "write_back": false
+    },
+    "diagnose": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 180000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "learn": {
+      "enabled": true,
+      "provider": "aiops",
+      "model_id": "deepseek-reasoner",
+      "timeout_ms": 120000,
+      "max_concurrency": 1,
+      "write_back": true
+    },
+    "plan": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 180000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "research": {
+      "enabled": true,
+      "provider": "aiops",
+      "tier": "quality",
+      "timeout_ms": 180000,
+      "max_concurrency": 2,
+      "write_back": false
+    }
+  },
+  "tiers": {
+    "fast": "deepseek-flash",
+    "quality": "deepseek-v4-pro"
+  },
+  "_timeout_note": "UNVALIDATED：plan/research/diagnose 原为 60s/60s/30s，而实测强模型一次规划 ≈59.6s ⇒ 余量仅 0.4s ⇒ 时好时坏（Lead 实测定位）。现统一 180s，且必须 > L2PlanTimeout(120s)，否则客户端先于规划器掐断。"
+}

@@ -65,6 +65,10 @@ func Open(dir string) (*Trajectory, error) {
 
 // Write 追加一条事件（直接写盘，不缓冲，保证崩溃后已写条目完整）。
 func (t *Trajectory) Write(e Entry) error {
+	// 判据⑪：**未登记的 kind 必须报错**（不许静默写入 —— 否则判据会"因为 kind 名不存在而空过"）。
+	if err := Validate(e); err != nil {
+		return err
+	}
 	if e.Ts == "" {
 		e.Ts = time.Now().Format(time.RFC3339)
 	}
