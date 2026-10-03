@@ -1,30 +1,50 @@
-# 个性化后台实现
+个性化后台实现 — 运行说明
 
-## 启动
-go run . --addr 127.0.0.1:8080 --data-dir ./data --api-key local-dev-token
+一、环境与构建
+需要 Go 1.21 或以上。
+构建：go build -o personald .
+直接运行（不编译）：go run .
 
-或编译后：
-go build -o personal-backend .
-./personal-backend --addr 127.0.0.1:8080 --data-dir ./data --api-key local-dev-token
+二、启动命令
+默认启动：./personald
+指定数据目录与端口：./personald -data-dir ./data -addr 127.0.0.1:8080
+常用参数：
+  -data-dir   数据目录，默认 ./data，首次启动自动创建
+  -addr       监听地址，默认 127.0.0.1:8080，非回环地址启动即拒绝
+  -token      占位鉴权令牌，默认 dev-token，可留空但鉴权头必须存在
 
-服务仅监听 127.0.0.1；使用非回环地址会拒绝启动。鉴权头占位：Authorization: Bearer local-dev-token，可用 --api-key 修改。
-
-## 端点
-GET /v1/health
-健康检查。返回 {"status":"ok"}。
+三、HTTP 端点
+GET  /v1/health
+  返回 {"status":"ok","version":"...","uptime_s":N}
+  用于存活探测，无需请求体。
 
 POST /v1/process
-文本清洗、词典纠错、意图分类、反馈记录。请求与响应均为 JSON。
-请求头：Authorization: Bearer local-dev-token；Content-Type: application/json。
-请求示例：{"text":"明天下午三点提醒我开会","feedback":null}
-反馈示例：{"text":"明天下午三点提醒我开会","feedback":true}
-意图分类：NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE。
-响应示例：{"intent":"NOTE","corrected":"明天下午三点提醒我开会","dictionary_hits":[],"trace_id":"..."}
+  请求：Content-Type: application/json，头 Authorization: Bearer <token>
+  body 字段：text（必填，待处理文本）、user_id（可选，默认 anonymous）、
+             action（可选，note/query/edit/commit/orchestrate，缺省走意图分类）
+  响应：{"ok":true,"intent":"NOTE","corrected":"...","matches":[...],"trace_id":"..."}
+  说明：清洗与词典纠错只替换命中词条，未命中文本原样保留；
+        空文本或超长文本返回 400，鉴权失败返回 401。
 
-## 数据文件
-默认数据目录：./data，可用 --data-dir 修改，启动时自动创建。
-dictionary.json：个性化词典条目，支持增/删/查。
-feedback.jsonl：反馈学习，append-only，✔/✘ 回执落盘。
-traces.jsonl：处理轨迹，append-only。
-usage.jsonl：调用用量，append-only。
-JSONL 只追加，不覆盖。
+POST /v1/feedback
+  请求：{"trace_id":"...","verdict":"up|down"} 或 {"trace_id":"...","ok":true|false}
+  作用：把 ✔/✘ 反馈追加写入 feedback.jsonl，用于后续学习。
+
+词典管理（供 ① 增/删/查）：
+GET    /v1/dict            查询全部条目
+GET    /v1/dict?q=关键词    按词或别名查询
+POST   /v1/dict            新增 {"term":"...","aliases":["..."],"correct":"..."}
+DELETE /v1/dict?term=词     删除条目
+
+四、数据文件（均在 -data-dir 下，全部 append-only）
+dictionary.json   个性化词典，增删改后整体重写，写入前做临时文件替换
+feedback.jsonl    反馈学习记录，每行一条，只追加不修改
+traces.jsonl      每次 /v1/process 的处理链路，每行一条，只追加
+usage.jsonl       端点调用与耗时统计，每行一条，只追加
+
+五、行为约束
+服务只监听 127.0.0.1（或 ::1）；传入其他地址时进程直接退出并提示。
+所有写盘操作先追加后返回，进程中断不丢已确认记录。
+纠错为保守策略：词典未命中的片段一律不改，避免正常文本被改坏。
+意图分类输出固定五类：NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE。
+鉴权当前为占位实现（Bearer token 比对），后续可替换为真实鉴权。

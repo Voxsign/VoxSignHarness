@@ -160,11 +160,6 @@ func main() {
 	dataDir := flag.String("data-dir", "./data", "Data directory")
 	flag.Parse()
 
-	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
-	}
-
 	dict := NewDictionary()
 	http.HandleFunc("/v1/health", healthHandler)
 	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
@@ -172,7 +167,6 @@ func main() {
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("Error starting server: %s\n", err)
 	}
 }
