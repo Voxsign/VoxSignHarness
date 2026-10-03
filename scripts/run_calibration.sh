@@ -174,8 +174,15 @@ while IFS= read -r line; do
   [ -z "$body" ] && body='{}'   # 缺省空对象；端点若要求字段，判据里必须显式写
   JFILE="$DATA/.resp.json"; export VHS_JFILE="$JFILE"
   svc=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$8); print toupper($8)}')
-  [ -z "$svc" ] && svc=A
-  if [ "$svc" = "B" ]; then TPORT="$ASR_PORT"; else TPORT="$PORT"; fi
+  # ⚠️ **路由**（2026-10-03 Peter P0「R 装置路由修复：产物判据打线 B」）：
+  #   `A` / `B` ⇒ 强制打该服务；**缺省 = auto** ⇒ 先线 A，404/无响应再试线 B，
+  #   并把**实际应答的服务**写进结果列 ⇒ **不掩盖"端点不存在"**（两端口都试过才判 ✗）。
+  #   为什么 auto 是安全的：报告里带服务标识 ⇒ 人能看到"是 B 答的"，而不是"不知道谁答的"。
+  case "$svc" in
+    A) ROUTE="A" ;;
+    B) ROUTE="B" ;;
+    *) ROUTE="auto" ;;
+  esac
   pre=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$7); print $7}')
   [ "$pre" = "-" ] && pre="" 
   # 前提判定：**按实际状态判**，不靠人（否则又会把"前提"写成想当然）
@@ -195,7 +202,25 @@ while IFS= read -r line; do
     continue
   fi
 
-  resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$TPORT$p" -H 'Content-Type: application/json' -d "$body" -w '\n%{http_code}' 2>/dev/null)
+  # 按路由策略发请求；auto ⇒ 先 A 后 B（404/000 才换），并记下实际应答者
+  try_one() {  # $1=port  ⇒ 输出 "code\tbody"
+    curl -s -m 30 -X "$m" "http://127.0.0.1:$1$p" -H 'Content-Type: application/json' \
+      -d "$body" -w '\n%{http_code}' 2>/dev/null
+  }
+  answered=""
+  case "$ROUTE" in
+    A) TPORT="$PORT";     resp=$(try_one "$PORT");     answered="A" ;;
+    B) TPORT="$ASR_PORT"; resp=$(try_one "$ASR_PORT"); answered="B" ;;
+    auto)
+      rA=$(try_one "$PORT");     cA=$(printf '%s' "$rA" | tail -1)
+      if [ "$cA" != "404" ] && [ "$cA" != "000" ]; then
+        resp="$rA"; TPORT="$PORT"; answered="A"
+      else
+        rB=$(try_one "$ASR_PORT"); cB=$(printf '%s' "$rB" | tail -1)
+        resp="$rB"; TPORT="$ASR_PORT"; answered="B"
+        [ "$cA" = "404" ] && [ "$cB" = "404" ] && answered="A+B(均404)"
+      fi ;;
+  esac
   code=$(printf '%s' "$resp" | tail -1)
   # ⚠️ **断言必须用完整响应，截断只用于显示**（2026-10-03 实测第 18 条）：
   # 我第一版先 `cut -c1-120` 再 grep ⇒ `intent_source` 在 120 字符之后 ⇒ **永远匹配不到 ⇒ 假红**。
@@ -238,9 +263,9 @@ except Exception:
     print(json.dumps(v,ensure_ascii=False))               # 自由文本
 ' 2>/dev/null)
       if [ "$got" = "$exp" ]; then
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（eq ${k}=${v} 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **R ✅**（eq ${k}=${v} 成立；C 待补 ⇒ ◐） |" >> "$OUT"
       else
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
       fi ;;
     if:*)
       # `if:<条件字段><op><条件值>?<结论字段>=<结论值>`
@@ -273,30 +298,30 @@ except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)" ] && cmet=
         *) cmet=1 ;;
       esac
       if [ "$cmet" != "1" ]; then
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **⚠️ 不适用**（条件 ${cond} 不成立；不算 ✗ 也不算 ✅） |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **⚠️ 不适用**（条件 ${cond} 不成立；不算 ✗ 也不算 ✅） |" >> "$OUT"
       else
         oexp=$(VHS_V="$ov" python3 -c 'import json,os,json as j;v=os.environ["VHS_V"]
 try: print(j.dumps(j.loads(v),ensure_ascii=False))
 except Exception: print(j.dumps(v,ensure_ascii=False))' 2>/dev/null)
         if [ "$kval" = "$oexp" ]; then
-          echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（条件成立且 ${ok}=${ov}；C 待补 ⇒ ◐） |" >> "$OUT"
+          echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **R ✅**（条件成立且 ${ok}=${ov}；C 待补 ⇒ ◐） |" >> "$OUT"
         else
-          echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 条件成立但 ${ok}：期望 ${oexp} 实际 ${kval}** |" >> "$OUT"
+          echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **✗ 条件成立但 ${ok}：期望 ${oexp} 实际 ${kval}** |" >> "$OUT"
         fi
       fi ;;
     absent:*)
       a=${want#absent:}
       if printf '%s' "$full" | grep -qF -- "$a"; then
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 不应出现 \`$a\`** |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **✗ 不应出现 \`$a\`** |" >> "$OUT"
       else
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **R ✅**（`absent:$a` 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **R ✅**（`absent:$a` 成立；C 待补 ⇒ ◐） |" >> "$OUT"
       fi ;;
     *)
       t=${want#contains:}
       if printf '%s' "$full" | grep -qF -- "$t"; then
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **◐ 弱断言**（仅证 \`$t\` 出现，**不证判据成立**） |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **◐ 弱断言**（仅证 \`$t\` 出现，**不证判据成立**） |" >> "$OUT"
       else
-        echo "| $id | $obj | $svc | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$t\` 未出现** |" >> "$OUT"
+        echo "| $id | $obj | $svc | $answered | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$t\` 未出现** |" >> "$OUT"
       fi ;;
   esac
 done < "$DATA/.crit"
