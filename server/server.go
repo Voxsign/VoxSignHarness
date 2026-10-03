@@ -364,7 +364,11 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	if needAsk || strings.EqualFold(typ, "ASK") || ask != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"executed": false, "reason": "意图需要澄清（ASK / 低置信）—— 红线：Ask != '' 绝不执行",
-			"intent": intent,
+			// 判据 ④（VHS-VOICE-001）：响应**必带** intent_source ∈ {asr-intent, text-fallback}
+			// ⚠️ 2026-10-03 真装配级真跑发现：此前响应里**一次都没出现过**该字段，
+			//    而 `trajectory.KindIntentSource` 其常量虽已登记、**从无写入点**。
+			"intent_source": "asr-intent",
+			"intent":        intent,
 		})
 		return
 	}
@@ -406,7 +410,10 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}()
-	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": ts.ID, "intent": intent})
+	// 判据 ④：执行路径同样必带 intent_source（本次意图来自线 B ⇒ asr-intent）
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id": ts.ID, "intent": intent, "intent_source": "asr-intent",
+	})
 }
 
 // callASRProcess 调线 B 的 POST /v1/process（**只走 HTTP**）。
