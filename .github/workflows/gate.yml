@@ -1,0 +1,277 @@
+# gate.yml — VoxSign Harness Go 门禁
+#
+# 三个 job：
+#   gate         (阻断)   go vet + go test + gofmt 必须干净
+#   reproducible (阻断)   全新克隆可 build 可 test —— 防 .gitignore 误伤源码目录复发
+#   gap-board    (非阻断) ASR 模拟已知缺口看板 + LHT-0002 架构桩看板，红=信号不是失败，输出进 job summary
+#
+# 每一条命令都已在本地实跑确认过退出码，详见 PR / 任务记录中的实测证据。
+# 取舍说明见文件末尾。
+
+name: gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------------
+  # 1/3 阻断门禁：静态检查 + 单元测试 + 格式
+  # ------------------------------------------------------------------------
+  gate:
+    name: gate (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # go.mod 声明 `go 1.22`。已用 go1.22.12 实跑：go build / go vet 退出码 0。
+          go-version: '1.22'
+          cache: true
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go test ./...
+        run: go test ./...
+
+      - name: gofmt (tracked .go files, ratcheted)
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          # RATCHET 基线：已存在的 gofmt 违规，只允许缩小、禁止扩大。
+          #   pipeline/pipeline.go 在 HEAD 上就有一处多余空行（已用 go1.22 与 go1.26
+          #   两个 gofmt 交叉验证；worktree blob == HEAD blob，即不是本地未提交改动）。
+          #   该文件正被另一处进行中的改动占用，故在此"祖父条款"豁免，而不是去改它。
+          # 一旦该文件被格式化，请立刻删掉这里对应的条目。
+          BASELINE='pipeline/pipeline.go'
+
+          # 只检查 git 已跟踪的 .go 文件：dist/ 构建产物、生成代码、其他 agent 的
+          # 未跟踪草稿文件都永远不会误伤这道门禁。
+          all=$(git ls-files -- '*.go' ':(exclude)dist/*')
+          if [ -z "$all" ]; then
+            echo "gofmt: no tracked Go files found."
+            exit 0
+          fi
+
+          files=()
+          while IFS= read -r f; do
+            if [ -n "$f" ]; then
+              if ! printf '%s\n' "$BASELINE" | grep -qxF "$f"; then
+                files+=("$f")
+              fi
+            fi
+          done <<< "$all"
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "gofmt: every tracked Go file is baselined."
+            exit 0
+          fi
+
+          unformatted=$(gofmt -l "${files[@]}")
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: these tracked files are not gofmt-clean:"
+            printf '%s\n' "$unformatted"
+            echo "Fix locally with: gofmt -w <file>"
+            exit 1
+          fi
+
+          # 棘轮卫生：基线里的文件已经格式化了就提醒删除条目。
+          while IFS= read -r b; do
+            if [ -n "$b" ] && [ -f "$b" ]; then
+              if [ -z "$(gofmt -l "$b")" ]; then
+                echo "::warning::gofmt baseline entry '$b' is now clean -- remove it from BASELINE."
+              fi
+            fi
+          done <<< "$BASELINE"
+
+          echo "gofmt: OK (${#files[@]} tracked file(s) checked)"
+
+  # ------------------------------------------------------------------------
+  # 2/3 阻断门禁：全新克隆可构建可测试
+  # ------------------------------------------------------------------------
+  # 关键点：fresh clone 里只有"已提交且被跟踪"的文件。如果某个源码目录被
+  # .gitignore 吞掉（历史上 cache/ 与 ground/ 就发生过），这里会直接编译失败，
+  # 而不是像开发者脏工作区那样"本地能过、CI 能过、新人克隆就崩"。
+  reproducible:
+    name: reproducible (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Fresh clone -> go build ./... + go test ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/clean-clone"
+          rm -rf "$clean"
+          # 从当前 checkout 克隆到一个全新目录：得到的是"只有已跟踪文件"的干净副本。
+          # 已验证 git clone 能正确复现 detached HEAD（PR 的 merge commit）。
+          git clone --quiet "$GITHUB_WORKSPACE" "$clean"
+          cd "$clean"
+          echo "verifying commit: $(git rev-parse HEAD)"
+          go build ./...
+          go test ./...
+
+  # ------------------------------------------------------------------------
+  # 3/3 非阻断：已知缺口看板
+  # ------------------------------------------------------------------------
+  # 用例断言的是"产品应该做到、当前还没做到"的行为，所以现在是红的。
+  # 用构建标签 asrsimgap 隔离，不会污染 `go test ./...`。
+  # continue-on-error: true —— 红了是信号，不是失败。
+  gap-board:
+    name: gap-board (non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: ASR-sim gap board (red is a signal, not a failure)
+        id: gap
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          out="$RUNNER_TEMP/gap-board.txt"
+
+          go test -tags asrsimgap ./e2e ./server -run TestASRSimGap -v 2>&1 | tee "$out"
+          status=${PIPESTATUS[0]}
+          gaps=$(grep -c 'GAP G' "$out")
+          if [ -z "$gaps" ]; then gaps=0; fi
+
+          {
+            echo "## ASR-sim gap board (non-blocking)"
+            echo ""
+            echo "Command: \`go test -tags asrsimgap ./e2e ./server -run TestASRSimGap -v\`"
+            echo ""
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| exit code | \`${status}\` |"
+            echo "| GAP assertions reported | \`${gaps}\` |"
+            echo "| verdict | $([ "$status" -eq 0 ] && echo 'all known gaps closed' || echo 'known gaps still open — signal, not a failure') |"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            cat "$out"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "gaps=$gaps" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::ASR-sim gap board is RED: ${gaps} known gap assertion(s) still open (exit ${status}). Signal, not a failure."
+          fi
+
+          # 保留真实退出码：UI 上这一步会显示为红色（信号），但
+          # continue-on-error 保证 workflow 整体不被阻断。
+          exit "$status"
+
+      - name: Architecture-stub board (LHT-0002, red is a signal, not a failure)
+        id: arch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          out="$RUNNER_TEMP/arch-board.txt"
+
+          go test -tags archstub ./e2e -run TestArch -v 2>&1 | tee "$out"
+          status=${PIPESTATUS[0]}
+          pass=$(grep -c '^--- PASS' "$out")
+          fail=$(grep -c '^--- FAIL' "$out")
+          skip=$(grep -c '^--- SKIP' "$out")
+
+          {
+            echo "## Architecture-stub board (LHT-0002, non-blocking)"
+            echo ""
+            echo "Command: \`go test -tags archstub ./e2e -run TestArch -v\`"
+            echo ""
+            echo "| metric | value |"
+            echo "| --- | --- |"
+            echo "| exit code | \`${status}\` |"
+            echo "| PASS | \`${pass}\` |"
+            echo "| FAIL (承诺未兑现) | \`${fail}\` |"
+            echo "| SKIP (缺证据，不得当通过) | \`${skip}\` |"
+            echo ""
+            echo "> 架构级不变式：红色 = 已承诺的架构性质未兑现，**不是**功能没做。"
+            echo "> SKIP 一律视为缺证据，**不得**折算为通过。"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            cat "$out"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "pass=$pass" >> "$GITHUB_OUTPUT"
+          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Architecture-stub board is RED: ${fail} FAIL / ${skip} SKIP (exit ${status}). Signal, not a failure."
+          fi
+
+          exit "$status"
+
+# ============================================================================
+# 取舍说明
+# ============================================================================
+#
+# 1. gofmt 为什么不是字面意义的 `gofmt -l .` 为空？
+#    实测 `gofmt -l .` 输出 pipeline/pipeline.go。该文件是**已提交**内容：
+#    worktree blob == HEAD blob（均 77daac79e45b0c32045bbb8b2a703095984eecb3），
+#    且 go1.22 与 go1.26 的 gofmt 都判定它不干净（第 793 行后多一个空行）。
+#    它不是"他人未提交的改动"，而是仓库里既有的违规。
+#    任务限制只允许新建 .github/ 下的文件、不得修改任何已有文件（pipeline/ 正被
+#    另一 agent 改动），所以采取"棘轮基线"方案：
+#      - 只检查 git 已跟踪的 .go 文件（dist/、生成物、未跟踪草稿天然免疫）；
+#      - 基线里显式列出既有违规，任何**新增**违规立即阻断；
+#      - 基线文件一旦被格式化，会打印 ::warning 提醒删除条目。
+#    等 pipeline/ 那笔改动落地后，应删除 BASELINE 条目，使该检查回归"零容忍"。
+#
+# 2. 为什么 go-version 选 '1.22'？
+#    go.mod 声明 `go 1.22`，选同版本最保守。实测 go1.22.12：build/vet 退出码 0，
+#    且所有测试包都能编译（本机 macOS 26 上部分测试二进制因 go1.22 链接器缺
+#    LC_UUID 而被 dyld 拒绝，属本地平台问题，Linux runner 不受影响）。
+#    Go 1.22 已 EOL，如后续愿意升级，可改为 '1.24'/'stable' —— 模块声明 1.22，
+#    更新工具链同样兼容。
+#
+# 3. 为什么 reproducible 用显式 `git clone` 而不是再 actions/checkout 一次？
+#    显式克隆让"全新克隆"这件事在日志里可见（打印 commit），且语义上排除了
+#    同一 job 里前序步骤可能产生的任何工作区残留。
+#
+# 4. gap-board 保留真实退出码（exit $status）而不是 exit 0：
+#    这样 UI 上该 step 显示红色，缺口不会被"看起来全绿"掩盖；同时
+#    continue-on-error: true 保证它不阻断 workflow。输出同时贴进
+#    $GITHUB_STEP_SUMMARY，并抽出一个 ::warning 便于在 checks 里看到。

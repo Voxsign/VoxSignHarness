@@ -196,6 +196,18 @@ const (
 	ConflictNoteVsDeploy = "note_vs_deploy" // 「发个想法」被仲裁为 NOTE
 	ConflictDebugPlan    = "debug_plan"     // 「修 bug 的思路」低置信 → 回问
 	ConflictDelete       = "delete"         // 删除动词 → EDIT(action=delete)
+	// ConflictNegation：否定词直接支配动作 → ASK 确认，绝不执行（缺口 G1）。
+	// 依据 SPEC-v2:49「Ask != '' → 绝不执行」与 VS-HARNESS-001:314「该回问、该拒绝也算正确」。
+	ConflictNegation = "negation"
+	// ConflictMeta：元指令（开始/继续/推进）被误当可执行命令 → ASK 消歧（缺口 G3）。
+	// 「开始测试」是推进对话，不是"跑 go test ./..."。
+	ConflictMeta = "meta"
+	// ConflictConditional：条件句（如果…就…）被无条件执行 → ASK（缺口 G6）。
+	// 系统不替用户守条件，也不得把"有前提的动作"当无条件命令做掉。
+	ConflictConditional = "conditional"
+	// ConflictMultiAction：一句话里有两件以上的事 → ASK 选先做哪个（缺口 G5）。
+	// 产品约束是"一屏一决策点"，系统不替用户猜顺序，也不静默丢掉其余动作。
+	ConflictMultiAction = "multi_action"
 )
 
 // Intent 是输入容错层产出的结构化意图（架构文档 §5.5）：

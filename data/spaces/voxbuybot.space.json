@@ -1,0 +1,13 @@
+{
+  "name": "voxbuybot",
+  "type": "project",
+  "scope": ["~/projects/voxbuybot/**"],
+  "exclude": ["node_modules/**", ".env*", "**/secrets/**"],
+  "tools": ["file", "git", "search", "test", "run", "read"],
+  "context": ["project-map:voxbuybot"],
+  "perms": { "read": true, "write": true, "exec": ["test", "run"] },
+  "acceptance": "沙特女装店：中文文案改动限定在 voxbuybot 内，订单查询只读",
+  "risk_default": "light",
+  "cross_refs": ["vault-notes"],
+  "version": 1
+}

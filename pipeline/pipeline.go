@@ -1440,6 +1440,21 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if o == nil || o.Providers == nil {
 		return it
 	}
+	// 评审 P4（G1）/ P3（G3）：仲裁结果**不得**被 LLM 回退覆盖。
+	// 回退命中后会把 it.Ask 清空，而「Ask != '' → 绝不执行」是安全红线：
+	//   - 否定：「不要删除那个文件吗？」会被清 Ask 后判 EDIT 执行；
+	//   - 元指令：「开始测试吗」同理（评审 G3-P3）；
+	//   - 条件句：「如果测试通过就提交吗」同理。
+	// 三者都必须在进入回退前直接返回。
+	switch it.Conflict {
+	case contract.ConflictNegation, contract.ConflictMeta, contract.ConflictConditional,
+		contract.ConflictMultiAction:
+		// 评审 G5-P0-1：多动作也必须豁免 —— 否则「把报价改成中文然后跑一下测试，行吗？」
+		// 会被 fallback 清空 Ask 后只执行第一个动作，G5 复发。
+		// 这是**同一类系统性缺口的第三个实例**（G1-P4 / G3-P3 已各踩一次）：
+		// 每新增一条"靠 Ask 拦住"的安全分支，都必须同时登记到这个 switch。
+		return it
+	}
 	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
 	// M7 复验补强：含问句特征时，规则未判 QUERY（UNKNOWN/低置信/误判其他意图如 NOTE）
 	// 一律调 LLM 复查——规则词典对口语长问句常误判（22:04 真机："我现在测试一下…看看效果怎么样"
@@ -1850,17 +1865,19 @@ func Summary(o *Options, since time.Time) (string, error) {
 		fmt.Fprintf(&sb, " / Net 均值 %dms（含等待/LLM 任务 %d 个）", sumWait/int64(waitN), waitN)
 	}
 	fmt.Fprintf(&sb, "\n")
-	if pureN > 0 {
-		fmt.Fprintf(&sb, "纯管线任务（无等待/LLM）%d 个，不计入 Net 均值\n", pureN)
-	}
+	// ⚠️ **无条件输出**：它是"Net 均值分母口径"的说明，属摘要**结构**，不随 pureN 是否为 0 而消失。
+	fmt.Fprintf(&sb, "纯管线任务（无等待/LLM）%d 个，不计入 Net 均值\n", pureN)
 	writeCounts(&sb, "按意图", byIntent)
 	writeCounts(&sb, "按域", bySpace)
 	writeCounts(&sb, "按归因", byAttr)
 	return sb.String(), nil
 }
 
+// writeCounts 写一个分节。⚠️ **空表也必须写标题**（写「（无）」）：
+// 摘要的**结构必须稳定**，不随数据有无而增减 —— 否则同一份摘要在不同数据下形状不同，无法被稳定断言。
 func writeCounts(sb *strings.Builder, title string, m map[string]int) {
 	if len(m) == 0 {
+		fmt.Fprintf(sb, "%s：\n  （无）\n", title)
 		return
 	}
 	type kv struct {

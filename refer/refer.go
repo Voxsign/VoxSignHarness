@@ -145,6 +145,7 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 		return nil, nil, nil
 	}
 	var opts []Option
+
 	// 0. 已显式目标：仅词典规范化，不回问
 	if it.Target != nil && it.Target.Entity != "" {
 		if canon := r.dictLookup(it.CorrectedText); canon != "" {
@@ -154,6 +155,33 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 	}
 
 	text := it.CorrectedText
+
+	// 缺口 G4：UNKNOWN 的澄清原因**不得**被指代回问覆写。
+	//
+	// 分类器判 UNKNOWN 时会写「你是想让我做什么？」——这是用户最需要知道的信息。
+	// 若 refer 把它改写成「你说的「那个」指的是哪个？」，用户会被问一个**错误的问题**。
+	//
+	// 但不能一刀切（既有回归 pipeline.TestCodexNineRegressions#1 要求
+	// 「我现在想认真开始测…把这个哈…推进起来…」这一句**必须**保留 refer 的指代回问）。
+	// 区分标准：是不是**操作指代**。
+	//   - 「把 这个…」→ 操作指代，refer 的澄清有价值 → 放行；
+	//   - 「嗯 那个 呃 记一下」→ 语气词，不是操作对象 → 保留分类器的澄清原因。
+	if it.Intent == contract.IntentUnknown && it.Ask != "" && !anyOperationAnaphora(text) {
+		return it, opts, nil
+	}
+
+	// 缺口 G9：NOTE 句里的**内容指代**不是操作指代。
+	//
+	// 笔记是自由文本：「记一下：这次要修的是报价页那个错别字」里的"那个"
+	// 是内容的一部分，追问"指的是哪个"既无意义（用户就是这么说的）又打断他。
+	//
+	// 边界（既有回归 pipeline.TestCodexNineRegressions#7）：`记一下 这个`
+	// 里指代**就是全部内容**，此时确实不知道记什么 —— 必须保持追问。
+	if it.Intent == contract.IntentNote {
+		if trigger, ok := hasAny(text, anaphoraTriggers); ok && !notePayloadIsJustPronoun(text, trigger) {
+			return it, opts, nil
+		}
+	}
 
 	// 1. 词典层（100%）
 	if canon := r.dictLookup(text); canon != "" {
@@ -298,4 +326,76 @@ func (r *Resolver) Solidify(entity, variant string) error {
 		return err
 	}
 	return nil
+}
+
+// operationVerbs 是指代词后紧跟时说明它是"操作对象"的动词。
+var operationVerbs = []rune("发删改查看开关跑修记提部打建写读")
+
+// operationAnaphora 报告某个指代词是否构成"操作指代"。
+//
+//	把 这个 改一下     → 前一字是"把"          → 是操作指代
+//	那个文件 改一下     → 后一字是动词"改"       → 是操作指代
+//	嗯 那个 呃 记一下   → 前后都不是操作语境      → 只是语气词，不是操作对象
+func operationAnaphora(text, trigger string) bool {
+	i := strings.Index(text, trigger)
+	if i < 0 {
+		return false
+	}
+	if i > 0 {
+		prev := []rune(text[:i])
+		if len(prev) > 0 {
+			p := prev[len(prev)-1]
+			switch p {
+			case '把', '将', '对', '给':
+				return true
+			}
+			// 动词在指代词之前：「打开它」「删除这个」——它仍是操作对象。
+			for _, v := range operationVerbs {
+				if p == v {
+					return true
+				}
+			}
+		}
+	}
+	rest := []rune(text[i+len(trigger):])
+	if len(rest) > 0 {
+		for _, v := range operationVerbs {
+			if rest[0] == v {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyOperationAnaphora 报告文本中是否存在**任意**一个操作指代。
+//
+// 注意必须遍历全部候选：hasAny 按词表顺序返回首个命中，而词表顺序与出现位置无关，
+// 长句里可能先命中语气词"那个"，却漏掉更早出现的操作指代"把这个"。
+func anyOperationAnaphora(text string) bool {
+	for _, t := range anaphoraTriggers {
+		if strings.Contains(text, t) && operationAnaphora(text, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// noteTriggersForRefer 是 NOTE 意图的触发词（与 input 层保持一致；refer 不 import input，
+// 故此处独立列出，只用于判断"剥掉后是否什么都不剩"）。
+var noteTriggersForRefer = []string{
+	"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
+}
+
+// notePayloadIsJustPronoun 报告 NOTE 句里剥掉指代与触发词后是否**什么都不剩**。
+//
+//	记一下 这个                        → 剩空 → true （指代就是全部内容，必须追问）
+//	记一下：这次要修的是报价页那个错别字   → 剩"：这次要修的是报价页错别字" → false（是内容，不追问）
+func notePayloadIsJustPronoun(text, trigger string) bool {
+	rest := strings.Replace(text, trigger, "", 1)
+	for _, w := range noteTriggersForRefer {
+		rest = strings.ReplaceAll(rest, w, "")
+	}
+	rest = strings.Trim(rest, "：:，。、！？!? 　")
+	return strings.TrimSpace(rest) == ""
 }
