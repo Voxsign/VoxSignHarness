@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// 判据⑫：**同一个阈值常数不得表达两个不同语义**。
+//
+// ⚠️ 这两个语义**共用同一个值是有意的**（都是在"足够高置信"这条线上分岔）：
+//   - ConfidenceThresholdAsk   ：是否回问（NeedDisambiguate = Confidence < 此值）
+//   - ConfidenceThresholdModel ：是否调用模型（Confidence >= 此值 走规则路径）
+//
+// **值相同，但名字不同** ⇒ 将来若要单独调整任一条，改一处即可，且**影响面清晰**。
+// 反例判据：源码里**不得再出现字面量 0.70**（两处必须用具名常量）。
+const (
+	ConfidenceThresholdAsk   = 0.70
+	ConfidenceThresholdModel = 0.70
+)
+
 // IntentModel 是"意图兜底模型"的最小接口。
 // 由 modelcenter.Registry 结构化实现（本包不依赖 modelcenter，保持单向/解耦）。
 type IntentModel interface {
@@ -29,7 +42,7 @@ var knownIntents = map[string]bool{
 // ClassifyIntentWith 本地优先；仅在低置信时走模型兜底，任何失败都降级。
 func ClassifyIntentWith(ctx context.Context, text string, model IntentModel, timeout time.Duration) IntentResult {
 	ir := ClassifyIntent(text)
-	if ir.Confidence >= 0.70 {
+	if ir.Confidence >= ConfidenceThresholdModel {
 		return ir // 高置信：核心路径本地，绝不调模型（红线 #6）
 	}
 	if model == nil {
@@ -68,6 +81,6 @@ func ClassifyIntentWith(ctx context.Context, text string, model IntentModel, tim
 	if conf > 0 {
 		ir.Confidence = conf
 	}
-	ir.NeedDisambiguate = ir.Confidence < 0.70
+	ir.NeedDisambiguate = ir.Confidence < ConfidenceThresholdAsk
 	return ir
 }
