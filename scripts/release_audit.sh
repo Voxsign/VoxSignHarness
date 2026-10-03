@@ -58,3 +58,29 @@ if [ "$miss_rel" -gt 0 ] || [ "$miss_led" -gt 0 ]; then
   exit 1
 fi
 echo "[audit] ✅ 齐备"
+
+# ---- ③④⑤：台账另外三项（"缺一不可"的 ③Issue 回写 ④缺口清单 ⑤测过/用过）----
+ISSUE=${VHS_AUDIT_ISSUE:-4}
+ISSUE_BODY=$(gh issue view "$ISSUE" --json comments -q '.comments[].body' 2>/dev/null || echo "")
+m_iss=0; m_gap=0; m_tst=0
+echo "[audit] 核 ③Issue 回写 / ④缺口清单 / ⑤测过用过"
+for t in $TAGS; do
+  body=$(git tag -l --format='%(contents)' "$t" 2>/dev/null)
+  i="✗"; g="✗"; v="✗"
+  printf '%s' "$ISSUE_BODY" | grep -qF "$t" && i="✅"
+  printf '%s' "$body" | grep -qE '未测|未做|缺口' && g="✅"
+  grep -qF '测过' docs/版本台账.md 2>/dev/null && grep -qF "$t" docs/版本台账.md 2>/dev/null && v="✅"
+  [ "$i" = "✗" ] && m_iss=$((m_iss+1))
+  [ "$g" = "✗" ] && m_gap=$((m_gap+1))
+  [ "$v" = "✗" ] && m_tst=$((m_tst+1))
+  printf "  %-18s Issue %s  缺口 %s  测过 %s\n" "$t" "$i" "$g" "$v"
+done
+echo "[audit] ---- ③缺 ${m_iss} · ④缺 ${m_gap} · ⑤缺 ${m_tst}"
+if [ "$m_iss" -gt 0 ] || [ "$m_gap" -gt 0 ] || [ "$m_tst" -gt 0 ]; then
+  echo "[audit] ❌ **三项中有缺口**（台账规定"缺一不可"）"
+  [ "$m_iss" -gt 0 ] && echo "[audit]    ⇒ ③补 Issue 回写：gh issue comment ${ISSUE} --body-file <...>（正文含 tag 名）"
+  [ "$m_gap" -gt 0 ] && echo "[audit]    ⇒ ④补缺口清单：tag 说明里写"未测/未做"（**未测 != 通过**）"
+  [ "$m_tst" -gt 0 ] && echo "[audit]    ⇒ ⑤补"测过/用过"：docs/版本台账.md 里该版本的对应段"
+  exit 1
+fi
+echo "[audit] ✅ ③④⑤ 也齐备"
