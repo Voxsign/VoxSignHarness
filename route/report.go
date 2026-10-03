@@ -47,10 +47,19 @@ func Report(path string) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "考察点② 升级率: %.2f 正常\n", s.EscalationRate)
 	}
-	// ③ 升级后是否变好 —— 需要"同一任务升级前后结果对比"的字段
-	b.WriteString("考察点③ 升级后是否变好: **无法判定** —— 台账当前**没有**记录" +
-		"「同一 task 的升级前后结果/质量」，因此无从对比。\n" +
-		"  需要的字段（尚缺）：task_id（同一任务串联）、升级前结果质量、升级后结果质量、outcome_after。\n" +
-		"  在此之前，任何\"升级有效\"的说法都只是推断。\n")
+	// ③ 升级后是否变好 —— 只用**同时具备前后质量**的条目对比
+	fmt.Fprintf(&b, "考察点③ 可比样本: %d（缺前后质量字段的条目: %d —— 按 unknown 计，不当 0）\n",
+		s.ComparableQuality, s.UnknownQuality)
+	switch {
+	case s.ComparableQuality < MinSamplesForVerdict:
+		fmt.Fprintf(&b, "考察点③ 升级后是否变好: 样本不足（可比 %d < %d），无法判定\n",
+			s.ComparableQuality, MinSamplesForVerdict)
+	case s.Improved > s.Worsened:
+		fmt.Fprintf(&b, "考察点③ 升级后是否变好: 改善 %d vs 变差 %d ⇒ 升级有正面效果\n", s.Improved, s.Worsened)
+	case s.Improved < s.Worsened:
+		fmt.Fprintf(&b, "考察点③ 升级后是否变好: 改善 %d vs 变差 %d ⇒ 不改善（白升级，升级规则需重审）\n", s.Improved, s.Worsened)
+	default:
+		fmt.Fprintf(&b, "考察点③ 升级后是否变好: 改善 %d vs 变差 %d ⇒ 无差异\n", s.Improved, s.Worsened)
+	}
 	return b.String(), nil
 }

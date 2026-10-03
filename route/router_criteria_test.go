@@ -5,6 +5,7 @@ package route
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -415,5 +416,51 @@ func TestReportOnEmptyLedger(t *testing.T) {
 	}
 	if !strings.Contains(out, "台账为空") {
 		t.Errorf("[报告] 空台账应如实说明:\n%s", out)
+	}
+}
+
+// 考察点③：含前后质量 ⇒ 能算出"是否变好"；缺字段 ⇒ unknown（不当 0）+ 无法判定。
+func TestQualityComparisonAndBackwardCompat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	// 旧格式条目（无 quality 字段）——不得崩、不得当 0
+	old := `{"at":"2026-10-03T00:00:00Z","level":"L1","reason":"legacy","escalated":true,"outcome":"answered"}`
+	if err := os.WriteFile(path, []byte(old+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, after := 0.4, 0.9
+	// 诚实阈值：少于 MinSamplesForVerdict 可比样本时**不得下结论** ⇒ 这里给足 10 条。
+	var recs []Record
+	for i := 0; i < MinSamplesForVerdict; i++ {
+		recs = append(recs, Record{
+			At: "2026-10-03T00:01:00Z", Level: LevelL1, Reason: "escalated", Escalated: true,
+			Outcome: "answered", TaskID: "t" + itoa(i), QualityBefore: &before, QualityAfter: &after,
+		})
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		_, _ = f.Write(append(b, '\n'))
+	}
+	_ = f.Close()
+
+	s, err := Aggregate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.UnknownQuality != 1 {
+		t.Errorf("[兼容] 旧条目应计 unknown，实际 %d", s.UnknownQuality)
+	}
+	if s.ComparableQuality != MinSamplesForVerdict || s.Improved != MinSamplesForVerdict {
+		t.Errorf("[考察点③] 可比/改善统计不符: %+v", s)
+	}
+	out, err := Report(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "改善 10") {
+		t.Errorf("[考察点③] 报告未给出改善结论:\n%s", out)
+	}
+	if !strings.Contains(out, "unknown 计") {
+		t.Errorf("[兼容] 旧条目应按 unknown 计数:\n%s", out)
 	}
 }
