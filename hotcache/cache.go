@@ -75,6 +75,8 @@ type Cache struct {
 	fetcher func(ctx context.Context) (Snapshot, error) // L2 远端刷新
 	now     func() time.Time
 	st      *state
+	// blacklistPath 是「用户显式改错」黑名单的落盘路径（空 = 不落盘）。
+	blacklistPath string
 }
 
 // New 构造缓存；l1Path 为空则不落盘；fetcher 为空则无远端（纯本地）。

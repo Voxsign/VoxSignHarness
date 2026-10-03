@@ -30,6 +30,16 @@ const testPageHTML = `<!doctype html>
  <button onclick="log()">看台账</button>
 </div>
 <div id="out"></div>
+<div id="fbrow" style="margin-top:6px">
+ <button id="fbok" type="button" onclick="feedbackOk()">✔ 对</button>
+ <button id="fbno" type="button" onclick="showNeg()">✘ 不对</button>
+ <button id="fbwrong" type="button" onclick="markWrong()">这个改错了</button>
+ <span id="fbstatus" style="color:#666;font-size:14px"></span>
+</div>
+<div id="fbneg" hidden>
+ <textarea id="fbneg_reason" placeholder="哪里不对？（可留空；留空记 user_marked_wrong）" style="height:40px"></textarea>
+ <button type="button" onclick="submitNeg()">提交 ✘ 原因</button>
+</div>
 <div id="metrics"></div>
 <h3>丢一个文档 + 一个难任务，看它打算怎么干</h3>
 <p style="color:#666"><b>本轮只规划，不执行</b>（不会真的改你的文件）。document 仅作规划输入、不落盘。</p>
@@ -99,6 +109,7 @@ async function run(){
   const text = document.getElementById('t').value;
   try{
   const d = await j('/v1/testpage', {text});
+  lastResult = d;   // 供 〔✔/✘/这个改错了〕 指认本次结果
   let h = '<div class="row"><span class="k">原始：</span><code>'+esc(d.raw)+'</code></div>'+
           '<div class="row"><span class="k">纠错：</span><code>'+esc(d.corrected)+'</code></div>'+
           '<div class="row"><span class="k">标点：</span><code>'+esc(d.punctuated)+'</code></div>'+
@@ -157,6 +168,47 @@ async function teach(){
   const canonical = prompt('规范化成什么（如 aiops）？'); if(!canonical) return;
   const r = await j('/v1/observe', {term, canonical});
   alert(JSON.stringify(r));
+}
+// ---- 回馈（✔/✘）与「这个改错了」（A8/A9/A10）----
+var lastResult = null;
+function fbstatus(msg, isErr){
+  const el = document.getElementById('fbstatus');
+  el.style.color = isErr ? '#c00' : '#666';
+  el.textContent = msg;
+}
+async function feedbackOk(){
+  if(!lastResult){ fbstatus('先点〔处理〕再给评价', true); return; }
+  try{
+    const d = await j('/v1/feedback', {text_raw: lastResult.raw, text_final: lastResult.corrected, accepted: true, reason: '', source: 'testpage'});
+    fbstatus('✔ 已记录（feedback.jsonl 第 ' + d.feedback.lines + ' 条）' + (d.feedback.log_error?('，落盘失败：'+d.feedback.log_error):''));
+  }catch(err){ fbstatus('✔ 记录失败：'+String(err), true); }
+}
+function showNeg(){
+  document.getElementById('fbneg').hidden = false;
+  document.getElementById('fbneg_reason').focus();
+}
+async function submitNeg(){
+  const reason = document.getElementById('fbneg_reason').value.trim();
+  if(!lastResult){ fbstatus('先点〔处理〕再给评价', true); return; }
+  try{
+    const d = await j('/v1/feedback', {text_raw: lastResult.raw, text_final: lastResult.corrected, accepted: false, reason: reason, source: 'testpage'});
+    document.getElementById('fbneg').hidden = true;
+    fbstatus('✘ 已记录（feedback.jsonl 第 ' + d.feedback.lines + ' 条，原因：' + d.feedback.reason + '）');
+  }catch(err){ fbstatus('✘ 记录失败：'+String(err), true); }
+}
+async function markWrong(){
+  if(!lastResult){ fbstatus('先点〔处理〕再标记', true); return; }
+  const corrs = (lastResult.corrections||[]).filter(c=>c.From && c.To);
+  if(corrs.length === 0){
+    fbstatus('本次没有可标记的改写（没有发生 From→To 纠错改写）', true);
+    return;
+  }
+  const term = corrs[0].From;
+  try{
+    const d = await j('/v1/blacklist', {op:'add', term: term, note: lastResult.raw+' → '+lastResult.corrected});
+    fbstatus('已把「'+d.term+'」加入改写黑名单并落盘，重新〔处理〕看效果');
+    run();  // 立即重跑一次，让"生效"可见
+  }catch(err){ fbstatus('黑名单记录失败：'+String(err), true); }
 }
 async function clearTaught(){ alert(JSON.stringify(await j('/v1/lexicon', {op:'clear_taught'}))); }
 async function log(){

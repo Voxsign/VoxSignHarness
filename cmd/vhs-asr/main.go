@@ -89,6 +89,11 @@ func main() {
 	servicesURL := envOr("VHS_SERVICES_URL", "https://aiops.peterzou.com/api/services")
 	hot := hotcache.New(filepath.Join(dataDir, "services-cache.json"), time.Hour,
 		hotcache.HTTPFetcher(servicesURL, os.Getenv("AIOPS_KEY"), 10*time.Second))
+	// 「这个改错了」黑名单（§5.1 第 5 件 / A10）：启动即加载，改了即落盘。
+	hot.SetBlacklistPath(filepath.Join(dataDir, "blacklist.json"))
+	if err := hot.LoadBlacklist(); err != nil {
+		log.Printf("黑名单加载失败（不阻断，按空黑名单继续）: %v", err)
+	}
 	// 启动即刷一次并**记日志**（可观测：别名条数/来源/状态）——真跑时要能看到它。
 	snap := hot.Refresh(context.Background())
 	log.Printf("L2 缓存：别名 %d 条 status=%s source=%s", len(snap.Aliases), snap.Status, snap.Source)
@@ -111,6 +116,10 @@ func main() {
 		log.Printf("L2 未装配（模型中心配置读取失败）：%v", err)
 	}
 	srvObj.DataDir = dataDir // 画像归因来源（SCOPE-PROFILE-01）：无文件则显式 none:no_profile
+	// 用户教词 / 清空教词 / 改写黑名单：全部接真实缓存（真二进制端到端可用，A10 依赖）。
+	srvObj.Teach = hot.Teach
+	srvObj.ClearTaught = hot.ClearTaught
+	srvObj.Blacklist = hot.Blacklist
 	srv := &http.Server{Addr: addr, Handler: srvObj.Handler()}
 	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）", addr, dataDir)
 	if err := srv.ListenAndServe(); err != nil {

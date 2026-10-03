@@ -19,6 +19,8 @@ type state struct {
 	hot     map[string]*Hotword
 	aliases []Alias
 	meta    Snapshot // 仅用 Status/FetchedAt/Source/Note
+	// blacklist 是「用户显式改错」的动态黑名单（term → 登记原因），只拦改写、不拦路由。
+	blacklist map[string]string
 }
 
 // ---- Observe / PutAlias ----
@@ -66,7 +68,7 @@ func (c *Cache) PutAlias(alias, canonical, source string) {
 
 func (c *Cache) state() *state {
 	if c.st == nil {
-		c.st = &state{hot: map[string]*Hotword{}}
+		c.st = &state{hot: map[string]*Hotword{}, blacklist: map[string]string{}}
 	}
 	return c.st
 }

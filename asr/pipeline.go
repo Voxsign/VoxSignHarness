@@ -8,7 +8,11 @@
 // 上下文/指代/意图/域建议属第 2 批，本层暂不实现（保持 unverified）。
 package asr
 
-import "time"
+import (
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Step 是管线中一步的运行摘要（同时用于 HTTP 响应与轨迹）。
 type Step struct {
@@ -114,7 +118,13 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 		rewritten, corrs := p.Hot.Rewrite(res.Text)
 		res.Text = rewritten
 		res.Corrections = append(res.Corrections, corrs...)
-		emit("hotcache", "cache:hotword+alias+edit", "按热词/别名/近音改写（K9）", p.now().Sub(t))
+		// 改写留痕（§5.1 第 5 件）：detail 里带**具体改了哪些词**（From→To），
+		// 使"这个改错了"能被精确指认；数量有界（前 5 处），防无限长。
+		detail := "按热词/别名/近音改写（K9）"
+		if tr := rewriteTrace(corrs); tr != "" {
+			detail += "：改写留痕 " + tr
+		}
+		emit("hotcache", "cache:hotword+alias+edit", detail, p.now().Sub(t))
 	}
 
 	// 5) 标点恢复：只写 Punctuated（正文不动，C1 v2）。
@@ -141,4 +151,31 @@ func isNoiseResult(cands []Candidate) bool {
 		}
 	}
 	return false
+}
+
+// rewriteTrace 把一次改写涉及的 From→To 序列化（有界：前 5 处；空 From/To 不参与）。
+// 它是"改写留痕"的正文：之后用户点〔这个改错了〕时，页面用 corrections 指认具体词。
+func rewriteTrace(corrs []Correction) string {
+	if len(corrs) == 0 {
+		return ""
+	}
+	const max = 5
+	var parts []string
+	for _, c := range corrs {
+		if c.From == "" || c.To == "" {
+			continue
+		}
+		parts = append(parts, c.From+"→"+c.To)
+		if len(parts) >= max {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	s := strings.Join(parts, "、")
+	if len(corrs) > max {
+		s += "…（共 " + strconv.Itoa(len(corrs)) + " 处）"
+	}
+	return s
 }

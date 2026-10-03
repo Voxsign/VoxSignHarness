@@ -144,3 +144,33 @@ func TestSCOPEPUNCT05CorrectionsSemanticsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// TestSCOPEPUNCT06ClauseSplitInsidePunctuated：从句断句**只发生在 punctuated 内**，
+// corrected 不许动（§5.1 第 6 件：标点断句）。这条判据钉住"断句已实现"：
+// 连接词前补逗号 + 句末补句号，正文逐字不变。
+func TestSCOPEPUNCT06ClauseSplitInsidePunctuated(t *testing.T) {
+	eng := NewEngine()
+	cases := []struct{ raw, wantPunct string }{
+		{"先改这个文件所以再提交", "，所以"},
+		{"我想查一下库存但是先等一下", "，但是"},
+		{"这个比较复杂而且很紧急", "，而且"},
+	}
+	seen := 0
+	for _, c := range cases {
+		got := eng.Correct(CorrectRequest{Raw: c.raw})
+		if got.Text != c.raw {
+			t.Errorf("[PUNCT-06] 断句改动了 corrected：%q → %q", c.raw, got.Text)
+		}
+		if strings.Contains(got.Punctuated, c.wantPunct) {
+			seen++
+		} else {
+			t.Errorf("[PUNCT-06] punctuated 未做从句断句：raw=%q punct=%q want=%q", c.raw, got.Punctuated, c.wantPunct)
+		}
+		if stripPunct(got.Punctuated) != stripPunct(c.raw) {
+			t.Errorf("[PUNCT-06] 断句改了正文：%q → %q", c.raw, got.Punctuated)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("三条断句样例一条都没生效——判据形同虚设")
+	}
+}

@@ -44,6 +44,9 @@ type Server struct {
 	Teach func(term, canonical string) error
 	// ClearTaught 清空"用户教的词"（**不得误清服务别名**）。
 	ClearTaught func() int
+	// Blacklist 是"这个改错了"的后端钩子（§5.1 第 5 件）：把词加入**改写黑名单**并落盘。
+	// 为空 ⇒ /v1/blacklist 返回 503（不假装支持）。
+	Blacklist func(term, note string) error
 }
 
 // NewServer 构造服务。
@@ -57,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/dictionary", s.handleDictionary)
 	mux.HandleFunc("/v1/process", s.handleProcess)
 	mux.HandleFunc("/v1/feedback", s.handleFeedback)
+	mux.HandleFunc("/v1/blacklist", s.handleBlacklist)
 	mux.HandleFunc("/v1/observe", s.handleObserve)
 	mux.HandleFunc("/v1/lexicon", s.handleLexicon)
 	mux.HandleFunc("/v1/task", s.handleTask)
@@ -329,7 +333,8 @@ func (s *Server) handleLexicon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleFeedback 回传一次反馈：登记为**候选词典条目**（source/created_at 可审计）。
+// handleFeedback 回传一次反馈：**登记为候选词典条目**（source/created_at 可审计）
+// **并且**追加一条 FeedbackRecord 到 feedback.jsonl（A8/A9：✔/✘ 各多一条、✘ 带原因）。
 // 注意：按 ASR-MODEL-02 L2，用户显式反馈属 user_explicit，不过 learn 通道；
 // 隐式推断才必须过 learn（本轮未实现）。
 func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
@@ -341,6 +346,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		TextRaw   string `json:"text_raw"`
 		TextFinal string `json:"text_final"`
 		Accepted  bool   `json:"accepted"`
+		Reason    string `json:"reason"`
 		Source    string `json:"source"`
 	}
 	if err := readJSON(r, &fb); err != nil {
@@ -361,7 +367,66 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// ① 回馈日志：**恒追加**（✔/✘ 都算一次真实使用反馈）；✘ 恒带原因（空则默认）。
+	reason := strings.TrimSpace(fb.Reason)
+	if !fb.Accepted && reason == "" {
+		reason = DefaultRejectReason
+	}
+	src := fb.Source
+	if src == "" {
+		src = "testpage"
+	}
+	rec := FeedbackRecord{
+		At: time.Now().UTC().Format(time.RFC3339Nano), Raw: fb.TextRaw, Corrected: fb.TextFinal,
+		Accepted: fb.Accepted, Reason: reason, Source: src,
+	}
+	logErr := ""
+	if err := s.appendFeedback(rec); err != nil {
+		logErr = err.Error() // 回馈落盘失败**留痕**，不静默、不阻断
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+		"feedback": map[string]any{
+			"accepted": rec.Accepted, "reason": rec.Reason, "path": s.feedbackPath(),
+			"lines": s.feedbackLines(), "log_error": logErr,
+		},
+	})
+}
+
+// handleBlacklist 是「这个改错了」入口：把词加入改写黑名单并落盘（A10）。
+// 校验：非空 term；hook 缺失 ⇒ 503（不假装支持）。
+func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
+		return
+	}
+	if s.Blacklist == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "blacklist disabled"})
+		return
+	}
+	var req struct {
+		Op   string `json:"op"`
+		Term string `json:"term"`
+		Note string `json:"note"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		return
+	}
+	switch req.Op {
+	case "add":
+		if strings.TrimSpace(req.Term) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term 不得为空"})
+			return
+		}
+		if err := s.Blacklist(req.Term, req.Note); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "term": strings.TrimSpace(req.Term), "note": strings.TrimSpace(req.Note)})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown op: " + req.Op})
+	}
 }
 
 type dictionaryRequest struct {
