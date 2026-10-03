@@ -1,0 +1,34 @@
+{
+  "contract_version": "1",
+  "gateway": {
+    "base_url": "https://aiops.peterzou.com",
+    "chat_path": "/api/model/chat",
+    "api_key_env": "AIOPS_KEY"
+  },
+  "channels": {
+    "default": {
+      "enabled": true,
+      "provider": "aiops",
+      "model_id": "deepseek-flash",
+      "timeout_ms": 30000,
+      "max_concurrency": 4,
+      "write_back": false
+    },
+    "diagnose": {
+      "enabled": false,
+      "provider": "aiops",
+      "model_id": "TBD",
+      "timeout_ms": 30000,
+      "max_concurrency": 2,
+      "write_back": false
+    },
+    "learn": {
+      "enabled": false,
+      "provider": "aiops",
+      "model_id": "TBD",
+      "timeout_ms": 60000,
+      "max_concurrency": 1,
+      "write_back": true
+    }
+  }
+}
