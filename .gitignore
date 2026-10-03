@@ -35,3 +35,10 @@ coverage.out
 # 校准快照（calib.sh 生成，不入库）
 .calib-before
 .calib-after
+
+# 校准产物（采集工具生成，不入库）
+.calib-evidence-C.md
+.calib-evidence-R.md
+.calib-before
+.calib-after
+.calib-diff
