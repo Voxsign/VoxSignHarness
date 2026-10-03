@@ -167,6 +167,16 @@ const discussLogName = "discuss.jsonl"
 
 // Run 执行完整 13 阶段编排循环。ctx 取消会中止等待人工确认，但已落盘轨迹不回滚。
 func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
+	// ⭐ 必填检查（Lead 2026-10-03 真跑实证：o==nil / 空 Options ⇒ **panic**，不是返回错误）。
+	// 原则：**"崩"与"报错"的区别是 —— 崩了没有任何人能看到原因**（且若崩在后台 goroutine，recover 也抓不到）。
+	if o == nil {
+		return Outcome{}, fmt.Errorf("pipeline.Run: Options 为 nil（调用方必须提供完整 Options）")
+	}
+	if o.Spaces == nil {
+		return Outcome{}, fmt.Errorf("pipeline.Run: Spaces 未配置（域门禁缺失 ⇒ 拒绝执行）")
+	}
+	// 注：**不检查 Providers** —— 其文档明确"nil 时纯规则/纯 search 路径不阻断"（Options.Providers 注释）。
+	// 若在此强求，会把"无 LLM 也能跑"的设计判死。仅当真要用 LLM 时才在对应路径处理。
 	if o.mu == nil {
 		o.mu = &sync.Mutex{}
 	}
