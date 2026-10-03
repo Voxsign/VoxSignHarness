@@ -18,6 +18,8 @@ import (
 
 	"voicesign-harness/asr"
 	"voicesign-harness/hotcache"
+	"voicesign-harness/modelcenter"
+	"voicesign-harness/plan"
 	"voicesign-harness/recog"
 )
 
@@ -26,6 +28,14 @@ type fileConfig struct {
 	DataDir    string `json:"data_dir"`
 	Dictionary string `json:"dictionary"`
 	Traces     string `json:"traces"`
+}
+
+// mustModel 解析通道模型 id（失败返回 "?"，仅用于日志）。
+func mustModel(cfg modelcenter.Config, ch modelcenter.Channel) string {
+	if m, err := cfg.ResolveModel(ch); err == nil {
+		return m
+	}
+	return "?"
 }
 
 func main() {
@@ -86,6 +96,20 @@ func main() {
 	defer stop()
 	pipe.Hot = &recog.Rewriter{Engine: asr.NewEngine(), Hot: hot}
 	srvObj := asr.NewServer(pipe)
+	// ⭐ L2 真实装配：读模型中心配置 → plan 通道 → 强模型（转成 plan.PlanModel）。
+	// 缺 key/配置坏 ⇒ **明确记录**并保持 L2 关闭（不静默假装已启用）。
+	mcPath := envOr("VHS_MODEL_CENTER", filepath.Join(".", "config", "model-center.json"))
+	if mcfg, err := modelcenter.Load(mcPath); err == nil {
+		if reg, err := modelcenter.NewRegistry(mcfg); err == nil {
+			srvObj.Models = &mcfg
+			srvObj.PlanModel = plan.ChannelPlanModel{Registry: reg, Channel: modelcenter.ChannelPlan}
+			log.Printf("L2 已装配：plan 通道 → %s", mustModel(mcfg, modelcenter.ChannelPlan))
+		} else {
+			log.Printf("L2 未装配（模型中心不可用）：%v", err)
+		}
+	} else {
+		log.Printf("L2 未装配（模型中心配置读取失败）：%v", err)
+	}
 	srvObj.DataDir = dataDir // 画像归因来源（SCOPE-PROFILE-01）：无文件则显式 none:no_profile
 	srv := &http.Server{Addr: addr, Handler: srvObj.Handler()}
 	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）", addr, dataDir)

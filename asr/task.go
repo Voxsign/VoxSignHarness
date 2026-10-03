@@ -148,9 +148,10 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"execute":       false,
-		"l2_enabled":    plan.L2Enabled(modelID),
-		"l2_model":      modelID,  // ⚠️ 本轮只规划，不执行
-		"document_read": doc.Read, // 空文档/未读 ⇒ false + note（不许静默当没有）
+		"l2_enabled":    plan.L2Enabled(modelID) && s.PlanModel != nil, // 配置了但没装配 ⇒ 如实报 false
+		"l2_model":      modelID,
+		"l2_note":       l2Note(s), // ⚠️ 本轮只规划，不执行
+		"document_read": doc.Read,  // 空文档/未读 ⇒ false + note（不许静默当没有）
 		"document_note": doc.Note,
 		"document": map[string]any{
 			"lines": doc.Lines, "items": doc.Items, "todos": doc.TODOs,
@@ -168,6 +169,14 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func itoaLen(s string) int { return len([]rune(s)) }
+
+// l2Note 说明"为什么这次没用模型式"（配置了但未装配时，必须说清）。
+func l2Note(s *Server) string {
+	if s.PlanModel == nil {
+		return "L2 未装配（无模型客户端）⇒ 走规则式"
+	}
+	return ""
+}
 
 // batchSizeItems 是每个"批处理"步骤覆盖的文档条目数。
 // ⚠️ **UNVALIDATED**（我取的 10，未标定）。
