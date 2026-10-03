@@ -20,10 +20,10 @@ func NewDictionary() *Dictionary {
 	return &Dictionary{entries: make(map[string]string)}
 }
 
-func (d *Dictionary) Add(word, correction string) {
+func (d *Dictionary) Add(word, definition string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.entries[word] = correction
+	d.entries[word] = definition
 }
 
 func (d *Dictionary) Delete(word string) {
@@ -35,20 +35,23 @@ func (d *Dictionary) Delete(word string) {
 func (d *Dictionary) Lookup(word string) (string, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	correction, exists := d.entries[word]
-	return correction, exists
+	definition, exists := d.entries[word]
+	return definition, exists
 }
 
-func (d *Dictionary) Correct(text string) string {
+func (d *Dictionary) Correct(word string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	words := strings.Fields(text)
-	for i, word := range words {
-		if correction, exists := d.entries[word]; exists {
-			words[i] = correction
+	if _, exists := d.entries[word]; exists {
+		return word
+	}
+	// Simple correction: return the first word that starts with the same letter
+	for entry := range d.entries {
+		if strings.HasPrefix(entry, string(word[0])) {
+			return entry
 		}
 	}
-	return strings.Join(words, " ")
+	return word
 }
 
 type Intent string
@@ -62,6 +65,7 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
+	text = strings.ToLower(text)
 	if strings.Contains(text, "note") {
 		return NOTE
 	} else if strings.Contains(text, "query") {
@@ -70,9 +74,10 @@ func ClassifyIntent(text string) Intent {
 		return EDIT
 	} else if strings.Contains(text, "commit") {
 		return COMMIT
-	} else {
+	} else if strings.Contains(text, "orchestrate") {
 		return ORCHESTRATE
 	}
+	return NOTE
 }
 
 type Feedback struct {
@@ -104,8 +109,21 @@ type Response struct {
 	Intent        Intent `json:"intent"`
 }
 
-func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+var (
+	addr    = flag.String("addr", "127.0.0.1:8080", "HTTP network address")
+	dataDir = flag.String("data-dir", "./data", "Data directory")
+	dict    = NewDictionary()
+)
+
+func main() {
+	flag.Parse()
+
+	http.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	http.HandleFunc("/v1/process", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -125,47 +143,27 @@ func processHandler(dict *Dictionary, dataDir string) http.HandlerFunc {
 			Intent:        intent,
 		}
 
-		if err := AppendToFile(dataDir+"/traces.jsonl", req); err != nil {
+		if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		if err := AppendToFile(dataDir+"/usage.jsonl", resp); err != nil {
+		if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP network address")
-	dataDir := flag.String("data-dir", "./data", "Data directory")
-	flag.Parse()
+	})
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}
-
-	dict := NewDictionary()
-	http.HandleFunc("/v1/health", healthHandler)
-	http.HandleFunc("/v1/process", processHandler(dict, *dataDir))
 
 	fmt.Printf("Starting server on %s\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "Server failed: %v\n", err)
 	}
 }
