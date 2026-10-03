@@ -1,61 +1,69 @@
-个性化后台实现 — 运行说明
+个性化后台 运行说明（README）
 
-一、启动
+一、环境与构建
+要求：Go 1.21+
+构建：
+  go build -o p13n ./cmd/p13n
+  （若为单文件入口，则 go build -o p13n .）
+运行：
+  go run . -addr 127.0.0.1:8787 -data-dir ./data -token dev-token
 
-  默认（监听 127.0.0.1:8080，数据目录 ./data）
-    go run main.go
+启动参数
+  -addr       监听地址，默认 127.0.0.1:8787；非回环地址（如 0.0.0.0、局域网 IP）启动即拒绝并退出非零
+  -data-dir   数据目录，默认 ./data，首次启动自动创建
+  -token      鉴权占位令牌，默认 dev-token；请求头 X-Auth-Token 必须匹配，否则 401
+  说明：鉴权为占位实现（静态令牌），仅用于占位与联调，不构成生产级认证。
 
-  编译后运行
-    go build -o pback . && ./pback
+二、HTTP 端点（均为 JSON 请求/响应）
 
-  常用参数 / 环境变量（二者等价，参数优先）
-    --addr      监听地址，默认 127.0.0.1:8080
-    --data-dir  数据目录，默认 ./data
-    --token     占位鉴权令牌，默认空（空则不校验）
-    对应环境变量：ADDR / DATA_DIR / TOKEN
+1) 健康检查
+  GET /v1/health
+  200 {"status":"ok","version":"...","data_dir":"./data","uptime_s":12}
 
-  安全约束
-    仅接受回环地址；--addr 若为非 127.0.0.1 / ::1 的地址，启动即报错退出。
-    设置 --token 后，请求须带 Authorization: Bearer <token>，否则 401。
-
-二、端点
-
-  GET  /v1/health
-    返回 200，{"status":"ok","data_dir":"...","dict_size":N}
-
+2) 主处理端点
   POST /v1/process
-    请求与响应均为 application/json，统一结构：
-    {"action":"...", ...} -> {"ok":true, ...} / {"ok":false, "error":"..."}
+  请求 {"text":"明天三点开会 记一下","user_id":"u1","session_id":"s1"}
+  响应 {"intent":"NOTE","corrected":"明天三点开会 记一下","changed":false,
+        "matches":[{"term":"开会","kind":"dict"}],"trace_id":"...","usage":{"tokens_in":9,"tokens_out":9}}
+  处理链路：清洗 -> 词典纠错（命中即替换，未命中保守保留原文）-> 意图分类（NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE）
+  安全约束：正常文本不被改坏；纠错仅在词典命中且满足匹配规则时生效，否则原样返回且 changed=false。
 
-    1) 文本处理（清洗 + 词典纠错 + 意图分类）
-       {"action":"process","text":"明天三点开会"}
-       响应：{"ok":true,"cleaned":"...","corrected":"...","intent":"NOTE",
-              "edits":[{"from":"...","to":"..."}],"trace_id":"..."}
+3) 个性化词典
+  POST   /v1/dict      增：{"term":"开会","alias":["开个会"],"note":"..."} -> 201
+  GET    /v1/dict      查：可选 ?q=开会；不传则列表
+  DELETE /v1/dict      删：{"term":"开会"} -> 200 {"deleted":1}
 
-    2) 词典增/删/查
-       {"action":"dict.add","term":"后台","aliases":["后台系统"]}
-       {"action":"dict.del","term":"后台"}
-       {"action":"dict.get","term":"后台"}      （查单条）
-       {"action":"dict.list","query":"后台"}    （模糊列表，可省 query）
+4) 反馈学习
+  POST /v1/feedback
+  请求 {"trace_id":"...","label":"ok"}   // label: ok = ✔ / bad = ✘
+  200 {"recorded":true}
 
-    3) 反馈学习（✔/✘ 落盘，仅追加）
-       {"action":"feedback","trace_id":"...","verdict":"up"}    // up=✔ / down=✘
-       响应：{"ok":true,"recorded":true}
+三、数据文件（独立数据目录，全部 append-only JSONL，仅追加、不重写）
+  <data-dir>/traces.jsonl    每次 /v1/process 一条：trace_id、时间、intent、原文、纠错后文本、changed、匹配项
+  <data-dir>/usage.jsonl     每次请求一条：端点、耗时、tokens、状态码
+  <data-dir>/feedback.jsonl  每条反馈一条：trace_id、label(ok/bad)、时间
+  <data-dir>/dictionary.json 词典持久化快照（增删后原子重写，非 JSONL）
 
-三、数据文件（全部 append-only JSONL，除词典为整表覆盖）
+追加语义：以 O_APPEND 打开并写入完整单行 JSON，进程崩溃不产生半行破坏；文件按需创建，权限 0600。
+查看示例：
+  tail -n 5 ./data/feedback.jsonl
+  grep '"intent":"COMMIT"' ./data/traces.jsonl
 
-  data/dictionary.json    个性化词典，增删改后整表覆盖写入
-  data/feedback.jsonl     反馈记录，每行一条，只追加
-  data/traces.jsonl       每次 /v1/process 的输入输出轨迹，只追加
-  data/usage.jsonl        调用计数与耗时，只追加
+四、快速自检
+  curl -s http://127.0.0.1:8787/v1/health -H 'X-Auth-Token: dev-token'
+  curl -s -X POST http://127.0.0.1:8787/v1/dict -H 'X-Auth-Token: dev-token' \
+       -d '{"term":"开会","alias":["开个会"]}'
+  curl -s -X POST http://127.0.0.1:8787/v1/process -H 'X-Auth-Token: dev-token' \
+       -d '{"text":"开个会吧","user_id":"u1"}'
+  curl -s -X POST http://127.0.0.1:8787/v1/feedback -H 'X-Auth-Token: dev-token' \
+       -d '{"trace_id":"<上一步返回>","label":"ok"}'
 
-  说明
-    目录不存在时启动自动创建；data-dir 可配，多个实例需使用不同目录。
-    JSONL 文件按行独立解析，损坏行跳过并计入 usage.jsonl。
-    词典纠错仅在命中词条或高置信模糊匹配时改写，未命中保持原文，
-    避免正常文本被改坏。
-
-四、意图类别
-
-  NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-  分类结果在 process 响应的 intent 字段返回；无法判定时返回 NOTE 并标记 low_confidence。
+五、验收对应
+  词典增/删/查：/v1/dict 三个方法 + dictionary.json
+  纠错：process 链路中的 clean + dict correct，保守不破坏正常文本
+  意图分类：五类 NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE
+  反馈落盘：feedback.jsonl append-only
+  数据落盘：traces.jsonl、usage.jsonl，data-dir 可配
+  HTTP：/v1/health、/v1/process
+  监听安全：仅 127.0.0.1 回环，非回环拒绝；X-Auth-Token 占位鉴权
+  编译：go build 通过
