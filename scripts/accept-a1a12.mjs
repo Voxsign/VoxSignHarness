@@ -121,17 +121,20 @@ const FAKE_REC = `
 const btns = `[...document.querySelectorAll('button')].map(b => (b.textContent||'').trim())`;
 const clickBtn = (needle) => `(() => { const b = [...document.querySelectorAll('button')].find(b => (b.textContent||'').includes(${JSON.stringify(needle)})); if (!b) return false; b.click(); return true; })()`;
 // 规划等待：合并后 /v1/task 走真实 L2 模型（实测一次 ≈60s，服务端超时 120s），
-// 故等待上限给 150s；页面若显示「规划失败」则立即抛错（不傻等）。
+// 故等待上限给 150s；页面若显示「规划失败」或「没有可执行步骤」（模型拒绝/空步骤）则立即抛错（不傻等）。
 async function waitPlanSteps(cdp, timeout = 150000) {
   const t0 = Date.now();
   for (;;) {
     const v = await cdp.eval(`(() => {
       const o = document.getElementById('planout');
-      if ((o.innerHTML || '').includes('规划失败')) return 'FAILED';
+      const h = o.innerHTML || '';
+      if (h.includes('规划失败')) return 'FAILED';
+      if (h.includes('没有可执行步骤')) return 'REFUSED';
       const rows = document.querySelectorAll('#planout table tr').length;
       return rows > 1;
     })()`);
     if (v === 'FAILED') throw new Error('规划失败（页面显示）');
+    if (v === 'REFUSED') throw new Error('规划无步骤（模型拒绝/空步骤，见 #planout）');
     if (v === true) return;
     if (Date.now() - t0 > timeout) throw new Error(`waitFor 超时（${timeout}ms）——步骤未渲染`);
     await sleep(150);
