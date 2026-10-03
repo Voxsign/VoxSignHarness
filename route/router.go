@@ -140,12 +140,23 @@ func SituationFromMemory(w *plan.WorkingMemory) Situation {
 	return sit
 }
 
-// Router 串起 L0 → L0.5。Threshold 是"关联度/置信度够用"的门槛。
+// L1Model 是慢通道（deepseek-flash）。
+type L1Model interface {
+	Complete(ctx context.Context, prompt string) (string, error)
+}
+
+// Router 串起 L0（本地 → 网关路由）→ L0.5（JEV）→ L1（唯一升级目标）。
 type Router struct {
-	Hot       *hotcache.Cache
-	JEV       JEV
-	Threshold float64
-	Timeout   time.Duration
+	Hot *hotcache.Cache
+	// ServiceRouter 是 L0 **第二梯队**（网关 /api/route）：本地未命中时才问，命中即返回。
+	ServiceRouter ServiceRoute
+	JEV           JEV
+	// L1 是唯一升级目标（deepseek-flash）。**只在"需要多步推理"时升级**，不为"想更准"升级。
+	L1 L1Model
+	// NeedsReasoning 由调用方声明"这是多步推理任务"（唯一升级触发器之一）。
+	NeedsReasoning bool
+	Threshold      float64
+	Timeout        time.Duration
 	// Kind 为空时按 KindFor(question+text) 自动分派。
 	Kind Kind
 }
@@ -160,6 +171,7 @@ func (r *Router) threshold() float64 {
 // Route 执行分层路由；question/situation 由调用方给（situation 由工作记忆四块板渲染）。
 // options 自动 = 各候选 id + "ambiguous"（J1/J3：允许"说不清"，且不发明答案空间）。
 func (r *Router) Route(ctx context.Context, text, question string, sit Situation) Decision {
+	var ledgerNote []LedgerEntry
 	options := []string{"ambiguous"}
 	for _, c := range sit.Candidates {
 		options = append(options, c.ID)
@@ -174,13 +186,55 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 			}
 		}
 	}
+	// ---- L0 第二梯队：网关 /api/route（不调模型）----
+	if r.ServiceRouter != nil {
+		name, ok, err := r.ServiceRouter.Lookup(ctx, text)
+		switch {
+		case err != nil:
+			// fail-open 但**留痕**：不可用 ≠ 没有
+			ledgerNote = append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "route-unavailable:" + err.Error(), Escalated: false})
+		case ok && name != "":
+			return Decision{
+				Level: LevelL0, Action: ActionAnswer, Choice: name, Confidence: 0.9,
+				Reason: "L0 第二梯队：网关 /api/route 唯一命中（靠 aliases，抗 ASR 变形，不调模型）",
+				Ledger: append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "gateway-route", Escalated: false}),
+			}
+		default:
+			ledgerNote = append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "route-no-unique-hit", Escalated: false})
+		}
+	}
+	// ---- 升级（唯一触发器：调用方声明"需要多步推理"）----
+	if r.NeedsReasoning {
+		if r.L1 == nil {
+			return Decision{Level: LevelL05, Action: ActionAskUser, Degraded: true,
+				DegradedReason: "需要多步推理但 L1 未配置",
+				Reason:         "无可用的慢通道，回问用户（不假装答得了）",
+				Ledger:         append(ledgerNote, LedgerEntry{Level: LevelL1, Reason: "l1-unconfigured", Escalated: false})}
+		}
+		t := r.Timeout
+		if t <= 0 {
+			t = 5 * time.Second
+		}
+		cctx, cancel := context.WithTimeout(ctx, t)
+		defer cancel()
+		out, err := r.L1.Complete(cctx, text)
+		if err != nil {
+			return Decision{Level: LevelL0, Action: ActionAskUser, Degraded: true,
+				DegradedReason: "L1 调用失败：" + err.Error(),
+				Reason:         "慢通道失败，降级并回问",
+				Ledger:         append(ledgerNote, LedgerEntry{Level: LevelL1, Reason: "l1-failed", Escalated: true})}
+		}
+		return Decision{Level: LevelL1, Action: ActionAnswer, Choice: out,
+			Reason: "需要多步推理 ⇒ 升级 L1（deepseek-flash）",
+			Ledger: append(ledgerNote, LedgerEntry{Level: LevelL1, Reason: "needs-reasoning", Escalated: true})}
+	}
 	// ---- L0.5：JEV ----
 	if r.JEV == nil {
 		return Decision{
 			Level: LevelL0, Action: ActionAskUser,
 			Reason:   "无 JEV 可用且本地未命中：回问用户（不猜）",
 			Degraded: true, DegradedReason: "JEV 未配置",
-			Ledger: []LedgerEntry{{Level: LevelL0, Reason: "no-jev", Escalated: false}},
+			Ledger: append(ledgerNote, LedgerEntry{Level: LevelL0, Reason: "no-jev", Escalated: false}),
 		}
 	}
 	if r.Timeout <= 0 {
@@ -192,6 +246,10 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 	if kind == "" {
 		kind = KindFor(question + " " + text) // ① 按场景分派（不再恒为 custom）
 	}
+	if kind == KindCustom {
+		// ① 落空可见：分派失败必须留痕（否则"分派不准"会静默成"泛泛地问 JEV"）
+		ledgerNote = append(ledgerNote, LedgerEntry{Level: LevelL05, Reason: "kind_fallback=true", Escalated: false})
+	}
 	resp, err := r.JEV.Decide(cctx, JEVRequest{Kind: kind, Question: question, Situation: sit, Options: options})
 	if err != nil {
 		// 硬要求②：**非 200/超时一律当 JEV 不可用 ⇒ 降级 L0 + degraded**（不假设它总对）
@@ -199,7 +257,7 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 			Level: LevelL0, Action: ActionAskUser,
 			Reason:   "JEV 不可用，降级 L0 并回问（fail-open）",
 			Degraded: true, DegradedReason: "JEV 调用失败：" + err.Error(),
-			Ledger: []LedgerEntry{{Level: LevelL0, ModelID: "jev", Reason: "jev-unavailable", Escalated: false}},
+			Ledger: append(ledgerNote, LedgerEntry{Level: LevelL0, ModelID: "jev", Reason: "jev-unavailable", Escalated: false}),
 		}
 	}
 	if resp.Choice == "ambiguous" || resp.Choice == "" {
@@ -208,13 +266,13 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 			Level: LevelL05, Action: ActionAskUser,
 			Confidence: resp.Confidence, ModelID: resp.ModelID,
 			Reason: "JEV 判为 ambiguous（" + resp.Reason + "）⇒ 回问用户，不升级 L1",
-			Ledger: []LedgerEntry{{Level: LevelL05, ModelID: resp.ModelID, Reason: "jev-ambiguous", Escalated: false}},
+			Ledger: append(ledgerNote, LedgerEntry{Level: LevelL05, ModelID: resp.ModelID, Reason: "jev-ambiguous", Escalated: false}),
 		}
 	}
 	return Decision{
 		Level: LevelL05, Action: ActionAnswer, Choice: resp.Choice,
 		Confidence: resp.Confidence, ModelID: resp.ModelID, Reason: resp.Reason,
-		Ledger: []LedgerEntry{{Level: LevelL05, ModelID: resp.ModelID, Reason: "jev-decided", Escalated: true}},
+		Ledger: append(ledgerNote, LedgerEntry{Level: LevelL05, ModelID: resp.ModelID, Reason: "jev-decided", Escalated: true}),
 	}
 }
 

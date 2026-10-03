@@ -164,3 +164,97 @@ func (j *recordingJEV) Decide(ctx context.Context, req JEVRequest) (JEVResponse,
 	}
 	return JEVResponse{Choice: "ambiguous", Confidence: 0.5}, nil
 }
+
+type fakeRoute struct {
+	name string
+	ok   bool
+	err  error
+}
+
+func (f *fakeRoute) Lookup(ctx context.Context, q string) (string, bool, error) {
+	return f.name, f.ok, f.err
+}
+
+type fakeL1 struct {
+	out   string
+	err   error
+	calls int
+}
+
+func (f *fakeL1) Complete(ctx context.Context, prompt string) (string, error) {
+	f.calls++
+	return f.out, f.err
+}
+
+// 第二梯队：网关 /api/route 唯一命中 ⇒ L0 返回，**不调 JEV**（顺序铁律）。
+func TestGatewayRouteSecondTierAvoidsJEV(t *testing.T) {
+	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
+	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{name: "cicd", ok: true}, JEV: jev}
+	d := r.Route(context.Background(), "部署到生产", "部署到生产", Situation{})
+	if jev.calls != 0 {
+		t.Fatalf("[L0-2] 第二梯队命中却调了 JEV %d 次", jev.calls)
+	}
+	if d.Level != LevelL0 || d.Choice != "cicd" {
+		t.Fatalf("[L0-2] 决策不符: %+v", d)
+	}
+}
+
+// 第二梯队不可用 ⇒ fail-open 落到 L0.5，且**留痕**（不可用 ≠ 没有）。
+func TestGatewayRouteUnavailableFallsThroughWithTrace(t *testing.T) {
+	jev := &fakeJEV{resp: JEVResponse{Choice: "cicd", Confidence: 0.9, ModelID: "jev-v1-rules"}}
+	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{err: errors.New("HTTP 502（按不可用处理）")}, JEV: jev}
+	d := r.Route(context.Background(), "部署到生产", "部署到生产", Situation{})
+	if jev.calls != 1 {
+		t.Fatalf("[L0-2] 不可用时应继续走 L0.5: calls=%d", jev.calls)
+	}
+	found := false
+	for _, e := range d.Ledger {
+		if strings.Contains(e.Reason, "route-unavailable") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[L0-2] 第二梯队不可用未留痕: %+v", d.Ledger)
+	}
+}
+
+// kind 落空可见：分派落到 custom ⇒ 台账必须记 kind_fallback=true。
+func TestKindFallbackIsVisible(t *testing.T) {
+	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
+	r := &Router{Hot: hotCache(t), JEV: jev}
+	d := r.Route(context.Background(), "讲个笑话吧", "讲个笑话吧", Situation{})
+	found := false
+	for _, e := range d.Ledger {
+		if e.Reason == "kind_fallback=true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[kind] 落空未留痕（分派不准会静默成泛泛地问）: %+v", d.Ledger)
+	}
+}
+
+// 升级只有两个触发器之一：调用方声明"需要多步推理"；**不因"想更准"升级**。
+func TestEscalationOnlyOnReasoningNeed(t *testing.T) {
+	l1 := &fakeL1{out: "多步方案：先 A 再 B"}
+	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.99, ModelID: "jev-v1-rules"}}
+	// (a) 明确需要多步推理 ⇒ 升 L1
+	r1 := &Router{Hot: hotCache(t), JEV: jev, L1: l1, NeedsReasoning: true}
+	d1 := r1.Route(context.Background(), "先查库存再改报价最后提交", "多步目标", Situation{})
+	if d1.Level != LevelL1 || l1.calls != 1 {
+		t.Fatalf("[L1] 需要多步推理未升级: %+v calls=%d", d1, l1.calls)
+	}
+	if d1.Level == LevelL1 && d1.Ledger[len(d1.Ledger)-1].Escalated != true {
+		t.Errorf("[L1] 升级未记台账: %+v", d1.Ledger)
+	}
+	// (b) 不需要多步推理 ⇒ 即使 L1 可用也不升（不许"想更准就升"）
+	l1b := &fakeL1{out: "不该被调用"}
+	r2 := &Router{Hot: hotCache(t), JEV: jev, L1: l1b, NeedsReasoning: false}
+	d2 := r2.Route(context.Background(), "库存还有多少", "查库存", Situation{})
+	if l1b.calls != 0 {
+		t.Fatalf("[L1] 非多步任务却升级了（退化成什么都问大模型）: calls=%d", l1b.calls)
+	}
+	if d2.Level != LevelL05 {
+		t.Errorf("[L1] 应在 L0.5 停住: %+v", d2)
+	}
+}
