@@ -12,10 +12,11 @@ import "time"
 
 // Step 是管线中一步的运行摘要（同时用于 HTTP 响应与轨迹）。
 type Step struct {
-	Step   string  `json:"step"`
-	Ms     float64 `json:"ms"`
-	Source string  `json:"source"`
-	Detail string  `json:"detail,omitempty"`
+	Step   string        `json:"step"`
+	Kind   TraceStepKind `json:"kind"` // 具名类型（EXEC-05 v2：自由字符串步骤写不出来）
+	Ms     float64       `json:"ms"`
+	Source string        `json:"source"`
+	Detail string        `json:"detail,omitempty"`
 }
 
 // Pipeline 是本地理解管线的执行者。
@@ -64,11 +65,11 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 
 	emit := func(name, source, detail string, d time.Duration) {
 		ms := float64(d.Microseconds()) / 1000.0
-		res.Steps = append(res.Steps, Step{Step: name, Ms: ms, Source: source, Detail: detail})
+		res.Steps = append(res.Steps, Step{Step: name, Kind: kindForStep(name), Ms: ms, Source: source, Detail: detail})
 		if p.Tracer != nil {
 			_ = p.Tracer.Append(TraceRecord{
 				RequestID: res.RequestID, SessionID: session,
-				Step: name, Ms: ms, Source: source, Detail: detail,
+				Step: name, Kind: kindForStep(name), Ms: ms, Source: source, Detail: detail,
 			})
 		}
 	}

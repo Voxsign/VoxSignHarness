@@ -19,13 +19,14 @@ import (
 
 // TraceRecord 是轨迹中的一条记录。
 type TraceRecord struct {
-	RequestID string  `json:"request_id"`
-	SessionID string  `json:"session_id,omitempty"`
-	Step      string  `json:"step"`   // retain|clean|dict|context|reference|intent|domain|punctuate
-	Ms        float64 `json:"ms"`     // 该步耗时（毫秒）
-	Source    string  `json:"source"` // 命中来源（rule:xxx / dictionary / store / -）
-	Detail    string  `json:"detail,omitempty"`
-	At        string  `json:"at"` // RFC3339Nano（UTC）
+	Kind      TraceStepKind `json:"kind,omitempty"`
+	RequestID string        `json:"request_id"`
+	SessionID string        `json:"session_id,omitempty"`
+	Step      string        `json:"step"`   // retain|clean|dict|context|reference|intent|domain|punctuate
+	Ms        float64       `json:"ms"`     // 该步耗时（毫秒）
+	Source    string        `json:"source"` // 命中来源（rule:xxx / dictionary / store / -）
+	Detail    string        `json:"detail,omitempty"`
+	At        string        `json:"at"` // RFC3339Nano（UTC）
 }
 
 // Tracer 是 append-only 的轨迹写入器。

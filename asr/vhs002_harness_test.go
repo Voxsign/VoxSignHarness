@@ -84,10 +84,10 @@ func TestMain(m *testing.M) {
 
 		pipe := NewPipeline(NewEngine(), dict, tracer)
 		srvObj := NewServer(pipe)
-		// ⚠️ G2 教词后端（Teach / pipe.Hot）**暂不接线**：
-		// K9 的缓存改写会往轨迹里加 "hotcache" 步，而测试方 ASR-EXEC-05
-		// 将其判为"非理解步骤"。**判据归测试方，不绕开** ⇒ 停手上报，等其升版后再接。
-		_ = srvObj
+		// G2 教词后端已接线（ASR-EXEC-05 v2 起 hotcache 属"零副作用纠错步骤"，天然合法）。
+		store := &teachStore{m: map[string]string{}}
+		srvObj.Teach = store.Teach
+		pipe.Hot = store
 		// 有 key 就接**真实** default 通道做兜底；没有则纯本地（缺 key 不内置、不失败）。
 		if os.Getenv("AIOPS_KEY") != "" {
 			if cfg, err := modelcenter.Load("../config/model-center.json"); err == nil {

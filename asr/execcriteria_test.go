@@ -18,6 +18,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -194,35 +195,91 @@ func TestASREXEC04EndToEndDoesNotExecute(t *testing.T) {
 
 // ASR-EXEC-05：轨迹里不得出现"执行"步骤。
 func TestASREXEC05TraceHasNoExecStep(t *testing.T) {
+	// **v2（Lead 发起 v1→v2）**：
+	// ① 轨迹步骤用**具名类型** `kind`（自由字符串步骤编译期写不出来）——
+	//    不再维护"合法步骤名白名单"（白名单必然漏）；
+	// ② 断言**零副作用**，而不是断言"步骤名合法"。
 	base := serviceBase(t)
 	traces := os.Getenv("VHS_ASR_TRACES")
 	if traces == "" {
 		t.Fatalf("[criterion] 需要 VHS_ASR_TRACES 指向 traces-asr.jsonl（未配置 → 先红）")
 	}
+
+	// ②-a 处理前后：**cwd 下的文件集合与大小不得变化**（dataDir 之外的副作用检查）
+	before := snapshotTree(t, ".", traces)
+
 	postJSON(t, base+"/v1/process", `{"text":"查一下库存","session_id":"trace-probe"}`)
 
+	after := snapshotTree(t, ".", traces)
+	for path, size := range after {
+		if old, ok := before[path]; !ok {
+			t.Errorf("[ASR-EXEC-05 v2] 处理文本产生了新文件（疑似副作用）: %s", path)
+		} else if old != size {
+			t.Errorf("[ASR-EXEC-05 v2] 处理文本改动了 dataDir 之外的文件: %s（%d→%d）", path, old, size)
+		}
+	}
+	for path := range before {
+		if _, ok := after[path]; !ok {
+			t.Errorf("[ASR-EXEC-05 v2] 处理文本删除了文件（疑似副作用）: %s", path)
+		}
+	}
+
+	// ① 每行轨迹必须带**枚举内**的 kind
 	data, err := os.ReadFile(traces)
 	if err != nil {
-		t.Fatalf("[ASR-EXEC-05] 读轨迹失败: %v", err)
+		t.Fatalf("[ASR-EXEC-05 v2] 读轨迹失败: %v", err)
 	}
-	allowed := map[string]bool{
-		"retain": true, "clean": true, "dict": true, "context": true,
-		"reference": true, "intent": true, "domain": true, "punctuate": true,
+	valid := map[TraceStepKind]bool{
+		StepRetain: true, StepCorrect: true, StepLexicon: true, StepPunctuate: true, StepCache: true,
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		var rec struct {
-			Step string `json:"step"`
+			Step string        `json:"step"`
+			Kind TraceStepKind `json:"kind"`
 		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("[ASR-EXEC-05] 轨迹行不是 JSON: %q", line)
+			t.Fatalf("[ASR-EXEC-05 v2] 轨迹行不是 JSON: %q", line)
 		}
-		if !allowed[rec.Step] {
-			t.Errorf("[ASR-EXEC-05] 轨迹出现非理解步骤 %q —— 疑似执行痕迹", rec.Step)
+		if !valid[rec.Kind] {
+			t.Errorf("[ASR-EXEC-05 v2] 步骤 %q 的 kind=%q 不在具名枚举内"+
+				"（自由字符串步骤不该写得出来）", rec.Step, rec.Kind)
 		}
 	}
+	// ⚠️ 诚实边界：出网调用与"进程数不增"**未在本判据内独立断言**；
+	// 本地路径无出网（唯一声明的出网路径是 env 守卫的模型兜底）。
+}
+
+// snapshotTree 记录 root 下的 路径→大小（排除 exclude 与数据目录），用于副作用比对。
+func snapshotTree(t *testing.T, root, exclude string) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.Contains(path, "asr-data") || strings.HasSuffix(path, ".git") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if path == exclude || strings.Contains(path, "asr-data") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		out[path] = info.Size()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // ASR-EXEC-06：域只建议、不授权；默认拒绝，不猜高权限域。
