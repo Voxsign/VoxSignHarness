@@ -1,50 +1,44 @@
-个性化后台 运行说明
+README.md（中文运行说明）
 
-一、环境
-Python 3.10+，仅标准库（可选依赖见 requirements.txt）。
-默认全部数据写入独立数据目录，不在源码目录内落任何文件。
+个性化后台实现 —— 本地优先的个人化文本处理服务
 
-二、启动
-python -m app.server --host 127.0.0.1 --port 8088 --data-dir ./data
-可选参数：
---token  devtoken            占位鉴权令牌，不传则读环境变量 ADMIN_TOKEN，两者都无则鉴权关闭但仍保留校验入口
---data-dir ./data            数据目录，不存在则自动创建
---dict ./data/dict.json      个性化词典路径，默认取 data-dir/dict.json
+一、环境要求
+Go 1.21 或以上；无需数据库，数据全部以 JSONL 文件追加写入本地数据目录。
 
-仅允许绑定 127.0.0.1 / ::1。传入非回环地址（如 0.0.0.0）直接启动失败并报错退出。
-服务起来后打印监听地址、数据目录、鉴权状态。
+二、启动命令
+构建：go build -o pbackend .
+启动（默认）：./pbackend
+指定监听与数据目录：./pbackend -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
+参数说明：
+-addr 监听地址，默认 127.0.0.1:8080，仅允许回环地址，非 127.0.0.1 的地址会被拒绝启动。
+-data-dir 数据目录，默认 ./data，不存在时自动创建。
+-token 占位鉴权令牌；留空时不校验。请求需带 Authorization: Bearer <token>。
 
-三、端点
-GET  /v1/health
-     返回 {"status":"ok","version":"...","data_dir":"...","uptime_s":N}
-     不需要鉴权。
+三、HTTP 端点
+GET /v1/health
+  健康检查，返回 {"status":"ok"}，无需鉴权。
 
 POST /v1/process
-     请求：{"text":"...","action":"auto","feedback":null}
-     响应：{"trace_id":"...","intent":"NOTE","corrected":"...","edits":[...],"hits":[...]}
-     intent 取值：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-     corrected 为清洗 + 词典纠错后的文本，正常文本原样返回（无改动则 corrected == text，edits 为空）
-     action 可选 dict_add / dict_del / dict_get / dict_list，用于个性化词典增删查；
-       dict_add: {"action":"dict_add","term":"...","replacement":"...","note":"..."}
-       dict_del: {"action":"dict_del","term":"..."}
-       dict_get: {"action":"dict_get","term":"..."}
-       dict_list: {"action":"dict_list"}（可选 "limit"/"offset"）
+  统一业务入口，Content-Type: application/json，需鉴权。
+  请求体示例：
+  {"text":"明天开会要带合同","intent":"","feedback":null}
+  字段：text 待处理文本；intent 可选，指定时跳过分类；feedback 可选，取值 "ok" 或 "bad"。
+  响应体示例：
+  {"ok":true,"intent":"NOTE","corrected":"明天开会要带合同","edits":[],"trace_id":"..."}
+  intent 取值：NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE。
 
-POST /v1/feedback
-     请求：{"trace_id":"...","verdict":"up"}  verdict 取 up(✔) / down(✘)，可带 "note"
-     以 append-only 方式追加到 feedback.jsonl，用于后续学习。
+四、个性化词典接口
+POST /v1/dict/add    新增条目，body: {"term":"合同","aliases":["合约"],"weight":1}
+POST /v1/dict/delete 删除条目，body: {"term":"合同"}
+GET  /v1/dict/list   查询全部条目
 
-鉴权（占位）：除 /v1/health 外，均需 Authorization: Bearer <token>。校验函数已留出接口，替换为真实实现即可。
+五、数据文件（均位于 -data-dir 目录，JSONL，append-only，只追加不覆写）
+traces.jsonl   每次 /v1/process 的输入、纠错结果、意图与 trace_id
+usage.jsonl    调用统计：时间戳、端点、耗时、状态码
+feedback.jsonl 反馈学习记录：trace_id、反馈值 ok/bad、时间戳
+dict.json      个性化词典快照，供启动时加载
 
-四、数据文件（均为 JSONL append-only，除 dict.json 外）
-data/dict.json        个性化词典，结构 {"version":1,"entries":[...]}，写入用临时文件 + 原子替换
-data/feedback.jsonl   反馈记录，每行 {"ts","trace_id","verdict","note","snapshot"}
-data/traces.jsonl     每次 /v1/process 的完整轨迹：原始文本、清洗结果、纠错 edits、命中词条、最终 intent
-data/usage.jsonl      调用用量：ts、endpoint、action、耗时 ms、状态码、是否命中词典
-
-五、自检
-GET /v1/health 返回 ok 即服务正常。
-发送一条测试请求确认链路：
-curl -s -X POST http://127.0.0.1:8088/v1/process -H "Content-Type: application/json" -d '{"text":"帮我记一下明天开会"}'
-预期 intent=NOTE，corrected 与原文一致或仅有词典命中替换。
-确认数据目录已生成 feedback.jsonl / traces.jsonl / usage.jsonl，且每次调用行数只增不减。
+六、行为说明
+文本纠错先做清洗（去多余空白、全半角归一），再按词典做匹配替换；未命中词典的文本保持原样，正常文本不会被改坏。
+意图分类按关键词与词典权重规则判定，无法判定时归为 QUERY。
+反馈回馈仅追加写入 feedback.jsonl，不阻塞主流程，写入失败只记录日志。
