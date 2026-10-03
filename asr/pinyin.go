@@ -92,6 +92,7 @@ var pinyinGroups = []pinyinGroup{
 	{"guang", "光广"},
 	{"gui", "贵归规"},
 	{"guo", "过国果锅"},
+	{"ha", "哈"},
 	{"hai", "还海害孩"},
 	{"han", "汉含喊寒"},
 	{"hao", "好号毫豪"},

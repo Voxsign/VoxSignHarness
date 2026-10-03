@@ -69,11 +69,11 @@ type Result struct {
 
 // Cache 是三层缓存。
 type Cache struct {
-	l0      Snapshot
 	l1Path  string
 	ttl     time.Duration
 	fetcher func(ctx context.Context) (Snapshot, error) // L2 远端刷新
 	now     func() time.Time
+	st      *state
 }
 
 // New 构造缓存；l1Path 为空则不落盘；fetcher 为空则无远端（纯本地）。
@@ -81,24 +81,4 @@ func New(l1Path string, ttl time.Duration, fetcher func(ctx context.Context) (Sn
 	return &Cache{l1Path: l1Path, ttl: ttl, fetcher: fetcher, now: time.Now}
 }
 
-// Observe 记一次热词出现（L0）。
-func (c *Cache) Observe(term, source string) {}
-
-// PutAlias 登记别名（L0；Refresh 时来自 L2 的会落 L1）。
-func (c *Cache) PutAlias(alias, canonical, source string) {}
-
-// Lookup 做四路关联度匹配（K3）。
-func (c *Cache) Lookup(term string) (Result, bool) { return Result{}, false }
-
-// Refresh 从 L2 刷新并落 L1；失败 fail-open 标 unknown（K5）。
-func (c *Cache) Refresh(ctx context.Context) Snapshot { return Snapshot{} }
-
-// Snapshot 返回当前快照（含三态）。
-func (c *Cache) Snapshot() Snapshot { return Snapshot{} }
-
-// Clear 清空三层（K6）。
-func (c *Cache) Clear() {}
-
-// Save/Load 是 L1 持久化（K6：可删可重建）。
-func (c *Cache) Save() error { return nil }
-func (c *Cache) Load() error { return nil }
+// 行为实现见 cache_impl.go。
