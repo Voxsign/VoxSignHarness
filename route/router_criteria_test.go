@@ -345,3 +345,43 @@ func TestLedgerWiredIntoRouting(t *testing.T) {
 		t.Errorf("[台账接线] 层级分布缺失: %+v", s.ByLevel)
 	}
 }
+
+// P4④：真实路由一次后，WorkingMemory 必须非空且含本轮实体。
+func TestRouterAutoBuildsWorkingMemory(t *testing.T) {
+	wm := &plan.WorkingMemory{}
+	r := &Router{Hot: hotCache(t), WM: wm}
+	d := r.Route(context.Background(), "爱ops", "爱ops 是什么", Situation{})
+	if len(wm.Items()) == 0 {
+		t.Fatal("[P4④] 路由后工作记忆仍为空（永远是被喂的）")
+	}
+	found := false
+	for _, it := range wm.Items() {
+		if strings.Contains(it.Element, d.Choice) || it.Element == "爱ops 是什么" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[P4④] 工作记忆未含本轮实体: %+v", wm.Items())
+	}
+}
+
+// 记账失败必须留痕（fail-open 但不能静默）。
+func TestLedgerWriteFailureLeavesTrace(t *testing.T) {
+	// 用一个**无法创建**的路径触发写失败（父路径是文件而非目录）。
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Router{Hot: hotCache(t), Ledger: &Ledger{Path: filepath.Join(blocker, "ledger.jsonl")}}
+	d := r.Route(context.Background(), "爱ops", "q", Situation{})
+	found := false
+	for _, e := range d.Ledger {
+		if strings.Contains(e.Reason, "ledger_write_failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[台账] 写失败未留痕（静默）: %+v", d.Ledger)
+	}
+}

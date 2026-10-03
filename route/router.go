@@ -161,6 +161,8 @@ type Router struct {
 	L1 L1Model
 	// NeedsReasoning 由调用方声明"这是多步推理任务"（唯一升级触发器之一）。
 	NeedsReasoning bool
+	// WM 非空时，**每次路由自动写入本轮实体**（否则四块板永远是"被喂的"）。
+	WM *plan.WorkingMemory
 	// Ledger 非空时，**每次路由结束都自动落盘一条**（不接 = 台账在跑但记的是空的）。
 	Ledger    *Ledger
 	Threshold float64
@@ -183,8 +185,18 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 		kind = KindFor(question + " " + text)
 	}
 	d := r.routeOnce(ctx, text, question, sit)
+	// 自动构建工作记忆（P4）：本轮问句进情景板，结论进活跃实体板。
+	if r.WM != nil {
+		r.WM.Remember("situation", plan.BoardItem{Element: text, Source: "route:" + string(d.Level)})
+		if d.Choice != "" {
+			r.WM.Remember("working_set", plan.BoardItem{Element: d.Choice, Source: "route:" + string(d.Level)})
+		}
+	}
 	if r.Ledger != nil {
-		_ = r.Ledger.Write(d, question, kind) // 落盘失败不影响路由结果（fail-open）
+		if err := r.Ledger.Write(d, question, kind); err != nil {
+			// fail-open（记账失败不该阻断路由），但**必须留痕**，不许静默。
+			d.Ledger = append(d.Ledger, LedgerEntry{Level: d.Level, Reason: "ledger_write_failed:" + err.Error()})
+		}
 	}
 	return d
 }
