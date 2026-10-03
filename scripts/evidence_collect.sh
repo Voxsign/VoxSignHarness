@@ -2,6 +2,7 @@
 # evidence_collect.sh —— **C 通道：代码证据采集**（`skills/validate-align/SKILL.md` v2 承诺的脚本之一）。
 #
 # 依据（skill 原文）：
+#   ⚠️ **C 通道只认代码**：`.md/.txt/.json/.yaml` 等文档中的字样**不算 C 证据**（skill：只有文档 = ✗）。
 #   | **C 代码校准** | 判据 → 实现代码真值：存在性/结构/接线 | git grep + Read 源码：接口、结构、调用链 | 每条判据的代码证据（文件:行） |
 #   | 评分规则 | 每条判据 PASS = **C 证据 + R 证据双证齐**；只 C 无 R = ◐ 待真跑；只有文档 = ✗ |
 #
@@ -69,7 +70,17 @@ grep -vE '^\s*(#|$)' "$LIST" | while IFS= read -r line; do
   path=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')
   [ -z "$path" ] && path="."
 
-  hits=$(git -C "$ROOT" grep -nE -- "$pat" -- "$path" 2>/dev/null | head -5)
+  # ⚠️ **C 通道 = 代码真值 ⇒ 必须排除文档**（2026-10-03 实测发现）：
+  # 第一次真跑时，V-02/V-04 的**首条**命中是 `tasks/VHS-VOICE-001-*.md`（规格文档本身）。
+  # ⚠️ 但**修不修这条排除，都不影响那两条的判定** —— 它们在 `trajectory/kinds.go:20/21`
+  #    有**真实现**（`IntentSourceASR` / `IntentSourceTextFallback`）。
+  #    ⇒ 排除规则失效是**真 bug**，但它**没有污染本次结论**（我一度误以为那两条是假阳性，那是错的）。
+  # 而 skill 明写：**只有文档 = ✗**。⇒ 排除 *.md/*.txt/*.json/*.yaml 等非代码，
+  #    除非调用方**显式**把路径限定为文档（那时由人负责语义）。
+  # ⚠️ 排除正则必须同时匹配 `.md:` 与 `.md":` —— git grep 对含非 ASCII 的路径**会加引号**，
+  # 只写 `\.md:` 会**静默失效**（2026-10-03 实测：排除规则写了但一条都没排掉）。
+  hits=$(git -C "$ROOT" grep -nE -- "$pat" -- "$path" 2>/dev/null \
+           | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' | head -5)
   n=$(printf '%s' "$hits" | grep -c . 2>/dev/null || echo 0)
 
   if [ "$n" -gt 0 ]; then
