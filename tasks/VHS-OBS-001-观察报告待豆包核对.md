@@ -26,10 +26,11 @@ cat docs/观察报告-待豆包核对-2026-10-03.md     # 完整 9 条（含复�
 
 ---
 
-## 1. ⭐ 两条高严重度 —— **同一个根因，建议一并评估**
+## 1. ⭐ **三条**现象 · **同一个根因** —— 建议**一并评估、一处修好解三条**
 
-### OBS-04 `/v1/run` 创建的任务**不落盘** ⇒ 重启后丢失
-### OBS-08 `/v1/run` **不做 `request_id` 去重** ⇒ 重复提交 = 重复执行
+### OBS-04 `/v1/run` 创建的任务**不落盘** ⇒ 重启后丢失　（高）
+### OBS-08 `/v1/run` **不做 `request_id` 去重** ⇒ 重复提交 = 重复执行　（高）
+### OBS-09 `/v1/run` 的 `role` **为空**，`/v1/tasks` 的为 `verifier`　（中）
 
 **实测（对照同时成立）**
 ```
@@ -48,10 +49,17 @@ cat docs/观察报告-待豆包核对-2026-10-03.md     # 完整 9 条（含复�
 ```
 server.go:184  "/v1/run"   ⇒ handleRun
 server.go:259  handleRun：**自己 `s.tasks[ts.ID] = ts`**（手动入 map）· **未调 `spawnTask`**
-               ⇒ ⇒ 跳过 `spawnTask:559` 里的两件事：
-                     · `s.persist(ts)`            ⇒ 不落盘（OBS-04）
-                     · `s.byReq[requestID] = ts.ID` ⇒ 不去重（OBS-08）
-server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 两件都做 ✅
+               ⇒ ⇒ **跳过 `spawnTask:559` 做的三件事**：
+                     · `s.persist(ts)`              ⇒ **不落盘**（OBS-04）
+                     · `s.byReq[requestID] = ts.ID` ⇒ **不去重**（OBS-08）
+                     · `Role: RolePlanner`          ⇒ **角色未初始化**（OBS-09）
+server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 三件都做 ✅
+```
+**OBS-09 实测**
+```
+同一输入，两入口各一次：
+  /v1/tasks ⇒ role = 'verifier'  · attribution「意图分类正确，执行与校验通过」
+  /v1/run   ⇒ role = ''（空）     · attribution「意图分类正确，执行与校验通过」（**相同**）
 ```
 
 **为什么 OBS-08 比 OBS-04 更严重**
@@ -62,7 +70,9 @@ server.go:179  "/v1/tasks" ⇒ handleTasksPost ⇒ `ts := s.spawnTask(…)` ⇒ 
 ⇒ 且两者都是**静默的**（响应里没有任何提示）
 ```
 
-> ⚠️ **我只报位置，不给修法**（"统一走 `spawnTask`" vs "在 `handleRun` 补 `persist`/`byReq`"
+> ⇒ **一处修好应同时解三条**（改法仍有取舍：见下）
+
+⚠️ **我只报位置，不给修法**（"统一走 `spawnTask`" vs "在 `handleRun` 补 `persist`/`byReq`"
 > 各有风险 —— 前者可能改变 `/v1/run` 的其它语义，后者可能遗漏 `spawnTask` 的其它附带行为）。
 
 ---
