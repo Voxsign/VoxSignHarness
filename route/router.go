@@ -89,6 +89,12 @@ type Decision struct {
 	Degraded       bool
 	DegradedReason string
 	Ledger         []LedgerEntry
+	// WMCAP 留痕（由工作记忆侧填入；台账据此回答"为什么这次抓了 N 个"）。
+	Capacity    int
+	DemandFloor int
+	Familiarity float64
+	Capped      bool
+	DropCount   int
 }
 
 // kindWords 是**场景分派**规则（不猜：按目标/问句里的信号词选 kind）。

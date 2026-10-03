@@ -45,6 +45,11 @@ type WMStats struct {
 	Drop      int      `json:"w_drop"`                 // 因握不住被丢弃的要素数
 	DropTrace []string `json:"w_drop_trace,omitempty"` // WM-2：丢弃必须留痕
 	ChainLen  int      `json:"chain_len"`              // 计划能排到第几步
+	// WMCAP 留痕（VHS-WMCAP-001 C1/C2/WMC-5）：容量变化必须可解释。
+	Capacity    int     `json:"capacity,omitempty"`
+	DemandFloor int     `json:"demand_floor,omitempty"`
+	Familiarity float64 `json:"familiarity,omitempty"`
+	Capped      bool    `json:"capped,omitempty"`
 }
 
 // Plan 是一次规划的结果。
@@ -173,6 +178,16 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 			Reason:     "待决板非空，先问再动",
 			Considered: cons, WM: wm}, nil
 	}
+	// 需求下限 = 目标里**显式提到**的实体数（一个都不提 ⇒ 1）；
+	// 供给 = 活跃实体板。两者分开，容量才有意义（否则永远够用、公式空转）。
+	if w.DemandFloor <= 0 {
+		w.DemandFloor = 1
+		for _, it := range w.WorkingSet {
+			if strings.Contains(goal, it.Element) {
+				w.DemandFloor++
+			}
+		}
+	}
 	// 活跃实体板驱动链长：每个被握住的实体 ⇒ 读 + 改，末尾提交。
 	var steps []Step
 	for range w.BoundedWorkingSet() {
@@ -189,6 +204,8 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 			Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Considered: cons, WM: wm}, nil
 	}
 	cons, wm := observe(goal, m, steps, nil)
+	ct := w.CapacityFor()
+	wm.Capacity, wm.DemandFloor, wm.Familiarity, wm.Capped = ct.Capacity, ct.DemandFloor, ct.Familiarity, ct.Capped
 	plan := Plan{Goal: goal, Source: "rule", Steps: steps, Considered: cons, WM: wm}
 	plan.WM.Drop = len(w.DropTrace)
 	plan.WM.DropTrace = append([]string(nil), w.DropTrace...)

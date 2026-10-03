@@ -70,26 +70,115 @@ func TestWM2DropIsTracedAndBounded(t *testing.T) {
 	}
 }
 
-// WM-1：同一**多实体**目标，扩工作记忆（容量）后链长必须变长。
+// WM-1（新形态，VHS-WMCAP-001）：**熟悉度↑ ⇒ 容量↑ ⇒ 链长↑**。
 //
-// 诚实边界：本判据只在"目标本身是多实体"时成立；单实体目标扩容量**不会**变长
-// （见 docs 登记：WM-1 是假设，不是普适规律）。
-func TestWM1LargerMemoryYieldsLongerChain(t *testing.T) {
+// 若此条不成立 ⇒ "容量"这个变量对本系统无用，应砍掉概念而不是调参（如实报告）。
+func TestWM1FamiliarityRaisesCapacityAndChain(t *testing.T) {
 	m := wmFixture(t)
-	goal := "改这些模块|a|b|c|d|e|f|g|h|i|j|k|l"
-	small, err := LocalPlanner{}.PlanWithMemory(goal, m, 4)
+	const n = 30
+	build := func(familiar bool) *WorkingMemory {
+		w := &WorkingMemory{DemandFloor: 2} // 目标显式提到 2 个实体
+		for i := 0; i < n; i++ {
+			src := "session"
+			if familiar {
+				src = "hotcache" // 命中本地缓存 = 熟悉
+			}
+			w.Remember("working_set", BoardItem{Element: "模块" + string(rune('A'+i%26)) + string(rune('a'+i/26)), Source: src})
+		}
+		return w
+	}
+	cold := build(false)
+	hot := build(true)
+	capCold := cold.CapacityFor()
+	capHot := hot.CapacityFor()
+	if capHot.Capacity <= capCold.Capacity {
+		t.Fatalf("[WMC-2] 熟悉度↑ 容量未↑: %d → %d", capCold.Capacity, capHot.Capacity)
+	}
+	pCold, err := LocalPlanner{}.PlanWithWorkingMemory("改这两个模块", m, cold)
 	if err != nil {
-		t.Fatalf("[WM-1] 小容量规划失败: %v", err)
+		t.Fatal(err)
 	}
-	large, err := LocalPlanner{}.PlanWithMemory(goal, m, 12)
+	pHot, err := LocalPlanner{}.PlanWithWorkingMemory("改这两个模块", m, hot)
 	if err != nil {
-		t.Fatalf("[WM-1] 大容量规划失败: %v", err)
+		t.Fatal(err)
 	}
-	if len(large.Steps) <= len(small.Steps) {
-		t.Errorf("[WM-1] 扩容后链长未变长: %d → %d（假设可能不成立，如实报告）", len(small.Steps), len(large.Steps))
+	if len(pHot.Steps) <= len(pCold.Steps) {
+		t.Errorf("[WM-1新] 熟悉度↑ 容量↑（%d→%d）但链长未变长（%d→%d）⇒ 容量变量可能无用",
+			capCold.Capacity, capHot.Capacity, len(pCold.Steps), len(pHot.Steps))
 	}
-	if small.WM.Drop == 0 {
-		t.Errorf("[WM-1] 小容量应发生丢弃且留痕: %+v", small.WM)
+}
+
+// WMC-1：熟悉度 0 → 容量落在 [3,10]。
+func TestWMC1ColdCapacityInLowBand(t *testing.T) {
+	tr := DefaultWMCap.Capacity(1, 10, 0)
+	if tr.Capacity < 3 || tr.Capacity > 10 {
+		t.Errorf("[WMC-1] 熟悉度 0 容量=%d，应在 [3,10]", tr.Capacity)
+	}
+}
+
+// WMC-2：熟悉度↑ ⇒ 容量↑，且不超 max。
+func TestWMC2CapacityIncreasesWithFamiliarity(t *testing.T) {
+	prev := 0
+	for _, fam := range []int{0, 3, 6, 9, 10} {
+		tr := DefaultWMCap.Capacity(5, 10, fam)
+		if tr.Capacity < prev {
+			t.Errorf("[WMC-2] 熟悉度上升但容量下降: %d → %d", prev, tr.Capacity)
+		}
+		if tr.Capacity > DefaultWMCap.Max {
+			t.Errorf("[WMC-2] 容量超 max: %d", tr.Capacity)
+		}
+		prev = tr.Capacity
+	}
+}
+
+// WMC-3（关键）：**熟悉度 ↓ ⇒ 容量必须跟着 ↓**（只涨不跌 = 退化成固定 max）。
+func TestWMC3CapacityDecreasesWhenFamiliarityDrops(t *testing.T) {
+	hot := DefaultWMCap.Capacity(8, 10, 9)
+	cold := DefaultWMCap.Capacity(8, 10, 1)
+	if cold.Capacity >= hot.Capacity {
+		t.Fatalf("[WMC-3] 熟悉度下降容量未降: hot=%d cold=%d ⇒ 动态退化", hot.Capacity, cold.Capacity)
+	}
+}
+
+// WMC-4：封顶时 capped=true 且 DropTrace 有记录。
+func TestWMC4CappedIsVisibleWithDropTrace(t *testing.T) {
+	tr := DefaultWMCap.Capacity(20, 20, 20) // 需求 20 × (1+1) = 40 > max 20
+	if !tr.Capped {
+		t.Errorf("[WMC-4] 封顶未标记: %+v", tr)
+	}
+	if tr.Capacity != DefaultWMCap.Max {
+		t.Errorf("[WMC-4] 封顶后应等于 max: %+v", tr)
+	}
+	w := &WorkingMemory{DemandFloor: 30}
+	for i := 0; i < 30; i++ {
+		w.Remember("working_set", BoardItem{Element: "e" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Source: "hotcache"})
+	}
+	ct := w.CapacityFor()
+	if ct.DropCount == 0 || len(ct.DropTrace) != ct.DropCount {
+		t.Errorf("[WMC-4] 溢出未留痕: %+v", ct)
+	}
+}
+
+// WMC-5：容量变化全部留痕（capacity / 需求下限 / 熟悉度 / 是否封顶）。
+func TestWMC5CapacityTraceIsComplete(t *testing.T) {
+	w := &WorkingMemory{DemandFloor: 4}
+	for i := 0; i < 10; i++ {
+		src, el := "session", "x"+string(rune('a'+i))
+		if i%2 == 0 {
+			src = "manifest" // 一半熟悉
+		}
+		w.Remember("working_set", BoardItem{Element: el, Source: src})
+	}
+	m := wmFixture(t)
+	p, err := LocalPlanner{}.PlanWithWorkingMemory("改这个", m, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.WM.Capacity == 0 || p.WM.DemandFloor == 0 {
+		t.Errorf("[WMC-5] 容量/需求下限未留痕: %+v", p.WM)
+	}
+	if p.WM.Familiarity <= 0 || p.WM.Familiarity > 1 {
+		t.Errorf("[WMC-5] 熟悉度未留痕或越界: %v", p.WM.Familiarity)
 	}
 }
 

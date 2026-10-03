@@ -71,6 +71,8 @@ func (l *Ledger) Write(d Decision, task string, kind Kind) error {
 		At: now().UTC().Format(time.RFC3339Nano), Task: task, Level: d.Level,
 		ModelID: d.ModelID, Reason: d.Reason, Escalated: escalated, Degraded: d.Degraded,
 		Outcome: outcome, Kind: kind, KindFallback: kindFallback, RouteAmbiguous: routeAmbiguous,
+		Capacity: d.Capacity, DemandFloor: d.DemandFloor, Familiarity: d.Familiarity,
+		Capped: d.Capped, DropCount: d.DropCount,
 	}
 	if err := os.MkdirAll(filepath.Dir(l.Path), 0o700); err != nil {
 		return err
