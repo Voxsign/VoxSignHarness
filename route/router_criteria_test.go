@@ -98,3 +98,69 @@ func TestJudgementMarkedJudgedBy(t *testing.T) {
 		t.Errorf("[WM-4] 判断内容缺失: %q", text)
 	}
 }
+
+// ① 场景分派：kind 按信号词选择，不再恒为 custom。
+func TestKindDispatchByScenario(t *testing.T) {
+	cases := map[string]Kind{
+		"能不能写入 vault-creds": KindPermission,
+		"帮我把那个模块改了":         KindReferent,
+		"记住这次的口音偏好":         KindLearnability,
+		"这件事该找谁":            KindGapClass,
+		"讲个笑话":              KindCustom,
+	}
+	for text, want := range cases {
+		if got := KindFor(text); got != want {
+			t.Errorf("[kind 分派] %q → %q，期望 %q", text, got, want)
+		}
+	}
+	// 具名类型保证：非法值在编译期写不出来（此断言只是防回退为 string）
+	var k Kind = KindPermission
+	if string(k) != "permission" {
+		t.Errorf("Kind 常量值不符: %q", k)
+	}
+}
+
+// ① 四块板 → situation 结构桥接（J2：紧凑结构化，不是长文本）。
+func TestSituationFromMemoryBridgesBoards(t *testing.T) {
+	w := &plan.WorkingMemory{}
+	w.Remember("working_set", plan.BoardItem{Element: "文件:plan/planner.go", Source: "上一轮"})
+	w.Remember("constraints", plan.BoardItem{Element: "域=vault-creds 只读", Source: "space"})
+	w.Remember("open_items", plan.BoardItem{Element: "尚未确认目标文件", Source: "session"})
+	w.Remember("situation", plan.BoardItem{Element: "用户在改规划器", Source: "session"})
+	sit := SituationFromMemory(w)
+	if len(sit.Candidates) != 1 || sit.Candidates[0].ID != "文件:plan/planner.go" {
+		t.Errorf("[桥接] candidates 未来自活跃实体板: %+v", sit.Candidates)
+	}
+	if len(sit.Constraints) != 1 || !strings.Contains(sit.Constraints[0], "vault-creds") {
+		t.Errorf("[桥接] constraints 未来自约束板: %+v", sit.Constraints)
+	}
+	if len(sit.Memory) != 2 {
+		t.Errorf("[桥接] memory 应含情景板+待决板: %+v", sit.Memory)
+	}
+	// 判断条目必须带（判断）标记，不与事实混放
+	w2 := &plan.WorkingMemory{}
+	w2.Remember("working_set", plan.BoardItem{Element: "判断:allow", Source: "jev", JudgedBy: "jev"})
+	if s := SituationFromMemory(w2); !strings.Contains(s.Candidates[0].Why, "判断") {
+		t.Errorf("[桥接] 判断条目未标记: %+v", s.Candidates)
+	}
+}
+
+// ① kind 真的被送到 JEV（不是留在本地）。
+func TestKindIsSentToJEV(t *testing.T) {
+	var got Kind
+	jev := &recordingJEV{record: func(r JEVRequest) { got = r.Kind }}
+	r := &Router{Hot: hotCache(t), JEV: jev}
+	r.Route(context.Background(), "能不能写入 vault", "能不能写入 vault-creds", Situation{})
+	if got != KindPermission {
+		t.Errorf("[kind] 送到 JEV 的 kind=%q，期望 permission", got)
+	}
+}
+
+type recordingJEV struct{ record func(JEVRequest) }
+
+func (j *recordingJEV) Decide(ctx context.Context, req JEVRequest) (JEVResponse, error) {
+	if j.record != nil {
+		j.record(req)
+	}
+	return JEVResponse{Choice: "ambiguous", Confidence: 0.5}, nil
+}

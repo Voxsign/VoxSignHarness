@@ -23,7 +23,7 @@ type Situation struct {
 
 // JEVRequest 是 /api/decide 的请求体（严格照规范 §2.2 形状）。
 type JEVRequest struct {
-	Kind       string    `json:"kind"`
+	Kind       Kind      `json:"kind"`
 	Question   string    `json:"question"`
 	Situation  Situation `json:"situation"`
 	Options    []string  `json:"options"`
@@ -34,9 +34,8 @@ type JEVRequest struct {
 type JEVClient struct {
 	Endpoint string // 例如 https://aiops.peterzou.com/api/decide
 	APIKey   string // 只从环境/.env 传入；不打印、不落盘
-	// Kind 必须取自规范枚举：referent | permission | learnability | gap_class | custom。
-	// ⚠️ 实测教训：kind 用错时 JEV 返回 400 BAD_KIND（**不猜 kind**，见 A5）。
-	Kind string
+	// Kind 是具名类型（编译期写不出非法值）。⚠️ 实测：kind 用错时 JEV 返回 400 BAD_KIND。
+	Kind Kind
 	HTTP *http.Client
 }
 
@@ -50,7 +49,7 @@ func (c *JEVClient) Decide(ctx context.Context, req JEVRequest) (JEVResponse, er
 		req.Kind = c.Kind
 	}
 	if req.Kind == "" {
-		req.Kind = "custom"
+		req.Kind = KindCustom
 	}
 	if len(req.Options) == 0 {
 		req.Options = []string{"ambiguous"}

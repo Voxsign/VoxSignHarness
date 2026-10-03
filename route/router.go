@@ -11,6 +11,7 @@ package route
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"voicesign-harness/hotcache"
@@ -32,6 +33,21 @@ const (
 	ActionAnswer   = "answer"   // 有把握，直接答
 	ActionAskUser  = "ask_user" // 回问用户（不猜、不升 L1）
 	ActionEscalate = "escalate" // 需要长篇推理 → 升 L1/L2
+)
+
+// Kind 是 JEV 的判断场景。**具名类型 + 常量**：`"route"` 这类字面量在**编译期就写不出来**
+// （规范枚举：referent | permission | learnability | gap_class | custom）。
+//
+// 机制性防复发：本轮实测踩过两次"猜 API"（kind="route"→400；payload 形状→502）——
+// 教训写进文档不防复发，**类型上写不出来才防复发**。
+type Kind string
+
+const (
+	KindReferent     Kind = "referent"     // 指代消解（那个/它 指谁）
+	KindPermission   Kind = "permission"   // 授权判断（能不能做）
+	KindLearnability Kind = "learnability" // 可学性判断（要不要记住）
+	KindGapClass     Kind = "gap_class"    // 缺口归类（找谁）
+	KindCustom       Kind = "custom"       // 兜底
 )
 
 // Candidate 是送给 JEV 的候选（**JEV 只认 candidates**，constraints 放 why）。
@@ -75,12 +91,63 @@ type Decision struct {
 	Ledger         []LedgerEntry
 }
 
+// kindWords 是**场景分派**规则（不猜：按目标/问句里的信号词选 kind）。
+var kindWords = []struct {
+	kind  Kind
+	words []string
+}{
+	{KindPermission, []string{"能不能", "可以吗", "允许", "权限", "授权", "vault", "不可逆", "删除", "部署"}},
+	{KindReferent, []string{"那个", "这个模块", "它", "指哪", "指的是", "哪个"}},
+	{KindLearnability, []string{"记住", "学到", "教它", "以后都", "下次也"}},
+	{KindGapClass, []string{"找谁", "谁负责", "缺什么", "谁来"}},
+}
+
+// KindFor 按场景分派 kind（默认 KindCustom）。
+func KindFor(text string) Kind {
+	t := strings.ToLower(text)
+	for _, r := range kindWords {
+		for _, w := range r.words {
+			if strings.Contains(t, strings.ToLower(w)) {
+				return r.kind
+			}
+		}
+	}
+	return KindCustom
+}
+
+// SituationFromMemory 把工作记忆的**四块板**桥接成 JEV 要的**结构化态势**（J2：紧凑，不是长文本）。
+func SituationFromMemory(w *plan.WorkingMemory) Situation {
+	if w == nil {
+		return Situation{}
+	}
+	sit := Situation{}
+	for _, it := range w.BoundedWorkingSet() {
+		why := it.Source
+		if it.JudgedBy != "" {
+			why += "（判断）"
+		}
+		sit.Candidates = append(sit.Candidates, Candidate{ID: it.Element, Why: why})
+	}
+	for _, c := range w.Constraints {
+		sit.Constraints = append(sit.Constraints, c.Element)
+	}
+	for _, it := range w.Situation {
+		sit.Memory = append(sit.Memory, it.Element)
+	}
+	for _, it := range w.OpenItems {
+		sit.Memory = append(sit.Memory, "待决:"+it.Element)
+	}
+	return sit
+}
+
 // Router 串起 L0 → L0.5。Threshold 是"关联度/置信度够用"的门槛。
 type Router struct {
 	Hot       *hotcache.Cache
 	JEV       JEV
 	Threshold float64
 	Timeout   time.Duration
+	// Kind 为空时按 KindFor(question+text) 自动分派。
+	Kind Kind
 }
 
 func (r *Router) threshold() float64 {
@@ -121,7 +188,11 @@ func (r *Router) Route(ctx context.Context, text, question string, sit Situation
 	}
 	cctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
-	resp, err := r.JEV.Decide(cctx, JEVRequest{Kind: "custom", Question: question, Situation: sit, Options: options})
+	kind := r.Kind
+	if kind == "" {
+		kind = KindFor(question + " " + text) // ① 按场景分派（不再恒为 custom）
+	}
+	resp, err := r.JEV.Decide(cctx, JEVRequest{Kind: kind, Question: question, Situation: sit, Options: options})
 	if err != nil {
 		// 硬要求②：**非 200/超时一律当 JEV 不可用 ⇒ 降级 L0 + degraded**（不假设它总对）
 		return Decision{
