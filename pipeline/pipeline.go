@@ -1602,7 +1602,8 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	// ① main.go：自包含完整服务（词典/纠错/意图/反馈/JSONL 落盘/端点/健康检查）——大文件独立调用。
 	sysMain := "你是资深 Go 工程师。只输出 main.go 的**完整代码文本**（自包含、可直接 go build 通过的服务）。" +
 		"硬性要求：①仅用标准库，零第三方依赖；②不许留 TODO/占位/伪代码；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
-		"④提供 /v1/health 与需求要求的业务端点；⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
+		"④需求文档要求/提及的**每一个 /v1/ 端点**都必须用 http.HandleFunc(\"/v1/...\", …) 字面量逐一注册（验收会按需求端点清单逐端点核对，缺一即不合格）；" +
+		"⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
 		"纯文本输出，不要 Markdown 围栏、不要 JSON、不要解释。"
 	mainCode, note := genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain, req)
 	if mainCode == "" {
@@ -1839,7 +1840,41 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 	if !buildRecv.OK {
 		gaps = append(gaps, "真编译失败："+truncateStr(buildRecv.Stderr, 300))
 	}
+	// 判据 5：需求端点 ↔ 产物路由端点存在性（洞 1，2026-10-04 无人工干预测试复现：
+	// 需求 7 端点产物仅 2 端点（/v1/health+/v1/process），P0 关键字仍判"齐全"放行）。
+	// 需求侧：从 o.Document（需求全文）提取所有出现的 /v1/xxx 字面量；
+	// 产物侧：从 main.go 提取 http.HandleFunc("/v1/xxx") 已注册端点；
+	// 差集 = 缺口 → 证据门 FAIL → 多轮修订（RoundEvidence 回喂 LLM 补齐端点）。
+	if o.Document != "" {
+		reqEP := endpointRefsOf(o.Document)
+		prodEP := endpointHandlersOf(mainSrc)
+		for ep := range reqEP {
+			if !prodEP[ep] {
+				gaps = append(gaps, "缺需求端点实现："+ep+"（需求文档要求，产物未注册 http.HandleFunc）")
+			}
+		}
+	}
 	return gaps
+}
+
+// endpointRefsOf 提取文本中出现的所有 /v1/xxx 端点字面量（需求侧：文档里提到的即算需求端点）。
+func endpointRefsOf(src string) map[string]bool {
+	set := map[string]bool{}
+	re := regexp.MustCompile(`/v1/[a-z_]+`)
+	for _, m := range re.FindAllString(src, -1) {
+		set[m] = true
+	}
+	return set
+}
+
+// endpointHandlersOf 提取源码中 http.HandleFunc("/v1/xxx", …) 已注册的端点（产物侧：注册才算实现）。
+func endpointHandlersOf(src string) map[string]bool {
+	set := map[string]bool{}
+	re := regexp.MustCompile(`HandleFunc\("/v1/[a-z_]+`)
+	for _, m := range re.FindAllString(src, -1) {
+		set[strings.TrimPrefix(m, `HandleFunc("`)] = true
+	}
+	return set
 }
 
 // deterministicImplementSkeleton 生成可编译 Go 代码骨架（LLM 不可用时仍产出）。
