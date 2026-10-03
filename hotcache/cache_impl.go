@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -110,17 +111,53 @@ func (c *Cache) Lookup(term string) (Result, bool) {
 			}
 		}
 	}
-	// ④ 编辑距离（≤1，且长度差 ≤1）
-	best, bestDist := Alias{}, 99
+	// ④ 编辑距离 + **错配门槛**（Lead 裁决：先治错配，再治未命中）。
+	//
+	// 通用性质：最高候选与次高候选的**分数差 < 阈值** ⇒ **不得匹配**（宁可未命中，不猜）。
+	// 与 VHS-ZHIJI-001 §2.1「宁可回问，不猜」同机制。
+	// ⚠️ 两个阈值 **UNVALIDATED**（未标定）。
+	const editMaxDistance = 1
+	const minScoreGap = 2
+	// 相对相似度门槛：短串上一字符之差（哎ops vs 爱ops）不足以作为"改写"的证据。
+	// ⚠️ UNVALIDATED：0.15 是我取的，未标定。
+	const maxEditRatio = 0.15
+
+	type cand struct {
+		canonical string
+		dist      int
+		source    string
+	}
+	var cands []cand
+	termLen := float64(len([]rune(term)))
 	for _, a := range s.aliases {
-		for _, cand := range []string{a.Alias, a.Canonical} {
-			if d := levenshtein(term, cand); d < bestDist {
-				best, bestDist = a, d
+		seen := map[string]bool{}
+		for _, c := range []string{a.Alias, a.Canonical} {
+			if c == "" || seen[c] {
+				continue // 别名与规范词相同 ⇒ 不重复计一次
+			}
+			seen[c] = true
+			d := levenshtein(term, c)
+			if float64(d) > maxEditRatio*termLen {
+				continue // 相对差异过大 ⇒ 不作为候选（防"错配"）
+			}
+			if d <= editMaxDistance {
+				cands = append(cands, cand{canonical: a.Canonical, dist: d, source: a.Source})
 			}
 		}
 	}
-	if bestDist <= 1 {
-		return Result{Canonical: best.Canonical, Score: 0.70, Route: RouteEdit, Source: best.Source, Status: st}, true
+	if len(cands) > 0 {
+		sort.Slice(cands, func(i, j int) bool { return cands[i].dist < cands[j].dist })
+		if len(cands) > 1 && cands[1].dist-cands[0].dist < minScoreGap {
+			// 差距不足 ⇒ **不猜**：不给答案，交出升级信号
+			return Result{NeedEscalate: true, Status: st, Route: RouteEdit}, false
+		}
+		// 同一距离上出现**不同 canonical** ⇒ 同样不猜
+		for _, c := range cands[1:] {
+			if c.dist == cands[0].dist && c.canonical != cands[0].canonical {
+				return Result{NeedEscalate: true, Status: st, Route: RouteEdit}, false
+			}
+		}
+		return Result{Canonical: cands[0].canonical, Score: 0.70, Route: RouteEdit, Source: cands[0].source, Status: st}, true
 	}
 	// 关联度不足 ⇒ 升级信号（K8），不是"不存在"
 	return Result{NeedEscalate: true, Status: st}, false
