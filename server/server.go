@@ -101,6 +101,7 @@ func stepName(status string) string {
 type taskState struct {
 	ID        string               `json:"task_id"`
 	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
+	ConvID    string               `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
 	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
 	Document  string               `json:"document,omitempty"`   // 附件/需求文档全文（长程任务输入，修订卡2 附；落轨迹）
 	Status    string               `json:"status"`
@@ -375,6 +376,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	}
 	// ④ 走既有执行路径（含域门禁 / 不可逆确认）
 	ts := &taskState{ID: fmt.Sprintf("task-%d", time.Now().UnixNano()), Status: stRunning, confirmCh: make(chan bool, 1)}
+	ts.ConvID = "default" // 指代固化上下文槽（voice 路径缺省会话）
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
 	s.mu.Lock()
@@ -551,12 +553,14 @@ type tasksPostReq struct {
 	Space     string `json:"space,omitempty"`
 	RequestID string `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Document  string `json:"document,omitempty"`   // 附件/需求文档全文（长程任务输入通道，修订卡2 附）
+	ConvID    string `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。document 非空时挂载到任务上下文（落轨迹）。
+// convID 非空时作为指代固化上下文槽键（缺省 "default"）。
 // 状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, document string) *taskState {
+func (s *Server) spawnTask(text, spaceHint, requestID, document, convID string) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
@@ -566,6 +570,11 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document string) *taskSta
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
+	}
+	if convID != "" {
+		ts.ConvID = convID
+	} else {
+		ts.ConvID = "default" // 指代固化上下文槽缺省会话（用户点名 conversation_id 必加）
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
@@ -824,7 +833,7 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document, req.ConvID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
