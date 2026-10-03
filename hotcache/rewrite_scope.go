@@ -47,11 +47,11 @@ func (c *Cache) LookupForRewrite(term string) (Result, bool) {
 	}
 	if isGenericForRewrite(term) {
 		// 这个词本身是通用词 ⇒ 不参与改写（也不去猜它的"专名对应"）
-		return Result{NeedEscalate: true, Status: c.Snapshot().Status}, false
+		return Result{NeedEscalate: true, Status: c.Status()}, false
 	}
 	if c.isBlacklisted(term) {
 		// 用户点过〔这个改错了〕⇒ 该词不再参与文本改写（路由仍可用，两用途分离）。
-		return Result{NeedEscalate: true, Status: c.Snapshot().Status}, false
+		return Result{NeedEscalate: true, Status: c.Status()}, false
 	}
 	return c.lookupInternal(term, true)
 }

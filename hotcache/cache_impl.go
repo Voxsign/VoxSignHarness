@@ -84,7 +84,7 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	if term == "" {
 		return Result{NeedEscalate: true}, false
 	}
-	st := c.Snapshot().Status
+	st := c.Status()
 	s := c.state()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -296,6 +296,35 @@ func (c *Cache) Refresh(ctx context.Context) Snapshot {
 }
 
 // Snapshot 返回当前快照；过期按 TTL 标 stale（K4）。
+// Status 是**廉价**的状态读取器（NF-1 性能修复）。
+//
+// ⚠️ 为什么需要它（2026-10-03 · 三条证据链闭合）：
+//
+//	`rewrite_scope.go` 的两个**未命中**分支原先写 `c.Snapshot().Status` ——
+//	为取**一个字符串字段**，`snapshotLocked` 会 `append([]Alias(nil), st.aliases...)`
+//	**复制全部别名**。而 `recog/rewriter.go:90 pass1` 对每个位置试 5 个窗口长度
+//	⇒ **5n 次全量拷贝** ⇒ 实测 8 字 743ms / 32 字 3530ms（traces 与长度扫描双证）。
+//
+// ⚠️ 本函数**保留 `state()` 的懒初始化副作用**（`state()` 会在 `c.st == nil` 时初始化），
+//
+//	因为那不是"副作用"，而是**既有行为**；换掉调用点时必须保住它。
+func (c *Cache) Status() string {
+	st := c.state() // ← 保留懒初始化
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	out := st.meta.Status
+	if out == "" {
+		out = StatusOK
+	}
+	if st.meta.FetchedAt != "" {
+		if ts, err := time.Parse(time.RFC3339, st.meta.FetchedAt); err == nil && c.ttl > 0 &&
+			c.now().UTC().Sub(ts) > c.ttl {
+			out = StatusStale
+		}
+	}
+	return out
+}
+
 func (c *Cache) Snapshot() Snapshot {
 	s := c.state()
 	s.mu.Lock()
