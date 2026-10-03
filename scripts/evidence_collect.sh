@@ -12,7 +12,7 @@
 #   sh scripts/evidence_collect.sh <判据清单文件>
 #
 # 判据清单格式（每行一条，`|` 分隔；`#` 开头为注释）：
-#   <判据ID> | <要证明的事实> | <匹配模式> [| <限定路径>]
+#   <判据ID> | <要证明的事实> | <匹配模式> [| <限定路径>] [| <别名模式（可选，同义词/实现名）>]
 #
 # 例：
 #   PL-1 | 规划器有 L2 分支 | L2Enabled | plan/
@@ -79,8 +79,14 @@ grep -vE '^\s*(#|$)' "$LIST" | while IFS= read -r line; do
   #    除非调用方**显式**把路径限定为文档（那时由人负责语义）。
   # ⚠️ 排除正则必须同时匹配 `.md:` 与 `.md":` —— git grep 对含非 ASCII 的路径**会加引号**，
   # 只写 `\.md:` 会**静默失效**（2026-10-03 实测：排除规则写了但一条都没排掉）。
+  # ⚠️ **必须排除采集器自身**（2026-10-03 实测）：脚本里的注释会包含模式词
+  # （如 `RunWithIntent` 出现在解释"为什么 0 命中不许判 ✗"的注释里）
+  # ⇒ 曾把 **scripts/evidence_collect.sh:92 自己**当成 C 证据 ⇒ **假阳性**。
+  # ⇒ 这与"排除文档"是同一类：**取证工具不能把自己算作证据。**
   hits=$(git -C "$ROOT" grep -nE -- "$pat" -- "$path" 2>/dev/null \
-           | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' | head -5)
+           | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' \
+           | grep -vE '^"?scripts/evidence_collect\.sh"?[:"]' \
+           | grep -vE '^"?\.calib-evidence' | head -5)
   n=$(printf '%s' "$hits" | grep -c . 2>/dev/null || echo 0)
 
   if [ "$n" -gt 0 ]; then
@@ -88,15 +94,35 @@ grep -vE '^\s*(#|$)' "$LIST" | while IFS= read -r line; do
     loc=$(printf '%s\n' "$hits" | head -3 | awk -F: '{print $1":"$2}' | tr '\n' ' ')
     echo "| $id | $fact | \`$pat\` | $loc | **C ✅**（R 待补 ⇒ ◐） |" >> "$OUT"
   else
-    echo "| $id | $fact | \`$pat\` | **（0 命中）** | **✗ 无 C 证据** |" >> "$OUT"
-    rc=1
+    # ⚠️ **0 命中不得直接判 ✗**（2026-10-03 实测事故）：
+    # 我曾按设计稿的符号名 `RunWithIntent` 搜 ⇒ 0 命中 ⇒ 判 V-01「未实现」。
+    # 而实现用的名字是 `handleVoice`（server/server.go:183），端点 `/v1/voice` **真跑 200**。
+    # ⇒ **把"命名不一致"误报成了"未实现"。**
+    # ⇒ 故：先查该判据的**别名/同义词**；别名命中 ⇒ 标 ⚠️「命名未对上」，
+    #    **不算 ✗，也不算 ✅** —— 它需要人来判"是不是同一个东西"。
+    alias=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
+    ahits=""
+    if [ -n "$alias" ]; then
+      ahits=$(git -C "$ROOT" grep -nE -- "$alias" -- "$path" 2>/dev/null \
+                | grep -vE '\.(md|txt|rst|json|ya?ml|toml)[":]' \
+                | grep -vE '^"?scripts/evidence_collect\.sh"?[:"]' \
+                | grep -vE '^"?\.calib-evidence' | head -3)
+    fi
+    if [ -n "$ahits" ]; then
+      aloc=$(printf '%s\n' "$ahits" | awk -F: '{print $1":"$2}' | tr '\n' ' ')
+      echo "| $id | $fact | \`$pat\` | 主模式 0 命中；**别名 \`$alias\` 命中**：$aloc | **⚠️ 命名未对上**（需人判是否同一语义） |" >> "$OUT"
+    else
+      echo "| $id | $fact | \`$pat\` | **（主模式 0 命中，别名亦无）** | **✗ 无 C 证据** |" >> "$OUT"
+      rc=1
+    fi
   fi
 done
 
 # ⚠️ 上面的 while 在子 shell 里，rc 传不出来 ⇒ 用文件计数重算（不使用管道读 rc）
 # ⚠️ 计数必须排除表头行（`| 判据 | 要证明的事实 |…`）—— 我第一版没排除，总数多算了 1
 T=$(grep -E '^\| [^|]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
-Z=$(grep -c '0 命中' "$OUT" 2>/dev/null || echo 0)
+Z=$(grep -c '✗ 无 C 证据' "$OUT" 2>/dev/null || echo 0)
+W=$(grep -c '⚠️ 命名未对上' "$OUT" 2>/dev/null || echo 0)
 C=$(grep -c 'C ✅' "$OUT" 2>/dev/null || echo 0)
 {
   echo
@@ -105,6 +131,7 @@ C=$(grep -c 'C ✅' "$OUT" 2>/dev/null || echo 0)
   echo "判据总数     : $T"
   echo "有 C 证据    : $C"
   echo "无 C 证据(✗) : $Z"
+  echo "⚠️ 命名未对上  : $W   ← **不算 ✗ 也不算 ✅**，需人判是否同一语义"
   echo "⇒ 按 skill：**有 C 证据的判据仍是 ◐（待真跑）**，须补 R 证据（scripts/run_calibration.sh）才可能 PASS。"
   echo '```'
 } >> "$OUT"
@@ -113,5 +140,6 @@ cat "$OUT"
 echo
 echo "[evidence_collect] 已写 $OUT"
 echo "[evidence_collect] ⚠️ 只有 C 证据 ⇒ 全部为 **◐ 待真跑**，**不得据此给 PASS**（skills/validate-align/SKILL.md）"
+[ "$W" -gt 0 ] && echo "[evidence_collect] ⚠️ 有 $W 条判据「主模式 0 命中但有别名命中」—— **需人判是否同一语义**（不许当 ✗，也不许当 ✅）"
 [ "$Z" -gt 0 ] && { echo "[evidence_collect] ❌ 有 $Z 条判据 0 命中（✗ 无 C 证据）"; exit 1; }
 exit 0
