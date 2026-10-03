@@ -4,7 +4,7 @@
     "repo": "smithpeter/voicesign-harness",
     "commit": "88793a8f3bb269604eda5bc6ccb6169cebf590c5",
     "produced_by": "harness",
-    "produced_at": "2026-10-03T00:34:37Z",
+    "produced_at": "2026-10-03T00:40:38Z",
     "independence": "no_prior_access"
   },
   "capabilities": [
@@ -312,13 +312,13 @@
       "id": "APP_LAUNCH",
       "source": "contract/contract.go",
       "status": "inferred",
-      "why": "有常量声明，生产代码（非 _test.go）无引用；仅测试文件引用（router_test.go:37），运行时可被路由但无生产调用点 —— 判定规则见 open_questions"
+      "why": "有常量声明，生产代码（非 _test.go）无引用（DSH 2026-10-03 裁决口径）；仅测试文件引用，判定规则见 open_questions"
     },
     {
       "id": "FILE_WRITE",
       "source": "contract/contract.go",
       "status": "verified",
-      "why": "有常量声明，生产代码（非 _test.go）无引用"
+      "why": "有常量声明，生产代码（非 _test.go）无引用（DSH 2026-10-03 裁决口径）"
     }
   ],
   "unresolved": [
@@ -405,10 +405,7 @@
       "perms": {
         "read": true,
         "write": true,
-        "exec": [
-          "test",
-          "run"
-        ]
+        "exec": []
       },
       "aliases": [
         "read"
@@ -594,7 +591,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -605,7 +602,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -616,7 +613,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -627,7 +624,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -638,7 +635,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -649,7 +646,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -660,7 +657,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -671,7 +668,7 @@
       "note": "网关自报，未独立核实",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     },
     {
@@ -682,7 +679,7 @@
       "note": "只读接口，不产生写权限",
       "source": {
         "endpoint": "https://aiops.peterzou.com/api/summary",
-        "fetched_at": "2026-10-03T00:34:37Z"
+        "fetched_at": "2026-10-03T00:40:38Z"
       }
     }
   ],

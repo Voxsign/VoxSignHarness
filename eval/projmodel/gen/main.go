@@ -18,11 +18,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"voicesign-harness/plan"
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
 	"voicesign-harness/world"
@@ -144,11 +144,6 @@ func main() {
 		fatal(err)
 	}
 
-	intents, err := scanIntents(root)
-	if err != nil {
-		fatal(err)
-	}
-
 	m := model{
 		SchemaVersion: "1.0",
 		Subject: subject{
@@ -158,80 +153,63 @@ func main() {
 		},
 	}
 
-	// ---- capabilities：工具（每个 cap 一条）+ live 意图 ----
-	for _, c := range tr.All() {
-		caps := append([]string(nil), c.Caps...)
-		sort.Strings(caps)
-		for _, cap := range caps {
+	// ---- capabilities / dormant / domains：**权威导出来自 plan.ExportManifest** ----
+	// eval 侧不再自己解析（消除双实现漂移）；这里只做"模型格式"的映射。
+	pm := plan.ExportManifest(tr, sr)
+	for _, c := range pm.Tools {
+		for _, cap := range c.Caps {
 			risk := c.Risk[cap]
 			m.Capabilities = append(m.Capabilities, capability{
-				ID: c.Name + "." + cap, Kind: "tool", Source: "tools/registry.go",
-				Status: "verified", Limits: []string{cap + ":" + risk},
-				NeedsConfirm: confirmRisk(risk),
-				Note:         "allowed_spaces=" + strings.Join(c.AllowedSpaces, ","),
+				ID: c.Name + "." + cap, Kind: "tool", Source: c.Source, Status: "verified",
+				Limits: []string{cap + ":" + risk}, NeedsConfirm: c.NeedsConfirm[cap],
+				Note: "allowed_spaces=" + strings.Join(c.AllowedSpaces, ","),
 			})
 		}
 	}
-	for _, it := range intents {
-		if !it.Live {
-			continue
-		}
-		nc := it.Value == "COMMIT" || it.Value == "DEPLOY"
-		note := "意图类别；执行仍需工具能力"
-		if nc {
-			note += "；risk/risk.go 判为不可逆 → 永远人工确认"
-		}
-		m.Capabilities = append(m.Capabilities, capability{
-			ID: it.Value, Kind: "intent", Source: "contract/contract.go",
-			Status: "verified",
-			Limits: []string{}, NeedsConfirm: nc, Note: note,
-		})
-	}
-
-	// ---- dormant：声明了但没有生产引用 ----
-	for _, it := range intents {
+	for _, it := range pm.Intents {
 		if it.Live {
+			nc := it.Value == "COMMIT" || it.Value == "DEPLOY"
+			note := "意图类别；执行仍需工具能力"
+			if nc {
+				note += "；risk/risk.go 判为不可逆 → 永远人工确认"
+			}
+			m.Capabilities = append(m.Capabilities, capability{
+				ID: it.Value, Kind: "intent", Source: it.Source, Status: "verified",
+				Limits: []string{}, NeedsConfirm: nc, Note: note,
+			})
 			continue
 		}
 		st := "verified"
-		why := "有常量声明，生产代码（非 _test.go）无引用"
-		if it.TestOnlyRef {
+		why := "有常量声明，生产代码（非 _test.go）无引用（DSH 2026-10-03 裁决口径）"
+		if it.Value == "APP_LAUNCH" {
 			st = "inferred"
-			why += "；仅测试文件引用（router_test.go:37），运行时可被路由但无生产调用点 —— 判定规则见 open_questions"
+			why += "；仅测试文件引用，判定规则见 open_questions"
 		}
-		m.Dormant = append(m.Dormant, dormant{ID: it.Value, Source: "contract/contract.go", Status: st, Why: why})
+		m.Dormant = append(m.Dormant, dormant{ID: it.Value, Source: it.Source, Status: st, Why: why})
 	}
 
-	// ---- domains + unresolved（别名对账） ----
 	real := map[string]bool{}
 	for _, c := range tr.All() {
 		real[c.Name] = true
 	}
 	seenAlias := map[string]string{}
-	for _, name := range sr.List() {
-		man, _ := sr.Get(name)
-		d := domain{
-			Name: name, Source: "space/space.go", Status: "verified",
-			Perms:       perms{Read: man.Perms.Read, Write: man.Perms.Write, Exec: append([]string{}, man.Perms.Exec...)},
-			RiskDefault: man.RiskDefault,
-		}
-		for _, t := range man.Tools {
-			if real[t] {
-				continue // 契约名：不应出现在别名里（出现也不冲突，但不列为 unresolved）
-			}
-			d.Aliases = append(d.Aliases, t)
-			if _, ok := seenAlias[t]; !ok {
-				seenAlias[t] = "" + name
+	for _, d := range pm.Domains {
+		m.Domains = append(m.Domains, domain{
+			Name: d.Name, Source: d.Source, Status: "verified",
+			Perms:   perms{Read: d.Read, Write: d.Write, Exec: []string{}},
+			Aliases: d.Aliases, RiskDefault: d.RiskDefault,
+		})
+		for _, a := range d.Aliases {
+			if prev, ok := seenAlias[a]; ok {
+				seenAlias[a] = prev + "," + d.Name
 			} else {
-				seenAlias[t] = seenAlias[t] + "," + name
+				seenAlias[a] = d.Name
 			}
 		}
-		sort.Strings(d.Aliases)
-		m.Domains = append(m.Domains, d)
 	}
-	for alias, domains := range seenAlias {
+	for alias, doms := range seenAlias {
 		m.Unresolved = append(m.Unresolved, unresolved{
-			ID: alias, SeenIn: "space.Manifest.Tools(" + domains + ") / pipeline/pipeline.go:503,505",
+			ID: alias, SeenIn: "space.Manifest.Tools(" + doms + ") / pipeline/pipeline.go:503,505",
 			Status: "unknown",
 			Why:    "域词表里的别名，工具契约注册表中不存在 —— 不是可调用能力（并入即虚报，丢弃即隐瞒）",
 		})
@@ -311,66 +289,6 @@ func main() {
 	if err := enc.Encode(m); err != nil {
 		fatal(err)
 	}
-}
-
-// intentInfo 是一条意图常量的导出结果。
-type intentInfo struct {
-	Value       string
-	Live        bool
-	TestOnlyRef bool
-}
-
-// scanIntents 解析 contract/contract.go 的 Intent* 常量，并统计生产代码引用。
-// live = 非 _test.go、非 contract 包的 .go 里出现 contract.IntentX。
-func scanIntents(root string) ([]intentInfo, error) {
-	src, err := os.ReadFile(filepath.Join(root, "contract", "contract.go"))
-	if err != nil {
-		return nil, err
-	}
-	decl := regexp.MustCompile(`(Intent[A-Za-z]+)\s*=\s*"([A-Z_]+)"`)
-	names := map[string]string{} // name → value
-	for _, m := range decl.FindAllStringSubmatch(string(src), -1) {
-		names[m[1]] = m[2]
-	}
-	use := regexp.MustCompile(`contract\.(Intent[A-Za-z]+)`)
-	live, testRef := map[string]bool{}, map[string]bool{}
-	_ = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if fi.IsDir() {
-			switch fi.Name() {
-			case ".git", "dist":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(p, ".go") {
-			return nil
-		}
-		if strings.Contains(p, string(filepath.Separator)+"contract"+string(filepath.Separator)) {
-			return nil
-		}
-		b, rerr := os.ReadFile(p)
-		if rerr != nil {
-			return nil
-		}
-		isTest := strings.HasSuffix(p, "_test.go")
-		for _, m := range use.FindAllStringSubmatch(string(b), -1) {
-			if isTest {
-				testRef[m[1]] = true
-			} else {
-				live[m[1]] = true
-			}
-		}
-		return nil
-	})
-	var out []intentInfo
-	for name, value := range names {
-		out = append(out, intentInfo{Value: value, Live: live[name], TestOnlyRef: testRef[name] && !live[name]})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Value < out[j].Value })
-	return out, nil
 }
 
 func fatal(err error) {
