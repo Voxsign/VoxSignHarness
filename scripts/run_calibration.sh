@@ -165,6 +165,7 @@ while IFS= read -r line; do
   want=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
   body=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$6); print $6}')
   [ -z "$body" ] && body='{}'   # 缺省空对象；端点若要求字段，判据里必须显式写
+  JFILE="$DATA/.resp.json"; export VHS_JFILE="$JFILE"
   pre=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$7); print $7}')
   # 前提判定：**按实际状态判**，不靠人（否则又会把"前提"写成想当然）
   PRE_OK=1
@@ -196,11 +197,55 @@ while IFS= read -r line; do
     echo "| $id | $obj | \`$m $p\` | - | **（前提「${pre}」不满足）** | **⚠️ 前提不满足**（不算 ✗ 也不算 ✅） |" >> "$OUT"
     continue
   fi
-  if printf '%s' "$full" | grep -qF -- "$want"; then
-    echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（C 待补 ⇒ ◐） |" >> "$OUT"
-  else
-    echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$want\` 未出现** |" >> "$OUT"
-  fi
+  # ⚠️ **断言分强弱**（2026-10-03 第 20 条）：字段名存在 ⇒ 只证"字段在"，
+  # 不证"判据成立" ⇒ **不得报 R ✅**，须报 **◐ 弱断言**。
+  #   期望写法：`contains:<子串>`（弱，默认）· `eq:<字段>=<值>`（值域）· `absent:<子串>`
+  case "$want" in
+    eq:*)
+      spec=${want#eq:}; k=${spec%%=*}; v=${spec#*=}
+      # ⚠️ 不用"内联 python + 引号拼接"（它静默返回空串，已实测踩过）
+      # ⇒ 把响应写文件，用**环境变量**传键名，避免任何引号嵌套。
+      printf '%s' "$full" > "$JFILE"
+      got=$(VHS_K="$k" python3 -c '
+import json,os,sys
+try: d=json.load(open(os.environ["VHS_JFILE"]))
+except Exception: print("__PARSE_ERR__"); raise SystemExit
+cur=d
+for part in os.environ["VHS_K"].split("."):
+    cur = cur.get(part) if isinstance(cur,dict) else None
+print(json.dumps(cur,ensure_ascii=False))
+' 2>/dev/null)
+      # ⚠️ 期望值也要**按 JSON 语义**规范化（2026-10-03 实测）：我第一版把 `false` 期望
+      # 当成字符串 `"false"`，而实际值是布尔 `false` ⇒ **类型不匹配 ⇒ 假红**。
+      # ⇒ 能解析成 JSON 标量就按 JSON 比；不能（如自由文本）再当字符串。
+      exp=$(VHS_V="$v" python3 -c '
+import json,os
+v=os.environ["VHS_V"]
+try:
+    print(json.dumps(json.loads(v),ensure_ascii=False))   # false/0/[]/{}/"x" 都走这里
+except Exception:
+    print(json.dumps(v,ensure_ascii=False))               # 自由文本
+' 2>/dev/null)
+      if [ "$got" = "$exp" ]; then
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（eq ${k}=${v} 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+      else
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ eq ${k}：期望 ${exp} 实际 ${got}** |" >> "$OUT"
+      fi ;;
+    absent:*)
+      a=${want#absent:}
+      if printf '%s' "$full" | grep -qF -- "$a"; then
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 不应出现 \`$a\`** |" >> "$OUT"
+      else
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **R ✅**（`absent:$a` 成立；C 待补 ⇒ ◐） |" >> "$OUT"
+      fi ;;
+    *)
+      t=${want#contains:}
+      if printf '%s' "$full" | grep -qF -- "$t"; then
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **◐ 弱断言**（仅证 \`$t\` 出现，**不证判据成立**） |" >> "$OUT"
+      else
+        echo "| $id | $obj | \`$m $p\` | $code | \`$rbody\` | **✗ 期望 \`$t\` 未出现** |" >> "$OUT"
+      fi ;;
+  esac
 done < "$DATA/.crit"
 
 R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
@@ -211,6 +256,7 @@ R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
 # ⇒ 只数**判定格**（`| **✗ …` / `| **⚠️ …`），不数叙述里的符号。
 Z=$(grep -c '| \*\*✗ ' "$OUT" 2>/dev/null || echo 0)
 W=$(grep -c '| \*\*⚠️ 前提不满足' "$OUT" 2>/dev/null || echo 0)
+K=$(grep -c '◐ 弱断言' "$OUT" 2>/dev/null || echo 0)
 T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
 {
   echo
@@ -220,6 +266,7 @@ T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' |
   echo "有 R 证据  : $R"
   echo "✗          : $Z"
   echo "⚠️ 前提不满足 : $W   ← **不算 ✗ 也不算 ✅**（装置前提，不是产品结论）"
+  echo "◐ 弱断言      : $K   ← **只证"字段/子串出现"，不证判据成立** ⇒ 不得当 ✅"
   echo "⇒ 按 skill：**PASS = C + R 双证齐**。有 R 证据仍须补 C 证据（scripts/evidence_collect.sh）。"
   echo '```'
   echo
