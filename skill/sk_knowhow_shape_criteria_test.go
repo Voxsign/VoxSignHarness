@@ -53,9 +53,12 @@ func TestSKKH1KnowhowShapeMatchesRemote(t *testing.T) {
 			continue
 		}
 
-		// ① 直解 Knowhow（当前实现的路径）
-		var khDirect Knowhow
-		_ = json.Unmarshal(raw, &khDirect)
+		// ① 接线路径：KnowhowFromRaw（2026-10-03 接线，修复"knowhow 在 manifest.knowhow 两层"）
+		//    Fetcher.Get 是否直接返回 knowhow 属接口设计，仍待裁；测试先走接线函数保证判据可验。
+		khDirect, derr := KnowhowFromRaw(raw)
+		if derr != nil {
+			t.Logf("[SK-KH-1] %s：KnowhowFromRaw 未解出（%v）——见 ② 对照", s.ID, derr)
+		}
 		directN := len(khDirect.Steps) + len(khDirect.Cautions) + len(khDirect.Style) +
 			len(khDirect.Judging) + len(khDirect.Basis)
 

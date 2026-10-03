@@ -102,6 +102,7 @@ type taskState struct {
 	ID        string               `json:"task_id"`
 	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
+	Document  string               `json:"document,omitempty"`   // 附件/需求文档全文（长程任务输入，修订卡2 附；落轨迹）
 	Status    string               `json:"status"`
 	Role      string               `json:"role,omitempty"` // M5-3：当前角色
 	Question  string               `json:"question,omitempty"`
@@ -549,15 +550,18 @@ type tasksPostReq struct {
 	Text      string `json:"text"`
 	Space     string `json:"space,omitempty"`
 	RequestID string `json:"request_id,omitempty"` // M4-1 ① 重试去重键
+	Document  string `json:"document,omitempty"`   // 附件/需求文档全文（长程任务输入通道，修订卡2 附）
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
-// requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID string) *taskState {
+// requestID 非空时登记 byReq 用于重试去重。document 非空时挂载到任务上下文（落轨迹）。
+// 状态迁移后自动 persist。
+func (s *Server) spawnTask(text, spaceHint, requestID, document string) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
+		Document:  document,
 		Status:    stRunning,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
@@ -819,7 +823,7 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
