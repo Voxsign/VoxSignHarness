@@ -119,7 +119,11 @@ func TestSCOPECONF01JSONHotReloadNotYAML(t *testing.T) {
 	// 不得有 YAML 配置
 	for _, pat := range []string{"*.yaml", "*.yml"} {
 		m, _ := filepath.Glob(filepath.Join(vhsServiceDir, pat))
-		m2, _ := filepath.Glob(filepath.Join(vhsServiceDir, "..", "config", pat))
+		// 判据路径修正（2026-10-03）：vhsServiceDir 是 "../cmd/vhs-asr"，
+		// 所以 vhsServiceDir/../config = "../cmd/config" —— 错。
+		// 从 asr/（测试工作目录）到仓库根的 config/ 应为 "../config"。
+		// 由实现方上报、DSH 复核确认后修正（判据归 DSH）。
+		m2, _ := filepath.Glob(filepath.Join("..", "config", pat))
 		if len(m)+len(m2) > 0 {
 			t.Errorf("[SCOPE-CONF-01] 发现 YAML 配置 %v %v —— 需求明令不用 YAML", m, m2)
 		}
