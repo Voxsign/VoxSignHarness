@@ -99,12 +99,23 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 
 		// #2-c ① **文档影响步骤**：条目数 ⇒ 批处理粒度（规则式能做的那一档）。
 		// ② 反例防线：批数**只由条目数**决定 ⇒ 内容等价但措辞不同的文档得到相同 steps。
-		batches := (doc.Items + batchSizeItems - 1) / batchSizeItems
+		driver := doc.Items
+		driverName := "条目"
+		if doc.TODOs > driver {
+			driver, driverName = doc.TODOs, "TODO"
+		}
+		if driver == doc.Items && doc.TODOs == doc.Items {
+			driverName = "条目/TODO"
+		}
+		batches := (driver + batchSizeItems - 1) / batchSizeItems
+		_ = driverName
 		if batches > 1 {
 			p.Steps = expandBatchedSteps(p.Steps, batches)
+			p.WM.ChainLen = len(p.Steps) // ③ 展开后必须与 steps 一致（否则那个数字是假的）
 			p.Considered = append(p.Considered, plan.ConsideredItem{
-				Element: "document_batches: " + strconv.Itoa(batches) + "（每批 " +
-					strconv.Itoa(batchSizeItems) + " 条）", Source: "<document>", Inferred: true,
+				Element: "document_batches: " + strconv.Itoa(batches) + "（" + driverName +
+					" " + strconv.Itoa(driver) + " 条 / 每批 " + strconv.Itoa(batchSizeItems) + "）",
+				Source: "<document>", Inferred: true,
 			})
 		}
 	}
@@ -238,10 +249,11 @@ func summarizeDocument(doc string) docSummary {
 			continue
 		}
 		d.Lines++
-		if strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "#") || strings.Contains(t, "：") {
+		// ① 条目格式覆盖：列表标记 + TODO/FIXME/XXX 标记行**都算条目**
+		if isListItem(t) || isTodoLine(t) {
 			d.Items++
 		}
-		if strings.Contains(strings.ToUpper(t), "TODO") {
+		if isTodoLine(t) {
 			d.TODOs++
 		}
 		for _, tok := range tokenize(t) {
@@ -258,6 +270,41 @@ func summarizeDocument(doc string) docSummary {
 		d.Note = "文档超限，已按前 " + strconv.Itoa(maxDocRunes) + " 字做摘要"
 	}
 	return d
+}
+
+// isListItem 识别常见列表/标记格式（**每种格式都要有判据**）。
+func isListItem(t string) bool {
+	for _, p := range []string{"- ", "* ", "+ "} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	// 数字点/括号：1. / 1) / 1、
+	digits := 0
+	for digits < len(t) && t[digits] >= '0' && t[digits] <= '9' {
+		digits++
+	}
+	if digits > 0 && digits < len(t) {
+		switch t[digits] {
+		case '.', ')':
+			return true
+		}
+		if strings.HasPrefix(t[digits:], "、") {
+			return true
+		}
+	}
+	return false
+}
+
+// isTodoLine 识别 TODO/FIXME/XXX 标记行（带或不带冒号）。
+func isTodoLine(t string) bool {
+	u := strings.ToUpper(t)
+	for _, m := range []string{"TODO", "FIXME", "XXX"} {
+		if strings.Contains(u, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenize 抽出可比较的词（中日韩 ≥2 字、拉丁 ≥3 字），忽略标点与空白。

@@ -175,7 +175,7 @@ func TestTaskDocumentAffectsSteps(t *testing.T) {
 	// ② **防乱变**：内容等价、措辞不同的两个文档 ⇒ 步骤数量必须相同
 	var c strings.Builder
 	for i := 0; i < 34; i++ {
-		c.WriteString("任务事项：" + strconv.Itoa(i) + "\n")
+		c.WriteString("- 待办事项 " + strconv.Itoa(i) + "\n")
 	}
 	other := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":"`+strings.ReplaceAll(c.String(), "\n", "\\n")+`"}`)
 	os, _ := other["plan"].(map[string]any)["steps"].([]any)
@@ -188,5 +188,70 @@ func TestTaskDocumentAffectsSteps(t *testing.T) {
 	ns, _ := none["plan"].(map[string]any)["steps"].([]any)
 	if len(ns) != len(es) {
 		t.Errorf("[#2-c] 未读文档时步骤应与无文档一致: %d vs %d", len(es), len(ns))
+	}
+}
+
+// #2-c-① 条目格式覆盖：每种格式都要认；普通段落不得被算成条目。
+func TestTaskItemFormatCoverage(t *testing.T) {
+	base, _ := newUIServer(t)
+	cases := []struct {
+		name string
+		doc  string
+		want int
+	}{
+		{"短横线", "- a\n- b\n", 2},
+		{"星号", "* a\n* b\n", 2},
+		{"加号", "+ a\n+ b\n", 2},
+		{"数字点", "1. a\n2. b\n", 2},
+		{"数字括号", "1) a\n2) b\n", 2},
+		{"任务未完成", "- [ ] a\n- [ ] b\n", 2},
+		{"任务已完成", "- [x] a\n- [x] b\n", 2},
+		{"TODO 冒号", "TODO: a\nTODO: b\n", 2},
+		{"FIXME", "FIXME: a\nFIXME: b\n", 2},
+		{"普通段落", "这是一段普通文字。\n还有第二行。\n", 0},
+	}
+	for _, c := range cases {
+		got := taskCall(t, base, `{"task":"整理文档","document":"`+strings.ReplaceAll(c.doc, "\n", "\\n")+`"}`)
+		doc, _ := got["document"].(map[string]any)
+		if doc == nil {
+			t.Fatalf("%s: 缺 document", c.name)
+		}
+		items, _ := doc["items"].(float64)
+		if int(items) != c.want {
+			t.Errorf("[格式] %s：条目数=%v，期望 %d", c.name, items, c.want)
+		}
+	}
+}
+
+// #2-c-② 驱动量与任务语义一致：34 个 TODO 行也必须分批。
+func TestTaskTodoCountDrivesBatching(t *testing.T) {
+	base, _ := newUIServer(t)
+	var b strings.Builder
+	for i := 0; i < 34; i++ {
+		b.WriteString("TODO: 待办 " + strconv.Itoa(i) + "\n")
+	}
+	got := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":"`+strings.ReplaceAll(b.String(), "\n", "\\n")+`"}`)
+	p, _ := got["plan"].(map[string]any)
+	steps, _ := p["steps"].([]any)
+	if len(steps) <= 2 {
+		t.Fatalf("[驱动量] 34 个 TODO 行未触发分批（steps=%d）—— 任务说整理 TODO 却不用 TODO 数决定", len(steps))
+	}
+	// ③ chain_len 必须等于展开后的步数
+	wm, _ := p["wm"].(map[string]any)
+	if wm != nil {
+		if cl, _ := wm["chain_len"].(float64); int(cl) != len(steps) {
+			t.Errorf("[chain_len] %v != steps %d（数字是假的）", wm["chain_len"], len(steps))
+		}
+	}
+	// ④ 数字可解释：considered 必须说明驱动量与批数
+	found := false
+	for _, c := range p["considered"].([]any) {
+		m, _ := c.(map[string]any)
+		if el, _ := m["element"].(string); strings.Contains(el, "document_batches:") && strings.Contains(el, "TODO") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("[驱动量] considered 未说明驱动量（应含 TODO）: %v", p["considered"])
 	}
 }
