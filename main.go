@@ -116,6 +116,10 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 	if cacheDir := cfg.CacheDir(); cacheDir != "" {
 		_ = os.MkdirAll(cacheDir, 0o755)
 		if st, err := cache.Open(filepath.Join(cacheDir, "quad.json"), time.Duration(cfg.Cache.TTLSeconds)*time.Second); err == nil {
+			// R-04：**接线** —— 不设上限 ⇒ `maxEntries=0` ⇒ 等于没修。
+			// <0 ⇒ 显式"无上限"（保留旧行为，但配置已给警告）。
+			st.SetMaxEntries(cfg.Cache.MaxEntries)
+			st.SweepExpired() // 启动时清一次过期条目（TTL 是惰性的，否则过期条目一直占位）
 			opts.Cache = st
 		}
 	}

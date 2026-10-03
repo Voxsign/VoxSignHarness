@@ -56,6 +56,15 @@ type ContractsCfg struct {
 type CacheCfg struct {
 	Dir        string `json:"dir,omitempty"`         // 默认 <log_dir>/cache
 	TTLSeconds int    `json:"ttl_seconds,omitempty"` // 默认 86400（1 天）
+	// MaxEntries 是四元组缓存的**条目数上限**（R-04：超限淘汰）。
+	//
+	// ⚠️ **默认值 10000 是 UNVALIDATED** —— 即：**未经实测标定**。
+	//   依据（Peter `docs/校准报告-产品与实现-L01.md` §6 修订项 2）：
+	//     「R-04 膨胀：只 TTL 过期不够，需 **max 条目/容量上限**（超限淘汰策略）。」
+	//   ⇒ 本字段**把"无上限"变成"有上限且可配"**；而**合理上限需实测标定**
+	//     （取决于真实条目的字节数与内存预算）⇒ **未标定前不得当作验收值**。
+	//   0 或负数 ⇒ 取默认；显式设 -1 ⇒ **无上限**（保留旧行为）。
+	MaxEntries int `json:"max_entries,omitempty"`
 }
 
 // ServerCfg 手机 HTTP API 面（内网 + token 认证）。
@@ -339,6 +348,16 @@ func (c *Config) validate() error {
 	}
 	if c.Cache.TTLSeconds <= 0 {
 		c.Cache.TTLSeconds = 86400
+	}
+	// R-04：条目上限。0/负数 ⇒ 取默认 10000（**UNVALIDATED**）；-1 ⇒ 保持"无上限"。
+	if c.Cache.MaxEntries == 0 {
+		c.Cache.MaxEntries = 10000
+		c.Warnings = append(c.Warnings,
+			"cache.max_entries 未配置 ⇒ 取默认 10000（**UNVALIDATED**：合理上限需实测标定）")
+	}
+	if c.Cache.MaxEntries < 0 {
+		c.Warnings = append(c.Warnings,
+			"cache.max_entries < 0 ⇒ **缓存无上限**（R-04 的膨胀风险仍然存在）")
 	}
 	if strings.TrimSpace(c.Server.Bind) == "" {
 		c.Server.Bind = c.Global.Addr

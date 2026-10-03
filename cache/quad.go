@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -39,6 +40,87 @@ type Store struct {
 
 	mu      sync.RWMutex
 	entries map[QuadKey]Entry
+
+	// maxEntries 是**条目数上限**（R-04）。0 = 无上限（**保持既有行为**，不破坏调用方）。
+	// ⚠️ 为什么需要它（Peter `docs/校准报告-产品与实现-L01.md` §6 修订项 2）：
+	//   「只 TTL 过期不够，需 **max 条目/容量上限**（超限淘汰策略）。」
+	//   修前 `Set` 只 upsert、**无上限检查**；且 TTL 是**惰性**的（`Get` 时才判过期）
+	//   ⇒ **过期条目也留在 map 里** ⇒ 内存与落盘文件持续增长。
+	maxEntries int
+}
+
+// SetMaxEntries 设置条目数上限（0 = 无上限）。**加方法而非改 Open 签名** ——
+// `cache.Open` 有 5 个调用方，改签名会破坏冻结的 API 形状。
+func (s *Store) SetMaxEntries(n int) {
+	s.mu.Lock()
+	s.maxEntries = n
+	s.mu.Unlock()
+}
+
+// MaxEntries 返回当前上限（0 = 无上限）。
+func (s *Store) MaxEntries() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxEntries
+}
+
+// Len 返回当前条目数（**含未过期的与尚未清理的过期条目**）—— 供 R-04 判据观测。
+func (s *Store) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.entries)
+}
+
+// SweepExpired 主动清理**已过期**条目并落盘。TTL 是惰性的（`Get` 才判过期），
+// 所以没有它 ⇒ 过期条目会一直占着 map（R-04 的"膨胀"）。
+func (s *Store) SweepExpired() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepExpiredLocked()
+	_ = s.persist()
+}
+
+// sweepExpiredLocked 调用方须持写锁。返回清理条数。
+func (s *Store) sweepExpiredLocked() int {
+	now := time.Now()
+	n := 0
+	for k, e := range s.entries {
+		if e.Version != s.Version || !now.Before(e.ExpiresAt) {
+			delete(s.entries, k)
+			n++
+		}
+	}
+	return n
+}
+
+// evictLocked 在超上限时淘汰（调用方须持写锁）。**策略（显式写出，不"看着办"）**：
+//  1. 先清**已过期 / 版本漂移**的条目（它们本就不该占位）
+//  2. 仍超上限 ⇒ 按 **ExpiresAt 最早**优先淘汰（最接近过期的先走）
+//
+// ⚠️ **不淘汰未过期条目，除非真的超上限**（`TestR04EvictionPrefersExpired` 钉住这一点）。
+func (s *Store) evictLocked() int {
+	if s.maxEntries <= 0 {
+		return 0
+	}
+	evicted := s.sweepExpiredLocked()
+	if len(s.entries) <= s.maxEntries {
+		return evicted
+	}
+	// 仍超 ⇒ 收集 (key, ExpiresAt) 并排序
+	type kv struct {
+		k QuadKey
+		t time.Time
+	}
+	all := make([]kv, 0, len(s.entries))
+	for k, e := range s.entries {
+		all = append(all, kv{k, e.ExpiresAt})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].t.Before(all[j].t) })
+	for i := 0; i < len(all) && len(s.entries) > s.maxEntries; i++ {
+		delete(s.entries, all[i].k)
+		evicted++
+	}
+	return evicted
 }
 
 // diskFormat 是落盘 JSON 形态。
@@ -148,6 +230,8 @@ func (s *Store) Set(k QuadKey, decision string) error {
 		Version:   s.Version,
 		ExpiresAt: time.Now().Add(s.TTL),
 	}
+	// R-04：超上限 ⇒ 淘汰（先清过期，再按最早过期淘汰）
+	s.evictLocked()
 	err := s.persist()
 	s.mu.Unlock()
 	if err != nil {
