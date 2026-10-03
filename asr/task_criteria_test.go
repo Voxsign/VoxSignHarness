@@ -4,13 +4,19 @@
 package asr
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
 	"testing"
+	"voicesign-harness/modelcenter"
+	"voicesign-harness/plan"
 )
 
 func taskCall(t *testing.T, base, body string) map[string]any {
@@ -253,5 +259,126 @@ func TestTaskTodoCountDrivesBatching(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("[驱动量] considered 未说明驱动量（应含 TODO）: %v", p["considered"])
+	}
+}
+
+// ⭐ 端点级判据（Lead 常设规则）：**能力必须走用户实际经过的入口**。
+type stubPlanModel struct {
+	out   string
+	err   error
+	calls int
+}
+
+func (s *stubPlanModel) Propose(ctx context.Context, goal string, m plan.Manifest) (string, error) {
+	s.calls++
+	return s.out, s.err
+}
+
+func newTaskServerWithL2(t *testing.T, model plan.PlanModel, modelID string) string {
+	t.Helper()
+	dir := t.TempDir()
+	pipe := NewPipeline(NewEngine(), nil, nil)
+	s := NewServer(pipe)
+	s.DataDir = dir
+	s.PlanModel = model
+	s.L2ModelID = modelID
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// 端点级①：注入桩模型 ⇒ **HTTP 响应里的 steps 必须不同**（证明端点真接了 L2）。
+func TestTaskEndpointUsesL2Model(t *testing.T) {
+	baseOff := newTaskServerWithL2(t, nil, "off")
+	off := taskCall(t, baseOff, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+
+	stub := &stubPlanModel{out: `{"steps":[
+	  {"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"},
+	  {"tool":"file","caps":["read"],"params":{"path":"docs/TODO.md"},"action":"读现有","output":"内容","why":"避免重复","domain":"project"},
+	  {"tool":"file","caps":["write"],"params":{"path":"docs/TODO.md","content":"x"},"action":"写","output":"文件","why":"落盘","domain":"project"}
+	]}`}
+	baseOn := newTaskServerWithL2(t, stub, "deepseek-v4-pro")
+	on := taskCall(t, baseOn, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+
+	po, _ := off["plan"].(map[string]any)
+	pn, _ := on["plan"].(map[string]any)
+	so, _ := po["steps"].([]any)
+	sn, _ := pn["steps"].([]any)
+	if len(so) == len(sn) {
+		t.Fatalf("[端点L2] 注入桩模型后 steps 数量未变（%d）⇒ 端点没接 L2", len(so))
+	}
+	if pn["source"] != "model" {
+		t.Errorf("[端点L2] source 应为 model，实际 %v", pn["source"])
+	}
+	if stub.calls != 1 {
+		t.Errorf("[端点L2] 桩应被调用 1 次，实际 %d", stub.calls)
+	}
+	if on["l2_enabled"] != true {
+		t.Errorf("[端点L2] 响应应标明 l2_enabled=true")
+	}
+}
+
+// 端点级②：L2 未启用 ⇒ **与纯规则式逐字段一致**。
+func TestTaskEndpointL2OffIsIdentical(t *testing.T) {
+	b1 := newTaskServerWithL2(t, nil, "off")
+	b2 := newTaskServerWithL2(t, &stubPlanModel{out: `{"steps":[{"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"}]}`}, "off")
+	x := taskCall(t, b1, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+	y := taskCall(t, b2, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+	px, _ := x["plan"].(map[string]any)
+	py, _ := y["plan"].(map[string]any)
+	if px["source"] != py["source"] || len(px["steps"].([]any)) != len(py["steps"].([]any)) {
+		t.Errorf("[端点L2] off 时行为应一致: %v/%d vs %v/%d", px["source"], len(px["steps"].([]any)), py["source"], len(py["steps"].([]any)))
+	}
+	if x["l2_enabled"] != false {
+		t.Errorf("[端点L2] off 时 l2_enabled 应为 false")
+	}
+}
+
+// 端点级③：模型报错 ⇒ HTTP 仍 200、响应标 degraded + 原因。
+func TestTaskEndpointL2FailureDegrades(t *testing.T) {
+	base := newTaskServerWithL2(t, &stubPlanModel{err: errors.New("boom")}, "deepseek-v4-pro")
+	got := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+	p, _ := got["plan"].(map[string]any)
+	if p["degraded"] != true || p["degraded_reason"] == nil || p["degraded_reason"] == "" {
+		t.Errorf("[端点L2] 模型失败未降级标注: %+v", p)
+	}
+}
+
+// ⭐ 合并后的通道路径：plan 通道指向 quality ⇒ 与指向 fast 的结果必须不同（桩可证）。
+func TestTaskEndpointChannelTierChangesResult(t *testing.T) {
+	stub := &stubPlanModel{out: `{"steps":[
+	  {"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"},
+	  {"tool":"file","caps":["read"],"params":{"path":"docs/TODO.md"},"action":"读现有","output":"内容","why":"避免重复","domain":"project"}
+	]}`}
+	dir := t.TempDir()
+	pipe := NewPipeline(NewEngine(), nil, nil)
+	s := NewServer(pipe)
+	s.DataDir = dir
+	s.PlanModel = stub
+	cfg := modelcenter.Config{
+		ContractVersion: "1",
+		Gateway:         modelcenter.GatewayConfig{BaseURL: "https://aiops.example", ChatPath: "/api/model/chat", APIKeyEnv: "VHS_TEST_KEY"},
+		Tiers:           map[string]string{"fast": "deepseek-flash", "quality": "deepseek-v4-pro"},
+		Channels: map[string]modelcenter.ChannelConfig{
+			"default":  {Enabled: true, ModelID: "deepseek-flash"},
+			"plan":     {Enabled: true, Tier: "quality"},
+			"research": {Enabled: true, Tier: "quality"},
+			"diagnose": {Enabled: false, ModelID: "TBD"},
+			"learn":    {Enabled: false, ModelID: "TBD", MaxConcurrency: 1, WriteBack: true},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s.Models = &cfg
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	got := taskCall(t, srv.URL, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
+	if got["l2_model"] != "deepseek-v4-pro" {
+		t.Errorf("[通道合并] plan 通道应解析到 quality 档模型，实际 %v", got["l2_model"])
+	}
+	p, _ := got["plan"].(map[string]any)
+	if p["source"] != "model" {
+		t.Errorf("[通道合并] plan 通道应走模型式，实际 source=%v", p["source"])
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"voicesign-harness/modelcenter"
 	"voicesign-harness/plan"
 	"voicesign-harness/space"
 	"voicesign-harness/tools"
@@ -61,7 +62,26 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	m := plan.ExportManifest(tr, sr)
 	// ② **让文档真的被读**：结构 + 关键词进 considered / WM（**不把全文塞进提示词**）。
 	goal := req.Task // 注意：goal **不再**写"附文档 N 字"（那是"看起来读了"）
-	p, err := plan.LocalPlanner{}.Plan(goal, m)
+	// ① **端点必须真的走 PlanWithL2**（Lead 实测：此前硬编码 LocalPlanner ⇒ L2 是死代码）。
+	cfgPath := s.L2ConfigPath
+	if cfgPath == "" {
+		cfgPath = "config/plan.json"
+	}
+	modelID := s.L2ModelID
+	if s.Models != nil {
+		// **合并**：通道（用途）→ 档位（质量）→ 模型 id；解析失败 fail-closed。
+		id, err := s.Models.ResolveModel(modelcenter.ChannelPlan)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": "plan 通道解析失败（fail-closed）: " + err.Error(),
+			})
+			return
+		}
+		modelID = id
+	} else if modelID == "" {
+		modelID = plan.L2ModelID(cfgPath)
+	}
+	p, err := plan.PlanWithL2(r.Context(), goal, m, s.PlanModel, modelID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -127,7 +147,9 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"execute":       false,    // ⚠️ 本轮只规划，不执行
+		"execute":       false,
+		"l2_enabled":    plan.L2Enabled(modelID),
+		"l2_model":      modelID,  // ⚠️ 本轮只规划，不执行
 		"document_read": doc.Read, // 空文档/未读 ⇒ false + note（不许静默当没有）
 		"document_note": doc.Note,
 		"document": map[string]any{

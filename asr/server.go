@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"voicesign-harness/modelcenter"
+	"voicesign-harness/plan"
 )
 
 // Server 持有管线，提供 HTTP 处理。
@@ -26,6 +28,16 @@ type Server struct {
 	IntentTimeout time.Duration
 	// DataDir 是本机数据目录（画像等；空则视为无画像）。
 	DataDir string
+	// PlanModel 是 L2 规划用模型（nil ⇒ L2 不生效，行为与纯规则式一致）。
+	// 由外层注入（生产：modelcenter 强模型客户端；测试：桩）。**端点必须真的用它**。
+	PlanModel plan.PlanModel
+	// L2ModelID 是生效的 L2 模型 id（空 ⇒ 从 config/plan.json + env 解析）。
+	L2ModelID string
+	// L2ConfigPath 是 config/plan.json 路径（空 ⇒ 用默认相对路径）。
+	L2ConfigPath string
+	// Models 是模型中心配置（可选）。非空时**规划走 `plan` 通道**（通道→档位→模型），
+	// 与 L2 槽位**合并为一条路径**（不再两条并存）。解析失败 ⇒ fail-closed 报错。
+	Models *modelcenter.Config
 	// Teach 是"用户教一个词"的后端钩子（CACHE-001 G2）。
 	// 路径用规范里已有的 `/v1/observe`（VHS-ASR-001 P3 端点清单），**不新造路径**。
 	// 为空 ⇒ 该端点返回 503（不假装支持）。
