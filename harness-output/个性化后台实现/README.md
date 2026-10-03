@@ -1,45 +1,47 @@
-个性化后台实现 — 运行说明
+个性化后台实现 README
 
-一、构建与启动
+一、环境与构建
+需要 Go 1.21 及以上，无第三方依赖。
+在项目根目录执行：
+go build -o bin/app .
+要求 go vet ./... 与 go build ./... 均零错误。
 
-编译：go build -o pbackend .
-启动：./pbackend -addr 127.0.0.1:8080 -data-dir ./data
-参数说明：
--addr 监听地址，仅允许回环地址（127.0.0.1 或 ::1），非回环直接拒绝启动，默认 127.0.0.1:8080
--data-dir 数据目录，可配置，程序启动时自动创建，默认 ./data
--token 鉴权占位令牌，可留空；留空时所有请求放行，非空时校验 Authorization: Bearer <token>
-端口占用或数据目录不可写会直接退出并打印原因。
+二、启动
+./bin/app -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
 
-二、HTTP 端点
+参数说明
+-addr     监听地址，默认 127.0.0.1:8080；非 127.0.0.1 / ::1 直接拒绝启动
+-data-dir 数据目录，默认 ./data，首次启动自动创建
+-token    占位鉴权令牌，请求头 Authorization: Bearer <token>；未配置时仅本机放行
 
-1. GET /v1/health
-   返回服务存活状态、版本、数据目录路径。
-   响应示例：{"status":"ok","version":"0.1.0","data_dir":"./data"}
+三、HTTP 端点
+GET  /v1/health
+返回 {"status":"ok","time":...,"data_dir":...}，用于存活探测。
 
-2. POST /v1/process
-   请求体 JSON，字段：
-   - text 必填，待处理文本
-   - action 可选，字典操作：add / delete / query，缺省走纠错与意图流程
-   - term 可选，词典条目（action 为 add/delete/query 时使用）
-   - feedback 可选，取值为 up 或 down，用于反馈学习
-   响应体 JSON，字段：
-   - corrected 纠错后的文本（正常文本原样返回，不被改坏）
-   - intent 意图分类结果，取值 NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
-   - dict 命中的词典条目（数组，可为空）
-   - ok 布尔，是否成功
-   - trace_id 本次调用链路 ID，可用于查日志
+POST /v1/process
+请求 JSON 字段：
+  text     待处理原文（必填）
+  action   可选，显式指定意图 NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE
+  feedback 可选，true 表示 ✔，false 表示 ✘
+响应 JSON 字段：
+  trace_id  本次处理编号
+  cleaned   清洗后文本
+  corrected 词典纠错后文本（无命中时与 cleaned 一致，正常文本不被改坏）
+  intent    意图分类结果
+  hits      命中的词典条目列表
+  safe      纠错是否被安全策略拦截（低置信度不改写）
 
-三、数据文件
+四、数据文件（全部追加写，位于 data-dir 下）
+dictionary.json        个性化词典，增删查，写入采用临时文件 + 重命名
+traces/traces.jsonl    每次 /v1/process 的输入、输出、命中与耗时
+usage/usage.jsonl      用量计数：端点、意图、耗时
+feedback/feedback.jsonl ✔/✘ 反馈，append-only，不覆盖不删除
 
-全部位于 -data-dir 指定目录，均为 JSONL 格式，append-only 追加写，不覆写不改写：
-- data/dictionary.jsonl 个性化词典条目，含增删记录，加载时按末条状态回放
-- data/feedback.jsonl 反馈学习记录，每条含 trace_id、文本、corrected、intent、✔/✘ 标记
-- data/traces.jsonl 每次 /v1/process 请求的输入、输出、耗时、trace_id
-- data/usage.jsonl 调用计数与端点用量统计
+五、词典管理（子命令）
+./bin/app dict add -term <词条> -replacement <替换>
+./bin/app dict del -term <词条>
+./bin/app dict list
 
-写入策略：每行一条完整 JSON，写完即 flush；文件不存在时自动创建；磁盘写失败不影响接口返回，仅在响应中省略 ok 提示并记录到 stderr。
-
-四、自检
-
-启动后执行：curl -s http://127.0.0.1:8080/v1/health 应返回 status 为 ok；
-再执行一条 /v1/process 请求，确认 data/traces.jsonl 新增一行。
+六、自检
+启动后执行 curl http://127.0.0.1:8080/v1/health，返回 status 为 ok 即视为可用；
+随后向 /v1/process 发送一条文本，确认 traces/traces.jsonl 新增一行且 feedback.jsonl 在提交反馈后新增一行。
