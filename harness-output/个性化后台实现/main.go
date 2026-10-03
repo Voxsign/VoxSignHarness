@@ -62,17 +62,18 @@ const (
 )
 
 func ClassifyIntent(text string) Intent {
-	if strings.Contains(text, "note") {
+	if strings.HasPrefix(text, "note:") {
 		return NOTE
-	} else if strings.Contains(text, "query") {
+	} else if strings.HasPrefix(text, "query:") {
 		return QUERY
-	} else if strings.Contains(text, "edit") {
+	} else if strings.HasPrefix(text, "edit:") {
 		return EDIT
-	} else if strings.Contains(text, "commit") {
+	} else if strings.HasPrefix(text, "commit:") {
 		return COMMIT
-	} else {
+	} else if strings.HasPrefix(text, "orchestrate:") {
 		return ORCHESTRATE
 	}
+	return NOTE
 }
 
 type Feedback struct {
@@ -136,11 +137,6 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := AppendToFile(fmt.Sprintf("%s/traces.jsonl", *dataDir), req); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := AppendToFile(fmt.Sprintf("%s/usage.jsonl", *dataDir), resp); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

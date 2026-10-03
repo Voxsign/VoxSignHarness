@@ -1,44 +1,61 @@
-README.md（中文运行说明）
+README（个性化后台）
 
-个性化后台实现 —— 本地优先的个人化文本处理服务
+一、构建与启动
 
-一、环境要求
-Go 1.21 或以上；无需数据库，数据全部以 JSONL 文件追加写入本地数据目录。
+  构建：go build -o p13n ./cmd/server
+  或直接运行：go run ./cmd/server
 
-二、启动命令
-构建：go build -o pbackend .
-启动（默认）：./pbackend
-指定监听与数据目录：./pbackend -addr 127.0.0.1:8080 -data-dir ./data -token dev-token
-参数说明：
--addr 监听地址，默认 127.0.0.1:8080，仅允许回环地址，非 127.0.0.1 的地址会被拒绝启动。
--data-dir 数据目录，默认 ./data，不存在时自动创建。
--token 占位鉴权令牌；留空时不校验。请求需带 Authorization: Bearer <token>。
+  默认监听 127.0.0.1:8080（仅回环地址，来自非回环的请求一律拒绝）。
+  数据目录默认 ./data，可通过参数或环境变量指定：
+  go run ./cmd/server -addr 127.0.0.1:8080 -data-dir ./data
+  P13N_ADDR=127.0.0.1:8080 P13N_DATA_DIR=./data go run ./cmd/server
 
-三、HTTP 端点
-GET /v1/health
-  健康检查，返回 {"status":"ok"}，无需鉴权。
+  鉴权为占位实现：请求头 X-API-Key 可选校验，留空表示不校验（占位，可后续替换为真实鉴权）。
 
-POST /v1/process
-  统一业务入口，Content-Type: application/json，需鉴权。
-  请求体示例：
-  {"text":"明天开会要带合同","intent":"","feedback":null}
-  字段：text 待处理文本；intent 可选，指定时跳过分类；feedback 可选，取值 "ok" 或 "bad"。
-  响应体示例：
-  {"ok":true,"intent":"NOTE","corrected":"明天开会要带合同","edits":[],"trace_id":"..."}
-  intent 取值：NOTE、QUERY、EDIT、COMMIT、ORCHESTRATE。
+二、HTTP 端点
 
-四、个性化词典接口
-POST /v1/dict/add    新增条目，body: {"term":"合同","aliases":["合约"],"weight":1}
-POST /v1/dict/delete 删除条目，body: {"term":"合同"}
-GET  /v1/dict/list   查询全部条目
+  GET  /v1/health
+       返回服务状态、数据目录、词典条目数，例如 {"status":"ok","data_dir":"./data","dict_size":12}
 
-五、数据文件（均位于 -data-dir 目录，JSONL，append-only，只追加不覆写）
-traces.jsonl   每次 /v1/process 的输入、纠错结果、意图与 trace_id
-usage.jsonl    调用统计：时间戳、端点、耗时、状态码
-feedback.jsonl 反馈学习记录：trace_id、反馈值 ok/bad、时间戳
-dict.json      个性化词典快照，供启动时加载
+  POST /v1/process
+       请求体 JSON：{"text":"把明天的会议记一下","user_id":"u1","feedback":null}
+       响应体 JSON：
+       {
+         "text_clean": "清洗后的文本",
+         "text_corrected": "纠错后的文本",
+         "corrected": true/false,
+         "intent": "NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE",
+         "confidence": 0.0-1.0,
+         "trace_id": "...",
+         "items": [...]
+       }
+       feedback 字段为可选：传 true/false 表示对该次结果打 ✔/✘，会追加写入 feedback.jsonl。
 
-六、行为说明
-文本纠错先做清洗（去多余空白、全半角归一），再按词典做匹配替换；未命中词典的文本保持原样，正常文本不会被改坏。
-意图分类按关键词与词典权重规则判定，无法判定时归为 QUERY。
-反馈回馈仅追加写入 feedback.jsonl，不阻塞主流程，写入失败只记录日志。
+  词典操作（P0：增/删/查）
+  POST /v1/dict/add     {"term":"术语","canonical":"规范写法","aliases":["别名"]}
+  POST /v1/dict/delete  {"term":"术语"}
+  GET  /v1/dict/list    列出全部条目
+  GET  /v1/dict/get?term=术语   查询单条
+
+三、数据文件（全部 append-only JSONL，位于 data-dir 内）
+
+  data/dictionary.json   个性化词典（增删改时整体重写，读取时加载到内存）
+  data/feedback.jsonl    反馈学习记录，每行一条 {"ts":...,"trace_id":...,"ok":true}
+  data/traces.jsonl      每次 /v1/process 的处理轨迹，每行一条
+  data/usage.jsonl       接口调用计数与耗时，每行一条
+
+  目录与文件首次启动自动创建，不会覆盖已有内容；JSONL 仅追加，不修改历史行。
+
+四、能力说明（P0 对应）
+
+  ① 词典：增/删/查，匹配时按最长优先，纠错仅在命中词典或安全规则时替换，避免改坏正常文本。
+  ② 纠错：先清洗（去多余空白、全角半角归一、URL/邮箱保护），再做词典纠错；未命中则原样返回。
+  ③ 意图分类：NOTE / QUERY / EDIT / COMMIT / ORCHESTRATE 五类，规则优先 + 关键词加权。
+  ④ 反馈学习：✔/✘ 追加落盘 feedback.jsonl，用于后续调整词典权重。
+  ⑤ 落盘：traces/usage/feedback 均为 JSONL append-only。
+  ⑥ 端点：/v1/health、/v1/process（JSON 请求/响应）。
+  ⑦ 仅监听 127.0.0.1，鉴权占位但已存在。
+
+五、自检
+
+  go build ./...  应无错误；启动后 curl http://127.0.0.1:8080/v1/health 应返回 status=ok。
