@@ -1,50 +1,53 @@
-个性化后台实现 · 运行说明
+个性化后台 运行说明
 
 一、启动
-go build -o pkb .        # 需编译通过，main.go 为完整实现，无 todo 占位
-./pkb -addr 127.0.0.1:8787 -data-dir ./data -token dev-token
+  go build -o bin/personalize .
+  ./bin/personalize --data-dir ./data --addr 127.0.0.1:8080
+  或：go run . --data-dir ./data --addr 127.0.0.1:8080
 
-参数说明
--addr     监听地址，必须为回环地址（127.0.0.1 或 ::1）；传入 0.0.0.0 等非回环地址时启动失败并退出，不做降级。
--data-dir 数据目录，默认 ./data，启动时自动创建。
--token    鉴权占位令牌，默认 dev-token，请求需带 Authorization: Bearer <token>；缺失或错误返回 401。
+  参数/环境变量（命令行优先）：
+  --data-dir / DATA_DIR   数据目录，默认 ./data，不存在则自动创建
+  --addr     / ADDR       监听地址，默认 127.0.0.1:8080，非回环地址直接拒绝启动
+  --token    / API_TOKEN  鉴权令牌占位；为空时不校验
 
 二、HTTP 端点
-GET  /v1/health
-  返回 200 与 {"status":"ok","data_dir":"...","dict_size":N}
-POST /v1/process
-  请求头 Content-Type: application/json，Authorization: Bearer <token>
-  请求体字段：
-    text     必填，待处理文本
-    user_id  选填，用于反馈与用量归属
-    op       选填，note|query|edit|commit|orchestrate，缺省由意图分类自动判定
-  响应体字段：
-    ok       布尔
-    intent   NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 之一
-    corrected  词典纠错后的文本（正常文本原样返回，不被改坏）
-    matched  命中的词典条目列表
-    reply    按意图生成的应答
-    trace_id 本次轨迹号，可用于反馈回执
-POST /v1/feedback
-  请求体 {"trace_id":"...","label":"up|down","user_id":"..."}，落盘 feedback.jsonl
+  GET  /v1/health
+       返回 {"status":"ok","data_dir":"...","uptime_s":N}
+  POST /v1/process
+       请求 {"text":"...","user_id":"u1","action":"note|query|edit|commit|orchestrate"}
+       响应 {"intent":"NOTE|QUERY|EDIT|COMMIT|ORCHESTRATE","corrected":"...",
+             "dict_hits":[{"term":"...","op":"..."}],"trace_id":"..."}
+  POST /v1/feedback
+       请求 {"trace_id":"...","label":"ok|bad","note":"..."}，追加写入 feedback.jsonl
+  GET  /v1/dictionary?q=关键词        查询词典条目
+  POST /v1/dictionary                 新增/更新条目 {"term":"...","to":"..."}
+  DELETE /v1/dictionary               删除条目 {"term":"..."}
 
-三、数据文件（均在 data-dir 下，除 dict.json 外均为 append-only JSONL，只追加不改写）
-dict.json        个性化词典，增/删/查条目，写盘采用临时文件 + 原子重命名
-feedback.jsonl   反馈学习记录，✔/✘ 每次一行
-traces.jsonl     处理轨迹，每个请求一行
-usage.jsonl      用量统计，含意图分布与耗时
-文件按天不需要轮转，直接追加；读取时对损坏行跳过并计数，不影响服务。
+  鉴权：请求头 Authorization: Bearer <token>；未配置 token 时仅记录不拦截。
 
-四、能力与实现要点
-个性化词典  词典增删查接口 + 匹配与纠错安全：仅命中条目才替换，长度/相似度阈值外不改写，避免误纠。
-文本纠错    先做清洗（空白、全半角、不可见字符），再走词典纠错，未命中一律原样返回。
-意图分类    NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 五类，规则打分 + 关键词加权，命中词典条目可提权。
-反馈学习    feedback.jsonl append-only，进程内维护权重，重启后按行回放恢复。
-数据落盘    全部 JSONL 追加写，写入带 fsync；data-dir 可配，路径不存在则创建。
+三、数据文件（均在 data-dir 下，JSONL append-only，仅追加不覆写）
+  dictionary.json   个性化词典条目（增删查的唯一真源）
+  feedback.jsonl    反馈学习记录，每行一条 ✔/✘ 回馈
+  traces.jsonl      每次 /v1/process 的输入、命中、意图、耗时
+  usage.jsonl       端点调用计数与延迟
 
-五、自检
-curl http://127.0.0.1:8787/v1/health
-curl -X POST http://127.0.0.1:8787/v1/process -H "Authorization: Bearer dev-token" -H "Content-Type: application/json" -d '{"text":"帮我把周报记一下","user_id":"u1"}'
-curl -X POST http://127.0.0.1:8787/v1/feedback -H "Authorization: Bearer dev-token" -H "Content-Type: application/json" -d '{"trace_id":"T1","label":"up","user_id":"u1"}'
+四、调用示例
+  curl -s http://127.0.0.1:8080/v1/health
+  curl -s -X POST http://127.0.0.1:8080/v1/process \
+       -H 'Content-Type: application/json' \
+       -d '{"text":"明天开会导致项目复盘","user_id":"u1"}'
+  curl -s -X POST http://127.0.0.1:8080/v1/feedback \
+       -H 'Content-Type: application/json' \
+       -d '{"trace_id":"<上一步返回>","label":"ok"}'
 
-写入完成后，tail -n 1 data/traces.jsonl 与 data/usage.jsonl 应各新增一行。
+五、实现要点（代码位置）
+  main.go                启动、路由、127.0.0.1 校验、鉴权占位
+  internal/dictionary    词典增删查（dictionary/dict）
+  internal/correct       文本清洗 + 词典纠错（correct），命中才替换，正常文本原样返回
+  internal/intent        五类意图分类（intent）
+  internal/feedback      反馈学习落盘（feedback）
+  internal/store         JSONL append-only 落盘（jsonl/append），带文件锁
+  词典与纠错均做边界匹配，避免把正常词改坏；未命中即不修改。
+
+六、退出
+  Ctrl+C，等待落盘 flush 完成后进程结束。
