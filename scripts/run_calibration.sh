@@ -97,6 +97,14 @@ while IFS= read -r line; do
   m=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$3); print toupper($3)}')
   p=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$4); print $4}')
   want=$(echo "$line" | awk -F'|' '{gsub(/^ +| +$/,"",$5); print $5}')
+  # ⚠️ **禁止空期望**（2026-10-03 实测事故）：
+  # 我曾用 `cmd/vhs-asr` 打 `/v1/voice` 得到 **200**，就当成 PASS ——
+  # 而那个 200 是**测试页的 200**（`<!doctype html>`），**不是 `handleVoice` 的 200**。
+  # ⇒ **"HTTP 200" ≠ "走到了那个 handler"** ⇒ R 证据必须断言**响应内容**（契约字段）。
+  if [ -z "$want" ]; then
+    echo "| $id | $obj | \`$m $p\` | - | **（清单未写期望子串）** | **✗ 判据无效**（R 证据必须断言响应内容，不能只验状态码） |" >> "$OUT"
+    continue
+  fi
 
   resp=$(curl -s -m 30 -X "$m" "http://127.0.0.1:$PORT$p" -H 'Content-Type: application/json' -d '{}' -w '\n%{http_code}' 2>/dev/null)
   code=$(printf '%s' "$resp" | tail -1)
@@ -110,7 +118,9 @@ while IFS= read -r line; do
 done < "$DATA/.crit"
 
 R=$(grep -c 'R ✅' "$OUT" 2>/dev/null || echo 0)
-Z=$(grep -c '✗ 期望' "$OUT" 2>/dev/null || echo 0)
+# ⚠️ 失败计数必须覆盖**所有** ✗ 类别 —— 我第一版只数 `✗ 期望`，
+# 于是新加的 `✗ 无效判据` **不被计入** ⇒ 退出码错误地为 0（2026-10-03 实测）
+Z=$(grep -c '✗ ' "$OUT" 2>/dev/null || echo 0)
 T=$(grep -E '^\| [A-Za-z0-9_-]+ \|' "$OUT" 2>/dev/null | grep -vc '^| 判据 ' || echo 0)
 {
   echo
