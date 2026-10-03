@@ -25,8 +25,58 @@ type Criterion struct {
 	Manual  bool   `json:"manual"` // **显式标注**
 }
 
-// CriteriaFromKnowhow 把 knowhow 映射成判据。
+// Template 是"规划模板"条目（steps 的正确归宿，VHS-SKILL-001 §3：steps → 规划模板）。
+type Template struct {
+	Skill   string `json:"source_skill"`
+	Version string `json:"source_version"`
+	Index   int    `json:"index"`
+	Text    string `json:"text"`
+}
+
+// Excluded 显式记录**没有归宿的 knowhow 条目**（SK-11：不许静默丢弃）。
+type Excluded struct {
+	Key    string `json:"key"`
+	Text   string `json:"text"`
+	Reason string `json:"reason"`
+}
+
+// Mapping 是 knowhow 的完整映射结果（**守恒**：三类之和 == knowhow 总条数）。
+type Mapping struct {
+	Criteria  []Criterion `json:"criteria"`
+	Templates []Template  `json:"templates"` // steps → 规划模板
+	Excluded  []Excluded  `json:"excluded"`  // 显式排除（带理由）
+	Total     int         `json:"total"`     // knowhow 条目总数
+}
+
+// KnowhowTotal 数出 knowhow 的全部条目（用于守恒断言）。
+func KnowhowTotal(kh Knowhow) int {
+	return len(kh.Steps) + len(kh.Judging) + len(kh.Cautions) + len(kh.Basis) + len(kh.Style)
+}
+
+// MapKnowhow 是**守恒**映射：每条 knowhow 要么成判据、要么成模板、要么显式排除。
+func MapKnowhow(skillID, version string, kh Knowhow) Mapping {
+	m := Mapping{Total: KnowhowTotal(kh)}
+	// steps → 规划模板（不是丢弃）
+	for i, t := range kh.Steps {
+		m.Templates = append(m.Templates, Template{Skill: skillID, Version: version, Index: i + 1, Text: t})
+	}
+	m.Criteria = criteriaOnly(skillID, version, kh)
+	// 守恒检查：任何未进判据也未进模板的条目，必须显式排除（当前映射已覆盖全部键）
+	sum := len(m.Criteria) + len(m.Templates) + len(m.Excluded)
+	if sum != m.Total {
+		m.Excluded = append(m.Excluded, Excluded{
+			Key: "unmapped", Text: "", Reason: "映射缺口（守恒失败）—— 属实现缺陷，必须显式暴露",
+		})
+	}
+	return m
+}
+
+// CriteriaFromKnowhow 把 knowhow 映射成判据（兼容入口）。
 func CriteriaFromKnowhow(skillID, version string, kh Knowhow) []Criterion {
+	return criteriaOnly(skillID, version, kh)
+}
+
+func criteriaOnly(skillID, version string, kh Knowhow) []Criterion {
 	var out []Criterion
 	add := func(field string, items []string) {
 		for i, t := range items {
