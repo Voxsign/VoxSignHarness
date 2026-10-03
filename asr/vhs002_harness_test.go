@@ -15,10 +15,40 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"voicesign-harness/modelcenter"
 )
+
+// teachStore 是夹具内的"教的词"存储 + 改写器（来源语义 user_taught）。
+type teachStore struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func (t *teachStore) Teach(term, canonical string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.m[term] = canonical
+	return nil
+}
+
+func (t *teachStore) Rewrite(text string) (string, []Correction) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := text
+	for term, canonical := range t.m {
+		if strings.Contains(out, term) {
+			out = strings.ReplaceAll(out, term, canonical)
+		}
+	}
+	if out == text {
+		return text, nil
+	}
+	return out, []Correction{{Kind: "hotword", Confidence: 0.95, Evidence: "user_taught"}}
+}
 
 func TestMain(m *testing.M) {
 	code := func() int {
@@ -54,6 +84,10 @@ func TestMain(m *testing.M) {
 
 		pipe := NewPipeline(NewEngine(), dict, tracer)
 		srvObj := NewServer(pipe)
+		// G2：教词的 HTTP 后端（夹具内实现，避免 asr → hotcache 反向依赖）。
+		store := &teachStore{m: map[string]string{}}
+		srvObj.Teach = store.Teach
+		pipe.Hot = store
 		// 有 key 就接**真实** default 通道做兜底；没有则纯本地（缺 key 不内置、不失败）。
 		if os.Getenv("AIOPS_KEY") != "" {
 			if cfg, err := modelcenter.Load("../config/model-center.json"); err == nil {

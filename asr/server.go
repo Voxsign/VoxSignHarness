@@ -26,6 +26,10 @@ type Server struct {
 	IntentTimeout time.Duration
 	// DataDir 是本机数据目录（画像等；空则视为无画像）。
 	DataDir string
+	// Teach 是"用户教一个词"的后端钩子（CACHE-001 G2）。
+	// 路径用规范里已有的 `/v1/observe`（VHS-ASR-001 P3 端点清单），**不新造路径**。
+	// 为空 ⇒ 该端点返回 503（不假装支持）。
+	Teach func(term, canonical string) error
 }
 
 // NewServer 构造服务。
@@ -39,6 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/dictionary", s.handleDictionary)
 	mux.HandleFunc("/v1/process", s.handleProcess)
 	mux.HandleFunc("/v1/feedback", s.handleFeedback)
+	mux.HandleFunc("/v1/observe", s.handleObserve)
 	return mux
 }
 
@@ -242,6 +247,40 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		ConfirmPatternMiss:    missConfirm,
 		Traces:                res.Steps,
 	})
+}
+
+// handleObserve 是"用户教一个词"的入口（G2：Peter 原话「最近我说的词」）。
+// 来源固定标 user_taught（可审计）；空词/同值一律拒绝（否则缓存被污染成"什么都能命中"）。
+func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
+		return
+	}
+	if s.Teach == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "teaching disabled"})
+		return
+	}
+	var req struct {
+		Term      string `json:"term"`
+		Canonical string `json:"canonical"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+		return
+	}
+	if strings.TrimSpace(req.Term) == "" || strings.TrimSpace(req.Canonical) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term/canonical 不得为空"})
+		return
+	}
+	if strings.TrimSpace(req.Term) == strings.TrimSpace(req.Canonical) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term 与 canonical 相同，无需教"})
+		return
+	}
+	if err := s.Teach(req.Term, req.Canonical); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "source": "user_taught"})
 }
 
 // handleFeedback 回传一次反馈：登记为**候选词典条目**（source/created_at 可审计）。
