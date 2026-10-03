@@ -385,3 +385,35 @@ func TestLedgerWriteFailureLeavesTrace(t *testing.T) {
 		t.Errorf("[台账] 写失败未留痕（静默）: %+v", d.Ledger)
 	}
 }
+
+// 聚合报告：样本不足必须如实说"无法判定"，且考察点③要指出字段缺失。
+func TestReportIsHonestAboutInsufficientSamples(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	l := &Ledger{Path: path}
+	r := &Router{Hot: hotCache(t), Ledger: l}
+	r.Route(context.Background(), "爱ops", "q", Situation{})
+	out, err := Report(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "样本不足") {
+		t.Errorf("[报告] 样本 1 条却未标样本不足:\n%s", out)
+	}
+	if !strings.Contains(out, "样本量: 1") {
+		t.Errorf("[报告] 未标明样本量:\n%s", out)
+	}
+	if !strings.Contains(out, "考察点③") || !strings.Contains(out, "无法判定") {
+		t.Errorf("[报告] 考察点③ 应如实说无法判定（缺字段）:\n%s", out)
+	}
+}
+
+// 空台账不崩，且如实说"无法判定"。
+func TestReportOnEmptyLedger(t *testing.T) {
+	out, err := Report(filepath.Join(t.TempDir(), "nope.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "台账为空") {
+		t.Errorf("[报告] 空台账应如实说明:\n%s", out)
+	}
+}
