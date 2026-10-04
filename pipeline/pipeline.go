@@ -2025,7 +2025,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 				"-d", `{"text":"帮我拉取那个仓库","conversation_id":"evg-1"}`}})
 			rs := strings.TrimSpace(r.Stdout)
 			if !strings.Contains(strings.ToLower(rs), "unresolved") && !strings.Contains(rs, "pending_resolve") && !strings.Contains(rs, "补全") {
-				gaps = append(gaps, "E4 resolve 行为不达标：无会话历史且无明确对象时应返回 unresolved/pending_resolve（需求判据 7），实测="+rs+"。实现要点：resolve handler 先查该 conversation_id 的会话历史（JSONL/内存 session store）——若该会话无任何历史记录且 text 含指代词（那个/这个/它/帮我…那个），必须返回含 unresolved 或 pending_resolve 的响应（如 {\"resolved\":false,\"target\":\"unresolved\",\"pending_resolve\":true}）；有历史时从最近记录补全 target。禁止返回 {\"resolved_target\":\"\"} 或 \"default target\" 等默认值")
+				gaps = append(gaps, "E4 resolve 行为不达标：无会话历史且无明确对象时应返回 unresolved/pending_resolve（需求判据 7），实测="+rs+"。实现要点：resolve handler 先查该 conversation_id 的会话历史（JSONL/内存 session store）——若该会话无任何历史记录且 text 含指代词（那个/这个/它/帮我…那个），必须返回含 unresolved 或 pending_resolve 的响应（如 {\"resolved\":false,\"target\":\"unresolved\",\"pending_resolve\":true}）；有历史时从最近记录补全 target。禁止返回 {\"resolved_target\":\"\"} 或 \"default target\" 等默认值。Go 行为锚点（可直接参照）：无历史时 handler 内做 `if 该会话无记录 { w.Header().Set(\"Content-Type\",\"application/json\"); io.WriteString(w, \"{\\\"resolved\\\":false,\\\"target\\\":\\\"unresolved\\\",\\\"pending_resolve\\\":true}\"); return }`")
 			}
 			// E5 run：编排执行必须投递上游并返回任务引用（需求判据 8 语义：summary/任务状态）。
 			ru := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "8", "-X", "POST",
@@ -2033,7 +2033,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 				"-d", `{"text":"拉取最新版，编译并启动服务","conversation_id":"evg-1"}`}})
 			rus := strings.TrimSpace(ru.Stdout)
 			if !strings.Contains(rus, "task_id") && !strings.Contains(rus, "submitted") && !strings.Contains(rus, "summary") && !strings.Contains(rus, "total") {
-				gaps = append(gaps, "E5 run 行为不达标：应编排任务并投递上游 harness（响应含 task_id/submitted/summary.total），实测="+rus+"。实现要点：run handler 将 text 交给内部编排（复用 decompose 逻辑拆任务列表），对每个任务 POST 上游 harness /v1/tasks（上游 base 默认 http://127.0.0.1:8941，支持 VHS_UPSTREAM 环境变量覆盖；JSON: {\"text\":任务文本,\"conversation_id\":当前会话}），收集返回的 task_id；响应 JSON 必须含 tasks 数组（每项含 task_id）+ submitted 数量 + summary（含 total 字段）。禁止返回 {\"results\":[]} 或 {\"tasks\":null}")
+				gaps = append(gaps, "E5 run 行为不达标：应编排任务并投递上游 harness（响应含 task_id/submitted/summary.total），实测="+rus+"。实现要点：run handler 将 text 交给内部编排（复用 decompose 逻辑拆任务列表），对每个任务 POST 上游 harness /v1/tasks（上游 base 默认 http://127.0.0.1:8941，支持 VHS_UPSTREAM 环境变量覆盖；JSON: {\"text\":任务文本,\"conversation_id\":当前会话}），收集返回的 task_id；响应 JSON 必须含 tasks 数组（每项含 task_id）+ submitted 数量 + summary（含 total 字段）。禁止返回 {\"results\":[]} 或 {\"tasks\":null}。Go 行为锚点（可直接参照）：先用内部拆任务逻辑得到 task 列表；对每个任务 `http.Post(upstream+\"/v1/tasks\", \"application/json\", bytes.NewReader(jsonStr))` 收集响应里的 task_id 到切片；最终响应写 `{\"tasks\":[{\"task_id\":\"...\"}],\"submitted\":N,\"summary\":{\"total\":N}}`（N=成功投递数，字段名必须含 task_id/submitted/summary/total）")
 			}
 		}
 	}
