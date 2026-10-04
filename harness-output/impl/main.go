@@ -6,45 +6,39 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 )
 
 var (
-	addr       string
-	dataDir    string
-	upstream   string
-	sessions   = make(map[string][]map[string]interface{})
+	addr       = flag.String("addr", "127.0.0.1:8950", "service address")
+	dataDir    = flag.String("data-dir", "./data", "data directory")
+	upstream   = os.Getenv("VHS_UPSTREAM")
+	sessions   = make(map[string]int)
 	sessionsMu sync.Mutex
 )
 
-func init() {
-	flag.StringVar(&addr, "addr", "127.0.0.1:8950", "service address")
-	flag.StringVar(&dataDir, "data-dir", "./data", "data directory")
-	flag.StringVar(&upstream, "upstream", "http://127.0.0.1:8941", "upstream service address")
-}
-
 func main() {
 	flag.Parse()
+	if upstream == "" {
+		upstream = "http://127.0.0.1:8941"
+	}
 
 	http.HandleFunc("/v1/voice/health", handleHealth)
 	http.HandleFunc("/v1/voice/parse", handleParse)
 	http.HandleFunc("/v1/voice/decompose", handleDecompose)
-	http.HandleFunc("/v1/voice/resolve", handleResolve)
-	http.HandleFunc("/v1/voice/feedback", handleFeedback)
 	http.HandleFunc("/v1/tasks", handleTasks)
 	http.HandleFunc("/v1/voice", handleVoice)
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		fmt.Println("Failed to start server:", err)
+	fmt.Printf("Listening on %s\n", *addr)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
 	}
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	sessionsMu.Lock()
 	defer sessionsMu.Unlock()
-
 	response := map[string]interface{}{
 		"ok":       true,
 		"service":  "vhs-voice",
@@ -64,7 +58,6 @@ func handleParse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clean, actions, noiseRemoved := parseText(req.Text)
-
 	response := map[string]interface{}{
 		"clean":         clean,
 		"actions":       actions,
@@ -117,83 +110,28 @@ func handleDecompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks := decomposeText(req.Clean)
-
+	tasks := decomposeTasks(req.Clean)
 	response := map[string]interface{}{
 		"tasks": tasks,
 	}
 	json.NewEncoder(w).Encode(response)
 }
 
-func decomposeText(clean string) []map[string]interface{} {
-	// Placeholder for actual decomposition logic
+func decomposeTasks(clean string) []map[string]interface{} {
+	// Placeholder for task decomposition logic
 	return []map[string]interface{}{
 		{"seq": 1, "action": "拉取", "target": "GitHub 仓库 example/repo"},
 	}
 }
 
-func handleResolve(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Tasks []map[string]interface{} `json:"tasks"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	resolvedTasks := resolveTasks(req.Tasks)
-
-	response := map[string]interface{}{
-		"resolved_tasks": resolvedTasks,
-	}
-	json.NewEncoder(w).Encode(response)
-}
-
-func resolveTasks(tasks []map[string]interface{}) []map[string]interface{} {
-	// Placeholder for actual resolution logic
-	return tasks
-}
-
-func handleFeedback(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Feedback string `json:"feedback"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	appendFeedback(req.Feedback)
-
-	response := map[string]interface{}{
-		"status": "feedback recorded",
-	}
-	json.NewEncoder(w).Encode(response)
-}
-
-func appendFeedback(feedback string) {
-	filePath := filepath.Join(dataDir, "feedback.jsonl")
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Println("Failed to open feedback file:", err)
-		return
-	}
-	defer f.Close()
-
-	entry := map[string]string{"feedback": feedback}
-	data, _ := json.Marshal(entry)
-	f.Write(data)
-	f.Write([]byte("\n"))
-}
-
 func handleTasks(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for tasks handling logic
-	http.Error(w, "Not implemented", http.StatusNotImplemented)
+	w.WriteHeader(http.StatusNotImplemented)
 }
 
 func handleVoice(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for voice handling logic
-	http.Error(w, "Not implemented", http.StatusNotImplemented)
+	w.WriteHeader(http.StatusNotImplemented)
 }
 
 func contains(slice []string, item string) bool {
