@@ -213,6 +213,30 @@ func registerGapThenNoun(after string) bool {
 			return true
 		}
 	}
+	// 描述场景（2026-10-04 能力自举「你必须增加一个 远程控制电脑 的能力」）：
+	// 动词+虚词 后跟 能力描述，以能力名词收尾（…的能力/工具/功能/技能/插件）。
+	// 排除查询/时态语境：「查一下已注册的工具」（mid="的"）、「已注册的能力」（mid="已注册的"）
+	// —— mid 以虚词/时态词开头或含注册动词 → 不是"注册新能力"指令。
+	for _, n := range registerCapabilityNouns {
+		if strings.HasSuffix(rest, n) {
+			mid := strings.TrimSuffix(rest, n)
+			if mid == "" {
+				continue // 名词本身：紧邻场景已覆盖
+			}
+			if strings.HasPrefix(mid, "的") || strings.HasPrefix(mid, "了") ||
+				strings.HasPrefix(mid, "吧") || strings.HasPrefix(mid, "呢") ||
+				strings.HasPrefix(mid, "已") || strings.HasPrefix(mid, "在") ||
+				strings.HasPrefix(mid, "过") {
+				return false
+			}
+			for _, v := range registerVerbs {
+				if strings.Contains(mid, v) {
+					return false // 描述含注册动词 → 查询/说明语境
+				}
+			}
+			return true
+		}
+	}
 	return false
 }
 
