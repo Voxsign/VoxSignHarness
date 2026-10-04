@@ -208,6 +208,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		out.View = contract.ReceiptView{
 			Action: "（空指令）", Files: "—", Result: "未执行（需回问：" + out.Ask + "）", Undo: "—",
 		}
+		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
 
@@ -334,6 +335,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Result: "未执行（需回问：" + intent.Ask + "）", Undo: "—（未执行）",
 		}
 		o.writeTaskMetrics(intent, out, false)
+		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
 
@@ -376,6 +378,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Result: "BOUNDARY_VIOLATION：" + reasonText(verdict.Reason), Undo: "—（未执行）",
 		}
 		o.writeTaskMetrics(intent, out, false)
+		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
 
@@ -468,6 +471,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Action: shortAction(intent), Files: targetFiles(intent),
 			Result: "待确认（" + decision.Level + "，未放行）", Undo: "—（未执行）",
 		}
+		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
 
