@@ -1834,12 +1834,26 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		// /v1/tasks/{id}"）——那是要调用的，不是产物要注册的。判据 5 只查产物端点族
 		//（/v1/voice/ 前缀；上游端点排除），否则永远误报缺口导致修订死循环。
 		upstreamEP := map[string]bool{"/v1/tasks": true, "/v1/tasks/{id}": true}
+		// 路径参数归一化：/v1/voice/tasks/{conversation_id} → /v1/voice/tasks/（参数名不参与匹配）。
+		// 2026-10-04 真跑：LLM 生成 HandleFunc("/v1/voice/tasks/")（尾斜杠，Go 路径参数兼容写法），
+		// 严格匹配 {conversation_id} 永远缺 → 5 轮修订死循环。归一后只验证端点路径存在。
+		normEP := func(ep string) string {
+			return regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(ep, "")
+		}
+		reqNorm := map[string]string{}
 		for ep := range reqEP {
-			if upstreamEP[ep] {
+			reqNorm[normEP(ep)] = ep
+		}
+		prodNorm := map[string]bool{}
+		for ep := range prodEP {
+			prodNorm[normEP(ep)] = true
+		}
+		for n, orig := range reqNorm {
+			if upstreamEP[orig] {
 				continue
 			}
-			if !prodEP[ep] {
-				gaps = append(gaps, "缺需求端点实现："+ep+"（需求文档要求，产物未注册 http.HandleFunc）")
+			if !prodNorm[n] {
+				gaps = append(gaps, "缺需求端点实现："+orig+"（需求文档要求，产物未注册 http.HandleFunc）")
 			}
 		}
 	}
