@@ -11,10 +11,17 @@ func TestEndpointGateRealCase(t *testing.T) {
 	if err != nil {
 		t.Skipf("需求文档不可读: %v", err)
 	}
-	prodBytes, err := os.ReadFile("../harness-output/个性化后台实现/main.go")
-	if err != nil {
-		t.Skipf("无人工产物不可读: %v", err)
-	}
+	// 2026-10-04：产物改为内联 fixture（2/7 端点）——工作区产物已是契约版 7/7，
+	// 测试依赖工作区文件会随产物演进而失效；洞1 复现场景固定为"需求 7 端点 vs 产物 2 端点"。
+	prodBytes := []byte(`package main
+
+import "net/http"
+
+func main() {
+	http.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {})
+	http.HandleFunc("/v1/process", func(w http.ResponseWriter, r *http.Request) {})
+}
+`)
 
 	reqEP := endpointRefsOf(string(docBytes))
 	prodEP := endpointHandlersOf(string(prodBytes))
