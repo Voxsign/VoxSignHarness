@@ -85,44 +85,19 @@ var (
 	// registerTriggers 是历史触发词表：保留给 actionWords（否定/条件的动作全集）
 	// 与非结构化兜底使用。新判定一律走 registerToolRequest 的结构性判据 ——
 	// 见下方"注册工具意图（架构缺口 A1）"。
-	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具",
-		// 2026-10-04 验证器 R11：口语注册"增加一个查看天气的能力"——
-		// "增加一个/新增一个/添加一个"+"能力" 语境命中（"加一个"太宽不加入）。
-		"增加一个", "新增一个", "添加一个"}
-	// writeTriggers 写文件指令（2026-10-04 验证器 R6/R7 逼出）：
-	// "把 XX 写到 /path" 此前被判 TEST（含"测试"字）或 UNKNOWN（无触发词）。
-	// 独立表放最前，先于 TEST 判定。
-	writeTriggers  = []string{"写到", "写入", "保存到", "保存为", "创建文件", "写一个", "写个"}
-	deleteTriggers = []string{"删掉", "删除", "去掉", "移除", "清空"}
-	feasibleAsk    = []string{"能不能", "可不可以", "是否可以", "行不行"}
-	thoughtWords   = []string{"想法", "备忘"}
-	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
-	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
-	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
-	// F4 修复（真实测试 R1/R2/R9）：事实疑问句触发。位于 2b 单类 switch 的 query 分支、
-	// 先于 deploy/edit 判定——「DMZ 发布是不是单向的」是提问不是部署命令（原误判 DEPLOY）。
-	queryTriggers = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
-		"是不是", "是什么", "是哪", "有哪些", "哪几", "是否", "有没有",
-		// 2026-10-04 用户实测"现在几点了"→回问：补明确时刻/日期查询触发词（事实查询，非写意图）。
-		// 只收窄到明确的问时词；"今天/明天/昨天/时间/日期"太宽（"感谢大家今天的配合"会误伤 QUERY）。
+	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具"}
+	deleteTriggers   = []string{"删掉", "删除", "去掉", "移除", "清空"}
+	feasibleAsk      = []string{"能不能", "可不可以", "是否可以", "行不行"}
+	thoughtWords     = []string{"想法", "备忘"}
+	statusQuestion   = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
+	debugPlanWords   = []string{"思路", "怎么做", "方案", "打算"}
+	noteTriggers     = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
+	queryTriggers    = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
 		"几点", "几点钟", "什么时间", "几号", "星期几", "周几",
 		// 2026-10-04 远程控制第二段：命令式触发词带空格，仅"运行 ls/执行 cat"类命中，
 		// 不误伤"程序运行正常吗"（无空格不命中）。
 		"运行 ", "执行 ", "帮我跑 ", "截个图", "截图"}
-	// F2 修复（真实测试「翻译一下：…」）：M2 补 INFO 类，接通配置中 INFO 路由（翻译/总结/摘要/问答→fast）。
-	// 独立表名（M1 intent.go 已有 infoTriggers），且不含 搜索/查一下——M2 中它们维持 QUERY 语义。
-	m2InfoTriggers = []string{"翻译", "总结", "摘要", "问答", "概括", "归纳"}
-	// F3 修复（真实测试 R5/R6、vhs task 3 条失败）：空间名词是实体名，不是"记想法"触发；
-	// 即使无空间提示（vhs task 沙箱为空）也遮蔽想法仲裁。
-	thoughtSpaceNouns = []string{"想法库", "备忘库", "笔记库", "素材库", "灵感库"}
-	// F6 修复（真实测试 R14）：带时间锚点的截止/待办表述 → NOTE（时间进 params）。
-	deadlineWords = []string{"之前", "完成", "截止", "到期", "提醒", "安排"}
-	// F4 修复补充（e2e fz-07 红线）：无主语的模糊确认句「是不是可以了」不落 QUERY——
-	// 没有可查的实体，模糊→回问（宁可回问，不可猜错）。
-	fuzzyConfirmations = []string{"是不是可以了", "是不是可以", "是不是好了", "是不是行", "是不是没问题", "是不是搞定了"}
-	// F12 修复（真实测试 R6）：编辑类触发词只补**组合词**（补充/补一句/加上/添加…），
-	// 不补裸"补/加/添"——避免"参加/加班/增加"等普通正文高频字误判 EDIT。
-	editTriggers    = []string{"改成", "换成", "改一下", "修改", "替换", "改", "整成", "补充", "补一句", "补上", "添加", "加上", "加一条", "加一下", "添一句"}
+	editTriggers    = []string{"改成", "换成", "改一下", "修改", "替换", "改"}
 	debugTriggers   = []string{"报错", "为什么失败", "崩溃", "闪退", "出错", "bug", "修一下", "修这个", "修那个", "修一修", "修"}
 	testTriggers    = []string{"跑测试", "跑一下", "测一下", "跑个测试", "测试"}
 	commitTriggers  = []string{"提交", "推上去", "推到"}
@@ -221,6 +196,7 @@ func registerGapThenNoun(after string) bool {
 			break
 		}
 	}
+	// 紧邻场景：动词+虚词 后直接是能力名词（「加一个 工具」「注册一个 命令」）。
 	for _, n := range registerCapabilityNouns {
 		if strings.HasPrefix(rest, n) {
 			return true
@@ -371,7 +347,7 @@ func containsAnyReturn(text string, keywords []string) (string, bool) {
 var actionWords = func() []string {
 	var all []string
 	for _, group := range [][]string{
-		registerTriggers, writeTriggers, deleteTriggers, noteTriggers, queryTriggers,
+		registerTriggers, deleteTriggers, noteTriggers, queryTriggers,
 		debugTriggers, testTriggers, commitTriggers, deployTriggers,
 		askTriggers, editTriggers,
 	} {
@@ -410,8 +386,9 @@ var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下�
 // 系统不替用户守条件，也不该把"有前提的动作"当无条件命令做掉。
 // ---------------------------------------------------------------------------
 
-// conditionalMarkers 是前置条件标记。"就"是中文最典型的条件连接词，
-// 但它太常见（就是/就这个），必须配合**后随动作窗口**才判定。
+// conditionalMarkers 是前置条件标记。
+// "就"是典型条件连接词但口语高频（就为什么/我就想让）——2026-10-04 用户实测误伤，
+// 由 conditionalClause 内 conditionalJiPrefixOK 豁免（仅"完成态前提+就+动作"才算真条件）。
 var conditionalMarkers = []string{"如果", "只要", "除非", "一旦", "要是", "假如", "就"}
 
 // conditionalWindow 是条件标记之后允许出现动作词的字数窗口。
@@ -688,207 +665,27 @@ func intentLabel(kind string) string {
 var (
 	orchOrganizeWords = []string{"整理成", "整理", "汇总成", "汇总", "汇编"}
 	orchDocWords      = []string{"沟通记录", "设计文档", "文档", "记录"}
-	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成", "放到", "输出到"} // F5 修复：真实测试 R5「整理成…文档放到 docs 目录」→ ORCHESTRATE
-	// orchCreateWords 是"从无到有产出文档"的动词（缺陷修复：书名号文档任务误判 TEST）。
-	// 「生成/写成/落成/产出」+《书名号》+文档词 → ORCHESTRATE，
-	// 不再被 TEST 触发词（标题含"测试"）抢先误判。
-	orchCreateWords = []string{"生成", "写成", "落成", "产出"}
+	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成"}
 )
-
-// 实现类长程任务（实现/搭建服务类）结构性识别词表 —— 修订卡2 层1+2（2026-10-03）。
-//
-// 范式对齐 REGISTER_TOOL 的双向回归法：结构 = 实现动词在前、能力名词在后（动词支配名词），
-// 中间允许修饰成分（形容词/定语）；问句成分（怎么/如何/为什么…）出现即排除 ——
-// 「这个系统是怎么实现的」「如何实现一个缓存」不得误判。
-//
-// 命中后：纯实现结构或带《…》文档引用 → ORCHESTRATE(kind=implement)，
-// 长程实现任务由编排引擎去拆解，分类层只做识别（对齐修订卡2 层2）。
-var (
-	implementVerbs = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个", "建一个"} // F1 修复：真实长叙述「建一个 OT 运营数据平台…帮我规划」→ ORCHESTRATE
-	// 修订类动词（洞 2，2026-10-04 无人工干预测试：修订/补齐/完善表述未命中 implement → 任务直接 done 0 轮无产物）。
-	// 命中修订类动词时额外要求实现域强信号（implDomainWords），防"修订文档"误判。
-	reviseVerbs      = []string{"修订", "补齐", "完善", "修正", "修复", "整改", "接着做", "继续做", "继续改", "按反馈", "根据反馈", "按验收", "根据验收"}
-	implDomainWords  = []string{"服务", "后台", "系统", "程序", "代码", "端点", "bug", "编译", "跑通", "上线", "实现", "接口", "引擎", "网关"}
-	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件", "需求说明书"}
-	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
-
-	// —— 技能调用（线 C 修订卡 2026-10-03）——
-	skillInvokeVerbs = []string{"调用", "使用", "用", "按", "按照", "依据", "根据", "让"}
-	skillNames       = []string{"校验与对齐", "校准与对齐", "validate-align", "对齐", "校验", "校准",
-		"plain-explainer", "解释", "检索", "写作", "翻译", "合规", "审阅", "报价", "文案"}
-	skillActionWords = []string{"校准", "对齐", "校验", "检查", "审阅", "分析", "检索", "总结", "翻译", "编写", "生成", "输出"}
-)
-
-// detectSkillInvocation 判定文本是否为"调用/使用某技能做某事"（线 C 修订卡）。
-// 命中返回 ORCHESTRATE + params{kind=skill, skill_name?, action?}。
-// 触发：含 "技能" 且（调用动词 ∪ 技能名直接出现）→ 技能调用意图。
-// 问句排除（"怎么用技能…"是询问不是调用）。
-func detectSkillInvocation(text string) (string, map[string]string, bool) {
-	if containsAny(text, questionExcludes) {
-		return "", nil, false
-	}
-	if !containsAny(text, []string{"技能"}) {
-		return "", nil, false
-	}
-	params := map[string]string{"kind": "skill"}
-	invoked := false
-	// ① 显式技能名出现（"校验与对齐技能"/"validate-align 技能"）→ 强信号
-	for _, n := range skillNames {
-		if strings.Contains(text, n) {
-			if !strings.Contains(text, "怎么") && !strings.Contains(text, "如何") {
-				params["skill_name"] = n
-				invoked = true
-				break
-			}
-		}
-	}
-	// ② 调用动词 + "技能" + 动作域词（"调用技能做校准/输出校准报告"）
-	//   收紧（2026-10-03 评审）：纯"使用技能做X"（X 非动作域）不判——避免
-	//   "实现一个使用技能的推荐系统"被技能检测器拦截（应走实现类）。
-	if !invoked {
-		hasInvokeVerb := false
-		for _, v := range skillInvokeVerbs {
-			if strings.Contains(text, v) {
-				hasInvokeVerb = true
-				break
-			}
-		}
-		if hasInvokeVerb {
-			for _, a := range skillActionWords {
-				if strings.Contains(text, a) {
-					params["action"] = a
-					invoked = true
-					break
-				}
-			}
-		}
-	}
-	if !invoked {
-		return "", nil, false
-	}
-	return contract.IntentOrchestrate, params, true
-}
-
-// detectImplementOrchestrate 判定文本是否为"实现/搭建某能力系统"的长程实现任务。
-// 命中返回 ORCHESTRATE + params{kind=implement, target_doc?}。
-func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
-	// 问句排除：含 怎么/如何/为什么… = 询问实现方式，不是实现任务。
-	if containsAny(text, questionExcludes) {
-		return "", nil, false
-	}
-	vi, ni := -1, -1
-	// 通用实现动词（实现/搭建/开发…）照原逻辑；修订类动词（修订/补齐/完善…）
-	// 必须同时命中实现域强信号（implDomainWords），否则不是实现任务（防"修订文档"误判）。
-	for _, w := range implementVerbs {
-		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
-			// 2026-10-03 真跑发现：动词命中必须**不在书名号《…》内**——
-			// 「整理成《全景开发文档》并保存提交」的"开发"是文档名成分，误当实现动词
-			// ⇒ 整理类被误判 implement（L-01 验收真跑，见 /tmp/l01_confirm.txt）。
-			if insideBookTitle(text, idx, idx+len(w)) {
-				continue
-			}
-			// 2026-10-04 洞2：动词后紧跟"计划/方案/文档/报告/步骤"时是名词短语
-			//（如"实现计划"），不是实现动作 → 跳过（"把实现计划修订一下…"）。
-			if strings.HasPrefix(text[idx+len(w):], "计划") || strings.HasPrefix(text[idx+len(w):], "方案") ||
-				strings.HasPrefix(text[idx+len(w):], "文档") || strings.HasPrefix(text[idx+len(w):], "报告") ||
-				strings.HasPrefix(text[idx+len(w):], "步骤") {
-				continue
-			}
-			vi = idx
-		}
-	}
-	reviseHit := false
-	for _, w := range reviseVerbs {
-		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
-			if insideBookTitle(text, idx, idx+len(w)) {
-				continue
-			}
-			if !containsAny(text, implDomainWords) {
-				continue // 修订类无实现域信号（如"修订这份文档"）→ 不是实现任务
-			}
-			vi = idx
-			reviseHit = true
-		}
-	}
-	// 名词必须在**动词之后**查找（text[vi:]）：
-	// 「《个性化ASR后台需求说明书v2》实现一个…后台服务」里书名号中的"后台"是定语成分，
-	// 若全句找最早名词会得到 ni<vi 的假阴性（2026-10-03 真跑发现，见 zz_debug 探针）。
-	if vi >= 0 {
-		for _, w := range implementNouns {
-			if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
-				ni = idx + vi // 还原为绝对位置
-			}
-		}
-		// 修订类动词的名词信号放宽到实现域词（端点/代码/接口/bug/编译/跑通…）：
-		// 「把缺失的 /v1/blacklist 端点补齐」无 implementNouns 实体词，靠实现域词兜底。
-		if reviseHit {
-			for _, w := range implDomainWords {
-				if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
-					ni = idx + vi
-				}
-			}
-			if ni < 0 && containsAny(text, implDomainWords) {
-				// 修订宾语常在动词前（"把缺失的端点补齐"）：全文实现域词命中即视名词信号成立。
-				ni = vi + 1
-			}
-		}
-		// 指代放宽（2026-10-03 上下文槽）：动词命中且**全文**含指代词（这份/该文档）
-		// 也视为名词信号——「按这份需求说明书继续实现并提交」无实体名词，靠槽解析目标。
-		// 查全文而非 text[vi:]：指代词常居动词前（"按这份需求说明书**继续实现**"）。
-		if ni < 0 {
-			for _, d := range []string{"这份", "该文档", "此文档", "这个", "这些", "它", "那"} {
-				if strings.Contains(text, d) {
-					ni = vi + 1
-					break
-				}
-			}
-		}
-	}
-	// 动词支配名词：动词必须存在且动词之后有名词。
-	if vi < 0 || ni < 0 || ni <= vi {
-		return "", nil, false
-	}
-	params := map[string]string{"kind": "implement"}
-	if title := extractBookTitle(text); title != "" {
-		params["target_doc"] = title
-	}
-	return contract.IntentOrchestrate, params, true
-}
 
 // detectOrchestrate 判定文本是否为"整理多份文档→生成文件→保存/提交"的复合长任务。
 // 命中时返回 (IntentOrchestrate, params{target_doc, source_hint}, true)。
 // target_doc 从《…》书名号里抽；抽不到则由编排引擎落默认文件名。
-//
-// 两条命中路径（顺序即优先级，命中即返回）：
-//   - 路径 1（原有）：organizeWords ∩ docWords ∩ (saveWords ∪ commitTriggers) —— 整理/汇总类。
-//   - 路径 2（缺陷修复）：书名号《…》 ∩ docWords ∩ createWords —— 直接"生成《X》文档"类，
-//     不再要求"整理/汇总"组织词。例如「生成《测试-打断语义》文档并保存提交」此前
-//     因标题含"测试"被 TEST 触发词抢先，导致 space_check 拒绝 + 秒级终态。
 func detectOrchestrate(text string) (string, map[string]string, bool) {
-	hasBookTitle := extractBookTitle(text) != ""
-	if containsAny(text, orchOrganizeWords) {
-		if !containsAny(text, orchDocWords) {
-			return "", nil, false
-		}
-		if !(containsAny(text, orchSaveWords) || containsAny(text, commitTriggers)) {
-			return "", nil, false
-		}
-		return contract.IntentOrchestrate, orchParams(text), true
+	if !containsAny(text, orchOrganizeWords) {
+		return "", nil, false
 	}
-	// 路径 2：书名号目标 + 文档语境 + 生成类动词（产出文档任务）。
-	if hasBookTitle && containsAny(text, orchDocWords) && containsAny(text, orchCreateWords) {
-		return contract.IntentOrchestrate, orchParams(text), true
+	if !containsAny(text, orchDocWords) {
+		return "", nil, false
 	}
-	return "", nil, false
-}
-
-// orchParams 抽取编排任务的公共参数（commit=1 + 书名号目标文档）。
-func orchParams(text string) map[string]string {
+	if !(containsAny(text, orchSaveWords) || containsAny(text, commitTriggers)) {
+		return "", nil, false
+	}
 	params := map[string]string{"commit": "1"}
 	if title := extractBookTitle(text); title != "" {
 		params["target_doc"] = title
 	}
-	return params
+	return contract.IntentOrchestrate, params, true
 }
 
 // extractBookTitle 抽取《…》书名号内的文档名（去书名号，保留扩展名点）。
@@ -899,17 +696,6 @@ func extractBookTitle(text string) string {
 		return strings.TrimSpace(text[i+len("《") : j])
 	}
 	return ""
-}
-
-// insideBookTitle 判断 [start,end) 区间是否完全落在书名号《…》内。
-// 用途：动词/名词匹配排除文档名成分（如《全景开发文档》里的"开发"不是实现动词）。
-func insideBookTitle(text string, start, end int) bool {
-	i := strings.Index(text, "《")
-	j := strings.Index(text, "》")
-	if i < 0 || j <= i {
-		return false
-	}
-	return start >= i && end <= j
 }
 
 // nowFn 是时间源（timeanchor.go 依赖，测试可替换）。
@@ -975,16 +761,7 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, feasibleAsk):
 		ti.Conflict = contract.ConflictAskVsOp
 		return c.fill(ti, contract.IntentAsk, 0.9, nil)
-	case containsAny(text, thoughtWords) && !c.spaceShadowsThought(text) && !containsAny(text, thoughtSpaceNouns):
-		// F5 修复（真实测试 R13「记下来然后再提交一个想法」）：想法类句子若含多动作连接，
-		// 先摊开让用户选，不静默吞掉第二个动作（原 thoughtWords 抢先判 NOTE）。
-		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
-			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
-			got.Conflict = contract.ConflictMultiAction
-			got.Ask = "你说了几件事（" + joinIntentLabels(labels) + "）。" +
-				"我先整体理解一下，你接着补一句最要紧的，我一件一件来"
-			return got
-		}
+	case containsAny(text, thoughtWords) && !c.spaceShadowsThought(text):
 		ti.Conflict = contract.ConflictNoteVsDeploy
 		return c.fill(ti, contract.IntentNote, 0.9, nil)
 	case containsAny(text, statusQuestion):
@@ -1019,6 +796,8 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
 			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 			got.Conflict = contract.ConflictMultiAction
+			// 2026-10-04 用户原话"不管多少件，你先理解我的意思"：不再机械回问"先做哪个"，
+			// 归 ASK 交模型人话理解并回应（执行层面仍一屏一决策点，但对话不卡用户）。
 			got.Ask = "你说了几件事（" + joinIntentLabels(labels) + "）。" +
 				"我先整体理解一下，你接着补一句最要紧的，我一件一件来"
 			return got
@@ -1030,19 +809,10 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentEdit, 0.9, c.editParams(text))
 	}
 
-	// 2a-bis. 复合/长任务（组织者式路由）：实现类长程（实现/搭建服务）→ ORCHESTRATE(kind=implement)；
-	//         整理/汇总 + 文档/记录 +（保存/提交）三连信号 → ORCHESTRATE。
+	// 2a-bis. 复合/长任务（组织者式路由）：整理/汇总 + 文档/记录 +（保存/提交）三连信号
+	// → ORCHESTRATE，不再压成单条 NOTE/COMMIT。
 	// 必须先于 2b 单类触发：「沟通记录」含「记录」会命中 noteTriggers，「提交」会命中 commitTriggers——
 	// 长任务「把全部沟通记录和设计文档整理成《…》并保存提交」此前被降级为单条 NOTE 整段 append。
-	// 技能类：线 C 修订卡（2026-10-03）—— "调用/使用 XX 技能做校准" → ORCHESTRATE(kind=skill)。
-	// 必须先于实现类/整理类判定（技能调用意图明确，不落入文档整理）。
-	if kind, params, ok := detectSkillInvocation(text); ok {
-		return c.fill(ti, kind, 0.9, params)
-	}
-	// 实现类：修订卡2 层1+2 —— 长程实现任务此前 UNKNOWN→need_ask（0 产出），现识别为 ORCHESTRATE。
-	if kind, params, ok := detectImplementOrchestrate(text); ok {
-		return c.fill(ti, kind, 0.9, params)
-	}
 	if kind, params, ok := detectOrchestrate(text); ok {
 		return c.fill(ti, kind, 0.9, params)
 	}
@@ -1069,16 +839,9 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	//
 	// 2b. 单类触发（长词在前，SPEC v1 §2 表）
 	switch {
-	case containsAny(text, writeTriggers):
-		// 2026-10-04 验证器 R6/R7：写文件指令（把 XX 写到/写入/保存到 /path）
-		// 先于 NOTE/TEST 判定——"把 自动验证器测试文件 写到 /tmp"不再被"测试"劫持。
-		return c.fill(ti, contract.IntentEdit, 0.85, nil)
 	case containsAny(text, noteTriggers):
 		return c.fill(ti, contract.IntentNote, 0.85, nil)
-	case containsAny(text, m2InfoTriggers):
-		// F2 修复：置于 queryTriggers 之前——「翻译一下：六层架构是什么」不落 QUERY。
-		return c.fill(ti, contract.IntentInfo, 0.85, nil)
-	case containsAny(text, queryTriggers) && !containsAny(text, fuzzyConfirmations):
+	case containsAny(text, queryTriggers):
 		return c.fill(ti, contract.IntentQuery, 0.85, c.queryParams(text))
 	case containsAny(text, debugTriggers):
 		return c.fill(ti, contract.IntentDebug, 0.85, map[string]string{"object": "debug"})
@@ -1090,25 +853,15 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentTest, 0.85, map[string]string{"test_kind": kind})
 	case containsAny(text, commitTriggers):
 		return c.fill(ti, contract.IntentCommit, 0.85, nil)
-	case containsAny(text, editTriggers):
-		// F12（2026-10-04）：EDIT 组合词（补充/补一句/加上/添加…）优先于 DEPLOY——
-		// "补充一段部署说明"是编辑动作，不是要部署（长词优先范式，与 F1 同源）。
-		return c.fill(ti, contract.IntentEdit, 0.85, c.editParams(text))
 	case containsAny(text, deployTriggers):
 		return c.fill(ti, contract.IntentDeploy, 0.85, nil)
 	case containsAny(text, askTriggers):
-		// 保持原语义：DEBUG（报错/为什么失败）先于 ASK（为什么/你觉得/是什么意思）；
-		// 疑问句事实查询（是不是/是什么…）已在上方 query 分支命中。
 		return c.fill(ti, contract.IntentAsk, 0.85, nil)
+	case containsAny(text, editTriggers): // 其余 EDIT 形态（改一下/修改/替换/改）
+		return c.fill(ti, contract.IntentEdit, 0.85, c.editParams(text))
 	}
 
-	// 3. F6 修复（真实测试 R14）：带时间锚点的截止/待办表述 → NOTE（时间由 applyCommon
-	//    抽进 params：time_hint/time_date）。「下周三之前完成方案评审」= 记一条带日期的待办。
-	if hint, _, _ := ResolveTimeAnchor(text, nowFn()); hint != "" && containsAny(text, deadlineWords) {
-		return c.fill(ti, contract.IntentNote, 0.85, nil)
-	}
-
-	// 3.5 元反馈/闲聊仲裁（2026-10-04 用户多轮截图点名"你是想让我做什么"回问）：
+	// 0.8 元反馈/闲聊仲裁（2026-10-04 用户多轮截图点名"你是想让我做什么"回问）：
 	// 抱怨/试探/元反馈话术（"识别太糟糕""后台有没有干活""懂我吗"）不落入 UNKNOWN 回问——
 	// 归 ASK 交模型直接人话回应。ASK 类永不触发回问（伪代码逻辑层 11：低置信非 NOTE/ASK 才回问）。
 	// 注意：排在单类触发之后——「测试一下」先命中 TEST，不会被这里抢走。
@@ -1116,7 +869,7 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentAsk, 0.8, nil)
 	}
 
-	// 4. 无任何触发词 → UNKNOWN，回问
+	// 3. 无任何触发词 → UNKNOWN，回问
 	return ti
 }
 

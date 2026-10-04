@@ -36,6 +36,8 @@ type Config struct {
 	Cache     CacheCfg     `json:"cache,omitempty"`
 	Server    ServerCfg    `json:"server,omitempty"`
 
+	// Cloud 云端模式（VHS_MODE=cloud）：谷歌登录 + 租户配额。nil 字段默认值见 CloudCfg.Default。
+	Cloud          CloudCfg `json:"cloud,omitempty"`
 	ConfigPath     string   `json:"-"` // 实际加载的配置文件路径
 	Warnings       []string `json:"-"` // 非致命问题（如缺 API key）
 	ForcedRoute    string   `json:"-"` // env VHS_ROUTE：强制路由名
@@ -56,21 +58,24 @@ type ContractsCfg struct {
 type CacheCfg struct {
 	Dir        string `json:"dir,omitempty"`         // 默认 <log_dir>/cache
 	TTLSeconds int    `json:"ttl_seconds,omitempty"` // 默认 86400（1 天）
-	// MaxEntries 是四元组缓存的**条目数上限**（R-04：超限淘汰）。
-	//
-	// ⚠️ **默认值 10000 是 UNVALIDATED** —— 即：**未经实测标定**。
-	//   依据（Peter `docs/校准报告-产品与实现-L01.md` §6 修订项 2）：
-	//     「R-04 膨胀：只 TTL 过期不够，需 **max 条目/容量上限**（超限淘汰策略）。」
-	//   ⇒ 本字段**把"无上限"变成"有上限且可配"**；而**合理上限需实测标定**
-	//     （取决于真实条目的字节数与内存预算）⇒ **未标定前不得当作验收值**。
-	//   0 或负数 ⇒ 取默认；显式设 -1 ⇒ **无上限**（保留旧行为）。
-	MaxEntries int `json:"max_entries,omitempty"`
 }
 
 // ServerCfg 手机 HTTP API 面（内网 + token 认证）。
 type ServerCfg struct {
 	Token string `json:"token,omitempty"` // 空 = 仅 127.0.0.1 本机访问免 token；非本机绑定必须配 token（启动告警）
 	Bind  string `json:"bind,omitempty"`  // 空 = 取 Global.Addr（默认 127.0.0.1:8765）
+}
+
+// CloudCfg 云端模式参数（VHS_MODE=cloud 时启用）。
+// 设计见 docs/云端谷歌登录与发布架构-20261004.md：谷歌账户即租户、配额三档、会话 JWT。
+type CloudCfg struct {
+	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID（Web application）
+	GoogleClientSecret string `json:"google_client_secret,omitempty"` // env VHS_GOOGLE_CLIENT_SECRET
+	RedirectURI        string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI，默认 https://voicesign.ai/auth/callback
+	JWTSecret          string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET；缺省首次启动自动生成并持久化 <log_dir>/cloud/jwt-secret
+	FreeDailyTasks     int    `json:"free_daily_tasks,omitempty"`     // 免费档每日任务额度，默认 30
+	TrialDays          int    `json:"trial_days,omitempty"`           // 新租户体验会员天数，默认 15（期间按 Prime 计）
+	TokenTTLHours      int    `json:"token_ttl_hours,omitempty"`      // 会话 JWT 有效期，默认 10
 }
 
 // Global 全局参数。
@@ -87,10 +92,8 @@ type Global struct {
 	// 不直接降级而是带 model 名进异常诊断层（区分网络慢/预算排队/参数不当）。
 	// 默认 10000ms；<=0 归一化为 10000。
 	FastResponseMs int `json:"fast_response_ms"`
-	// ASRDataDir ASR 服务数据目录（feedback.jsonl/blacklist.json/dictionary.json）。
-	// 2026-10-04：「ASR 沉淀进入记忆槽」——harness 每个任务读 ASR 学到的东西跨会话注入记忆上下文。
-	// 空则不注入（ASR 未启用时无副作用）。
-	ASRDataDir string `json:"asr_data_dir"`
+	// CloudMode 云端模式开关：env VHS_MODE=cloud（谷歌登录+租户配额）；空/其他值=本地模式。
+	CloudMode bool `json:"cloud_mode,omitempty"`
 }
 
 // Provider 一个模型端点（OpenAI 兼容或 mock）。同一网关可声明多个 provider（不同 model）实现按场景选模型。
@@ -151,17 +154,10 @@ func Default() Config {
 			FastResponseMs:     10000,
 		},
 		Providers: []Provider{
-			// 2026-10-03 裸调实测：use_max_completion_tokens 作为顶层字段会使 aiops 网关 502（0.9s）
-			// ——已从 Params 移除；MaxTokens 上限也会令模型用满 token 致网关 60s 504，harness 不传上限。
-			{Name: "center", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
-			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
-			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-v4-pro", ResponseFormat: &trueVal},
-			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
-				// 模型调度（docs/模型调度-设计.md）：gpt-mini = 线上最弱兜底（gpt-4o-mini 实测 10s 可用）；
-				// deepseek 系列若 402 欠费 → ChatWithFallback 一次即 down → 自动切 gpt-mini，不再卡死。
-				{Name: "gpt-mini", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
-				// 2026-10-03 质量链：gpt4o（gpt-4o）裸调实测 6s/3461 字符生成成功，编译质量优于 gpt-4o-mini。
-				{Name: "gpt4o", Kind: OpenAIKind, Endpoint: "https://aiops.peterzou.com/api/model/chat", Model: "gpt-4o", ResponseFormat: &trueVal},
+			{Name: "center", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
+			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
+			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "gpt-6-luna", Params: map[string]any{"use_max_completion_tokens": true}, ResponseFormat: &trueVal},
+			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://api.deepseek.com", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "openai", Kind: OpenAIKind, Endpoint: "https://api.openai.com/v1", Model: "gpt-5.4-mini", ResponseFormat: &trueVal},
 			{Name: "gemini", Kind: OpenAIKind, Endpoint: "https://generativelanguage.googleapis.com/v1beta/openai", Model: "gemini-3.8-flash", ResponseFormat: &trueVal},
 			{Name: "mock", Kind: MockKind, Model: "mock"},
@@ -276,14 +272,6 @@ func Load(configPath string) (Config, error) {
 		for i := range cfg.Providers {
 			cfg.Providers[i].APIKey = v
 		}
-	} else if ak := os.Getenv("AIOPS_KEY"); ak != "" {
-		// F9 修复（真实测试）：未显式设 VHS_API_KEY 时，复用统一读 Key（AIOPS_KEY）
-		// 注入 aiops.peterzou.com 端点，避免模型候选全部 401 降级（网关实测接受 Bearer）。
-		for i := range cfg.Providers {
-			if strings.Contains(cfg.Providers[i].Endpoint, "aiops.peterzou.com") {
-				cfg.Providers[i].APIKey = ak
-			}
-		}
 	}
 	if v := os.Getenv("VHS_PROVIDER"); v != "" {
 		cfg.ForcedProvider = v
@@ -292,13 +280,23 @@ func Load(configPath string) (Config, error) {
 		cfg.ForcedRoute = v
 	}
 	envString(&cfg.Global.LogDir, "VHS_LOG_DIR")
-	envString(&cfg.Global.ASRDataDir, "VHS_ASR_DATA")
 	envString(&cfg.Global.Addr, "VHS_ADDR")
 	envInt(&cfg.Global.MaxTurnsDefault, "VHS_MAX_TURNS")
 	envBool(&cfg.Global.AllowHighRisk, "VHS_ALLOW_HIGH_RISK")
 	envFloat(&cfg.Input.IntentConf, "VHS_INTENT_CONF")
 	envString(&cfg.Input.LowConfAction, "VHS_LOW_CONF_ACTION")
 	envString(&cfg.Server.Token, "VHS_TOKEN")
+	// 云端模式：VHS_MODE=cloud 启用谷歌登录/租户/配额。
+	if os.Getenv("VHS_MODE") == "cloud" {
+		cfg.Global.CloudMode = true
+	}
+	envString(&cfg.Cloud.GoogleClientID, "VHS_GOOGLE_CLIENT_ID")
+	envString(&cfg.Cloud.GoogleClientSecret, "VHS_GOOGLE_CLIENT_SECRET")
+	envString(&cfg.Cloud.RedirectURI, "VHS_GOOGLE_REDIRECT_URI")
+	envString(&cfg.Cloud.JWTSecret, "VHS_JWT_SECRET")
+	envInt(&cfg.Cloud.FreeDailyTasks, "VHS_FREE_DAILY_TASKS")
+	envInt(&cfg.Cloud.TrialDays, "VHS_TRIAL_DAYS")
+	envInt(&cfg.Cloud.TokenTTLHours, "VHS_TOKEN_TTL_HOURS")
 
 	// 校验与归一化。
 	if err := cfg.validate(); err != nil {
@@ -368,16 +366,6 @@ func (c *Config) validate() error {
 	}
 	if c.Cache.TTLSeconds <= 0 {
 		c.Cache.TTLSeconds = 86400
-	}
-	// R-04：条目上限。0/负数 ⇒ 取默认 10000（**UNVALIDATED**）；-1 ⇒ 保持"无上限"。
-	if c.Cache.MaxEntries == 0 {
-		c.Cache.MaxEntries = 10000
-		c.Warnings = append(c.Warnings,
-			"cache.max_entries 未配置 ⇒ 取默认 10000（**UNVALIDATED**：合理上限需实测标定）")
-	}
-	if c.Cache.MaxEntries < 0 {
-		c.Warnings = append(c.Warnings,
-			"cache.max_entries < 0 ⇒ **缓存无上限**（R-04 的膨胀风险仍然存在）")
 	}
 	if strings.TrimSpace(c.Server.Bind) == "" {
 		c.Server.Bind = c.Global.Addr

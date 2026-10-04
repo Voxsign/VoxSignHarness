@@ -50,13 +50,8 @@ const (
 	stNeedConfirm = "need_confirm"    // 强确认（红条）
 	stDone        = "done"
 	stCanceled    = "canceled"
-	stBlocked     = "blocked"     // 2026-10-03 L-01 架构：证据门多轮未过/上限 → 明确阻塞（对齐 dsh block 语义）
 	stInterrupted = "interrupted" // M4-1 ③：重启恢复的未完成任务，不自动续跑
 )
-
-// defaultMaxRounds 是任务默认轮次上限（2026-10-03 L-01 架构：多轮逼近目标，
-// 对齐 dsh goal maxGoalRounds；超限且证据门未过 → blocked，杜绝"骨架也 done"）。
-const defaultMaxRounds = 20
 
 // 角色映射（M5-3）：pipeline 13 阶段 → Planner / Executor / Verifier。
 //
@@ -79,8 +74,6 @@ func roleForStatus(status string) string {
 		return RolePlanner
 	case stDone:
 		return RoleVerifier
-	case stBlocked:
-		return RolePlanner // 阻塞属决策层（对齐 dsh blocked 由策略判定）
 	case stRunning:
 		return RoleExecutor
 	default:
@@ -99,8 +92,6 @@ func stepName(status string) string {
 		return "确认闸"
 	case stDone:
 		return "校验/归因"
-	case stBlocked:
-		return "阻塞"
 	case stCanceled:
 		return "取消"
 	case stInterrupted:
@@ -113,11 +104,9 @@ func stepName(status string) string {
 // taskState 是一次异步任务的完整状态（含 rollback 所需的可逆/备份信息）。
 type taskState struct {
 	ID        string               `json:"task_id"`
-	RequestID string               `json:"request_id,omitempty"`      // M4-1 ① 重试去重键
-	ConvID    string               `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
-	Text      string               `json:"text,omitempty"`            // M4-1 ② need_ask 续跑原文
-	Document  string               `json:"document,omitempty"`        // 附件/需求文档全文（长程任务输入，修订卡2 附；落轨迹）
-	Mode      string               `json:"mode,omitempty"`            // voice|text；voice 确认自动放行
+	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
+	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
+	Mode      string               `json:"mode,omitempty"`       // voice|text；voice 确认自动放行
 	Status    string               `json:"status"`
 	Role      string               `json:"role,omitempty"` // M5-3：当前角色
 	Question  string               `json:"question,omitempty"`
@@ -131,15 +120,8 @@ type taskState struct {
 	// 属已知限制——当前 server 的任务表是内存态，重启恢复路径另有 interrupted 处理。
 	askedQuestions map[string]bool
 	askRounds      int
-
-	// 2026-10-03 L-01 架构（对齐 dsh goal-round）：任务 = 多轮逼近目标。
-	MaxRounds     int               `json:"max_rounds,omitempty"`     // 轮次上限（默认 20）
-	RoundsUsed    int               `json:"rounds_used,omitempty"`    // 已用轮次（每轮=一次 pipeline 执行）
-	BlockedReason string            `json:"blocked_reason,omitempty"` // blocked 原因（如 round-limit + 证据缺口）
-	RoundLog      []roundEntry      `json:"round_log,omitempty"`      // 轮次留痕（每轮 status/证据/耗时）
-	LastRoundGaps string            `json:"-"`                        // 上一轮证据门缺口（回喂下一轮 LLM）
-	Outcome       *pipeline.Outcome `json:"outcome,omitempty"`
-	Err           string            `json:"error,omitempty"`
+	Outcome        *pipeline.Outcome `json:"outcome,omitempty"`
+	Err            string            `json:"error,omitempty"`
 
 	// rollback 元数据
 	Reversible bool   `json:"reversible,omitempty"`
@@ -155,15 +137,6 @@ type taskState struct {
 	eventSeq  int
 	events    []sseEvent
 	listeners []chan sseEvent
-}
-
-// roundEntry 是一次目标轮次的留痕记录（对齐 dsh goal-round 的轮次可追溯性）。
-type roundEntry struct {
-	Round     int    `json:"round"`                // 轮次序号
-	Status    string `json:"status"`               // pass / fail
-	Evidence  string `json:"evidence,omitempty"`   // PASS 简述或失败缺口（证据门结论）
-	Err       string `json:"error,omitempty"`      // 轮次错误
-	ElapsedMs int64  `json:"elapsed_ms,omitempty"` // 该轮耗时
 }
 
 // sseEvent 是一条 SSE 事件（seq 单调递增）。Data 被平铺进最终 JSON（契约：data 必含 seq）。
@@ -192,6 +165,9 @@ type Server struct {
 
 	boot time.Time
 
+	// cloud 云端模式（VHS_MODE=cloud）：谷歌登录/租户/配额；nil=本地模式。
+	cloud *cloudAuth
+
 	mu    sync.Mutex
 	tasks map[string]*taskState
 	byReq map[string]string // request_id → task_id（M4-1 ①）
@@ -200,6 +176,9 @@ type Server struct {
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
 func New(cfg *config.Config, o *pipeline.Options) *Server {
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
+	if cfg.Global.CloudMode {
+		s.cloud = newCloudAuth(cfg)
+	}
 	s.restore()
 	return s
 }
@@ -219,9 +198,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/task/", s.auth(s.handleTaskGet))
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
-	mux.HandleFunc("/v1/health", s.auth(s.handleHealth))
+	// health 免鉴权（云端负载均衡/健康检查必须可匿名探测）。
+	mux.HandleFunc("/v1/health", s.public(s.handleHealth))
 	// ASR 校准（iOS 录音 → 平台 model-center 千问）：契约见 docs/ASR接口契约-20261004.md。
 	mux.HandleFunc("/v1/asr", s.auth(s.handleASR))
+	// 云端模式（VHS_MODE=cloud）：谷歌登录 + 租户/配额查询。
+	mux.HandleFunc("/v1/auth/google", s.public(s.handleAuthGoogle))
+	mux.HandleFunc("/v1/me", s.auth(s.handleMe))
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
@@ -257,7 +240,12 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	// 平台 ASR 端点：与 model-center 同一 base，路径 /api/model/asr。
 	asrURL := platformAIOpsBase + "/api/model/asr"
 	// v2 个性化热词：ASR 服务器这一层解决个性化问题（专名/口语/常用词提升，不依赖 iOS 本地）。
+	// 云端模式按租户隔离热词库（tenants/<sub>/hotwords.json）；本地模式用全局 personal/。
 	hotwords := loadASRHotwords(s.cfg.Global.LogDir)
+	if sub := ctxTenant(r.Context()); sub != "" && s.cloud != nil {
+		tenantDir := filepath.Join(s.cfg.Global.LogDir, "tenants", sanitizeSub(sub))
+		hotwords = loadASRHotwords(tenantDir)
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"model":        "qwen-audio-asr",
 		"audio_base64": base64.StdEncoding.EncodeToString(audio),
@@ -399,8 +387,43 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// public 无鉴权端点（仅云端模式的登录与健康检查）。
+func (s *Server) public(next http.HandlerFunc) http.HandlerFunc {
+	return s.cors(func(w http.ResponseWriter, r *http.Request) {
+		next(w, r)
+	})
+}
+
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return s.cors(func(w http.ResponseWriter, r *http.Request) {
+		// 云端模式：校验会话 JWT 并注入租户；本地模式沿用 m7-token / 本机豁免。
+		if s.cloud != nil {
+			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if tok == "" {
+				tok = r.Header.Get("X-Token")
+			}
+			claims, err := s.cloud.verifyJWT(tok)
+			if err != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]string{
+					"error": "会话无效或已过期，请重新登录", "code": "unauthorized"})
+				return
+			}
+			ctx := withTenant(r.Context(), claims.Sub)
+			// 任务提交做配额检查（免费档超限 429）。
+			if r.Method == http.MethodPost && (r.URL.Path == "/v1/tasks" || r.URL.Path == "/v1/run") {
+				left, err := s.cloud.checkAndConsume(claims.Sub)
+				if err == quotaExceededErr {
+					writeJSON(w, http.StatusTooManyRequests, map[string]string{
+						"error": "今日免费额度已用完，升级 VoiceSign Prime 解锁不限量",
+						"code":  "quota_exceeded",
+					})
+					return
+				}
+				_ = left
+			}
+			next(w, r.WithContext(ctx))
+			return
+		}
 		// 本机豁免：token 为空时只允许回环地址。
 		if s.cfg.Server.Token == "" {
 			if !isLoopback(r.RemoteAddr) {
@@ -434,26 +457,8 @@ func isLoopback(remoteAddr string) bool {
 // ---------- 端点 ----------
 
 type runReq struct {
-	Text           string `json:"text"`
-	RequestID      string `json:"request_id,omitempty"`      // 幂等重试键（对齐 /v1/tasks）
-	ConversationID string `json:"conversation_id,omitempty"` // 指代固化会话（用户点名 conversation_id 必加）
-	Mode           string `json:"mode,omitempty"`            // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
-}
-
-// tryDedup M4-1 ①：同 request_id 重复提交 → 返回既有任务（不重复执行/写轨迹）。
-// 两入口（/v1/run 与 /v1/tasks）共用 —— OBS-08 核对：此前 handleRun 无此检查。
-func (s *Server) tryDedup(requestID string) (taskID, status string, found bool) {
-	if requestID == "" {
-		return "", "", false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existingID, ok := s.byReq[requestID]; ok {
-		if existing, ok2 := s.tasks[existingID]; ok2 {
-			return existing.ID, existing.Status, true
-		}
-	}
-	return "", "", false
+	Text string `json:"text"`
+	Mode string `json:"mode,omitempty"` // voice|text；voice 网关确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
@@ -467,24 +472,67 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// M4-1 ①：request_id 去重（OBS-08 修复 —— 此前 handleRun 连字段都不收）。
-	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
-		writeJSON(w, http.StatusOK, map[string]string{"task_id": existingID, "status": status, "deduped": "true"})
-		return
+	ts := &taskState{
+		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		Status:    stRunning,
+		confirmCh: make(chan bool, 1),
+	}
+	// 任务生命周期独立于 HTTP 请求（响应返回后请求 ctx 会被取消）。
+	ctx, cancel := context.WithCancel(context.Background())
+	ts.cancel = cancel
+
+	s.mu.Lock()
+	s.tasks[ts.ID] = ts
+	s.mu.Unlock()
+
+	// 克隆模板 Options，注入本任务的 ConfirmFn（桥接到手机 /v1/confirm）。
+	o := *s.tmpl
+	o.ConfirmFn = func(taskID, question string) (bool, error) {
+		// 2026-10-04 用户拍板"所有拦截去掉"：voice 网关确认自动放行，不挂起等待
+		//（否则 iOS 无确认交互 → 任务永久 waiting，用户实测"卡住"）。
+		// 确认题记录到日志供审计；text 模式保留人工确认桥。
+		if req.Mode == "" || req.Mode == "voice" {
+			fmt.Printf("confirm-auto-approve task=%s q=%s\n", taskID, question)
+			return true, nil
+		}
+		s.mu.Lock()
+		ts.Status = stWaiting
+		ts.Question = question
+		s.mu.Unlock()
+
+		select {
+		case approved := <-ts.confirmCh:
+			s.mu.Lock()
+			ts.Status = stRunning
+			ts.Question = ""
+			s.mu.Unlock()
+			return approved, nil
+		case <-ctx.Done():
+			return false, errors.New("任务被取消")
+		}
 	}
 
-	// OBS-04/08/09/10 修复（2026-10-03 观察报告核对）：统一走 spawnTask，
-	// 不再手工构造 taskState —— 补齐 persist（落盘）/ byReq（request_id 去重）/
-	// Role（初始 planner）/ Text / Document / startedAt / writeContextSlot（conversation_id 槽）。
-	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID, req.Mode)
+	go func() {
+		out, err := pipeline.Run(ctx, &o, req.Text)
+		s.mu.Lock()
+		ts.Outcome = &out
+		if err != nil {
+			ts.Err = err.Error()
+			ts.Status = stCanceled
+		} else if ctx.Err() != nil {
+			ts.Status = stCanceled
+		} else {
+			ts.Status = stDone
+		}
+		s.mu.Unlock()
+	}()
+
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
 }
 
 // voiceReq 是 /v1/voice 的入参：**只收文本**（不碰音频编解码）。
 type voiceReq struct {
-	Text           string `json:"text"`
-	RequestID      string `json:"request_id,omitempty"`      // 幂等重试键（OBS-11 对齐）
-	ConversationID string `json:"conversation_id,omitempty"` // 指代固化会话（OBS-11 对齐）
+	Text string `json:"text"`
 }
 
 // asrEndpoint 返回线 B 地址（可配；默认本机 8123）。
@@ -530,29 +578,49 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	if needAsk || strings.EqualFold(typ, "ASK") || ask != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"executed": false, "reason": "意图需要澄清（ASK / 低置信）—— 红线：Ask != '' 绝不执行",
-			// 判据 ④（VHS-VOICE-001）：响应**必带** intent_source ∈ {asr-intent, text-fallback}
-			// ⚠️ 2026-10-03 真装配级真跑发现：此前响应里**一次都没出现过**该字段，
-			//    而 `trajectory.KindIntentSource` 其常量虽已登记、**从无写入点**。
-			"intent_source": "asr-intent",
-			"intent":        intent,
+			"intent": intent,
 		})
 		return
 	}
 	// ④ 走既有执行路径（含域门禁 / 不可逆确认）
-	// OBS-11 修复（2026-10-03 观察报告核对）：**同一模式的第二份拷贝**——
-	// 原实现与 handleRun 同样手工构造 taskState 3 字段 + 手动入 map ⇒ 不落盘/不去重/role 空。
-	// 统一走 spawnTask（含 persist / tryDedup / Role / writeContextSlot / conversation_id）。
-	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"task_id": existingID, "intent": intent, "intent_source": "asr-intent", "status": status, "deduped": "true",
-		})
-		return
+	ts := &taskState{ID: fmt.Sprintf("task-%d", time.Now().UnixNano()), Status: stRunning, confirmCh: make(chan bool, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	ts.cancel = cancel
+	s.mu.Lock()
+	s.tasks[ts.ID] = ts
+	s.mu.Unlock()
+	o := *s.tmpl
+	o.ConfirmFn = func(taskID, question string) (bool, error) {
+		s.mu.Lock()
+		ts.Status = stWaiting
+		ts.Question = question
+		s.mu.Unlock()
+		select {
+		case approved := <-ts.confirmCh:
+			s.mu.Lock()
+			ts.Status = stRunning
+			ts.Question = ""
+			s.mu.Unlock()
+			return approved, nil
+		case <-ctx.Done():
+			return false, errors.New("任务被取消")
+		}
 	}
-	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID, "voice") // 语音入口天然 voice：确认自动放行
-	// 判据 ④：执行路径同样必带 intent_source（本次意图来自线 B ⇒ asr-intent）
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"task_id": ts.ID, "intent": intent, "intent_source": "asr-intent",
-	})
+	go func() {
+		out, err := pipeline.Run(ctx, &o, req.Text)
+		s.mu.Lock()
+		ts.Outcome = &out
+		if err != nil {
+			ts.Err = err.Error()
+			ts.Status = stCanceled
+		} else if ctx.Err() != nil {
+			ts.Status = stCanceled
+		} else {
+			ts.Status = stDone
+		}
+		s.mu.Unlock()
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": ts.ID, "intent": intent})
 }
 
 // callASRProcess 调线 B 的 POST /v1/process（**只走 HTTP**）。
@@ -585,23 +653,12 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/task/")
 	s.mu.Lock()
 	ts, ok := s.tasks[id]
+	s.mu.Unlock()
 	if !ok {
-		s.mu.Unlock()
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
 		return
 	}
-	// ⚠️ **必须在锁内 marshal**（2026-10-03）：`ts` 是共享指针，
-	//   写侧持 `s.mu` 改 `ts.*` ⇒ 锁外 `json.Marshal(ts)` 会读全部字段 ⇒ **数据竞争**。
-	//   先 marshal 成字节，再解锁写出（**不持锁做 I/O**）。
-	b, mErr := json.Marshal(ts)
-	s.mu.Unlock()
-	if mErr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "任务序列化失败: " + mErr.Error()})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b)
+	writeJSON(w, http.StatusOK, ts)
 }
 
 type confirmReq struct {
@@ -687,37 +744,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 type tasksPostReq struct {
 	Text      string `json:"text"`
 	Space     string `json:"space,omitempty"`
-	RequestID string `json:"request_id,omitempty"`      // M4-1 ① 重试去重键
-	Document  string `json:"document,omitempty"`        // 附件/需求文档全文（长程任务输入通道，修订卡2 附）
-	ConvID    string `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
-	Mode      string `json:"mode,omitempty"`            // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
+	RequestID string `json:"request_id,omitempty"` // M4-1 ① 重试去重键
+	Mode      string `json:"mode,omitempty"`       // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
-// requestID 非空时登记 byReq 用于重试去重。document 非空时挂载到任务上下文（落轨迹）。
-// convID 非空时作为指代固化上下文槽键（缺省 "default"）。
-// 状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, document, convID, mode string) *taskState {
+// requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
+func (s *Server) spawnTask(text, spaceHint, requestID, mode string) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
-		Document:  document,
 		Mode:      mode, // voice→确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 		Status:    stRunning,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
-		MaxRounds: defaultMaxRounds, // L-01 架构：多轮逼近目标上限（对齐 dsh maxGoalRounds）
-	}
-	if convID != "" {
-		ts.ConvID = convID
-	} else {
-		ts.ConvID = "default" // 指代固化上下文槽缺省会话（用户点名 conversation_id 必加）
-	}
-	// 指代固化上下文槽：任务输入落槽（append-only，方案 C 上下文槽；供后续"这份/该文档"指代解析）。
-	if text != "" || document != "" {
-		writeContextSlot(s.cfg.Global.LogDir, ts.ConvID, convSlot(ts.ConvID, text, document))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
@@ -737,9 +779,6 @@ func (s *Server) spawnTask(text, spaceHint, requestID, document, convID, mode st
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
 func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint string) {
 	o := *s.tmpl
-	o.ConvID = ts.ConvID                   // 指代固化上下文槽键（/v1/tasks 执行体——此前缺赋值致槽解析退 default，R2 指代不命中）
-	o.Document = ts.Document               // 附件文档全文 → 实现类长程任务消费（修订卡2 附）
-	o.ASRDataDir = s.cfg.Global.ASRDataDir // ASR 沉淀进入记忆槽（2026-10-04）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
 		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
@@ -769,25 +808,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		fullText = "在 " + spaceHint + " " + text
 	}
 	go func() {
-		// L-01 架构（2026-10-03）：任务 = 多轮逼近目标。每轮跑一次 pipeline，
-		// 轮末过**证据门**（产物存在性 + 真编译 + P0 能力存在性）：
-		//   - 证据门全过 → done（唯一成功出口）
-		//   - 有缺口且未超上限 → 记录 fail 轮次，缺口回喂下一轮 LLM 修复
-		//   - 有缺口且超上限 → blocked（对齐 dsh round-limit block，杜绝"骨架也 done"）
-		for s.runOneRound(ts, &o, ctx, fullText) {
-		}
-	}()
-}
-
-// runOneRound 执行一轮目标轮次（L-01 架构）：跑 pipeline → 收尾/证据门。
-// 返回 true = 预算内证据门 FAIL，应继续下一轮；false = 到达终态（done/canceled/blocked/need_ask 挂起）。
-// 锁纪律：证据门（含 go build 真编译）在**锁外**执行，锁内只做状态收尾（防持锁跑子进程）。
-func (s *Server) runOneRound(ts *taskState, o *pipeline.Options, ctx context.Context, fullText string) bool {
-	t0 := time.Now()
-	out, err := pipeline.Run(ctx, o, fullText)
-
-	// 非成功产出路径（错误/取消/回问）——与成功路径分开处理，避免持锁跑证据门。
-	if err != nil || ctx.Err() != nil || out.Ask != "" {
+		out, err := pipeline.Run(ctx, &o, fullText)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		ts.Outcome = &out
@@ -812,7 +833,7 @@ func (s *Server) runOneRound(ts *taskState, o *pipeline.Options, ctx context.Con
 					"reason": "ask_not_converging", "rounds": ts.askRounds,
 				})
 				s.persist(ts)
-				return false
+				return
 			}
 			// 回问出口：挂起为 need_ask，等待 /answer 续跑（M4-1 ②）。
 			ts.askedQuestions[out.Ask] = true
@@ -824,90 +845,26 @@ func (s *Server) runOneRound(ts *taskState, o *pipeline.Options, ctx context.Con
 				"question": out.Ask, "options": out.Options,
 			})
 			s.persist(ts)
-			return false
+		default:
+			s.markStatus(ts, stDone)
+			ts.Reversible = isReversibleIntent(out.Intent.Intent)
+			ts.BackupPath = pickBackupPath(out.Receipts, out.View.Undo)
+			ts.TargetPath = pickTargetPath(out.Intent)
+			if out.Intent.Intent == contract.IntentNote {
+				ts.TargetPath = filepath.Join(s.cfg.Global.LogDir, "notes.md")
+				if ts.BackupPath == "" {
+					ts.BackupPath = newestBackup(s.cfg.Global.LogDir)
+				}
+			}
+			s.emitEvent(ts, "done", map[string]any{
+				"receipt":     contract.RenderReceipt(out.View),
+				"attribution": out.Attribution,
+				"reversible":  ts.Reversible,
+				"role":        ts.Role,
+			})
+			s.persist(ts)
 		}
-		return false
-	}
-
-	// 成功产出路径。
-	// 证据门只对实现类任务（ORCHESTRATE kind=implement）生效；
-	// 其他意图保持原逻辑直接 done（L-01 架构边界，防普通任务被误锁循环）。
-	isImplement := out.Intent.Intent == contract.IntentOrchestrate &&
-		out.Intent.Params != nil && out.Intent.Params["kind"] == "implement"
-	gaps := []string(nil)
-	if isImplement {
-		gaps = o.EvidenceGaps(&out) // 锁外：含 go build 真编译，不许桩
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ts.Outcome = &out
-	round := ts.RoundsUsed + 1
-	ts.RoundsUsed = round
-	if !isImplement {
-		s.finishDone(ts, &out)
-		return false
-	}
-	if len(gaps) == 0 {
-		// 证据门 PASS → done（唯一成功出口）。
-		ts.RoundLog = append(ts.RoundLog, roundEntry{
-			Round: round, Status: "pass",
-			Evidence:  "证据门全过：产物存在/真编译/P0 能力齐全",
-			ElapsedMs: time.Since(t0).Milliseconds(),
-		})
-		ts.LastRoundGaps = ""
-		s.finishDone(ts, &out)
-		return false
-	}
-	// 证据门 FAIL：记录 fail 轮次，判断是否还有轮次预算。
-	gapText := strings.Join(gaps, "；")
-	ts.RoundLog = append(ts.RoundLog, roundEntry{
-		Round: round, Status: "fail",
-		Evidence:  "证据门缺口：" + gapText,
-		ElapsedMs: time.Since(t0).Milliseconds(),
-	})
-	ts.LastRoundGaps = gapText
-	if ts.RoundsUsed >= ts.MaxRounds {
-		ts.BlockedReason = "round-limit：证据门 " + fmt.Sprintf("%d", ts.RoundsUsed) + " 轮未通过：" + gapText
-		s.markStatus(ts, stBlocked)
-		s.emitEvent(ts, "blocked", map[string]any{
-			"reason": "round-limit", "rounds_used": ts.RoundsUsed, "gaps": gapText,
-		})
-		s.persist(ts)
-		return false
-	}
-	// 预算内 → 下一轮：带缺口继续（第 2+ 轮不再确认、携带上轮证据门缺口）。
-	o.RoundEvidence = gapText
-	o.SkipConfirm = true
-	s.markStatus(ts, stRunning)
-	s.emitEvent(ts, "round", map[string]any{
-		"round": round + 1, "prev_gaps": gapText,
-	})
-	s.persist(ts)
-	return true
-}
-
-// finishDone 是 done 终态的统一收尾（L-01 架构抽取：非实现类任务与证据门 PASS 共用）。
-// 调用方已持 s.mu。
-func (s *Server) finishDone(ts *taskState, out *pipeline.Outcome) {
-	s.markStatus(ts, stDone)
-	ts.Reversible = isReversibleIntent(out.Intent.Intent)
-	ts.BackupPath = pickBackupPath(out.Receipts, out.View.Undo)
-	ts.TargetPath = pickTargetPath(out.Intent)
-	if out.Intent.Intent == contract.IntentNote {
-		ts.TargetPath = filepath.Join(s.cfg.Global.LogDir, "notes.md")
-		if ts.BackupPath == "" {
-			ts.BackupPath = newestBackup(s.cfg.Global.LogDir)
-		}
-	}
-	s.emitEvent(ts, "done", map[string]any{
-		"receipt":     contract.RenderReceipt(out.View),
-		"attribution": out.Attribution,
-		"reversible":  ts.Reversible,
-		"role":        ts.Role,
-		"rounds_used": ts.RoundsUsed,
-	})
-	s.persist(ts)
+	}()
 }
 
 // maxAskRounds 是同一任务允许的最大澄清轮次（缺口 G8 修复）。
@@ -1052,14 +1009,21 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// M4-1 ①：同 request_id 重复提交 → 返回既有任务，不重复执行/写轨迹。
-	if existingID, status, ok := s.tryDedup(req.RequestID); ok {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"task_id": existingID, "status": status, "deduped": "true",
-		})
-		return
+	s.mu.Lock()
+	if req.RequestID != "" {
+		if existingID, ok := s.byReq[req.RequestID]; ok {
+			if existing, ok2 := s.tasks[existingID]; ok2 {
+				s.mu.Unlock()
+				writeJSON(w, http.StatusOK, map[string]string{
+					"task_id": existing.ID, "status": existing.Status, "deduped": "true",
+				})
+				return
+			}
+		}
 	}
+	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document, req.ConvID, req.Mode)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
@@ -1130,20 +1094,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, ts *taskSt
 	ts.listeners = append(ts.listeners, ch)
 	s.mu.Unlock()
 
-	// ⚠️ 2026-10-03（判据 `TestSSEHeadersArriveBeforeFirstEvent` **先红**后修）：
-	//   **订阅建立后立刻 flush 一次响应头**。
-	//
-	// 为什么：原先只在**终态路径**与**收到事件时**才 `flusher.Flush()` ——
-	//   ⇒ **"等待首个事件"期间响应头不送出** ⇒ 客户端的 `http.Do` **阻塞到首个事件**
-	//   ⇒ 后果（实测，判据先红成立）：
-	//      · 调用方**无法观测「SSE 流已建立」**（这不是测试写法问题，**任何 SSE 客户端都会中招**）
-	//      · `TestSSEInterruptImmediacy` 只能用 `go { time.Sleep(100ms); cancel }` **并发**发 cancel，
-	//        否则 `getSSE` 永不返回 ⇒ **时序耦合**（慢机器上 100ms 可能不够 ⇒ 事件错过）
-	//   ⇒ 按 SSE 惯例，流应在建立后**立即**把头送出（客户端据此确认"流已开"）。
-	//
-	// ⚠️ 首次 Flush 会**隐式写 200 响应头** ⇒ 此后 `w.Header()` 的改动不再生效（本函数后续不再改头）。
-	flusher.Flush()
-
 	defer func() {
 		s.mu.Lock()
 		for i, l := range ts.listeners {
@@ -1198,53 +1148,21 @@ func (s *Server) handleCancelSub(w http.ResponseWriter, r *http.Request, ts *tas
 }
 
 // writeTaskView 按 INTERACT-v1 形状渲染（receipt=四行，attribution=六格）。
-// writeTaskView 把任务视图写给 w。
-//
-// ⚠️ **并发纪律**（2026-10-03 · race detector 实报）：
-//
-//	本函数会从 `handleTasksSub`（SSE 订阅）在**另一个 goroutine** 被调用，
-//	而写侧（`runPipeline.func2` @ server.go:596-606）持 `s.mu` 写 `ts.*`。
-//	原先本函数**不持锁**读 `ts.Question/Options/Err/Outcome/Reversible`
-//	⇒ `WARNING: DATA RACE`（`-race -count=20` 实测 5 次）。
-//	⇒ 修法：**持锁做快照**，**锁外**装配与写出（避免持锁做 I/O 阻塞写侧）。
 func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
-	// —— 持锁快照（只在这里读共享字段）——
-	var (
-		id, status, role, question, errStr string
-		options                            []pipeline.AskOption
-		reversible                         bool
-		receipt                            string
-		attribution                        contract.Attribution
-		hasOutcome                         bool
-	)
-	s.mu.Lock()
-	id, status, role = ts.ID, ts.Status, ts.Role
-	question = ts.Question
-	options = append([]pipeline.AskOption(nil), ts.Options...) // 复制，避免锁外再读切片
-	errStr = ts.Err
-	reversible = ts.Reversible
+	body := map[string]any{"task_id": ts.ID, "status": ts.Status, "role": ts.Role}
+	if ts.Question != "" {
+		body["question"] = ts.Question
+	}
+	if len(ts.Options) > 0 {
+		body["options"] = ts.Options
+	}
+	if ts.Err != "" {
+		body["error"] = ts.Err
+	}
 	if ts.Outcome != nil {
-		hasOutcome = true
-		receipt = contract.RenderReceipt(ts.Outcome.View) // 渲染也放在锁内（读 Outcome）
-		attribution = ts.Outcome.Attribution
-	}
-	s.mu.Unlock()
-
-	// —— 锁外装配与写出 ——
-	body := map[string]any{"task_id": id, "status": status, "role": role}
-	if question != "" {
-		body["question"] = question
-	}
-	if len(options) > 0 {
-		body["options"] = options
-	}
-	if errStr != "" {
-		body["error"] = errStr
-	}
-	if hasOutcome {
-		body["receipt"] = receipt
-		body["attribution"] = attribution
-		if reversible {
+		body["receipt"] = contract.RenderReceipt(ts.Outcome.View)
+		body["attribution"] = ts.Outcome.Attribution
+		if ts.Reversible {
 			body["reversible"] = true
 		}
 	}
@@ -1423,66 +1341,6 @@ func (s *Server) persist(ts *taskState) {
 		return
 	}
 	_ = os.Rename(tmp, final)
-}
-
-// —— 指代固化上下文槽（方案 C：上下文槽 + 词典沉淀；2026-10-03 用户点名 conversation_id 必加）——
-// 槽文件：<logDir>/context_slots/<conversation_id>.jsonl（append-only）。
-// 每次任务输入落一条 {ts, text, target_doc?, document_head}；指代解析从该会话读最近记录。
-
-// convSlot 构造一条槽记录。
-func convSlot(convID, text, document string) string {
-	rec := map[string]any{
-		"ts":       time.Now().UTC().Format(time.RFC3339),
-		"conv_id":  convID,
-		"text":     truncateRunes(text, 300),
-		"doc_head": truncateRunes(document, 200),
-		"doc_full": document, // 全文（2026-10-03 记忆增强：指代命中后恢复 document 全文，使"那个事"能真跑）
-		"has_doc":  document != "",
-	}
-	b, _ := json.Marshal(rec)
-	return string(b)
-}
-
-// writeContextSlot append 一条槽记录（按 conversation_id 分文件隔离；越界/失败静默：
-// 槽是增强能力，不阻断任务主链）。
-func writeContextSlot(logDir, convID, line string) {
-	dir := filepath.Join(logDir, "context_slots")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(filepath.Join(dir, convID+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	_, _ = f.WriteString(line + "\n")
-	_ = f.Close()
-}
-
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
-
-// readContextSlots 读会话槽记录（供 pipeline 指代解析）。
-func readContextSlots(logDir, convID string) []map[string]any {
-	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
-	if err != nil {
-		return nil
-	}
-	var out []map[string]any
-	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if ln == "" {
-			continue
-		}
-		var rec map[string]any
-		if json.Unmarshal([]byte(ln), &rec) == nil {
-			out = append(out, rec)
-		}
-	}
-	return out
 }
 
 // restore 启动时加载历史任务；未完成状态标 interrupted。

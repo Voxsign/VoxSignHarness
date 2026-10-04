@@ -21,15 +21,6 @@ type state struct {
 	meta    Snapshot // 仅用 Status/FetchedAt/Source/Note
 	// blacklist 是「用户显式改错」的动态黑名单（term → 登记原因），只拦改写、不拦路由。
 	blacklist map[string]string
-
-	// —— 别名索引（NF1-ALLOC 修复，2026-10-03）：lookupInternal 原 4 遍全量别名遍历
-	//    （③b 每条还算 2 次 MixedKey ⇒ 分配/耗时随别名数线性增长，8 字实测 743ms）。
-	//    现以 PutAlias/重建时预计算的索引做 O(1) 查；④编辑距离仍全量（罕见路径）。
-	canonicalIdx map[string]Alias   // canonical → 别名记录（① 精确-canonical）
-	aliasIdx     map[string]Alias   // alias → 别名记录（② 别名精确）
-	pinyinIdx    map[string][]Alias // PinyinKey → 别名列表（③ 拼音近音）
-	mixedIdx     map[string][]Alias // MixedKey → 别名列表（③b 混排规范化）
-	lenIdx       map[int][]Alias    // rune 长度 → 别名列表（④ 编辑距离桶，差 ≤2）
 }
 
 // ---- Observe / PutAlias ----
@@ -69,45 +60,10 @@ func (c *Cache) PutAlias(alias, canonical, source string) {
 	for i := range s.aliases {
 		if s.aliases[i].Alias == alias {
 			s.aliases[i] = Alias{Alias: alias, Canonical: canonical, PinyinKey: pk, Source: source, FetchedAt: now}
-			c.rebuildAliasIndexesLocked(s)
 			return
 		}
 	}
 	s.aliases = append(s.aliases, Alias{Alias: alias, Canonical: canonical, PinyinKey: pk, Source: source, FetchedAt: now})
-	c.rebuildAliasIndexesLocked(s)
-}
-
-// rebuildAliasIndexesLocked 重建别名四索引（调用方持锁）。
-// 供 PutAlias 与任何直接改 s.aliases 的入口（load/restore/teach）保持索引一致。
-func (c *Cache) rebuildAliasIndexesLocked(s *state) {
-	s.canonicalIdx = make(map[string]Alias, len(s.aliases))
-	s.aliasIdx = make(map[string]Alias, len(s.aliases))
-	s.pinyinIdx = make(map[string][]Alias, len(s.aliases))
-	s.mixedIdx = make(map[string][]Alias, len(s.aliases))
-	s.lenIdx = make(map[int][]Alias, len(s.aliases))
-	for _, a := range s.aliases {
-		if a.Canonical != "" {
-			s.canonicalIdx[a.Canonical] = a
-		}
-		s.aliasIdx[a.Alias] = a
-		if a.PinyinKey != "" {
-			s.pinyinIdx[a.PinyinKey] = append(s.pinyinIdx[a.PinyinKey], a)
-		}
-		if mk, ok := MixedKey(a.Alias); ok {
-			s.mixedIdx[mk] = append(s.mixedIdx[mk], a)
-		}
-		if mk, ok := MixedKey(a.Canonical); ok {
-			s.mixedIdx[mk] = append(s.mixedIdx[mk], a)
-		}
-		// 编辑距离桶：按 rune 长度入桶（同时入 alias 与 canonical 两条记录，
-		// 保证 ④ 按长度过滤后仍覆盖两侧）。
-		la := len([]rune(a.Alias))
-		if a.Canonical != a.Alias {
-			lc := len([]rune(a.Canonical))
-			s.lenIdx[lc] = append(s.lenIdx[lc], a)
-		}
-		s.lenIdx[la] = append(s.lenIdx[la], a)
-	}
 }
 
 func (c *Cache) state() *state {
@@ -128,12 +84,12 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	if term == "" {
 		return Result{NeedEscalate: true}, false
 	}
-	st := c.Status()
+	st := c.Snapshot().Status
 	s := c.state()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// ① 精确（热词 / 明文 canonical）—— 索引 O(1)
+	// ① 精确（热词 / 明文 canonical）
 	if h, ok := s.hot[term]; ok {
 		score := 1.0 + float64(h.Heat)*0.01
 		if score > 1.0 {
@@ -141,23 +97,23 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 		}
 		return Result{Canonical: term, Score: score, Route: RouteExact, Source: h.Source, Status: st}, true
 	}
-	if a, ok := s.canonicalIdx[term]; ok {
-		return Result{Canonical: a.Canonical, Score: 1.0, Route: RouteExact, Source: a.Source, Status: st}, true
+	for _, a := range s.aliases {
+		if a.Canonical == term {
+			return Result{Canonical: a.Canonical, Score: 1.0, Route: RouteExact, Source: a.Source, Status: st}, true
+		}
 	}
-	// ② 别名 —— 索引 O(1)
-	if a, ok := s.aliasIdx[term]; ok {
+	// ② 别名
+	for _, a := range s.aliases {
 		if skipGeneric && isGenericForRewrite(a.Alias) {
-			// 跳过通用词别名：改写成规范的候选可能在别处（继续走拼音/混排索引）。
-		} else {
+			continue
+		}
+		if a.Alias == term {
 			return Result{Canonical: a.Canonical, Score: 0.95, Route: RouteAlias, Source: a.Source, Status: st}, true
 		}
 	}
-	// ③ 拼音近音（同一音节序列）—— 索引 O(1)
+	// ③ 拼音近音（同一音节序列）
 	if key, ok := asr.PinyinKey(term); ok {
-		for _, a := range s.pinyinIdx[key] {
-			if skipGeneric && isGenericForRewrite(a.Alias) {
-				continue
-			}
+		for _, a := range s.aliases {
 			if a.PinyinKey != "" && a.PinyinKey == key {
 				return Result{Canonical: a.Canonical, Score: 0.85, Route: RoutePinyin, Source: a.Source, Status: st}, true
 			}
@@ -170,14 +126,11 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	if key, ok := MixedKey(term); ok {
 		canonicalSelf := ""
 		matches := map[string]string{}
-		for _, a := range s.mixedIdx[key] {
+		for _, a := range s.aliases {
 			ak, ok1 := MixedKey(a.Alias)
 			ck, ok2 := MixedKey(a.Canonical)
 			hit := (ok1 && ak == key) || (ok2 && ck == key)
 			if !hit {
-				continue
-			}
-			if skipGeneric && isGenericForRewrite(a.Alias) {
 				continue
 			}
 			if ok2 && ck == key {
@@ -221,37 +174,23 @@ func (c *Cache) lookupInternal(term string, skipGeneric bool) (Result, bool) {
 	}
 	var cands []cand
 	termLen := float64(len([]rune(term)))
-	// 编辑距离桶预过滤（NF1 性能债第二刀，2026-10-03）：dist≤2 的串长度差≤2，
-	// 只扫 lenIdx[L±2] 桶，不再全量遍历 s.aliases。
-	maxDistForBucket := 2
-	tl := len([]rune(term))
-	seenAlias := map[string]bool{}
-	for dlen := tl - maxDistForBucket; dlen <= tl+maxDistForBucket; dlen++ {
-		if dlen < 0 {
-			continue
-		}
-		for _, a := range s.lenIdx[dlen] {
-			if seenAlias[a.Alias] {
-				continue // 同一条别名已入候选（跨桶去重，避免双桶重复计算）
+	for _, a := range s.aliases {
+		seen := map[string]bool{}
+		for _, c := range []string{a.Alias, a.Canonical} {
+			if c == "" || seen[c] {
+				continue // 别名与规范词相同 ⇒ 不重复计一次
 			}
-			seenAlias[a.Alias] = true
-			prevSeen := "" // 每条别名独立去重（与原 `seen` 的语义一致；见下）
-			for _, c := range [2]string{a.Alias, a.Canonical} {
-				if c == "" || c == prevSeen {
-					continue // 别名与规范词相同 ⇒ 不重复计一次
-				}
-				prevSeen = c
-				d := levenshtein(term, c)
-				if float64(d) > maxEditRatio*termLen {
-					continue // 相对差异过大 ⇒ 不作为候选（防"错配"）
-				}
-				maxD := editMaxDistance
-				if len([]rune(term)) >= longInputLen {
-					maxD = editMaxDistanceLong
-				}
-				if d <= maxD {
-					cands = append(cands, cand{canonical: a.Canonical, dist: d, source: a.Source})
-				}
+			seen[c] = true
+			d := levenshtein(term, c)
+			if float64(d) > maxEditRatio*termLen {
+				continue // 相对差异过大 ⇒ 不作为候选（防"错配"）
+			}
+			maxD := editMaxDistance
+			if len([]rune(term)) >= longInputLen {
+				maxD = editMaxDistanceLong
+			}
+			if d <= maxD {
+				cands = append(cands, cand{canonical: a.Canonical, dist: d, source: a.Source})
 			}
 		}
 	}
@@ -349,7 +288,6 @@ func (c *Cache) Refresh(ctx context.Context) Snapshot {
 			s.aliases = append(s.aliases, a)
 		}
 	}
-	c.rebuildAliasIndexesLocked(s)
 	s.meta.Status = StatusOK
 	s.meta.Note = ""
 	s.meta.FetchedAt = now.Format(time.RFC3339)
@@ -358,35 +296,6 @@ func (c *Cache) Refresh(ctx context.Context) Snapshot {
 }
 
 // Snapshot 返回当前快照；过期按 TTL 标 stale（K4）。
-// Status 是**廉价**的状态读取器（NF-1 性能修复）。
-//
-// ⚠️ 为什么需要它（2026-10-03 · 三条证据链闭合）：
-//
-//	`rewrite_scope.go` 的两个**未命中**分支原先写 `c.Snapshot().Status` ——
-//	为取**一个字符串字段**，`snapshotLocked` 会 `append([]Alias(nil), st.aliases...)`
-//	**复制全部别名**。而 `recog/rewriter.go:90 pass1` 对每个位置试 5 个窗口长度
-//	⇒ **5n 次全量拷贝** ⇒ 实测 8 字 743ms / 32 字 3530ms（traces 与长度扫描双证）。
-//
-// ⚠️ 本函数**保留 `state()` 的懒初始化副作用**（`state()` 会在 `c.st == nil` 时初始化），
-//
-//	因为那不是"副作用"，而是**既有行为**；换掉调用点时必须保住它。
-func (c *Cache) Status() string {
-	st := c.state() // ← 保留懒初始化
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	out := st.meta.Status
-	if out == "" {
-		out = StatusOK
-	}
-	if st.meta.FetchedAt != "" {
-		if ts, err := time.Parse(time.RFC3339, st.meta.FetchedAt); err == nil && c.ttl > 0 &&
-			c.now().UTC().Sub(ts) > c.ttl {
-			out = StatusStale
-		}
-	}
-	return out
-}
-
 func (c *Cache) Snapshot() Snapshot {
 	s := c.state()
 	s.mu.Lock()
@@ -422,7 +331,6 @@ func (c *Cache) Clear() {
 	defer s.mu.Unlock()
 	s.hot = map[string]*Hotword{}
 	s.aliases = nil
-	c.rebuildAliasIndexesLocked(s)
 	s.meta = Snapshot{}
 }
 
@@ -471,7 +379,6 @@ func (c *Cache) Load() error {
 		s.hot[h.Term] = &h
 	}
 	s.aliases = append([]Alias(nil), snap.Aliases...)
-	c.rebuildAliasIndexesLocked(s)
 	s.meta.Status = StatusOK
 	s.meta.FetchedAt = snap.FetchedAt
 	s.meta.Source = snap.Source

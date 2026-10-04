@@ -45,36 +45,3 @@ func TestDetectOrchestrateBookTitle(t *testing.T) {
 		t.Fatal("ORCHESTRATE 基线应不可逆（收尾 git commit）")
 	}
 }
-
-// TestDetectOrchestrateCreateDoc（缺陷修复回归）：「生成《X》文档并保存提交」类任务
-// 必须判 ORCHESTRATE，不得因标题含"测试"被 TEST 触发词抢先误判。
-// 复现：2026-10-04 实测「生成《测试-打断语义》文档并保存提交」被判 TEST → space_check 拒绝 → 秒级终态。
-func TestDetectOrchestrateCreateDoc(t *testing.T) {
-	c := NewTaskClassifier(0.6, nil)
-	cases := []struct {
-		name string
-		text string
-		want string
-	}{
-		{"复现用例·标题含测试", "生成《测试-打断语义》文档并保存提交", contract.IntentOrchestrate},
-		{"生成式·无提交", "生成《iOS客户端-后台能力设计》文档", contract.IntentOrchestrate},
-		{"写成·带书名号", "把设计要点写成《后端设计 v2》文档", contract.IntentOrchestrate},
-		{"产出·文档语境", "产出《周报》文档并提交", contract.IntentOrchestrate},
-		{"纯测试不回归", "跑一下测试", contract.IntentTest},
-		{"测试指定包不回归", "执行测试这个函数", contract.IntentTest},
-		{"普通编辑不误伤", "把《文档》标题改成中文", contract.IntentEdit},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := c.ClassifyTask(tc.text).Intent
-			if got != tc.want {
-				t.Fatalf("text=%q: got %q want %q", tc.text, got, tc.want)
-			}
-		})
-	}
-	// 书名号目标必须抽准（生成式路径 2 的 target_doc）。
-	it := c.ClassifyTask("生成《测试-打断语义》文档并保存提交")
-	if it.Params["target_doc"] != "测试-打断语义" {
-		t.Fatalf("生成式路径书名号抽取错误: %q", it.Params["target_doc"])
-	}
-}

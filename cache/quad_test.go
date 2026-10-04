@@ -48,17 +48,13 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 
 func TestTTLExpiry(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "cache.json")
-	// ⚠️ 2026-10-03（`scripts/timing_sensitive_scan.sh` 扫出）：原用 **TTL=40ms + sleep 80ms**
-	//   ⇒ 与 R-04 判据**同类缺陷**：若 `Open`+`Set` 在慢 CI 上耗时接近 40ms，
-	//     条目在下面那句"刚写入应命中"之前就已过期 ⇒ **判据报错而实现是对的**。
-	//   ⇒ 放大到 **2s / 2.5s**：塞入耗时（微秒级）与 TTL 差 **5 个数量级** ⇒ 免疫环境速度。
-	s, _ := Open(p, 2*time.Second)
+	s, _ := Open(p, 40*time.Millisecond)
 	k := QuadKey{Intent: "NOTE", Space: "vault-notes", Perm: "append", Ref: "idea1"}
 	_ = s.Set(k, "auto")
 	if _, ok := s.Get(k); !ok {
 		t.Fatal("刚写入应命中")
 	}
-	time.Sleep(2500 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
 	if _, ok := s.Get(k); ok {
 		t.Fatal("过期后不应命中")
 	}

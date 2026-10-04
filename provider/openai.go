@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -15,10 +13,6 @@ import (
 	"voicesign-harness/config"
 	"voicesign-harness/contract"
 )
-
-// ErrModelDown 标记**模型级**故障（欠费 402 / 模型中心上游错误 code=model_upstream）：
-// 重试无意义（欠费不会因重试恢复），调度器据此快速短路并标记该模型 down（2026-10-03）。
-var ErrModelDown = errors.New("model down")
 
 // openaiClient 是 OpenAI 兼容端点的客户端（架构 §14.2）：
 // 兼容 OpenAI / DeepSeek / 模型中心（model.peterzou.com）/ Gemini 兼容层等
@@ -50,17 +44,16 @@ func newOpenAIClient(p config.Provider, cfg *config.Config) *openaiClient {
 	}
 }
 
-// normalizeEndpoint 规范化端点为完整的 chat URL。
-// 兼容四种形态：
+// normalizeEndpoint 规范化端点为完整的 chat/completions URL。
+// 兼容三种形态：
 //   - base：             "https://host"                    → "https://host/chat/completions"
 //   - 带 /v1：           "https://host/v1"                 → "https://host/v1/chat/completions"
 //   - 完整路径：         "https://host/v1/chat/completions" → 原样返回
-//   - 网关自定义路径：   "https://host/api/model/chat"      → 原样返回（aiops 网关 2026-10-03）
 //
 // 同时去掉任意尾部斜杠（如 "https://host/"、"https://host/v1/"）。
 func normalizeEndpoint(ep string) string {
 	ep = strings.TrimRight(ep, "/")
-	if !strings.HasSuffix(ep, "/chat/completions") && !strings.HasSuffix(ep, "/chat") {
+	if !strings.HasSuffix(ep, "/chat/completions") {
 		ep += "/chat/completions"
 	}
 	return ep
@@ -84,13 +77,10 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse,
 
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		t0 := time.Now()
 		resp, retryable, err := c.doOnce(ctx, body)
 		if err == nil {
-			log.Printf("[llm-trace] %s attempt=%d OK %.1fs", c.name, attempt, time.Since(t0).Seconds())
 			return resp, nil
 		}
-		log.Printf("[llm-trace] %s attempt=%d FAIL %.1fs retryable=%v err=%v", c.name, attempt, time.Since(t0).Seconds(), retryable, err)
 		lastErr = err
 		// 不可重试错误（4xx 业务错误 / ctx 取消 / 畸形 JSON）或重试次数用尽 → 直接返回。
 		if !retryable || attempt >= len(retryBackoffs) {
@@ -187,17 +177,6 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 		snippet := truncateResp(string(data), 300)
 		// 429 / 5xx → 可重试；其他 4xx（400/401/403…）→ 立即失败。
 		retry := raw.StatusCode == http.StatusTooManyRequests || raw.StatusCode >= 500
-		// 2026-10-03 模型调度：**模型级故障**（402 欠费 / 模型中心上游错误 model_upstream）
-		// 重试无意义，标记 ErrModelDown → 调度器快速切下一个模型，不占 harness 重试预算。
-		if raw.StatusCode == http.StatusPaymentRequired ||
-			(raw.StatusCode >= 500 && strings.Contains(string(data), "model_upstream")) {
-			return ChatResponse{}, false, fmt.Errorf("%w: HTTP %d: %s", ErrModelDown, raw.StatusCode, snippet)
-		}
-		// 504 = 网关上游超时：同一请求重试大概率再超时（2026-10-03 实测），单次内不重试，
-		// 由调度层切下一个模型；不标记 down（可能只是瞬时负载），下次调用仍可尝试。
-		if raw.StatusCode == http.StatusGatewayTimeout {
-			return ChatResponse{}, false, fmt.Errorf("HTTP %d: %s", raw.StatusCode, snippet)
-		}
 		return ChatResponse{}, retry, fmt.Errorf("HTTP %d: %s", raw.StatusCode, snippet)
 	}
 
@@ -227,9 +206,8 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 // truncateResp 把响应体片段截断到 n 字符，避免错误信息过长污染轨迹。
 func truncateResp(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	r := []rune(s) // F8 修复：按 rune 截断，避免切裂多字节字符产生非法 UTF-8
-	if len(r) <= n {
+	if len(s) <= n {
 		return s
 	}
-	return string(r[:n]) + "...(truncated)"
+	return s[:n] + "...(truncated)"
 }

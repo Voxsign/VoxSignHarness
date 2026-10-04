@@ -510,18 +510,9 @@ func archInitGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
 		{"init", "-q"},
-		// ⚠️ **--local**（2026-10-03 CI 事故，同 pipeline）：产品代码的 commit 没有 -c 注入，
-		// 依赖仓库 user 配置 ⇒ 无全局身份的 CI runner 会失败。`--local` 禁止上溯父仓库。
-		{"config", "--local", "user.email", "vhs-arch@example.com"},
-		{"config", "--local", "user.name", "vhs-arch"},
-		// ⚠️ **不许写 git config**（2026-10-03 事故，全仓最后一处）：
-		// `git config user.email` 不带 --local/--global 时写"从 cwd 上溯找到的仓库"的 config；
-		// 当 dir 的仓库不可用时会上溯到**主仓库** ⇒ 覆盖真实身份（曾把 user.email 改成
-		// vhs@test / vhs-test@example.com / vhs-arch@example.com 三个测试身份之一）、
-		// 并把 core.bare 置 true ⇒ 仓库被当裸库。
-		// ⇒ 身份改由**全局配置回落**；若需注入，用命令级 `-c user.email=...`。
-		// commit.gpgsign 也**不写 config**（同因：config 会写"从 cwd 上溯找到的仓库"）
-		// ⇒ 改在 commit 时用命令级 `-c commit.gpgsign=false` 注入
+		{"config", "user.email", "vhs-arch@example.com"},
+		{"config", "user.name", "vhs-arch"},
+		{"config", "commit.gpgsign", "false"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -532,12 +523,7 @@ func archInitGitRepo(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# arch fixture baseline\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"add", "README.md"},
-		// 身份与签名开关一律**命令级 -c 注入**（不写 config ⇒ 无副作用，也不依赖全局身份）
-		{"-c", "user.email=vhs-arch@example.com", "-c", "user.name=vhs-arch",
-			"-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline"},
-	} {
+	for _, args := range [][]string{{"add", "README.md"}, {"commit", "-q", "-m", "baseline"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {

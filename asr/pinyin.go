@@ -16,10 +16,7 @@
 // 产出一条候选。
 package asr
 
-import (
-	"strings"
-	"sync"
-)
+import "strings"
 
 // pinyinGroup 是一个音节的汉字分组。**有序切片**（不是 map）：
 // 表必须可回放——Go map 迭代顺序随机，若依赖"先命中者胜"，
@@ -329,36 +326,16 @@ var pinyinGroups = []pinyinGroup{
 // buildPinyinTable 把**有序**分组表反转成 汉字→音节 的查询表。
 // 纯函数：同一份 pinyinGroups 永远得到同一张表（顺序确定，与 map 迭代无关）。
 // 冲突（同字跨组）时前者优先，但当前表已由测试保证不存在冲突。
-// ⚠️ 2026-10-03（NF-1 性能修复）：**结果缓存**。
-//
-// 为什么：本函数**每次调用都重建整张表**（291 分组 / 1044 汉字，实测 **68µs/次**），
-// 而 `PinyinKey` 在热路径上被**逐字**调用 —— `hotcache.MixedKey` 对**每个中文字**
-// 调一次 `PinyinKey(string(r))`，而 `lookupInternal` 的第 ③b 遍对**每条别名**调 2 次
-// `MixedKey`（Alias + Canonical）⇒ 237 别名 ⇒ **474 次 `MixedKey` ⇒ 约 78ms/次 lookup**
-// ⇒ 而 `recog.pass1` 调 `LookupForRewrite` **5n 次** ⇒ 8 字输入 ⇒ **40 次** ⇒ **约 3 秒**。
-// （实测：`/v1/run` 的 `hotcache` 步骤 = **743ms**；单次 `LookupForRewrite` = **79.9ms**。）
-//
-// 依据：本函数**自己的注释**写着「**纯函数：同一份 pinyinGroups 永远得到同一张表
-// （顺序确定，与 map 迭代无关）**」⇒ 纯函数 + 常量输入 ⇒ 结果恒定 ⇒ **缓存是安全的**。
-//
-// ⚠️ 返回的表**只读**：调用方只做查表（`table[r]`），不得修改。
-var pinyinTableOnce sync.Once
-
-var pinyinTableCache map[rune]string
-
 func buildPinyinTable() map[rune]string {
-	pinyinTableOnce.Do(func() {
-		table := make(map[rune]string)
-		for _, g := range pinyinGroups {
-			for _, r := range g.chars {
-				if _, seen := table[r]; !seen {
-					table[r] = g.syllable
-				}
+	table := make(map[rune]string)
+	for _, g := range pinyinGroups {
+		for _, r := range g.chars {
+			if _, seen := table[r]; !seen {
+				table[r] = g.syllable
 			}
 		}
-		pinyinTableCache = table
-	})
-	return pinyinTableCache
+	}
+	return table
 }
 
 // pinyinTerm 是一条"正确写法 + 其音节序列"的热词条目。
