@@ -44,15 +44,15 @@ final class SettingsStore: ObservableObject {
             servers = list
         } else {
             // 首次启动：预置两台（豆包式"可连多台"）——
-            // 201 = 用户指定的目标服务器（默认连接）；129 = 本机 Mac（备选）。
+            // 129 = 本机 Mac（默认连接，日志在 Mac 端可查）；201 = 主服务器（备用）。
             servers = [
-                ServerConfig(id: UUID().uuidString,
-                             name: "主服务器",
-                             base: "http://127.0.0.1:8897",
-                             token: "m7-token"),
                 ServerConfig(id: UUID().uuidString,
                              name: "我的 Mac",
                              base: "http://192.168.8.129:8897",
+                             token: "m7-token"),
+                ServerConfig(id: UUID().uuidString,
+                             name: "主服务器",
+                             base: "http://127.0.0.1:8897",
                              token: "m7-token")
             ]
         }
@@ -77,6 +77,8 @@ final class SettingsStore: ObservableObject {
         guard servers.contains(where: { $0.id == id }) else { return }
         activeServerID = id
         persist()
+        // v2.1 I16：切换即触发一次即时连通性探测（胶囊立即反馈，不等 30s 心跳）。
+        Task { await ConnectivityService.shared.probe() }
     }
 
     func removeServer(_ id: String) {

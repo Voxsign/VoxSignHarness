@@ -18,33 +18,63 @@ struct InputBarView: View {
     #endif
 
     @State private var keyboardMode: Bool = false
+    // v2.1 I14：3s 无识别提示（不显示逐字期间的补偿反馈）
+    @State private var transcriptSnap: String = ""
+    @State private var silentSeconds: Int = 0
+    @State private var noSpeechDetected: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // 豆包式"松开发送"录音状态条：按住时出现（红底白字 + 实时识别文字）
+            // 豆包式"松开发送"录音状态条：按住时出现。
+            // v3 决策依据①：按住中**不显示逐字识别**（中间态会误导英文名/专业词），
+            // 说完（松手 final）一次性在用户气泡里显示最终句，可校准。
+            // v3 决策依据③：提示"上滑取消"（豆包同款手势）。
+            // v2.1 I14：加"正在听…"波形动画；3s 无识别 → "请说话"提示（说完一次性显示的补偿反馈）。
             #if canImport(Speech)
             if speech.isRecording && !keyboardMode {
-                VStack(spacing: 4) {
-                    HStack(spacing: 6) {
-                        Circle().fill(Color.white).frame(width: 8, height: 8)
-                        Text("松开 发送")
+                VStack(spacing: 3) {
+                    HStack(spacing: 8) {
+                        // "正在听"波形（按住中持续呼吸，补偿"不显示逐字"的空窗期）
+                        WaveView()
+                            .colorScheme(.light)
+                        Text(noSpeechDetected ? "没听到声音，请说话" : "正在听…")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.white)
                         Spacer()
-                    }
-                    if !speech.transcript.isEmpty {
-                        Text(speech.transcript)
-                            .font(.system(size: 14))
-                            .foregroundColor(.white.opacity(0.95))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("松开 发送 · 上滑取消")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.85))
                     }
                 }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Color.red)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(noSpeechDetected ? Color.orange : Color.red)
                 .cornerRadius(12)
                 .padding(.horizontal, 12).padding(.top, 6)
                 .transition(.move(edge: .top).combined(with: .opacity))
+                .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                    if speech.isRecording {
+                        if speech.transcript != transcriptSnap {
+                            transcriptSnap = speech.transcript
+                            silentSeconds = 0
+                        } else {
+                            silentSeconds += 1
+                        }
+                        noSpeechDetected = silentSeconds >= 3
+                    } else {
+                        noSpeechDetected = false
+                        silentSeconds = 0
+                        transcriptSnap = ""
+                    }
+                }
+            } else if speech.unavailable && !keyboardMode {
+                Text("语音不可用：请在 系统设置→VoiceSign 中允许 麦克风 与 语音识别")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.gray.opacity(0.7))
+                    .cornerRadius(8)
+                    .padding(.horizontal, 12).padding(.top, 6)
             }
             #endif
 
@@ -109,14 +139,20 @@ struct InputBarView: View {
                 .scaleEffect(speech.isRecording ? 1.05 : 1.0)
                 .animation(.easeOut(duration: 0.12), value: speech.isRecording)
                 .accessibilityIdentifier("vhs.hold")
-                // 按住说话：DragGesture(minimumDistance:0) 按下即触发、松手即结束（豆包同款）
+                // 按住说话（豆包同款）：按下录音；松手发送；上滑取消（translation.height < -80）。
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { _ in
                             if !speech.isRecording { speech.startHold() }
                         }
-                        .onEnded { _ in
-                            if speech.isRecording { speech.stopHold() }
+                        .onEnded { v in
+                            if speech.isRecording {
+                                if v.translation.height < -80 {
+                                    speech.cancelHold()   // 上滑取消：不发送
+                                } else {
+                                    speech.stopHold()     // 松手：识别完自动发送
+                                }
+                            }
                         }
                 )
         }

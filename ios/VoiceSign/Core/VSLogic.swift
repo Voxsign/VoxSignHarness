@@ -306,4 +306,42 @@ enum VSLogic {
         let t = text.trimmingCharacters(in: .whitespaces).lowercased()
         return ["停", "停止", "停下", "stop"].contains(t)
     }
+
+    // MARK: - v2.1 口答词表（I06 确认口答 / I17 撤销口答 / 先进理念6 噪声过滤 / I13 分险级）
+
+    /// 极短噪声词：无意义哼哈（嗯/哦/好…）不提交、不生成气泡。
+    /// 注意：确认口答在 AppModel.sendVoice 里先于本判断执行，"好/是/行"在决策点场景会被口答消费。
+    static func isNoiseWord(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.count <= 1 { return true }
+        let noise: Set<String> = ["嗯", "嗯嗯", "哦", "哦哦", "啊", "好的", "好", "OK", "ok", "Ok", "行", "哈", "诶", "哎", "呀", "对", "是", "明白", "知道了"]
+        return noise.contains(s)
+    }
+
+    /// 确认口答肯定词（need_confirm 场景）。
+    static func isAffirmPhrase(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        let exact: Set<String> = ["执行", "确认", "可以", "好", "好的", "做", "做吧", "继续", "是", "对", "同意", "行", "就这么办", "就做"]
+        return exact.contains(s) || s.hasPrefix("执行")
+    }
+
+    /// 确认口答否定词（need_confirm 场景）。
+    static func isNegativePhrase(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        let exact: Set<String> = ["取消", "拒绝", "不要", "不做", "不执行", "停", "停止", "算了", "不用", "别"]
+        return exact.contains(s) || s.hasPrefix("不")
+    }
+
+    /// 撤销口答词（I17 / 先进理念2 语音撤销链）："撤销""撤销刚才那个""撤销上一条"。
+    static func isUndoPhrase(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s == "撤销" || s.contains("撤销")
+    }
+
+    /// 高风险动作词（I13 分险级：提交/推送/合并/部署/删除等，口答无效、强制按钮确认）。
+    static func isHighRiskAction(_ probe: String) -> Bool {
+        let a = probe.lowercased()
+        let highRisk: [String] = ["提交", "推送", "push", "commit", "merge", "合并", "部署", "发布", "删除", "清空", "覆盖", "drop", "迁移", "rm"]
+        return highRisk.contains { a.contains($0) }
+    }
 }

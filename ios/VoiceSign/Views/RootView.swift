@@ -16,7 +16,28 @@ struct RootView: View {
             // 只保留顶部连接状态胶囊 + 打断系统条 + 对话流 + 决策点 + 输入条。
 
             // T2 连接状态胶囊：绿=在线 · 黄=重连 · 灰=离线排队（网络状态永远透明）
-            ConnectionStatusView()
+            // T3 豆包式：顶部一行 = 连接胶囊（左）+ 标题（中）+ 设置齿轮（右）
+            HStack(spacing: 8) {
+                ConnectionStatusView()
+                Spacer()
+                Text("VoxSign")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(.primary)
+                Spacer()
+                // 设置入口（T3 修复：齿轮常驻顶部，不再随角色条隐藏）
+                Button {
+                    model.showSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("vhs.settings")
+                .padding(.trailing, 10)
+            }
+            .padding(.leading, 12)
 
             // 红色打断系统条（可关闭）
             if let bar = model.systemBar {
@@ -65,9 +86,10 @@ struct RootView: View {
         switch row {
         case .user(let b): UserBubbleView(bubble: b)
         case .harness(let b): HarnessBubbleView(bubble: b)
-        case .typing: TypingView()
+        case .typing: TypingView(text: model.typingText)
         // T3 豆包式：执行过程不再铺七项流程卡，统一收敛成"三点正在思考"（与豆包一致）。
-        case .execCard: TypingView()
+        // v2.1 I18：思考态文案动态升级（5s/10s），由 model.typingText 驱动。
+        case .execCard: TypingView(text: model.typingText)
         case .receipt(let r):
             ReceiptCardView(receipt: r.receipt, undo: r.undo, badges: r.badges, onRollback: { model.rollback() })
         }
