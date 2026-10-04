@@ -111,7 +111,7 @@ func TestF5MultiActionThoughtNotSwallowed(t *testing.T) {
 	if got.Conflict != contract.ConflictMultiAction {
 		t.Errorf("R13 Conflict=%s, want multi_action", got.Conflict)
 	}
-	if !strings.Contains(got.Ask, "两件以上") {
+	if !strings.Contains(got.Ask, "几件事") {
 		t.Errorf("R13 Ask 文案异常: %q", got.Ask)
 	}
 }
