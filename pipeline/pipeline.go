@@ -1907,6 +1907,24 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			}
 		}
 	}
+	// 判据 6：无桩实现（2026-10-04 真跑实证：LLM 生成 resolve/run/tasks handler 全部
+	// `// Placeholder for ... logic` + StatusNotImplemented(501)——端点注册全在、判据 5 PASS、
+	// 证据门误判收敛，但真跑打接口全 501。用户红线"真装配级不许桩"，桩必须抓）。
+	// 检测：StatusNotImplemented / "// Placeholder" / panic("not implemented") / TODO 占位。
+	lowMain := strings.ToLower(mainSrc)
+	stubHits := []string{}
+	if strings.Contains(mainSrc, "http.StatusNotImplemented") {
+		stubHits = append(stubHits, "handler 返回 501 StatusNotImplemented（占位桩）")
+	}
+	if strings.Contains(lowMain, "// placeholder") {
+		stubHits = append(stubHits, "源码含 `// Placeholder` 占位注释")
+	}
+	if strings.Contains(lowMain, "not implemented") {
+		stubHits = append(stubHits, "panic/TODO `not implemented`")
+	}
+	if len(stubHits) > 0 {
+		gaps = append(gaps, "产物含桩实现（"+strings.Join(stubHits, "；")+"）——必须实现真实业务逻辑，禁止占位")
+	}
 	return gaps
 }
 
