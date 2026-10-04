@@ -1360,11 +1360,13 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 			break
 		}
 		memory = "上一轮证据门缺口（必须修复后才能完成）：\n" + strings.Join(gaps, "\n")
-		// 2026-10-04 修复：修订轮注入当前产物代码头（LLM 全量重写导致"修A坏B"——
-		// E2 达标下轮退回 null，5 轮耗死）。基于现有代码修改，禁止无关重写。
+		// 2026-10-04 修复：修订轮注入当前产物代码（LLM 全量重写导致"修A坏B"）。
+		// 2026-10-04 再修：仅开头 3000 字符看不到文件后部的 E4/E5 handler（8 轮耗死）——
+		// 改首尾拼接（首 1500 + 尾 3500），保证缺口对应函数可见。
 		if cur, err := os.ReadFile(filepath.Join(skelDir, "main.go")); err == nil && len(cur) > 0 {
-			head := truncateStr(string(cur), 3000)
-			memory += "\n\n当前产物 main.go（开头截断，其他逻辑保持不变，只修缺口对应函数，输出完整新文件）：\n" + head
+			src := string(cur)
+			head, tail := truncateStr(src, 1500), truncateStrTail(src, 3500)
+			memory += "\n\n当前产物 main.go（开头 1500 字符 + 末尾 3500 字符，中间省略。基于它修改，只修缺口对应函数，输出完整新文件）：\n===main.go 开头===\n" + head + "\n===main.go 末尾===\n" + tail
 		}
 		receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "evidence", OK: false,
 			Err:  fmt.Sprintf("round %d 证据门 %d 项缺口", round, len(gaps)),
@@ -2020,7 +2022,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 				"-d", `{"text":"帮我拉取那个仓库","conversation_id":"evg-1"}`}})
 			rs := strings.TrimSpace(r.Stdout)
 			if !strings.Contains(strings.ToLower(rs), "unresolved") && !strings.Contains(rs, "pending_resolve") && !strings.Contains(rs, "补全") {
-				gaps = append(gaps, "E4 resolve 行为不达标：无会话历史且无明确对象时应返回 unresolved/pending_resolve（需求判据 7），实测="+rs+"——实现指代/对象补全状态机")
+				gaps = append(gaps, "E4 resolve 行为不达标：无会话历史且无明确对象时应返回 unresolved/pending_resolve（需求判据 7），实测="+rs+"。实现要点：resolve handler 先查该 conversation_id 的会话历史（JSONL/内存 session store）——若该会话无任何历史记录且 text 含指代词（那个/这个/它/帮我…那个），必须返回含 unresolved 或 pending_resolve 的响应（如 {\"resolved\":false,\"target\":\"unresolved\",\"pending_resolve\":true}）；有历史时从最近记录补全 target。禁止返回 {\"resolved_target\":\"\"} 或 \"default target\" 等默认值")
 			}
 			// E5 run：编排执行必须投递上游并返回任务引用（需求判据 8 语义：summary/任务状态）。
 			ru := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "8", "-X", "POST",
@@ -2028,7 +2030,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 				"-d", `{"text":"拉取最新版，编译并启动服务","conversation_id":"evg-1"}`}})
 			rus := strings.TrimSpace(ru.Stdout)
 			if !strings.Contains(rus, "task_id") && !strings.Contains(rus, "submitted") && !strings.Contains(rus, "summary") && !strings.Contains(rus, "total") {
-				gaps = append(gaps, "E5 run 行为不达标：应编排任务并投递上游 harness（响应含 task_id/summary/total 等任务引用），实测="+rus+"——实现上游 POST /v1/tasks 投递与任务状态回读")
+				gaps = append(gaps, "E5 run 行为不达标：应编排任务并投递上游 harness（响应含 task_id/submitted/summary.total），实测="+rus+"。实现要点：run handler 将 text 交给内部编排（复用 decompose 逻辑拆任务列表），对每个任务 POST 上游 harness /v1/tasks（上游 base 默认 http://127.0.0.1:8941，支持 VHS_UPSTREAM 环境变量覆盖；JSON: {\"text\":任务文本,\"conversation_id\":当前会话}），收集返回的 task_id；响应 JSON 必须含 tasks 数组（每项含 task_id）+ submitted 数量 + summary（含 total 字段）。禁止返回 {\"results\":[]} 或 {\"tasks\":null}")
 			}
 		}
 	}
@@ -3172,6 +3174,13 @@ func reasonText(r string) string {
 	default:
 		return r
 	}
+}
+
+func truncateStrTail(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func truncateStr(s string, n int) string {
