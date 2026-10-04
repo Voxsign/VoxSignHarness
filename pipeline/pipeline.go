@@ -1657,14 +1657,7 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		if mainCode == "" {
 			return nil, "main.go 修复失败: " + note
 		}
-		// 修复轮产物同样先做确定性 import 清理（LLM 重生成必带未用 import——
-		// 2026-10-03 实证：不清理则修复轮永远卡在 "imported and not used"，3 轮耗尽）。
-		if c2, n2 := removeUnusedImports(mainCode, lastErr); c2 != "" {
-			log.Printf("[llmGenerate] 修复轮 %d 确定性清理 %d 个未使用 import", i, n2)
-			files["main.go"] = c2
-		} else {
-			files["main.go"] = mainCode
-		}
+		files["main.go"] = mainCode
 		if err := writeFilesToDisk(skelDir, files); err != nil {
 			return nil, "写盘失败: " + err.Error()
 		}
@@ -1672,7 +1665,24 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		if buildRecv.OK {
 			return files, fmt.Sprintf("编译全绿（%d 轮修复）", i)
 		}
+		// 2026-10-04 修复：build 失败后**先用本轮错误确定性清理**（LLM 每轮重写会引入
+		// 新的未用 import；此前用上一轮错误清理本轮代码 → 错位 → 3 轮永远耗死在
+		// "imported and not used"，真跑复现"编译迭代 3 轮仍未通过"）。
 		lastErr = truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
+		if c3, n3 := removeUnusedImports(files["main.go"], lastErr); c3 != "" {
+			log.Printf("[llmGenerate] 修复轮 %d 确定性清理 %d 个未使用 import（本轮错误）", i, n3)
+			files["main.go"] = c3
+			if err := writeFilesToDisk(skelDir, files); err != nil {
+				return nil, "写盘失败: " + err.Error()
+			}
+			recv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
+			if recv.OK {
+				return files, fmt.Sprintf("编译全绿（修复轮 %d 确定性清理 %d 个 import）", i, n3)
+			}
+			// 清理后仍有非 import 错误：更新 lastErr 供下轮 LLM 修复（避免拿旧错误修）。
+			log.Printf("[llmGenerate] 修复轮 %d 清理后仍失败：\n%s", i, truncateStr(recv.Stdout+"\n"+recv.Stderr, 800))
+			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
+		}
 	}
 	return nil, "编译迭代 3 轮仍未通过"
 }
