@@ -616,6 +616,11 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "project" // 多步编排=读文档+写文件+git 提交，落在项目域
 	case contract.IntentRegisterTool:
 		return "project" // 2026-10-04 能力自举：注册工具=写类意图，需可写域（global 只读会拒）
+	case contract.IntentEdit, contract.IntentDebug, contract.IntentTest,
+		contract.IntentCommit, contract.IntentDeploy:
+		// 2026-10-04 用户实测"跑一下测试/提交一下代码"→越界（BOUNDARY_VIOLATION）：
+		// 写/执行类意图无点名域时默认落 project（可写+test/run/git 工具），消除语音场景"越界"。
+		return "project"
 	default:
 		return "global"
 	}
