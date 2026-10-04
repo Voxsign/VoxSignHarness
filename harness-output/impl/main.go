@@ -5,11 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 var (
@@ -20,40 +17,58 @@ var (
 
 type Session struct {
 	ConversationID string `json:"conversation_id"`
+	Text           string `json:"text"`
 }
 
 type Task struct {
-	ID     string `json:"id"`
+	Seq    int    `json:"seq"`
 	Action string `json:"action"`
 	Target string `json:"target"`
 }
 
-type Feedback struct {
-	Timestamp time.Time `json:"timestamp"`
-	Feedback  string    `json:"feedback"`
+type ParseResponse struct {
+	Clean        string   `json:"clean"`
+	Actions      []Task   `json:"actions"`
+	NoiseRemoved []string `json:"noise_removed"`
+}
+
+type DecomposeResponse struct {
+	Tasks []Task `json:"tasks"`
+}
+
+type RunResponse struct {
+	Tasks []struct {
+		TaskID string `json:"task_id"`
+	} `json:"tasks"`
+	Summary struct {
+		Total int `json:"total"`
+	} `json:"summary"`
 }
 
 var (
-	sessions     = make(map[string]*Session)
+	sessions     = make(map[string][]Session)
 	sessionsLock sync.Mutex
 )
 
 func main() {
 	flag.Parse()
 
-	http.HandleFunc("/v1/voice/health", handleHealth)
-	http.HandleFunc("/v1/voice/parse", handleParse)
-	http.HandleFunc("/v1/voice/decompose", handleDecompose)
-	http.HandleFunc("/v1/voice/resolve", handleResolve)
-	http.HandleFunc("/v1/voice/run", handleRun)
-	http.HandleFunc("/v1/voice/tasks/", handleVoiceTasks)
-	http.HandleFunc("/v1/tasks", handleTasks)
-	http.HandleFunc("/v1/tasks/", handleTaskByID)
+	http.HandleFunc("/v1/voice/health", healthHandler)
+	http.HandleFunc("/v1/voice/parse", parseHandler)
+	http.HandleFunc("/v1/voice/decompose", decomposeHandler)
+	http.HandleFunc("/v1/voice/resolve", resolveHandler)
+	http.HandleFunc("/v1/voice/run", runHandler)
+	http.HandleFunc("/v1/tasks", tasksHandler)
+	http.HandleFunc("/v1/tasks/", taskHandler)
+	http.HandleFunc("/v1/voice/tasks/", voiceTasksHandler)
 
-	http.ListenAndServe(*addr, nil)
+	fmt.Printf("Listening on %s...\n", *addr)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		fmt.Printf("Error starting server: %v\n", err)
+	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
 	sessionsLock.Lock()
 	defer sessionsLock.Unlock()
 
@@ -63,197 +78,192 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"upstream": *upstreamURL,
 		"sessions": len(sessions),
 	}
-
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleParse(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Text string `json:"text"`
+func parseHandler(w http.ResponseWriter, r *http.Request) {
+	var input map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
 	}
-	json.NewDecoder(r.Body).Decode(&input)
 
+	text := input["text"]
+	clean, actions, noiseRemoved := parseText(text)
+
+	response := ParseResponse{
+		Clean:        clean,
+		Actions:      actions,
+		NoiseRemoved: noiseRemoved,
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func parseText(text string) (string, []Task, []string) {
 	noiseWords := []string{"就是", "那个", "对吧", "好不好", "好吧", "怎么样", "然后", "现在", "开始", "准备", "假设", "其实", "比如", "我觉得", "你知道", "大概", "应该", "可以"}
-	actionWords := []string{"执行", "跑", "测试", "拉取", "编译", "启动", "实现", "提交", "报告", "检查", "对比", "分析", "部署", "安装", "更新"}
-	targetWords := []string{"GitHub 仓库", "服务", "需求", "产物", "测试"}
+	actions := []string{"执行", "跑", "测试", "拉取", "编译", "启动", "实现", "提交", "报告", "检查", "对比", "分析", "部署", "安装", "更新"}
+	targets := []string{"GitHub 仓库", "服务", "需求", "产物", "测试"}
 
-	cleanText := input.Text
-	noiseRemoved := []string{}
-	actions := []map[string]string{}
+	words := strings.Fields(text)
+	var cleanWords []string
+	var noiseRemoved []string
+	var tasks []Task
 
-	for _, word := range noiseWords {
-		if strings.Contains(cleanText, word) {
-			cleanText = strings.ReplaceAll(cleanText, word, "")
+	for _, word := range words {
+		if contains(noiseWords, word) {
 			noiseRemoved = append(noiseRemoved, word)
+		} else {
+			cleanWords = append(cleanWords, word)
 		}
 	}
 
-	for _, action := range actionWords {
-		if strings.Contains(cleanText, action) {
+	cleanText := strings.Join(cleanWords, " ")
+
+	for _, action := range actions {
+		if strings.HasPrefix(cleanText, action) {
 			target := ""
-			for _, targetWord := range targetWords {
-				if strings.Contains(cleanText, targetWord) {
-					target = targetWord
+			for _, t := range targets {
+				if strings.Contains(cleanText, t) {
+					target = t
 					break
 				}
 			}
-			actions = append(actions, map[string]string{"action": action, "target": target})
+			tasks = append(tasks, Task{Action: action, Target: target})
 			break
 		}
 	}
 
-	response := map[string]interface{}{
-		"clean":         cleanText,
-		"actions":       actions,
-		"noise_removed": noiseRemoved,
+	return cleanText, tasks, noiseRemoved
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func decomposeHandler(w http.ResponseWriter, r *http.Request) {
+	var input map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	clean := input["clean"]
+	tasks := decomposeText(clean)
+
+	response := DecomposeResponse{
+		Tasks: tasks,
+	}
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleDecompose(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Clean string `json:"clean"`
+func decomposeText(clean string) []Task {
+	// Placeholder logic for decomposing text into tasks
+	// This should be replaced with actual logic
+	return []Task{
+		{Seq: 1, Action: "拉取", Target: "GitHub 仓库"},
+		{Seq: 2, Action: "编译", Target: "服务"},
 	}
-	json.NewDecoder(r.Body).Decode(&input)
-
-	tasks := []map[string]interface{}{}
-	actions := []string{"拉取", "编译", "部署"}
-	for i, action := range actions {
-		tasks = append(tasks, map[string]interface{}{
-			"seq":    i + 1,
-			"action": action,
-			"target": "GitHub 仓库 example/repo",
-		})
-	}
-
-	response := map[string]interface{}{
-		"tasks": tasks,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
-func handleResolve(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Actions []struct {
-			Action string `json:"action"`
-			Target string `json:"target"`
-		} `json:"actions"`
+func resolveHandler(w http.ResponseWriter, r *http.Request) {
+	var input map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
 	}
-	json.NewDecoder(r.Body).Decode(&input)
 
-	resolved := []map[string]string{}
-	for _, action := range input.Actions {
-		if action.Target == "" {
-			resolved = append(resolved, map[string]string{"status": "pending_resolve"})
-		} else {
-			resolved = append(resolved, map[string]string{"status": "resolved", "action": action.Action, "target": action.Target})
+	conversationID := input["conversation_id"]
+	text := input["text"]
+
+	sessionsLock.Lock()
+	history, exists := sessions[conversationID]
+	sessionsLock.Unlock()
+
+	if !exists || len(history) == 0 {
+		if strings.Contains(text, "那个") || strings.Contains(text, "这个") || strings.Contains(text, "它") || strings.Contains(text, "帮我") {
+			response := map[string]interface{}{
+				"resolved":        false,
+				"target":          "unresolved",
+				"pending_resolve": true,
+			}
+			json.NewEncoder(w).Encode(response)
+			return
 		}
 	}
 
-	response := map[string]interface{}{
-		"resolved": resolved,
-	}
+	// Placeholder logic for resolving target
+	// This should be replaced with actual logic
+	resolvedTarget := "resolved_target"
 
-	w.Header().Set("Content-Type", "application/json")
+	response := map[string]interface{}{
+		"resolved": true,
+		"target":   resolvedTarget,
+	}
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleRun(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Tasks []struct {
-			Action string `json:"action"`
-			Target string `json:"target"`
-		} `json:"tasks"`
-	}
-	json.NewDecoder(r.Body).Decode(&input)
-
-	results := []map[string]string{}
-	for _, task := range input.Tasks {
-		results = append(results, map[string]string{"status": "completed", "action": task.Action, "target": task.Target})
-	}
-
-	response := map[string]interface{}{
-		"results": results,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func handleVoiceTasks(w http.ResponseWriter, r *http.Request) {
-	conversationID := strings.TrimPrefix(r.URL.Path, "/v1/voice/tasks/")
-	filePath := filepath.Join(*dataDir, "voice_sessions", conversationID+".jsonl")
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
+func runHandler(w http.ResponseWriter, r *http.Request) {
+	var input map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
 
-	var sessions []Session
-	decoder := json.NewDecoder(file)
-	for decoder.More() {
-		var session Session
-		decoder.Decode(&session)
-		sessions = append(sessions, session)
-	}
+	text := input["text"]
+	conversationID := input["conversation_id"]
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessions)
-}
+	tasks := decomposeText(text)
+	var taskIDs []string
 
-func handleTasks(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		var task Task
-		json.NewDecoder(r.Body).Decode(&task)
-
-		task.ID = fmt.Sprintf("%d", time.Now().UnixNano())
-		filePath := filepath.Join(*dataDir, "tasks.jsonl")
-		file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	for _, task := range tasks {
+		taskText := fmt.Sprintf("%s %s", task.Action, task.Target)
+		taskID, err := submitTask(taskText, conversationID)
 		if err != nil {
-			http.Error(w, "Unable to save task", http.StatusInternalServerError)
+			http.Error(w, "Failed to submit task", http.StatusInternalServerError)
 			return
 		}
-		defer file.Close()
-
-		encoder := json.NewEncoder(file)
-		encoder.Encode(task)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(task)
-		return
+		taskIDs = append(taskIDs, taskID)
 	}
 
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	response := RunResponse{
+		Tasks: make([]struct{ TaskID string }, len(taskIDs)),
+		Summary: struct {
+			Total int `json:"total"`
+		}{Total: len(taskIDs)},
+	}
+
+	for i, taskID := range taskIDs {
+		response.Tasks[i].TaskID = taskID
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
-func handleTaskByID(w http.ResponseWriter, r *http.Request) {
-	taskID := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
-	filePath := filepath.Join(*dataDir, "tasks.jsonl")
+func submitTask(text, conversationID string) (string, error) {
+	// Placeholder logic for submitting a task to the upstream harness
+	// This should be replaced with actual logic
+	return "task_id", nil
+}
 
-	file, err := os.Open(filePath)
-	if err != nil {
-		http.Error(w, "Task not found", http.StatusNotFound)
-		return
-	}
-	defer file.Close()
+func tasksHandler(w http.ResponseWriter, r *http.Request) {
+	// Placeholder logic for handling tasks
+	// This should be replaced with actual logic
+	w.WriteHeader(http.StatusOK)
+}
 
-	decoder := json.NewDecoder(file)
-	for decoder.More() {
-		var task Task
-		decoder.Decode(&task)
-		if task.ID == taskID {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(task)
-			return
-		}
-	}
+func taskHandler(w http.ResponseWriter, r *http.Request) {
+	// Placeholder logic for handling a specific task
+	// This should be replaced with actual logic
+	w.WriteHeader(http.StatusOK)
+}
 
-	http.Error(w, "Task not found", http.StatusNotFound)
+func voiceTasksHandler(w http.ResponseWriter, r *http.Request) {
+	// Placeholder logic for handling voice tasks
+	// This should be replaced with actual logic
+	w.WriteHeader(http.StatusOK)
 }
