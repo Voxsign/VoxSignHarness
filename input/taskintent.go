@@ -420,6 +420,14 @@ func conditionalClause(text string) (string, bool) {
 				break
 			}
 			pos := from + i
+			if m == "就" {
+				// 2026-10-04 用户实测：「就为什么/我就想让」口语误伤。仅当"就"前有完成态前提
+				// （尾字 了/过/完/好 等）才是真条件（"测试过了就部署"）；口语"我就…"跳过。
+				if !conditionalJiPrefixOK(text[:pos]) {
+					from = pos + len(m)
+					continue
+				}
+			}
 			after := text[pos+len(m):]
 			if r := []rune(after); len(r) > conditionalWindow {
 				after = string(r[:conditionalWindow])
@@ -431,6 +439,20 @@ func conditionalClause(text string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// conditionalJiPrefixOK 判定"就"前的语段是否像完成态前提（"测试过了就部署"→"测试过了"）。
+// 口语"我就想让…"（尾字"我"）、句首"就为什么…"→ 非条件，跳过，不误伤。
+func conditionalJiPrefixOK(prefix string) bool {
+	r := []rune(strings.TrimSpace(prefix))
+	if len(r) == 0 {
+		return false
+	}
+	switch r[len(r)-1] {
+	case '了', '过', '完', '好', '成', '绿':
+		return true
+	}
+	return false
 }
 
 // metaMaxPrefixRunes 是元指令词之前允许的前置字数（"好的，""我们先""嗯，"）。
@@ -946,8 +968,8 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
 			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 			got.Conflict = contract.ConflictMultiAction
-			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
-				"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+			got.Ask = "你说了几件事（" + joinIntentLabels(labels) + "）。" +
+				"我先整体理解一下，你接着补一句最要紧的，我一件一件来"
 			return got
 		}
 		ti.Conflict = contract.ConflictNoteVsDeploy
@@ -984,8 +1006,8 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
 			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 			got.Conflict = contract.ConflictMultiAction
-			got.Ask = "这句里有两件以上的事（" + joinIntentLabels(labels) + "）。" +
-				"我一次只做一件——请先说要先做哪个，或分成两句分别说"
+			got.Ask = "你说了几件事（" + joinIntentLabels(labels) + "）。" +
+				"我先整体理解一下，你接着补一句最要紧的，我一件一件来"
 			return got
 		}
 	}
