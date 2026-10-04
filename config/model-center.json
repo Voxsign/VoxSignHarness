@@ -1,9 +1,21 @@
 {
-  "contract_version": "1",
-  "gateway": {
-    "base_url": "https://aiops.peterzou.com",
-    "chat_path": "/api/model/chat",
-    "api_key_env": "AIOPS_KEY"
+
+ "contract_version": "1",
+ "gateway": {
+  "base_url": "https://aiops.voxsign.ai",
+  "chat_path": "/api/model/chat",
+  "api_key_env": "AIOPS_KEY"
+ },
+ "channels": {
+  "default": {
+   "enabled": true,
+   "provider": "aiops",
+   "tier": "fast",
+   "model_id": "deepseek-flash",
+   "timeout_ms": 30000,
+   "max_concurrency": 4,
+   "write_back": false
+
   },
   "channels": {
     "default": {
