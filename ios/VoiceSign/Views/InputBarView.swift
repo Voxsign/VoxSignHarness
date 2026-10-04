@@ -31,7 +31,40 @@ struct InputBarView: View {
             // v3 决策依据③：提示"上滑取消"（豆包同款手势）。
             // v2.1 I14：加"正在听…"波形动画；3s 无识别 → "请说话"提示（说完一次性显示的补偿反馈）。
             #if canImport(Speech)
-            if speech.isRecording && !keyboardMode {
+            if speech.calibrating && !keyboardMode {
+                // v2.4 ASR 校准：松手后先到平台千问校准，校准完才一次性出文字（用户原话"先到ASR服务器校准，校准完再丢出来"）。
+                HStack(spacing: 8) {
+                    ProgressView().tint(.white)
+                    Text("正在校准…")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text("识别完成后自动发送")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.85))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(VSColor.blue)
+                .cornerRadius(12)
+                .padding(.horizontal, 12).padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if speech.asrFailed && !keyboardMode {
+                // v2.4：ASR 服务器校准失败 → 明确提示重说（不回退本地识别）。
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white)
+                    Text("识别失败，请再按一次")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Color.orange)
+                .cornerRadius(12)
+                .padding(.horizontal, 12).padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if speech.isRecording && !keyboardMode {
                 VStack(spacing: 3) {
                     HStack(spacing: 8) {
                         // "正在听"波形（按住中持续呼吸，补偿"不显示逐字"的空窗期）
@@ -133,8 +166,11 @@ struct InputBarView: View {
                 .font(.system(size: 26, weight: .medium))
                 .foregroundColor(.white)
                 .frame(width: 64, height: 64)
-                .background(speech.isRecording ? Color.red : VSColor.blue)
+                .background(speech.isRecording
+                            ? AnyShapeStyle(LinearGradient(colors: [Color(red: 1.0, green: 0.24, blue: 0.24), Color(red: 0.85, green: 0.15, blue: 0.30)], startPoint: .top, endPoint: .bottom))
+                            : AnyShapeStyle(VSColor.brandGradient))
                 .clipShape(Circle())
+                .shadow(color: speech.isRecording ? Color.red.opacity(0.35) : VSColor.purple.opacity(0.3), radius: 8, x: 0, y: 3)
                 .contentShape(Circle())
                 .scaleEffect(speech.isRecording ? 1.05 : 1.0)
                 .animation(.easeOut(duration: 0.12), value: speech.isRecording)

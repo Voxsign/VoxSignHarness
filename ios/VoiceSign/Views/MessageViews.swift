@@ -8,12 +8,31 @@
 
 import SwiftUI
 
-// MARK: - 配色（蓝白主题，对齐 web styles.css：主蓝 #1f6bff）
+// MARK: - 配色（豆包视觉：主蓝 #3370FF → 紫 #8B5CF6 渐变、白底浅灰会话、大圆角）
 
 enum VSColor {
-    static let blue = Color(red: 0.12, green: 0.42, blue: 1.0)
-    static let bg = Color(red: 0.95, green: 0.96, blue: 0.99)
+    /// 豆包主蓝 #3370FF
+    static let blue = Color(red: 0.20, green: 0.44, blue: 1.0)
+    /// 豆包渐变紫 #8B5CF6
+    static let purple = Color(red: 0.545, green: 0.36, blue: 0.965)
+    /// 会话背景（浅灰，豆包式）
+    static let bg = Color(red: 0.949, green: 0.953, blue: 0.965)
     static let harnessBubble = Color.white
+    /// 卡片级阴影（App Store 精致度：柔和低透明度，不抢内容）
+    static let shadow = Color.black.opacity(0.06)
+    /// 用户气泡高光（顶部左上更亮，增加立体感）
+    static var userBubbleGradientHigh: LinearGradient {
+        LinearGradient(colors: [Color(red: 0.32, green: 0.55, blue: 1.0), purple],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    /// 品牌渐变（标题/按钮统一用）
+    static var brandGradient: LinearGradient {
+        LinearGradient(colors: [blue, purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    /// 用户气泡：蓝紫渐变（豆包式）
+    static var userBubbleGradient: LinearGradient {
+        LinearGradient(colors: [blue, purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
     static let userBubble = blue
     static let receiptGreen = Color(red: 0.90, green: 0.97, blue: 0.91)
     static let confirmRed = Color(red: 0.97, green: 0.90, blue: 0.90)
@@ -56,8 +75,10 @@ struct UserBubbleView: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 12).padding(.vertical, 8)
             }
-            .background(VSColor.userBubble)
-            .cornerRadius(16)
+            .background(VSColor.userBubbleGradientHigh)
+            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18,
+                                              bottomTrailingRadius: 4, topTrailingRadius: 18))
+            .shadow(color: VSColor.shadow, radius: 6, x: 0, y: 2)
         }
     }
 }
@@ -70,7 +91,9 @@ struct HarnessBubbleView: View {
                 .foregroundColor(.black)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(VSColor.harnessBubble)
-                .cornerRadius(16)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
+                                                  bottomTrailingRadius: 18, topTrailingRadius: 18))
+                .shadow(color: VSColor.shadow, radius: 5, x: 0, y: 2)
             Spacer()
         }
     }
@@ -107,7 +130,7 @@ struct TypingView: View {
                     ForEach(0..<3) { i in
                         let phase = sin(t * 4 + Double(i) * 0.9)
                         Circle()
-                            .fill(Color.gray.opacity(0.6))
+                            .fill(VSColor.blue.opacity(0.75))
                             .frame(width: 7, height: 7)
                             .offset(y: max(0, phase) * -4)
                     }
@@ -176,7 +199,26 @@ struct ReceiptCardView: View {
                 .foregroundColor(.black)
                 .padding(.horizontal, 12).padding(.vertical, 9)
                 .background(VSColor.harnessBubble)
-                .cornerRadius(16)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
+                                                  bottomTrailingRadius: 18, topTrailingRadius: 18))
+            // 图片回执（闭环验收场景）：后台截图回执含 "/screenshots/<file>.png" → 直接渲染图片。
+            // 图片 URL = 当前活动服务器 base + 相对路径（截图经 /screenshots/ 静态端点提供）。
+            if let shotURL = ScreenshotURL.from(receipt.result, base: SettingsStore.shared.base) {
+                AsyncImage(url: shotURL) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFit()
+                            .frame(maxWidth: 240)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: VSColor.shadow, radius: 5, x: 0, y: 2)
+                    case .failure:
+                        Text("（截图加载失败）").font(.system(size: 12)).foregroundColor(.secondary)
+                    default:
+                        ProgressView().frame(width: 80, height: 80)
+                    }
+                }
+                .padding(.leading, 4)
+            }
             // 撤销小字（I07 保留；I17 命中区≥44pt，且支持口答"撤销"）
             if undo.show {
                 Button(action: onRollback) {
@@ -188,5 +230,25 @@ struct ReceiptCardView: View {
                 }
             }
         }
+    }
+}
+
+
+// MARK: - 图片回执 URL 解析
+
+enum ScreenshotURL {
+    /// 从回执文本提取 /screenshots/<file>.png 相对路径，拼上当前服务器 base。
+    static func from(_ text: String, base: String) -> URL? {
+        guard let rng = text.range(of: "/screenshots/") else { return nil }
+        var end = text.index(rng.lowerBound, offsetBy: "/screenshots/".count)
+        var path = "/screenshots/"
+        while end < text.endIndex {
+            let ch = text[end]
+            if ch == " " || ch == "\n" || ch == "（" || ch == ")" || ch == "。" { break }
+            path.append(ch)
+            end = text.index(after: end)
+        }
+        guard path.hasSuffix(".png") else { return nil }
+        return URL(string: base + path)
     }
 }

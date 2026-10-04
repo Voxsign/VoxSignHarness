@@ -38,25 +38,7 @@ struct SettingsView: View {
                 // —— 服务器管理（豆包式：连哪台电脑/连云，多台可切换）——
                 Section("服务器（可多台切换）") {
                     ForEach(settings.servers) { srv in
-                        HStack {
-                            Image(systemName: srv.id == settings.activeServerID ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(srv.id == settings.activeServerID ? .green : .gray)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(srv.name).font(.system(size: 14, weight: .medium))
-                                Text(srv.base).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
-                            }
-                            Spacer()
-                            if srv.id == settings.activeServerID {
-                                Text("当前").font(.system(size: 11)).foregroundColor(.green)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture { settings.switchServer(srv.id); conn.probe() }
-                        .swipeActions {
-                            if settings.servers.count > 1 {
-                                Button("删除", role: .destructive) { settings.removeServer(srv.id) }
-                            }
-                        }
+                        ServerRowView(srv: srv, settings: settings, conn: conn)
                     }
                     Button {
                         showAdd = true
@@ -129,7 +111,7 @@ struct SettingsView: View {
                 // —— 后台能力 ——
                 #if canImport(Speech)
                 Section("后台能力") {
-                    Toggle("常听模式（后台持续收音）", isOn: $speech.alwaysOn)
+                    // v2.4：本地识别全部移除，语音走 ASR 服务器校准（按住说话，无常听模式）。
                     Button("补投离线队列") {
                         Task { _ = await model.flushQueue() }
                     }
@@ -185,5 +167,36 @@ struct SettingsView: View {
             }
         }
         .presentationDetents([.height(320)])
+    }
+}
+
+
+// MARK: - 服务器行（拆分自 ForEach，规避 Swift 类型检查超时）
+
+private struct ServerRowView: View {
+    let srv: ServerConfig
+    @ObservedObject var settings: SettingsStore
+    @ObservedObject var conn: ConnectivityService
+
+    var body: some View {
+        HStack {
+            Image(systemName: srv.id == settings.activeServerID ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(srv.id == settings.activeServerID ? .green : .gray)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(srv.name).font(.system(size: 14, weight: .medium))
+                Text(srv.base).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if srv.id == settings.activeServerID {
+                Text("当前").font(.system(size: 11)).foregroundColor(.green)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { settings.switchServer(srv.id); conn.probe() }
+        .swipeActions {
+            if settings.servers.count > 1 {
+                Button("删除", role: .destructive) { settings.removeServer(srv.id) }
+            }
+        }
     }
 }
