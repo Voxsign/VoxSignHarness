@@ -681,6 +681,17 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo:
+		// 自迭代第二段（2026-10-04）：语音自举注册的契约能力优先执行。
+		// 文本命中已注册能力（如「远程控制电脑」）→ 调真实执行器，不再回"无法远程控制"。
+		if capName := o.matchVoiceContract(&it); capName != "" {
+			args := map[string]any{
+				"cap":     capName,
+				"text":    it.CorrectedText,
+				"pattern": it.CorrectedText,
+				"log_dir": logDir,
+			}
+			return []contract.Receipt{o.run("remote-desktop", args)}
+		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
 			pattern = it.Params["object"]
@@ -742,6 +753,28 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 		recv.Err = err.Error()
 	}
 	return recv
+}
+
+// matchVoiceContract 检测口语文本是否命中语音自举注册的契约能力（Source=="voice"）。
+// 命中返回能力名（如「远程控制电脑」），未命中返回空串。仅查询类意图走此优先路径，
+// 执行动作类意图仍走各自专用执行器（test/git/file…）。
+func (o *Options) matchVoiceContract(it *contract.Intent) string {
+	if o.Tools == nil {
+		return ""
+	}
+	text := it.CorrectedText
+	if text == "" {
+		text = it.RawText
+	}
+	for _, c := range o.Tools.All() {
+		if c.Source != "voice" || c.Name == "" {
+			continue
+		}
+		if strings.Contains(text, c.Name) {
+			return c.Name
+		}
+	}
+	return ""
 }
 
 // ---------- 多步编排（ORCHESTRATE，组织者式路由） ----------
@@ -2521,7 +2554,9 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		// 四行回执的"结果"展示回答文本（截断 120），不再只显示"OK（自动执行）"空壳。
 		if len(rs) > 0 {
 			if s := strings.TrimSpace(rs[0].Stdout); s != "" && !strings.HasPrefix(s, "{") {
-				view.Result = truncateStr(s, 120)
+				// 2026-10-04 远程控制/查询类回执提升截断到 400（此前 120 把
+				// "桌面列表+进程列表" 多行结果吞掉后半，用户要求"怎么处理的要让我了解"）。
+				view.Result = truncateStr(s, 400)
 			}
 		}
 	}

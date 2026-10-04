@@ -88,6 +88,10 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 		out, execErr, ok = e.execSearch(args)
 	case "verify":
 		out, execErr, ok = e.execVerify(args)
+	case "remote-desktop":
+		// 2026-10-04 自迭代第二段：语音自举注册的「远程控制电脑」能力 → 真实执行器
+		//（列桌面/截图/运行应用/只读命令白名单）。机器=用户自己的 Mac（harness 宿主）。
+		out, execErr, ok = e.execRemote(args)
 	default:
 		recv.Blocked = fmt.Sprintf("执行器未实现工具 %q（仅内置六工具可执行）", tool)
 		recv.DurationMs = time.Since(start).Milliseconds()
@@ -277,4 +281,127 @@ func (e *Executor) execVerify(args map[string]any) (string, string, bool) {
 		detail += "\n" + res.Evidence
 	}
 	return detail, "", ok
+}
+
+// ---------- 远程控制电脑（自迭代第二段：语音注册契约 → 真实执行器） ----------
+
+// remoteReadOnlyCmds 只读命令白名单（远程控制仅允许无副作用的查询类命令；
+// 写类操作走既有 git/file 执行器与门禁，不在此放开）。
+var remoteReadOnlyCmds = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true,
+	"pwd": true, "whoami": true, "date": true, "ps": true,
+	"df": true, "du": true, "echo": true, "uptime": true,
+}
+
+// execRemote 执行「远程控制电脑」能力：按文本子动作列桌面文件、截取屏幕、
+// 列出运行应用、或执行白名单只读命令。输出人话结果（≤15 项），截图保存到
+// log_dir/screenshots/ 并报告路径（iOS 端以文本回执展示）。
+func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
+	text := str(args, "text")
+	logDir := str(args, "log_dir")
+	var b strings.Builder
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "无法定位用户主目录: " + err.Error(), false
+	}
+
+	// ① 白名单只读命令：文本里出现 "运行 ls / 执行 cat / 帮我跑 df" 等 → 解析命令执行。
+	if cmd := extractReadOnlyCmd(text); cmd != "" {
+		argv := strings.Fields(cmd)
+		out, errStr, ok := e.runCmd(argv)
+		if ok {
+			b.WriteString("命令「" + cmd + "」执行结果：\n" + out)
+			return b.String(), "", true
+		}
+		b.WriteString("命令「" + cmd + "」执行失败：" + errStr + "\n")
+	}
+
+	// ② 桌面文件列表（"看看桌面上有什么"）。
+	desktop := filepath.Join(home, "Desktop")
+	if entries, err := os.ReadDir(desktop); err == nil {
+		var names []string
+		for _, ent := range entries {
+			if len(names) >= 15 {
+				names = append(names, "…等共 "+fmt.Sprintf("%d", len(entries))+" 项")
+				break
+			}
+			suffix := ""
+			if ent.IsDir() {
+				suffix = "/"
+			}
+			names = append(names, ent.Name()+suffix)
+		}
+		b.WriteString("桌面共 " + fmt.Sprintf("%d", len(entries)) + " 项：" + strings.Join(names, "、") + "\n")
+	} else {
+		b.WriteString("（无法读取桌面目录：" + err.Error() + "）\n")
+	}
+
+	// ③ 屏幕截图（screencapture 需屏幕录制权限；失败不阻塞，提示权限）。
+	// 中文口语匹配："截个图"中间夹"个"字，"截个图/截屏/截图/桌面/看看"全收。
+	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
+		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") ||
+		strings.Contains(text, "看看") {
+		shotDir := filepath.Join(logDir, "screenshots")
+		if err := os.MkdirAll(shotDir, 0o755); err == nil {
+			png := filepath.Join(shotDir, "screen-"+time.Now().Format("20060102-150405")+".png")
+			if err := exec.Command("screencapture", "-x", png).Run(); err != nil {
+				b.WriteString("截图失败（可能缺「屏幕录制」权限或屏幕不可用）：" + err.Error() + "\n")
+			} else if fi, err := os.Stat(png); err != nil || fi.Size() == 0 {
+				b.WriteString("截图未生成（文件为空或不可读）\n")
+			} else {
+				b.WriteString("已截图：" + png + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
+			}
+		}
+	}
+
+	// ④ 运行中的应用（"打开/运行/有哪些应用"）。
+	if strings.Contains(text, "应用") || strings.Contains(text, "运行") || strings.Contains(text, "程序") {
+		if out, errStr, ok := e.runCmd([]string{"ps", "-axo", "comm"}); ok {
+			lines := strings.Split(out, "\n")
+			seen := map[string]bool{}
+			var apps []string
+			for _, ln := range lines {
+				name := strings.TrimSpace(ln)
+				if name == "" || strings.HasPrefix(name, "comm") {
+					continue
+				}
+				base := filepath.Base(name)
+				if !seen[base] && !strings.HasPrefix(base, "/") {
+					seen[base] = true
+					apps = append(apps, base)
+				}
+				if len(apps) >= 15 {
+					break
+				}
+			}
+			if len(apps) > 0 {
+				b.WriteString("当前运行的主要进程：" + strings.Join(apps, "、") + "\n")
+			}
+		} else {
+			b.WriteString("进程列表失败：" + errStr + "\n")
+		}
+	}
+
+	if b.Len() == 0 {
+		b.WriteString("远程控制能力已就绪。可以说「看看桌面上有什么」「截个图」「运行 ls 看看」或「有哪些应用在跑」。")
+	}
+	return b.String(), "", true
+}
+
+// extractReadOnlyCmd 从口语文本提取白名单只读命令（"运行 ls -la" / "帮我 cat xxx"）。
+// 只接受 remoteReadOnlyCmds 白名单内的命令名；其余一律不执行（防注入）。
+func extractReadOnlyCmd(text string) string {
+	prefixes := []string{"运行 ", "执行 ", "帮我跑 ", "跑一下 ", "用 ", "命令 "}
+	for _, p := range prefixes {
+		if idx := strings.Index(text, p); idx >= 0 {
+			rest := strings.TrimSpace(text[idx+len(p):])
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				if remoteReadOnlyCmds[fields[0]] {
+					return strings.Join(fields, " ")
+				}
+			}
+		}
+	}
+	return ""
 }
