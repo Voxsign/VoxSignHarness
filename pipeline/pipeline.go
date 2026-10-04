@@ -1213,6 +1213,13 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空 → 惰性自动注册 project 域，
 	// scope 指向 git 仓库根，落盘到日志目录 spaces/，长任务即开即用（不覆盖已有注册）。
 	o.ensureProjectSpace()
+	// 2026-10-04 接线（断链修复）：kind=implement 的实现类长任务 → execImplement
+	//（LLM 生成 + 证据门多轮收敛 + git 提交）。此前 llmGenerateImplement/EvidenceGaps
+	// 只有定义无调用者 → 实现类任务全部落到文档整理分支（读文档→汇总→写全景文档），
+	// 证据门永不触发——这是"无人工一次成功"主线的架构性断链。
+	if it.Params != nil && it.Params["kind"] == "implement" {
+		return o.execImplement(ctx, it, logDir)
+	}
 	root := o.projectRootForCommit(it)
 	if root == "" {
 		return []contract.Receipt{{Tool: "orchestrate", OK: false,
@@ -1289,6 +1296,75 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 
 	// 5) 定向 git 提交（只 add 生成文件，绝不 git add -A）。
 	crecv := o.commitTargetPath(root, cleanTarget, "vhs(orchestrate): 生成《"+title+"》多步编排落地")
+	crecv.Seq = nextSeq()
+	receipts = append(receipts, crecv)
+	return receipts
+}
+
+// execImplement（2026-10-04 接线）：kind=implement 的实现类长任务——
+// LLM 按需求文档生成 Go 服务到 harness-output/<slug>/，证据门多轮收敛（≤5 轮，
+// 缺口回喂下一轮 memory），无缺口后 git 提交。doc 优先取 o.Document（server document
+// 通道），回退 it.Params["document"]。
+func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	root := o.projectRootForCommit(it)
+	if root == "" {
+		return []contract.Receipt{{Tool: "implement", OK: false,
+			Err: "实现类任务需 project 域且 scope 指向项目根（projectRootForCommit 未解析）"}}
+	}
+	title := strings.TrimSpace(it.Params["target_doc"])
+	if title == "" {
+		title = "语音适配层"
+	}
+	doc := o.Document
+	if doc == "" {
+		doc = it.Params["document"]
+	}
+	if doc == "" {
+		return []contract.Receipt{{Tool: "implement", OK: false,
+			Err: "实现类任务缺少需求文档（document 通道为空；POST /v1/tasks 需带 document 全文）"}}
+	}
+	skelDir := filepath.Join(root, "harness-output", asciiSlug(title))
+	var receipts []contract.Receipt
+	nextSeq := func() int { return len(receipts) + 1 }
+	memory := ""
+	done := false
+	const maxImplRounds = 5
+	for round := 1; round <= maxImplRounds && !done; round++ {
+		files, errMsg := o.llmGenerateImplement(ctx, title, doc, skelDir, memory)
+		if errMsg != "" {
+			receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement",
+				OK: false, Err: errMsg})
+			break
+		}
+		for name := range files {
+			p := filepath.Join(skelDir, name)
+			clean, ok := space.ResolveScopePath(root, p)
+			if !ok {
+				receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement",
+					OK: false, Err: "白名单外写路径被拒绝: " + p})
+				continue
+			}
+			receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement", OK: true,
+				Stdout: "writed: " + clean})
+		}
+		out := &Outcome{Receipts: receipts}
+		gaps := o.EvidenceGaps(out)
+		if len(gaps) == 0 {
+			done = true
+			receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "evidence", OK: true,
+				Stdout: fmt.Sprintf("证据门 PASS（round %d，无缺口）", round)})
+			break
+		}
+		memory = "上一轮证据门缺口（必须修复后才能完成）：\n" + strings.Join(gaps, "\n")
+		receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "evidence", OK: false,
+			Err:  fmt.Sprintf("round %d 证据门 %d 项缺口", round, len(gaps)),
+			Stdout: strings.Join(gaps, "\n")})
+	}
+	if !done {
+		receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement", OK: false,
+			Err: fmt.Sprintf("证据门 %d 轮未收敛（已达最大轮次，需人工修订）", maxImplRounds)})
+	}
+	crecv := o.commitTargetPath(root, skelDir, "vhs(implement): "+title+" 实现（证据门收敛）")
 	crecv.Seq = nextSeq()
 	receipts = append(receipts, crecv)
 	return receipts

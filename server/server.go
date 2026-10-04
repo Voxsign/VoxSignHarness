@@ -103,6 +103,7 @@ func stepName(status string) string {
 
 // taskState 是一次异步任务的完整状态（含 rollback 所需的可逆/备份信息）。
 type taskState struct {
+	Document string // 需求文档全文（实现类任务；续跑/回答时随 Options.Document 回传）
 	ID        string               `json:"task_id"`
 	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
@@ -746,16 +747,18 @@ type tasksPostReq struct {
 	Space     string `json:"space,omitempty"`
 	RequestID string `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Mode      string `json:"mode,omitempty"`       // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
+	Document  string `json:"document,omitempty"`   // 需求文档全文（实现类任务；execImplement 证据门/LLM 生成共用）
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, mode string) *taskState {
+func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
 		Mode:      mode, // voice→确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
+		Document:  document,
 		Status:    stRunning,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
@@ -772,13 +775,14 @@ func (s *Server) spawnTask(text, spaceHint, requestID, mode string) *taskState {
 	s.persist(ts)
 	s.mu.Unlock()
 
-	s.runPipeline(ts, ctx, text, spaceHint)
+	s.runPipeline(ts, ctx, text, spaceHint, document)
 	return ts
 }
 
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
-func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint string) {
+func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint, document string) {
 	o := *s.tmpl
+	o.Document = document
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
 		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
@@ -973,7 +977,7 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 	// 形成澄清循环。这给回问文案承诺的「先说要先做哪个」一个**确定语义**：
 	// 用户说的那句，就是要执行的那一件。
 	if ts.Outcome != nil && ts.Outcome.Intent.Conflict == contract.ConflictMultiAction {
-		s.runPipeline(ts, ctx, strings.TrimSpace(answer), "")
+		s.runPipeline(ts, ctx, strings.TrimSpace(answer), "", ts.Document)
 		return true
 	}
 
@@ -993,7 +997,7 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 		// 无可替换指代词的兜底路径：仍要剥离候选 id 前缀，避免两条路径处理不一致（评审 S4）。
 		substituted = " 澄清：" + stripOptionPrefix(answer)
 	}
-	s.runPipeline(ts, ctx, prefix+substituted, "")
+	s.runPipeline(ts, ctx, prefix+substituted, "", ts.Document)
 	return true
 }
 
@@ -1023,7 +1027,7 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
