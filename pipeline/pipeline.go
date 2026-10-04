@@ -1664,7 +1664,8 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		}
 		lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 	}
-	for i := 1; i <= 3; i++ {
+	// 2026-10-04 加码：3→5（LLM 修复轮生成新代码可能引入非 import/变量错误，多给机会）
+	for i := 1; i <= 5; i++ {
 		curHead := truncateStr(files["main.go"], 2500)
 		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请在以下当前代码基础上**仅修复编译错误**（其他逻辑保持不变）后输出**完整 main.go**。\n\n当前 main.go（截断开头）：\n"+curHead+"\n\n编译错误：\n"+lastErr, req)
 		if mainCode == "" {
@@ -1697,7 +1698,15 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 		}
 	}
-	return nil, "编译迭代 3 轮仍未通过"
+	// 2026-10-04 修复：编译迭代耗尽仍返回最后一次写盘产物（编译缺口由证据门判据 3 报出、
+	// 修订轮继续逼近——此前返回 nil 直接 break，8 轮上限形同虚设（真跑：round 2 编译失败即终）。
+	lastNote := "编译迭代耗尽：最后编译错误——"
+	if lastErr != "" {
+		lastNote += truncateStr(lastErr, 300)
+	} else {
+		lastNote += "未知"
+	}
+	return files, lastNote
 }
 
 // parseGenFiles 解析 LLM 返回的 {"files":{...}} JSON（容忍 ```json 围栏与前后杂质）。
