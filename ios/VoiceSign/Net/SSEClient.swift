@@ -16,10 +16,18 @@ final class SSEClient {
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
+        // 修复卡死根源（T2）：waitsForConnectivity=true 时，网络不可达会让
+        // URLSession 无限期等待连接建立 —— 手机连不上 server 时 UI 就"卡死"。
+        // 改走显式竞速超时（connectTimeout），连不上 10s 内抛错给上层重连决策。
+        cfg.waitsForConnectivity = false
+        // 60s 仅作 idle 超时（流上长时间无任何字节），SSE keepalive 足够。
         cfg.timeoutIntervalForRequest = 60
-        cfg.waitsForConnectivity = true
         return URLSession(configuration: cfg)
     }()
+
+    /// 建立连接的最长等待（秒）：TCP/HTTP 握手阶段竞速超时，超时按"连接失败"处理。
+    /// 上层（AppModel.openSSE）会按退避策略重连，不会无限挂起。
+    private let connectTimeout: TimeInterval = 10
 
     /// 订阅某任务的事件流。
     /// - Parameter taskId: 任务 id
@@ -47,7 +55,22 @@ final class SSEClient {
             let parser = SSEParser()
             let task = Task {
                 do {
-                    let (bytes, resp) = try await self.session.bytes(for: req)
+                    // T2 连接竞速超时：URLSession 的 timeoutIntervalForRequest 只覆盖
+                    // idle 超时，不覆盖"连不上"——用 withThrowingTaskGroup 加一个
+                    // connectTimeout 的哨兵任务，谁先失败/完成即裁决。
+                    let (bytes, resp): (URLSession.AsyncBytes, URLResponse) = try await withThrowingTaskGroup(of: (URLSession.AsyncBytes, URLResponse).self) { group in
+                        group.addTask {
+                            let (b, r) = try await self.session.bytes(for: req)
+                            return (b, r)
+                        }
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: UInt64(self.connectTimeout * 1_000_000_000))
+                            throw APIError.transport("SSE 连接超时（\(Int(self.connectTimeout))s，服务不可达？）")
+                        }
+                        let first = try await group.next()!
+                        group.cancelAll()
+                        return first
+                    }
                     guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                         continuation.finish(throwing: APIError.http((resp as? HTTPURLResponse)?.statusCode ?? 0,
                                                                    "SSE 连接失败"))

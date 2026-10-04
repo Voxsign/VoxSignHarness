@@ -31,6 +31,11 @@ final class SpeechRecognizer: ObservableObject {
             }
         }
     }
+    /// T2 豆包式交互：识别到一段完整语音（final 且有内容）时回调文本。
+    /// AppModel 设置后即"开口即达"——说完自动提交，无需再按发送键。
+    var onFinalSegment: ((String) -> Void)?
+    /// 豆包式"按住说话"模式：按住录音、松手 endAudio 触发 final → 自动提交。
+    private var holdMode = false
 
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -61,11 +66,45 @@ final class SpeechRecognizer: ObservableObject {
         isRecording ? stop() : start()
     }
 
+    // MARK: - 豆包式"按住说话"（主交互）
+
+    /// 按住开始录音（holdMode=true → final 后直接提交，不进入常听循环）。
+    func startHold() {
+        holdMode = true
+        // T3 豆包式：用户要说话，先停掉上一段回复朗读（录音 session 也会切走 playback）。
+        VoiceOutputService.shared.stop()
+        start()
+    }
+
+    /// 松手：endAudio 促使识别尽快出 final → 回调 onFinalSegment → AppModel 自动提交。
+    /// 不 cancel task（否则 final 结果会丢）；final 回调里会自行清理。
+    func stopHold() {
+        holdMode = false
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        request?.endAudio()
+        request = nil
+        isRecording = false
+    }
+
     func start() {
-        guard let recognizer = recognizer, recognizer.isAvailable else {
+        // 豆包式：按下瞬间立即进录音态（UI 先反馈，不等引擎就绪）。
+        // 先清掉上一轮未决任务（final 未到/异常挂起时，新按住不会被旧任务挡住）。
+        task?.cancel()
+        task = nil
+        DispatchQueue.main.async {
+            self.transcript = ""
+            self.isRecording = true
+        }
+        guard let recognizer = recognizer else {
+            DispatchQueue.main.async { self.isRecording = false }
             unavailable = true
             return
         }
+        // 不硬拦截 recognizer.isAvailable：Apple 识别服务网络抖动时 isAvailable 可能短暂为 false，
+        // 硬拦截会导致"按都按不住"（按钮毫无反应）。直接发起识别任务，服务不可达时任务自身报错，
+        // UI 反馈已先行，错误路径走 stop()。
         do {
             let session = AVAudioSession.sharedInstance()
             // T1 常听模式：playAndRecord + background 支持后台持续采集（配合 UIBackgroundModes: audio）。
@@ -109,22 +148,40 @@ final class SpeechRecognizer: ObservableObject {
                         self.stop()
                     }
                 } else if result?.isFinal ?? false {
-                    if self.alwaysOn {
-                        // 一段结束：丢弃本次 request，重启一段（引擎与会话保持运行）。
-                        self.request?.endAudio()
-                        self.request = nil
-                        self.task = nil
+                    let text = result?.bestTranscription.formattedString ?? ""
+                    // T2 残留修复（用户实测）：final 一到就 cancel 旧任务 + 清空 transcript，
+                    // 否则旧 recognitionTask 仍可能回调，把上一段内容带进新段/重复提交。
+                    self.task?.cancel()
+                    self.task = nil
+                    self.request?.endAudio()
+                    self.request = nil
+                    DispatchQueue.main.async {
+                        self.transcript = ""
+                    }
+                    if self.alwaysOn && !self.holdMode {
+                        // 一段结束：重启一段（引擎与会话保持运行）。
+                        // T2：完整一句 → 回调 AppModel 自动提交（开口即达）。
+                        if !text.isEmpty {
+                            self.onFinalSegment?(text)
+                        }
                         if self.isRecording {
                             self.beginNewSegment()
                         }
                     } else {
+                        // 按住说话 / 普通点按：final 即停 + 自动提交。
                         self.stop()
+                        if !text.isEmpty {
+                            self.onFinalSegment?(text)
+                        }
                     }
                 }
             }
-            isRecording = true
-            transcript = ""
+            DispatchQueue.main.async {
+                self.isRecording = true
+                self.transcript = ""
+            }
         } catch {
+            DispatchQueue.main.async { self.isRecording = false }
             unavailable = true
             stop()
         }
@@ -133,6 +190,10 @@ final class SpeechRecognizer: ObservableObject {
     /// 常听模式：一段识别结束后原地开新段（复用同一引擎/会话）。
     private func beginNewSegment() {
         guard let recognizer = recognizer, recognizer.isAvailable else { return }
+        // T2 残留修复：开新段前先把上一段显示清掉，新段从空白开始。
+        DispatchQueue.main.async {
+            self.transcript = ""
+        }
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         if #available(iOS 16.0, *) {
@@ -149,12 +210,25 @@ final class SpeechRecognizer: ObservableObject {
             if error != nil {
                 DispatchQueue.main.async { self.stop() }
             } else if result?.isFinal ?? false, self.alwaysOn {
+                let text = result?.bestTranscription.formattedString ?? ""
+                // T2 残留修复：final 一到即 cancel + 清 transcript（同主 start 分支）。
+                self.task?.cancel()
+                self.task = nil
                 self.request?.endAudio()
                 self.request = nil
-                self.task = nil
+                DispatchQueue.main.async {
+                    self.transcript = ""
+                }
+                if !text.isEmpty {
+                    self.onFinalSegment?(text)
+                }
                 if self.isRecording { self.beginNewSegment() }
             } else if result?.isFinal ?? false {
                 self.stop()
+                let text = result?.bestTranscription.formattedString ?? ""
+                if !text.isEmpty {
+                    self.onFinalSegment?(text)
+                }
             }
         }
     }

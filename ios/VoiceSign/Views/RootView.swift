@@ -12,7 +12,11 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RoleBarView()
+            // T3 豆包式简化：不再显示角色条（Planner/Executor/Verifier 收敛进执行卡内部状态）。
+            // 只保留顶部连接状态胶囊 + 打断系统条 + 对话流 + 决策点 + 输入条。
+
+            // T2 连接状态胶囊：绿=在线 · 黄=重连 · 灰=离线排队（网络状态永远透明）
+            ConnectionStatusView()
 
             // 红色打断系统条（可关闭）
             if let bar = model.systemBar {
@@ -33,9 +37,12 @@ struct RootView: View {
                     }
                     .padding(12)
                 }
-                .onChange(of: model.rows.count) { _ in
+                // T2 滚动修复：改用 scrollTick（每次追加气泡 +1），
+                // 确保说完话后 Harness 的回复/执行卡/回执一定滚动到可见。
+                .onChange(of: model.scrollTick) { _ in
                     if let last = model.rows.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        // T3 豆包式：快速轻滚到底（0.1s），不僵硬不打断阅读。
+                        withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
             }
@@ -44,17 +51,7 @@ struct RootView: View {
             DecisionZoneView(decision: model.decision, onAnswer: { ans in model.answer(ans) })
                 .padding(.horizontal, 12)
 
-            // M7 诊断行：上屏显示最近轮询状态/失败原因（DEBUG），避免黑盒"正在处理…"
-            #if DEBUG
-            if !model.diagLine.isEmpty {
-                Text(model.diagLine)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            #endif
-
+            // T3 豆包式：不再显示任何诊断行/轮询标识（保持纯对话流）。
             InputBarView()
         }
         .background(VSColor.bg.ignoresSafeArea())
@@ -69,7 +66,8 @@ struct RootView: View {
         case .user(let b): UserBubbleView(bubble: b)
         case .harness(let b): HarnessBubbleView(bubble: b)
         case .typing: TypingView()
-        case .execCard(let s): ExecCardView(state: s)
+        // T3 豆包式：执行过程不再铺七项流程卡，统一收敛成"三点正在思考"（与豆包一致）。
+        case .execCard: TypingView()
         case .receipt(let r):
             ReceiptCardView(receipt: r.receipt, undo: r.undo, badges: r.badges, onRollback: { model.rollback() })
         }

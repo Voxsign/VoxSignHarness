@@ -30,6 +30,8 @@ struct VoiceSignApp: App {
                     // T1 后台能力：请求通知权限 + 启动时补投离线队列。
                     NotificationService.shared.requestAuthorization()
                     Task { await model.flushQueue() }
+                    // T2 连接感知：启动即探测 server 可达性（顶部胶囊立即亮起）。
+                    ConnectivityService.shared.start()
                 }
         }
     }
