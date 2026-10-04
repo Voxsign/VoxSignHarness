@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -213,7 +214,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("/v1/health", s.auth(s.handleHealth))
+	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
+	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
+	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
 	return mux
+}
+
+// handleScreenshot 提供远程控制截图（图片回执）。iOS 端用 <base>/screenshots/<name> 直接渲染。
+func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
+	name := path.Base(strings.TrimPrefix(r.URL.Path, "/screenshots/"))
+	if name == "." || name == "/" || !strings.HasSuffix(name, ".png") {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	p := filepath.Join(s.cfg.Global.LogDir, "screenshots", name)
+	if fi, err := os.Stat(p); err != nil || fi.IsDir() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	http.ServeFile(w, r, p)
 }
 
 func (s *Server) Start() error {

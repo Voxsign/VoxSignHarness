@@ -829,6 +829,15 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 			}
 		}
 	}
+	// ③ 动作触发：截图/列桌面（"给我截个图"不含"远程控制"字样，但意图明确）。
+	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
+		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
+		}
+	}
 	if strings.Contains(text, "控制电脑") || strings.Contains(text, "控制后台") ||
 		strings.Contains(text, "远程控制") || strings.Contains(text, "控制这台") ||
 		strings.Contains(text, "控制那台") {

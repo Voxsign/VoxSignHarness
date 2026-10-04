@@ -357,7 +357,9 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 			} else if fi, err := os.Stat(png); err != nil || fi.Size() == 0 {
 				b.WriteString("截图未生成（文件为空或不可读）\n")
 			} else {
-				b.WriteString("已截图：" + png + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
+				// 图片回执：输出相对 URL（/screenshots/<file>），iOS 端拼 base 直接渲染；
+				// 不再输出 Mac 本地绝对路径（真机无法访问）。
+				b.WriteString("已截图：/screenshots/" + filepath.Base(png) + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
 			}
 		}
 	}
