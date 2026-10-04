@@ -676,6 +676,169 @@ var (
 	orchSaveWords     = []string{"保存提交", "保存", "生成", "落成", "写成"}
 )
 
+
+// 实现类长程任务（实现/搭建服务类）结构性识别词表 —— 修订卡2 层1+2（2026-10-03）。
+//
+// 范式对齐 REGISTER_TOOL 的双向回归法：结构 = 实现动词在前、能力名词在后（动词支配名词），
+// 中间允许修饰成分（形容词/定语）；问句成分（怎么/如何/为什么…）出现即排除 ——
+// 「这个系统是怎么实现的」「如何实现一个缓存」不得误判。
+//
+// 命中后：纯实现结构或带《…》文档引用 → ORCHESTRATE(kind=implement)，
+// 长程实现任务由编排引擎去拆解，分类层只做识别（对齐修订卡2 层2）。
+var (
+	implementVerbs   = []string{"实现", "搭建", "开发", "构建", "重构", "编码", "写一个", "造一个", "做一个", "写一套", "落地一个", "建一个"} // F1 修复：真实长叙述「建一个 OT 运营数据平台…帮我规划」→ ORCHESTRATE
+	// 修订类动词（洞 2，2026-10-04 无人工干预测试：修订/补齐/完善表述未命中 implement → 任务直接 done 0 轮无产物）。
+	// 命中修订类动词时额外要求实现域强信号（implDomainWords），防"修订文档"误判。
+	reviseVerbs      = []string{"修订", "补齐", "完善", "修正", "修复", "整改", "接着做", "继续做", "继续改", "按反馈", "根据反馈", "按验收", "根据验收"}
+	implDomainWords  = []string{"服务", "后台", "系统", "程序", "代码", "端点", "bug", "编译", "跑通", "上线", "实现", "接口", "引擎", "网关"}
+	implementNouns   = []string{"服务", "后台", "系统", "模块", "平台", "程序", "工具", "组件", "引擎", "网关", "中间件", "需求说明书"}
+	questionExcludes = []string{"怎么", "如何", "为什么", "哪能", "能否", "怎么弄", "怎么做", "怎么样"}
+
+	// —— 技能调用（线 C 修订卡 2026-10-03）——
+	skillInvokeVerbs = []string{"调用", "使用", "用", "按", "按照", "依据", "根据", "让"}
+	skillNames       = []string{"校验与对齐", "校准与对齐", "validate-align", "对齐", "校验", "校准",
+		"plain-explainer", "解释", "检索", "写作", "翻译", "合规", "审阅", "报价", "文案"}
+	skillActionWords = []string{"校准", "对齐", "校验", "检查", "审阅", "分析", "检索", "总结", "翻译", "编写", "生成", "输出"}
+)
+
+// detectSkillInvocation 判定文本是否为"调用/使用某技能做某事"（线 C 修订卡）。
+// 命中返回 ORCHESTRATE + params{kind=skill, skill_name?, action?}。
+// 触发：含 "技能" 且（调用动词 ∪ 技能名直接出现）→ 技能调用意图。
+// 问句排除（"怎么用技能…"是询问不是调用）。
+func detectSkillInvocation(text string) (string, map[string]string, bool) {
+	if containsAny(text, questionExcludes) {
+		return "", nil, false
+	}
+	if !containsAny(text, []string{"技能"}) {
+		return "", nil, false
+	}
+	params := map[string]string{"kind": "skill"}
+	invoked := false
+	// ① 显式技能名出现（"校验与对齐技能"/"validate-align 技能"）→ 强信号
+	for _, n := range skillNames {
+		if strings.Contains(text, n) {
+			if !strings.Contains(text, "怎么") && !strings.Contains(text, "如何") {
+				params["skill_name"] = n
+				invoked = true
+				break
+			}
+		}
+	}
+	// ② 调用动词 + "技能" + 动作域词（"调用技能做校准/输出校准报告"）
+	//   收紧（2026-10-03 评审）：纯"使用技能做X"（X 非动作域）不判——避免
+	//   "实现一个使用技能的推荐系统"被技能检测器拦截（应走实现类）。
+	if !invoked {
+		hasInvokeVerb := false
+		for _, v := range skillInvokeVerbs {
+			if strings.Contains(text, v) {
+				hasInvokeVerb = true
+				break
+			}
+		}
+		if hasInvokeVerb {
+			for _, a := range skillActionWords {
+				if strings.Contains(text, a) {
+					params["action"] = a
+					invoked = true
+					break
+				}
+			}
+		}
+	}
+	if !invoked {
+		return "", nil, false
+	}
+	return contract.IntentOrchestrate, params, true
+}
+
+// detectImplementOrchestrate 判定文本是否为"实现/搭建某能力系统"的长程实现任务。
+// 命中返回 ORCHESTRATE + params{kind=implement, target_doc?}。
+func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
+	// 问句排除：含 怎么/如何/为什么… = 询问实现方式，不是实现任务。
+	if containsAny(text, questionExcludes) {
+		return "", nil, false
+	}
+	vi, ni := -1, -1
+	// 通用实现动词（实现/搭建/开发…）照原逻辑；修订类动词（修订/补齐/完善…）
+	// 必须同时命中实现域强信号（implDomainWords），否则不是实现任务（防"修订文档"误判）。
+	for _, w := range implementVerbs {
+		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
+			// 2026-10-03 真跑发现：动词命中必须**不在书名号《…》内**——
+			// 「整理成《全景开发文档》并保存提交」的"开发"是文档名成分，误当实现动词
+			// ⇒ 整理类被误判 implement（L-01 验收真跑，见 /tmp/l01_confirm.txt）。
+			if insideBookTitle(text, idx, idx+len(w)) {
+				continue
+			}
+			// 2026-10-04 洞2：动词后紧跟"计划/方案/文档/报告/步骤"时是名词短语
+			//（如"实现计划"），不是实现动作 → 跳过（"把实现计划修订一下…"）。
+			if strings.HasPrefix(text[idx+len(w):], "计划") || strings.HasPrefix(text[idx+len(w):], "方案") ||
+				strings.HasPrefix(text[idx+len(w):], "文档") || strings.HasPrefix(text[idx+len(w):], "报告") ||
+				strings.HasPrefix(text[idx+len(w):], "步骤") {
+				continue
+			}
+			vi = idx
+		}
+	}
+	reviseHit := false
+
+	for _, w := range reviseVerbs {
+		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
+			if insideBookTitle(text, idx, idx+len(w)) {
+				continue
+			}
+			if !containsAny(text, implDomainWords) {
+				continue // 修订类无实现域信号（如"修订这份文档"）→ 不是实现任务
+			}
+			vi = idx
+			reviseHit = true
+		}
+	}
+	// 名词必须在**动词之后**查找（text[vi:]）：
+	// 「《个性化ASR后台需求说明书v2》实现一个…后台服务」里书名号中的"后台"是定语成分，
+	// 若全句找最早名词会得到 ni<vi 的假阴性（2026-10-03 真跑发现，见 zz_debug 探针）。
+	if vi >= 0 {
+		for _, w := range implementNouns {
+			if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
+				ni = idx + vi // 还原为绝对位置
+			}
+		}
+		// 修订类动词的名词信号放宽到实现域词（端点/代码/接口/bug/编译/跑通…）：
+		// 「把缺失的 /v1/blacklist 端点补齐」无 implementNouns 实体词，靠实现域词兜底。
+		if reviseHit {
+			for _, w := range implDomainWords {
+				if idx := strings.Index(text[vi:], w); idx >= 0 && (ni < 0 || idx < ni) {
+					ni = idx + vi
+				}
+			}
+			if ni < 0 && containsAny(text, implDomainWords) {
+				// 修订宾语常在动词前（"把缺失的端点补齐"）：全文实现域词命中即视名词信号成立。
+				ni = vi + 1
+			}
+		}
+		// 指代放宽（2026-10-03 上下文槽）：动词命中且**全文**含指代词（这份/该文档）
+		// 也视为名词信号——「按这份需求说明书继续实现并提交」无实体名词，靠槽解析目标。
+		// 查全文而非 text[vi:]：指代词常居动词前（"按这份需求说明书**继续实现**"）。
+		if ni < 0 {
+			for _, d := range []string{"这份", "该文档", "此文档", "这个", "这些", "它", "那"} {
+				if strings.Contains(text, d) {
+					ni = vi + 1
+					break
+				}
+			}
+		}
+	}
+	// 动词支配名词：动词必须存在且动词之后有名词。
+	if vi < 0 || ni < 0 || ni <= vi {
+		return "", nil, false
+	}
+	params := map[string]string{"kind": "implement"}
+	if title := extractBookTitle(text); title != "" {
+		params["target_doc"] = title
+	}
+	return contract.IntentOrchestrate, params, true
+}
+
+
 // detectOrchestrate 判定文本是否为"整理多份文档→生成文件→保存/提交"的复合长任务。
 // 命中时返回 (IntentOrchestrate, params{target_doc, source_hint}, true)。
 // target_doc 从《…》书名号里抽；抽不到则由编排引擎落默认文件名。
@@ -1235,4 +1398,15 @@ func askForKind(kind string) string {
 	default:
 		return taskAskTemplate
 	}
+}
+
+// insideBookTitle 判断 [start,end) 区间是否完全落在书名号《…》内。
+// 用途：动词/名词匹配排除文档名成分（如《全景开发文档》里的"开发"不是实现动词）。
+func insideBookTitle(text string, start, end int) bool {
+	i := strings.Index(text, "《")
+	j := strings.Index(text, "》")
+	if i < 0 || j <= i {
+		return false
+	}
+	return start >= i && end <= j
 }

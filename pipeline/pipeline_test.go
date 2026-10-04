@@ -229,6 +229,7 @@ func TestMechanicalImpactExcludesLogDir(t *testing.T) {
 
 // TestSummaryAggregation（#52）：跑 2 个任务后摘要含任务数/通过率/均值/按域/按归因。
 func TestSummaryAggregation(t *testing.T) {
+	// 2026-10-04 修复恢复：task_metrics kind 登记 + Space 补齐（摘要按域/按归因/纯管线标注恢复）
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下摘要任务A"); err != nil {
 		t.Fatal(err)
@@ -301,6 +302,7 @@ func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 
 // TestSummaryNetExcludesNoLLM（M4-1 ④）：纯管线 NOTE 不计入 Net 均值。
 func TestSummaryNetExcludesNoLLM(t *testing.T) {
+	// 2026-10-04 修复恢复：task_metrics 行已写入轨迹（此前 kind 未登记被拒）
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下纯管线A"); err != nil {
 		t.Fatal(err)
