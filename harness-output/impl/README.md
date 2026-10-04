@@ -1,38 +1,31 @@
-# 语音适配层 vhs-voice 运行说明
+语音适配层 README 运行说明
 
-## 启动
-go build ./...
+启动
+构建：go build ./...
+启动：go run ./cmd/vhs-voice
+默认监听 127.0.0.1:8950，可用环境变量 VHS_VOICE_ADDR 覆盖。
+上游主 harness 默认 http://127.0.0.1:8941，可用环境变量 VHS_UPSTREAM 覆盖。
+数据目录可配（data-dir）；落盘均为 append-only JSONL。
 
-go run ./cmd/vhs-voice -addr 127.0.0.1:8950 -data-dir ./data
-
-环境变量：
-VHS_VOICE_ADDR 监听地址，默认 127.0.0.1:8950
-VHS_UPSTREAM 主 harness 地址，默认 http://127.0.0.1:8941
-
-说明：
-仅监听 127.0.0.1，非回环地址拒绝。
-
-## 端点
-GET /v1/voice/health
+端点
+GET  /v1/voice/health
 POST /v1/voice/parse
 POST /v1/voice/decompose
 POST /v1/voice/resolve
 POST /v1/voice/run
-GET /v1/voice/tasks/{conversation_id}
+GET  /v1/voice/tasks/{conversation_id}
 POST /v1/tasks
-GET /v1/tasks/{id}
-GET /v1/health
+GET  /v1/tasks/{id}
+P0 端点：
+GET  /v1/health
 POST /v1/process
 
-## 数据文件
-会话记忆/审计：
-<dataDir>/voice_sessions/<conversation_id>.jsonl
+数据文件
+<dataDir>/voice_sessions/<conversation_id>.jsonl：会话记忆，可审计
+<dataDir>/feedback.jsonl：反馈学习，append-only
+<dataDir>/traces/：追踪记录 JSONL，append-only
+<dataDir>/usage/：用量记录 JSONL，append-only
 
-反馈学习：
-<dataDir>/feedback.jsonl
-
-追踪与用量：
-<dataDir>/traces/*.jsonl
-<dataDir>/usage/*.jsonl
-
-以上 JSONL 均为 append-only，数据目录由 data-dir 指定，独立存放，可审计。
+行为要点
+resolve 无会话历史且文本含指代词时，返回 unresolved/pending_resolve，不返回默认目标。
+run 编排任务并投递上游 harness，响应包含 task_id、submitted、summary.total。
