@@ -774,6 +774,18 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 			return c.Name
 		}
 	}
+	// ② 能力询问命中：用户问"能不能控制电脑/能控制后台吗"（未带能力名）——
+	// 不能让模型回"我无法控制"（模型不知道已注册能力），命中后执行器用真实
+	// 桌面列表证明能力。2026-10-04 用户真机实测："能够控制后台的电脑吗"被回"不能"。
+	if strings.Contains(text, "控制电脑") || strings.Contains(text, "控制后台") ||
+		strings.Contains(text, "远程控制") || strings.Contains(text, "控制这台") ||
+		strings.Contains(text, "控制那台") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
+		}
+	}
 	return ""
 }
 
