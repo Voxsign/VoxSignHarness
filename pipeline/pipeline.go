@@ -988,10 +988,14 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		return genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 200, sysMsg, usrMsg)
 	}
 
-	// 2026-10-03 模型调度实证：需求全文（7966 字符）直接喂 LLM → 大 prompt + 完整生成必然
-	// 超网关 60s 上限（504）。正解：喂**能力清单摘要**（小 prompt，10s 级收敛），
-	// 语义判据由证据门（P0 关键字 + go build 真编译）兜底，缺口经 RoundEvidence 回喂。
-	req := "目标产品标题：" + title + "\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief + memoryBlock(memory)
+	// 2026-10-04 洞4 修复：需求文档端点清单 + 要点摘要必须注入 prompt。
+	// 此前 req 只喂硬编码 implCapabilityBrief（ASR 能力清单）——清单恰好匹配 ASR 需求时
+	// 看似可用；换需求（语音适配层）后 LLM 无需求信息 → 生成错误内容 → 证据门永远缺口 →
+	// 修订死循环到 blocked。正解：从 doc 提取端点清单注入（复用 endpointRefsOf 证据门逻辑），
+	// 摘要控制长度（网关 60s 上限），语义判据仍由证据门兜底。
+	req := "目标产品标题：" + title + "\n\n需求文档要求实现的端点清单（验收逐端点核对，必须全部注册）：\n" +
+		sortedEndpoints(doc) + "\n\n需求要点摘要（简要）：\n" + docBrief(doc, 1200) +
+		"\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief + memoryBlock(memory)
 	if o.RoundEvidence != "" {
 		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
 		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"
@@ -1264,6 +1268,36 @@ func endpointRefsOf(src string) map[string]bool {
 		set[m] = true
 	}
 	return set
+}
+
+// sortedEndpoints 将端点集合排序为逐行清单（LLM prompt 用，稳定可读）。
+func sortedEndpoints(src string) string {
+	if src == "" {
+		return "（需求文档为空——无端点清单）"
+	}
+	eps := endpointRefsOf(src)
+	if len(eps) == 0 {
+		return "（需求文档未提及 /v1/ 端点）"
+	}
+	var list []string
+	for ep := range eps {
+		list = append(list, ep)
+	}
+	sort.Strings(list)
+	return strings.Join(list, "\n")
+}
+
+// docBrief 截取需求文档前 n 字符作为要点摘要（含标题与首个判据表，控制 prompt 长度）。
+func docBrief(src string, n int) string {
+	if src == "" {
+		return "（无需求文档）"
+	}
+	s := strings.TrimSpace(src)
+	if len([]rune(s)) <= n {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:n]) + "\n…（文档过长，以上为摘要，完整判据以端点清单 + 证据门为准）"
 }
 
 // endpointHandlersOf 提取源码中 http.HandleFunc("/v1/xxx", …) 已注册的端点（产物侧：注册才算实现）。
