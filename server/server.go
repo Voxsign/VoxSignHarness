@@ -17,9 +17,12 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -180,6 +183,9 @@ func (e sseEvent) flattened() map[string]any {
 }
 
 // Server 持有配置、pipeline 模板与任务表。
+// platformAIOpsBase 自建平台入口（与 config/model-center.json gateway.base_url 一致）。
+const platformAIOpsBase = "https://aiops.peterzou.com"
+
 type Server struct {
 	cfg  *config.Config
 	tmpl *pipeline.Options
@@ -214,10 +220,98 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("/v1/health", s.auth(s.handleHealth))
+	// ASR 校准（iOS 录音 → 平台 model-center 千问）：契约见 docs/ASR接口契约-20261004.md。
+	mux.HandleFunc("/v1/asr", s.auth(s.handleASR))
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
 	return mux
+}
+
+// handleASR 接收 iOS 录音（multipart file=WAV），base64 后转发平台 model-center 的 /api/model/asr
+// （阿里千问 ASR，AIOPS_KEY 鉴权，与 chat 通道同一密钥环境变量）。契约见 docs/ASR接口契约-20261004.md。
+func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
+	if err := r.ParseMultipartForm(15 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "音频解析失败：" + err.Error()})
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "缺少 file 字段（multipart 音频）"})
+		return
+	}
+	defer file.Close()
+	audio, err := io.ReadAll(file)
+	if err != nil || len(audio) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "音频为空或读取失败"})
+		return
+	}
+	key := strings.TrimSpace(os.Getenv("AIOPS_KEY"))
+	if key == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"ok": "false", "code": "asr_channel_not_ready",
+			"error": "平台 model-center 未提供 /api/model/asr（AIOPS_KEY 未设置）"})
+		return
+	}
+	// 平台 ASR 端点：与 model-center 同一 base，路径 /api/model/asr。
+	asrURL := platformAIOpsBase + "/api/model/asr"
+	payload, _ := json.Marshal(map[string]any{
+		"model":        "qwen-audio-asr",
+		"audio_base64": base64.StdEncoding.EncodeToString(audio),
+		"mime":         "audio/wav",
+		"language":     "zh",
+	})
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, asrURL, bytes.NewReader(payload))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"ok": "false", "code": "asr_internal", "error": err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"ok": "false", "code": "asr_channel_not_ready",
+			"error": "平台 model-center 不可达：" + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）", asrURL, resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		var perr map[string]any
+		_ = json.Unmarshal(data, &perr)
+		code, _ := perr["code"].(string)
+		// 平台未实现该端点时返回 not_found → 统一映射为契约语义 asr_channel_not_ready。
+		if code == "" || code == "not_found" {
+			code = "asr_channel_not_ready"
+		}
+		msg, _ := perr["error"].(string)
+		if msg == "" {
+			msg = "平台 model-center 的 /api/model/asr 返回 HTTP " + resp.Status
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"ok": "false", "code": code, "error": msg})
+		return
+	}
+	var pr struct {
+		OK    bool   `json:"ok"`
+		Text  string `json:"text"`
+		DurMs int    `json:"duration_ms"`
+		Model string `json:"model"`
+		Err   string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(data, &pr); err != nil || !pr.OK || pr.Text == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
+		return
+	}
+	log.Printf("ASR: 校准成功 model=%s duration_ms=%d text_len=%d", pr.Model, pr.DurMs, len(pr.Text))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model})
 }
 
 // handleScreenshot 提供远程控制截图（图片回执）。iOS 端用 <base>/screenshots/<name> 直接渲染。
