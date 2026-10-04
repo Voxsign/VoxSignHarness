@@ -88,6 +88,22 @@ final class SpeechRecognizer: ObservableObject {
         isRecording = false
     }
 
+    /// 上滑取消（豆包同款手势）：直接清理录音与识别任务，**不触发** onFinalSegment（不发送）。
+    func cancelHold() {
+        print("[ASR] cancelHold（上滑取消）")
+        DiagLogger.shared.log("ASR", "cancelHold（上滑取消）")
+        holdMode = false
+        task?.cancel()
+        task = nil
+        request?.endAudio()
+        request = nil
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        isRecording = false
+        transcript = ""
+    }
+
     func start() {
         // 豆包式：按下瞬间立即进录音态（UI 先反馈，不等引擎就绪）。
         // 先清掉上一轮未决任务（final 未到/异常挂起时，新按住不会被旧任务挡住）。
@@ -97,7 +113,60 @@ final class SpeechRecognizer: ObservableObject {
             self.transcript = ""
             self.isRecording = true
         }
+        print("[ASR] start: mic=\(micStatus()) speech=\(speechStatus()) alwaysOn=\(alwaysOn) hold=\(holdMode)")
+        DiagLogger.shared.log("ASR", "start mic=\(micStatus()) speech=\(speechStatus())")
+        // 【闪退修复 T3】权限前置检查：麦克风/语音识别未授权时，AVAudioEngine 的
+        // installTap/engine.start 会抛 NSException（Swift do-catch 捕不到）→ 直接闪退。
+        // 现在改为：未授权 → 先弹权限请求，绝不进引擎；拒绝 → 置 unavailable（UI 提示）。
+        let mic = AVAudioSession.sharedInstance().recordPermission
+        switch mic {
+        case .granted:
+            break
+        case .undetermined:
+            print("[ASR] mic undetermined → 请求授权")
+            AVAudioSession.sharedInstance().requestRecordPermission { [weak self] ok in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    print("[ASR] mic 授权结果 ok=\(ok)")
+                    DiagLogger.shared.log("ASR", "mic 授权 ok=\(ok)")
+                    if ok {
+                        self.start()   // 授权成功：立即补启动（用户不用再按一次）
+                    } else {
+                        self.unavailable = true
+                        self.isRecording = false
+                    }
+                }
+            }
+            return
+        case .denied:
+            print("[ASR] mic denied → unavailable")
+            DispatchQueue.main.async {
+                self.unavailable = true
+                self.isRecording = false
+            }
+            return
+        @unknown default:
+            return
+        }
+        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+            print("[ASR] speech 未授权 → 请求")
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    print("[ASR] speech 授权结果 status=\(status.rawValue)")
+                    DiagLogger.shared.log("ASR", "speech 授权 status=\(status.rawValue)")
+                    if status == .authorized {
+                        self.start()
+                    } else {
+                        self.unavailable = true
+                        self.isRecording = false
+                    }
+                }
+            }
+            return
+        }
         guard let recognizer = recognizer else {
+            print("[ASR] recognizer nil → unavailable")
             DispatchQueue.main.async { self.isRecording = false }
             unavailable = true
             return
@@ -116,6 +185,8 @@ final class SpeechRecognizer: ObservableObject {
                 try session.setCategory(.record, mode: .measurement, options: .duckOthers)
             }
             try session.setActive(true, options: .notifyOthersOnDeactivation)
+            print("[ASR] session 已激活 (record)")
+            DiagLogger.shared.log("ASR", "session 已激活")
 
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
@@ -128,11 +199,14 @@ final class SpeechRecognizer: ObservableObject {
 
             let node = engine.inputNode
             let format = node.outputFormat(forBus: 0)
+            print("[ASR] installTap format=\(format.sampleRate)Hz ch=\(format.channelCount)")
             node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                 self?.request?.append(buffer)
             }
             engine.prepare()
             try engine.start()
+            print("[ASR] engine.start OK")
+            DiagLogger.shared.log("ASR", "engine.start OK")
 
             task = recognizer.recognitionTask(with: req) { [weak self] result, error in
                 guard let self = self else { return }
@@ -144,11 +218,15 @@ final class SpeechRecognizer: ObservableObject {
                 // T1 常听：识别到 final（停顿）只复位 request，不停止引擎，继续下一段；
                 // 按需模式保持原行为（final/错误即停）。
                 if error != nil {
+                    print("[ASR] error 回调: \(error!.localizedDescription)")
+                    DiagLogger.shared.log("ASR", "error 回调: \(error!.localizedDescription)")
                     DispatchQueue.main.async {
                         self.stop()
                     }
                 } else if result?.isFinal ?? false {
                     let text = result?.bestTranscription.formattedString ?? ""
+                    print("[ASR] final: \(text.prefix(60))")
+                    DiagLogger.shared.log("ASR", "final len=\(text.count) text=\(text.prefix(60))")
                     // T2 残留修复（用户实测）：final 一到就 cancel 旧任务 + 清空 transcript，
                     // 否则旧 recognitionTask 仍可能回调，把上一段内容带进新段/重复提交。
                     self.task?.cancel()
@@ -180,7 +258,11 @@ final class SpeechRecognizer: ObservableObject {
                 self.isRecording = true
                 self.transcript = ""
             }
+            print("[ASR] recognitionTask 建立成功，录音中")
+            DiagLogger.shared.log("ASR", "recognitionTask 建立成功")
         } catch {
+            print("[ASR] 启动异常(可捕): \(error.localizedDescription)")
+            DiagLogger.shared.log("ASR", "启动异常: \(error.localizedDescription)")
             DispatchQueue.main.async { self.isRecording = false }
             unavailable = true
             stop()
@@ -189,6 +271,7 @@ final class SpeechRecognizer: ObservableObject {
 
     /// 常听模式：一段识别结束后原地开新段（复用同一引擎/会话）。
     private func beginNewSegment() {
+        print("[ASR] beginNewSegment")
         guard let recognizer = recognizer, recognizer.isAvailable else { return }
         // T2 残留修复：开新段前先把上一段显示清掉，新段从空白开始。
         DispatchQueue.main.async {
@@ -234,6 +317,7 @@ final class SpeechRecognizer: ObservableObject {
     }
 
     func stop() {
+        print("[ASR] stop")
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -242,6 +326,27 @@ final class SpeechRecognizer: ObservableObject {
         request = nil
         task = nil
         isRecording = false
+    }
+
+    // MARK: - 日志辅助
+
+    private func micStatus() -> String {
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case .granted: return "granted"
+        case .denied: return "denied"
+        case .undetermined: return "undetermined"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private func speechStatus() -> String {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized: return "authorized"
+        case .denied: return "denied"
+        case .restricted: return "restricted"
+        case .notDetermined: return "notDetermined"
+        @unknown default: return "unknown"
+        }
     }
 
     /// P1 一轮一清：发送后清空识别缓冲，下一轮从空白开始（不带上一轮残留）。

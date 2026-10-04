@@ -65,21 +65,13 @@ struct UserBubbleView: View {
 struct HarnessBubbleView: View {
     let bubble: Bubble
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(bubble.text)
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(VSColor.harnessBubble)
-                    .cornerRadius(16)
-                Spacer()
-            }
-            if !bubble.badges.isEmpty {
-                HStack {
-                    ForEach(bubble.badges, id: \.label) { BadgeView(badge: $0) }
-                    Spacer()
-                }
-            }
+        HStack {
+            Text(bubble.text)
+                .foregroundColor(.black)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(VSColor.harnessBubble)
+                .cornerRadius(16)
+            Spacer()
         }
     }
 }
@@ -102,20 +94,28 @@ struct WaveView: View {
     }
 }
 
-/// 三点处理中。用 TimelineView 驱动，避免依赖 @State 宏。
+/// 三点处理中 + 动态文案（I04 思考态 / I18 长任务升级文案）。
+/// 用 TimelineView 驱动，避免依赖 @State 宏。
 struct TypingView: View {
+    var text: String = "正在思考…"
+
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 4) {
-                ForEach(0..<3) { i in
-                    let phase = sin(t * 4 + Double(i) * 0.9)
-                    Circle()
-                        .fill(Color.gray.opacity(0.6))
-                        .frame(width: 7, height: 7)
-                        .offset(y: max(0, phase) * -4)
+        HStack(spacing: 10) {
+            TimelineView(.animation) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                HStack(spacing: 4) {
+                    ForEach(0..<3) { i in
+                        let phase = sin(t * 4 + Double(i) * 0.9)
+                        Circle()
+                            .fill(Color.gray.opacity(0.6))
+                            .frame(width: 7, height: 7)
+                            .offset(y: max(0, phase) * -4)
+                    }
                 }
             }
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundColor(.gray)
         }
         .padding(12)
         .background(VSColor.harnessBubble)
@@ -151,7 +151,7 @@ struct ExecCardView: View {
     }
 }
 
-// MARK: - 回执卡（绿色四行 + 撤销按钮）
+// MARK: - 回执 → 人话气泡（v2.1：I01 人话回复 / I12 动作+对象 / I07+I17 撤销小字 44pt）
 
 struct ReceiptCardView: View {
     let receipt: Receipt
@@ -160,43 +160,24 @@ struct ReceiptCardView: View {
     let onRollback: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
-                Text("完成").font(.system(size: 13, weight: .semibold))
-                Spacer()
-            }
-            line("动作", receipt.action)
-            line("文件", receipt.files)
-            line("结果", receipt.result)
-            HStack {
-                Text("撤销").font(.system(size: 12, weight: .bold))
-                Text(receipt.undo).font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                Spacer()
-                if undo.show {
-                    Button("撤销") { onRollback() }
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Color.red.opacity(0.12))
-                        .foregroundColor(.red)
-                        .cornerRadius(8)
+        VStack(alignment: .leading, spacing: 2) {
+            // 豆包式人话气泡：一条"已完成，动作。结果"（不再绿色四行卡，不显示徽章）
+            Text("已完成，\(receipt.action)。\(receipt.result)")
+                .font(.system(size: 14))
+                .foregroundColor(.black)
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(VSColor.harnessBubble)
+                .cornerRadius(16)
+            // 撤销小字（I07 保留；I17 命中区≥44pt，且支持口答"撤销"）
+            if undo.show {
+                Button(action: onRollback) {
+                    Text("可撤销")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, 4)
                 }
             }
-            if !badges.isEmpty {
-                HStack { ForEach(badges, id: \.label) { BadgeView(badge: $0) }; Spacer() }
-            }
-        }
-        .padding(12)
-        .background(VSColor.receiptGreen)
-        .cornerRadius(16)
-    }
-
-    private func line(_ k: String, _ v: String) -> some View {
-        HStack(alignment: .top) {
-            Text(k).font(.system(size: 12, weight: .bold))
-            Text(v.isEmpty ? "—" : v).font(.system(size: 12))
-            Spacer()
         }
     }
 }

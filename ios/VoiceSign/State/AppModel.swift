@@ -127,6 +127,7 @@ final class AppModel: ObservableObject {
     }
 
     /// T2 语音专用发送：与键盘 send 同链路，但气泡标记 fromVoice + 清一轮识别缓冲。
+    /// v2.1：决策点存在时语音优先口答（I06/I13/I17）；极短噪声词不提交（先进理念6）。
     func sendVoice(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
@@ -135,6 +136,17 @@ final class AppModel: ObservableObject {
         #endif
         // T3 豆包式：用户开口时立即打断上一段朗读（先听用户说）。
         VoiceOutputService.shared.stop()
+
+        // v2.1 I06/I13/I17：决策点存在 → 语音口答优先（确认/选项/撤销；高风险强制按钮）。
+        if decision != nil, handleVoiceDecision(t) {
+            DiagLogger.shared.log("ASR", "口答已消费: \(t)")
+            return
+        }
+        // 先进理念6：无意义哼哈（嗯/哦/好…）不提交、不生成气泡。
+        if VSLogic.isNoiseWord(t) {
+            DiagLogger.shared.log("ASR", "噪声词已忽略: \(t)")
+            return
+        }
         appendUser(t, fromVoice: true)
 
         if VSLogic.isInterruptPhrase(t),
@@ -144,6 +156,47 @@ final class AppModel: ObservableObject {
             return
         }
         submit(t)
+    }
+
+    /// v2.1 口答决策：确认/选项/撤销。返回 true=已作为口答消费（不再提交为新任务）。
+    private func handleVoiceDecision(_ t: String) -> Bool {
+        // I17 / 先进理念2 语音撤销链：说"撤销"回滚最近一次可撤销操作。
+        if VSLogic.isUndoPhrase(t) {
+            if let row = rows.last, case .receipt(let r) = row, r.undo.show {
+                speak("好，撤销刚才的操作。")
+                rollback()
+                return true
+            }
+            return false   // 没有可撤销对象 → 不当撤销消费，按普通指令走
+        }
+        guard let d = decision else { return false }
+        switch d.kind {
+        case .confirm:
+            // I13 分险级：高风险动作（提交/推送/合并/部署/删除…）口答不生效，强制按钮。
+            let probe = (currentView?.receipt ?? "") + (currentView?.question ?? "")
+            if VSLogic.isHighRiskAction(probe) {
+                speak("这是高风险操作，请在下方点击按钮确认。")
+                return true
+            }
+            if VSLogic.isAffirmPhrase(t) { answer("执行"); return true }
+            if VSLogic.isNegativePhrase(t) { answer("拒绝"); return true }
+            return false
+        case .ask:
+            if let hit = d.options.first(where: {
+                t.contains($0.label) || $0.label.contains(t) || t.contains($0.id) || $0.id.contains(t)
+            }) {
+                answer(hit.id)
+                return true
+            }
+            // "都可以/随便/听你的" → 第一选项（豆包式自然应答）。
+            if VSLogic.isAffirmPhrase(t), let first = d.options.first {
+                answer(first.id)
+                return true
+            }
+            return false
+        default:
+            return false
+        }
     }
 
     // MARK: - 发送入口
@@ -198,6 +251,7 @@ final class AppModel: ObservableObject {
     func submit(_ text: String) {
         let reqId = VSLogic.genRequestId()
         rows.append(.typing)
+        armLongTaskTimers()
         Task {
             do {
                 // T2 连接感知：提交前探测——不在线不傻等 15s 超时，直接进离线队列。
@@ -577,8 +631,16 @@ final class AppModel: ObservableObject {
     }
 
     /// T3 豆包式：Harness 的"真回复"（完成/回执/决策点）朗读；系统提示不读。
+    /// v2.1 自适应朗读（先进理念3）：短文本全文读；长文本读摘要+提示看屏（治 EC 推演的 TTS 瓶颈）。
     private func speak(_ text: String) {
-        VoiceOutputService.shared.speak(text)
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        if t.count > 80 {
+            let head = String(t.prefix(80))
+            VoiceOutputService.shared.speak(head + "。内容较长，详情可以看屏幕。")
+        } else {
+            VoiceOutputService.shared.speak(t)
+        }
     }
 
     private func appendHarness(_ text: String, view: TaskView, spoken: Bool = false) {
@@ -588,9 +650,31 @@ final class AppModel: ObservableObject {
     }
 
     private func removeTyping() {
+        longTaskTimer?.cancel()
+        typingText = "正在思考…"
         rows.removeAll {
             if case .typing = $0 { return true }
             return false
+        }
+    }
+
+    // MARK: - v2.1 I18 长任务提示升级（5s → 10s）
+
+    /// 思考态动态文案（TypingView 显示）。
+    @Published var typingText = "正在思考…"
+    private var longTaskTimer: Task<Void, Never>?
+
+    /// 提交后启动：5s 升级"还在思考，马上好…"，10s 改"任务比较久，完成了我通知你"（通知兜底由后台完成）。
+    private func armLongTaskTimers() {
+        longTaskTimer?.cancel()
+        typingText = "正在思考…"
+        longTaskTimer = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self.typingText = "还在思考，马上好…" }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self.typingText = "任务比较久，完成了我通知你" }
         }
     }
 
@@ -616,6 +700,8 @@ final class AppModel: ObservableObject {
     }
 
     private func closeExecCard() {
+        longTaskTimer?.cancel()
+        typingText = "正在思考…"
         execCardRowId = nil
     }
 

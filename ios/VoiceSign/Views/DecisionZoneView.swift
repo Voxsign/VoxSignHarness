@@ -15,28 +15,30 @@ struct DecisionZoneView: View {
     var body: some View {
         switch decision?.kind {
         case .confirm:
+            // v2.1 豆包式确认：白底问题 + 浅色按钮（不再红色强条）。
             VStack(alignment: .leading, spacing: 10) {
-                Text("⚠ \(decision?.question ?? "人工放行（不可逆）操作")")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.red)
+                Text(decision?.question ?? "确认执行这个操作吗？")
+                    .font(.system(size: 14))
+                    .foregroundColor(.primary)
                 HStack {
                     Button("执行") { onAnswer("执行") }
-                        .font(.system(size: 14, weight: .bold))
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                        .background(Color.red)
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(VSColor.blue)
                         .foregroundColor(.white)
                         .cornerRadius(10)
-                    Button("拒绝") { onAnswer("拒绝") }
+                    Button("取消") { onAnswer("拒绝") }
                         .font(.system(size: 14))
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                        .background(Color.gray.opacity(0.2))
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(Color.gray.opacity(0.15))
                         .foregroundColor(.primary)
                         .cornerRadius(10)
                 }
             }
             .padding(12)
-            .background(VSColor.confirmRed)
+            .background(Color.white)
             .cornerRadius(14)
+            .shadow(radius: 2)
 
         case .ask:
             VStack(alignment: .leading, spacing: 8) {
