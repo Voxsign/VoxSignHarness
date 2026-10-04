@@ -92,6 +92,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1631,26 +1632,30 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	if buildRecv.OK {
 		return files, "编译全绿（0 轮修复）"
 	}
-	// 编译失败 → ①确定性清理未使用 import（机械错误，LLM 修复不稳定——2026-10-03 实证 3 轮仍失败）；
-	// ②仍失败才回喂 LLM（≤3 轮）。
+	// 编译失败 → ①确定性修复循环（import 未用按名清理 + 未使用变量按行号删，机械错误 LLM 修不稳；
+	// 2026-10-04 真跑实证：import 错位修复 + objects 未用变量，LLM 全量重写 3 轮均不收敛）；
+	// ②确定性耗尽仍失败才回喂 LLM（≤3 轮）。
 	log.Printf("[llmGenerate] 编译失败（首轮），错误：\n%s", truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 1200))
 	// 调试保留：LLM 产物副本（骨架兜底会覆盖写盘产物，这里留一份供编译错误分析）。
 	_ = os.WriteFile("/tmp/llm_main_debug.go", []byte(files["main.go"]), 0o644)
 	cleanErrs := buildRecv.Stdout + "\n" + buildRecv.Stderr
 	lastErr := truncateStr(cleanErrs, 2500)
-	if cleaned, n := removeUnusedImports(files["main.go"], cleanErrs); cleaned != "" {
-		log.Printf("[llmGenerate] 确定性清理 %d 个未使用 import，重编译", n)
-		files["main.go"] = cleaned
-		if err := writeFilesToDisk(skelDir, files); err == nil {
-			recv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
-			if recv.OK {
-				return files, fmt.Sprintf("编译全绿（确定性清理 %d 个未使用 import）", n)
-			}
-			// 关键：清理后仍有错误（非 import），必须更新 lastErr——
-			// 否则修复轮拿旧错误（import）修，永远修不掉清理后暴露的真实错误（2026-10-03 实证循环）。
-			log.Printf("[llmGenerate] 清理后仍失败，更新修复轮错误信息：\n%s", truncateStr(recv.Stdout+"\n"+recv.Stderr, 800))
-			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
+	// 确定性修复循环：每次清理后立即重编译（行号/上下文逐轮收敛，最多 6 轮）。
+	for d := 1; d <= 6; d++ {
+		cleaned, n := deterministicClean(files["main.go"], lastErr)
+		if n == 0 {
+			break
 		}
+		log.Printf("[llmGenerate] 确定性修复轮 %d 清理 %d 处（import/未用变量）", d, n)
+		files["main.go"] = cleaned
+		if err := writeFilesToDisk(skelDir, files); err != nil {
+			return nil, "写盘失败: " + err.Error()
+		}
+		recv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
+		if recv.OK {
+			return files, fmt.Sprintf("编译全绿（确定性修复 %d 轮）", d)
+		}
+		lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 	}
 	for i := 1; i <= 3; i++ {
 		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
@@ -1768,6 +1773,41 @@ func removeUnusedImports(src, buildOut string) (string, int) {
 		sb.WriteString("\n")
 	}
 	return strings.TrimSuffix(sb.String(), "\n"), removed
+}
+
+// removeUnusedVars 按编译器行号删除未使用变量声明（declared and not used）。
+// 2026-10-04 真跑实证：语音适配层生成 `objects := [...]` 但函数内未用 →
+// go build 报 `./main.go:76:2: declared and not used: objects`，LLM 修复轮
+// 全量重写 3 轮不收敛。机械错误由 harness 确定性兜底：删除错误行（含缩进）。
+// 一次只删一个（多行号会因删除错位），由外层循环逐轮重编译收敛。
+func removeUnusedVars(src, buildOut string) (string, int) {
+	m := regexp.MustCompile(`\./main\.go:(\d+):\d+: declared and not used: (\w+)`).FindStringSubmatch(buildOut)
+	if len(m) != 3 {
+		return "", 0
+	}
+	lineNo, err := strconv.Atoi(m[1])
+	if err != nil || lineNo < 1 {
+		return "", 0
+	}
+	lines := strings.Split(src, "\n")
+	if lineNo > len(lines) {
+		return "", 0
+	}
+	// 只删单行声明（该行含 := 或 var 前缀），避免删错结构体/函数边界。
+	trim := strings.TrimSpace(lines[lineNo-1])
+	if !strings.Contains(trim, ":=") && !strings.HasPrefix(trim, "var ") {
+		return "", 0
+	}
+	lines = append(lines[:lineNo-1], lines[lineNo:]...)
+	return strings.Join(lines, "\n"), 1
+}
+
+// deterministicClean 编译失败机械修复：import 全量清理（按名）+ 变量一次一个（按行号）。
+func deterministicClean(src, buildOut string) (string, int) {
+	if c, n := removeUnusedImports(src, buildOut); c != "" {
+		return c, n
+	}
+	return removeUnusedVars(src, buildOut)
 }
 
 // EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
