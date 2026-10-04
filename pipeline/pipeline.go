@@ -1668,8 +1668,11 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	}
 	// 2026-10-04 加码：3→5（LLM 修复轮生成新代码可能引入非 import/变量错误，多给机会）
 	for i := 1; i <= 5; i++ {
-		curHead := truncateStr(files["main.go"], 2500)
-		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请在以下当前代码基础上**仅修复编译错误**（其他逻辑保持不变）后输出**完整 main.go**。\n\n当前 main.go（截断开头）：\n"+curHead+"\n\n编译错误：\n"+lastErr, req)
+		// 2026-10-04 修复：编译修复轮也改首尾拼接（仅开头 2500 看不到行 234 的 E5 类型错误——
+		// LLM 修不掉、5 轮耗尽、8 轮重投仍失败。编译错误自带行号，首尾注入保证错误行可见）。
+		srcCur := files["main.go"]
+		head, tail := truncateStr(srcCur, 1500), truncateStrTail(srcCur, 2500)
+		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请在以下当前代码基础上**仅修复编译错误**（其他逻辑保持不变）后输出**完整 main.go**。编译错误行号对应【末尾 2500 字符】里的代码。\n\n当前 main.go 开头（1500 字符）：\n"+head+"\n\n当前 main.go 末尾（2500 字符，错误行在此范围）：\n"+tail+"\n\n编译错误：\n"+lastErr, req)
 		if mainCode == "" {
 			return nil, "main.go 修复失败: " + note
 		}
