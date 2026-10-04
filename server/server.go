@@ -256,11 +256,14 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	}
 	// 平台 ASR 端点：与 model-center 同一 base，路径 /api/model/asr。
 	asrURL := platformAIOpsBase + "/api/model/asr"
+	// v2 个性化热词：ASR 服务器这一层解决个性化问题（专名/口语/常用词提升，不依赖 iOS 本地）。
+	hotwords := loadASRHotwords(s.cfg.Global.LogDir)
 	payload, _ := json.Marshal(map[string]any{
 		"model":        "qwen-audio-asr",
 		"audio_base64": base64.StdEncoding.EncodeToString(audio),
 		"mime":         "audio/wav",
 		"language":     "zh",
+		"hotwords":     hotwords,
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
@@ -311,7 +314,46 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("ASR: 校准成功 model=%s duration_ms=%d text_len=%d", pr.Model, pr.DurMs, len(pr.Text))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model})
+		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model,
+		"hotwords_used": len(hotwords)})
+}
+
+// loadASRHotwords 读个性化热词库 <log_dir>/personal/hotwords.json（不存在则写入种子词）。
+// 运行时用户纠正的词由 voice 链路追加（去重、上限 100 词、每词 ≤20 字符）。
+func loadASRHotwords(logDir string) []string {
+	dir := filepath.Join(logDir, "personal")
+	_ = os.MkdirAll(dir, 0o755)
+	p := filepath.Join(dir, "hotwords.json")
+	data, err := os.ReadFile(p)
+	if err == nil {
+		var ws []string
+		if json.Unmarshal(data, &ws) == nil && len(ws) > 0 {
+			return trimHotwords(ws)
+		}
+	}
+	// 种子词（从用户历史语音反馈提取的专名/常用指令词）。
+	seeds := []string{"VoxSign", "VoiceSign", "Harness", "aiops", "PeterZou", "季总", "截个图", "远程控制", "查看天气", "校准"}
+	b, _ := json.MarshalIndent(seeds, "", "  ")
+	_ = os.WriteFile(p, b, 0o644)
+	log.Printf("ASR: 初始化个性化热词库 %s（%d 词）", p, len(seeds))
+	return trimHotwords(seeds)
+}
+
+func trimHotwords(ws []string) []string {
+	out := make([]string, 0, len(ws))
+	seen := map[string]bool{}
+	for _, w := range ws {
+		w = strings.TrimSpace(w)
+		if w == "" || len([]rune(w)) > 20 || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+		if len(out) >= 100 {
+			break
+		}
+	}
+	return out
 }
 
 // handleScreenshot 提供远程控制截图（图片回执）。iOS 端用 <base>/screenshots/<name> 直接渲染。
