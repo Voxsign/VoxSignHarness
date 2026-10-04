@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,73 +15,73 @@ import (
 var (
 	addr        = flag.String("addr", "127.0.0.1:8950", "HTTP network address")
 	dataDir     = flag.String("data-dir", "./data", "Data directory")
-	upstreamURL = os.Getenv("VHS_UPSTREAM")
+	upstreamURL = flag.String("upstream", "http://127.0.0.1:8941", "Upstream harness URL")
 )
-
-type Task struct {
-	ID      string `json:"id"`
-	Status  string `json:"status"`
-	Details string `json:"details"`
-}
 
 type Session struct {
 	ConversationID string `json:"conversation_id"`
-	Tasks          []Task `json:"tasks"`
+}
+
+type Task struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+	Target string `json:"target"`
+}
+
+type Feedback struct {
+	Timestamp time.Time `json:"timestamp"`
+	Feedback  string    `json:"feedback"`
 }
 
 var (
-	sessions   = make(map[string]*Session)
-	sessionsMu sync.Mutex
+	sessions     = make(map[string]*Session)
+	sessionsLock sync.Mutex
 )
 
 func main() {
 	flag.Parse()
-	if upstreamURL == "" {
-		upstreamURL = "http://127.0.0.1:8941"
-	}
 
-	http.HandleFunc("/v1/voice/health", handleVoiceHealth)
-	http.HandleFunc("/v1/voice/parse", handleVoiceParse)
-	http.HandleFunc("/v1/voice/decompose", handleVoiceDecompose)
-	http.HandleFunc("/v1/voice/resolve", handleVoiceResolve)
-	http.HandleFunc("/v1/voice/run", handleVoiceRun)
+	http.HandleFunc("/v1/voice/health", handleHealth)
+	http.HandleFunc("/v1/voice/parse", handleParse)
+	http.HandleFunc("/v1/voice/decompose", handleDecompose)
+	http.HandleFunc("/v1/voice/resolve", handleResolve)
+	http.HandleFunc("/v1/voice/run", handleRun)
 	http.HandleFunc("/v1/voice/tasks/", handleVoiceTasks)
 	http.HandleFunc("/v1/tasks", handleTasks)
 	http.HandleFunc("/v1/tasks/", handleTaskByID)
 
-	fmt.Printf("Listening on %s...\n", *addr)
-	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Printf("Error starting server: %v\n", err)
-	}
+	http.ListenAndServe(*addr, nil)
 }
 
-func handleVoiceHealth(w http.ResponseWriter, r *http.Request) {
-	sessionsMu.Lock()
-	defer sessionsMu.Unlock()
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	sessionsLock.Lock()
+	defer sessionsLock.Unlock()
+
 	response := map[string]interface{}{
 		"ok":       true,
 		"service":  "vhs-voice",
-		"upstream": upstreamURL,
+		"upstream": *upstreamURL,
 		"sessions": len(sessions),
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleVoiceParse(w http.ResponseWriter, r *http.Request) {
+func handleParse(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Text string `json:"text"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&input)
 
 	noiseWords := []string{"就是", "那个", "对吧", "好不好", "好吧", "怎么样", "然后", "现在", "开始", "准备", "假设", "其实", "比如", "我觉得", "你知道", "大概", "应该", "可以"}
 	actionWords := []string{"执行", "跑", "测试", "拉取", "编译", "启动", "实现", "提交", "报告", "检查", "对比", "分析", "部署", "安装", "更新"}
-	objectWords := []string{"GitHub 仓库", "服务", "需求", "产物", "测试"}
+	targetWords := []string{"GitHub 仓库", "服务", "需求", "产物", "测试"}
 
 	cleanText := input.Text
 	noiseRemoved := []string{}
+	actions := []map[string]string{}
+
 	for _, word := range noiseWords {
 		if strings.Contains(cleanText, word) {
 			cleanText = strings.ReplaceAll(cleanText, word, "")
@@ -88,17 +89,17 @@ func handleVoiceParse(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	actions := []map[string]string{}
 	for _, action := range actionWords {
 		if strings.Contains(cleanText, action) {
 			target := ""
-			for _, object := range objectWords {
-				if strings.Contains(cleanText, object) {
-					target = object
+			for _, targetWord := range targetWords {
+				if strings.Contains(cleanText, targetWord) {
+					target = targetWord
 					break
 				}
 			}
 			actions = append(actions, map[string]string{"action": action, "target": target})
+			break
 		}
 	}
 
@@ -107,121 +108,150 @@ func handleVoiceParse(w http.ResponseWriter, r *http.Request) {
 		"actions":       actions,
 		"noise_removed": noiseRemoved,
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleVoiceDecompose(w http.ResponseWriter, r *http.Request) {
+func handleDecompose(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Clean string `json:"clean"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&input)
 
-	tasks := []map[string]interface{}{
-		{"seq": 1, "action": "拉取", "target": "GitHub 仓库"},
-		{"seq": 2, "action": "编译", "target": "产物"},
+	tasks := []map[string]interface{}{}
+	actions := []string{"拉取", "编译", "部署"}
+	for i, action := range actions {
+		tasks = append(tasks, map[string]interface{}{
+			"seq":    i + 1,
+			"action": action,
+			"target": "GitHub 仓库 example/repo",
+		})
 	}
 
 	response := map[string]interface{}{
 		"tasks": tasks,
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleVoiceResolve(w http.ResponseWriter, r *http.Request) {
+func handleResolve(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Clean string `json:"clean"`
+		Actions []struct {
+			Action string `json:"action"`
+			Target string `json:"target"`
+		} `json:"actions"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&input)
 
-	resolvedTarget := "unresolved"
-	if strings.Contains(input.Clean, "GitHub 仓库") {
-		resolvedTarget = "GitHub 仓库"
+	resolved := []map[string]string{}
+	for _, action := range input.Actions {
+		if action.Target == "" {
+			resolved = append(resolved, map[string]string{"status": "pending_resolve"})
+		} else {
+			resolved = append(resolved, map[string]string{"status": "resolved", "action": action.Action, "target": action.Target})
+		}
 	}
 
 	response := map[string]interface{}{
-		"resolved_target": resolvedTarget,
+		"resolved": resolved,
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func handleVoiceRun(w http.ResponseWriter, r *http.Request) {
+func handleRun(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Tasks []map[string]interface{} `json:"tasks"`
+		Tasks []struct {
+			Action string `json:"action"`
+			Target string `json:"target"`
+		} `json:"tasks"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	json.NewDecoder(r.Body).Decode(&input)
 
-	taskIDs := []string{}
+	results := []map[string]string{}
 	for _, task := range input.Tasks {
-		taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
-		taskIDs = append(taskIDs, taskID)
+		results = append(results, map[string]string{"status": "completed", "action": task.Action, "target": task.Target})
 	}
 
 	response := map[string]interface{}{
-		"task_ids": taskIDs,
+		"results": results,
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 func handleVoiceTasks(w http.ResponseWriter, r *http.Request) {
 	conversationID := strings.TrimPrefix(r.URL.Path, "/v1/voice/tasks/")
-	sessionsMu.Lock()
-	defer sessionsMu.Unlock()
+	filePath := filepath.Join(*dataDir, "voice_sessions", conversationID+".jsonl")
 
-	session, exists := sessions[conversationID]
-	if !exists {
+	file, err := os.Open(filePath)
+	if err != nil {
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
+	defer file.Close()
 
-	json.NewEncoder(w).Encode(session)
+	var sessions []Session
+	decoder := json.NewDecoder(file)
+	for decoder.More() {
+		var session Session
+		decoder.Decode(&session)
+		sessions = append(sessions, session)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
 }
 
 func handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		var task Task
-		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
+		json.NewDecoder(r.Body).Decode(&task)
+
+		task.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+		filePath := filepath.Join(*dataDir, "tasks.jsonl")
+		file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			http.Error(w, "Unable to save task", http.StatusInternalServerError)
 			return
 		}
-		task.ID = fmt.Sprintf("task-%d", time.Now().UnixNano())
-		task.Status = "pending"
-		task.Details = "Task created"
+		defer file.Close()
 
-		sessionsMu.Lock()
-		defer sessionsMu.Unlock()
-		session, exists := sessions[task.ID]
-		if !exists {
-			session = &Session{ConversationID: task.ID, Tasks: []Task{}}
-			sessions[task.ID] = session
-		}
-		session.Tasks = append(session.Tasks, task)
+		encoder := json.NewEncoder(file)
+		encoder.Encode(task)
 
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(task)
-	} else {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
-	sessionsMu.Lock()
-	defer sessionsMu.Unlock()
+	filePath := filepath.Join(*dataDir, "tasks.jsonl")
 
-	for _, session := range sessions {
-		for _, task := range session.Tasks {
-			if task.ID == taskID {
-				json.NewEncoder(w).Encode(task)
-				return
-			}
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	for decoder.More() {
+		var task Task
+		decoder.Decode(&task)
+		if task.ID == taskID {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(task)
+			return
 		}
 	}
 
