@@ -281,6 +281,11 @@ func Load(configPath string) (Config, error) {
 		for i := range cfg.Providers {
 			cfg.Providers[i].APIKey = v
 		}
+	} else if v := os.Getenv("AIOPS_KEY"); v != "" {
+		// 2026-10-04 兼容旧变量名（此前 harness 一直用 AIOPS_KEY 传网关读 Key）。
+		for i := range cfg.Providers {
+			cfg.Providers[i].APIKey = v
+		}
 	}
 	if v := os.Getenv("VHS_PROVIDER"); v != "" {
 		cfg.ForcedProvider = v
