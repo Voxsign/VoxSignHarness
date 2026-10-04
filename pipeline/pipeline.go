@@ -1330,10 +1330,12 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 	done := false
 	const maxImplRounds = 5
 	for round := 1; round <= maxImplRounds && !done; round++ {
-		files, errMsg := o.llmGenerateImplement(ctx, title, doc, skelDir, memory)
-		if errMsg != "" {
+		files, note := o.llmGenerateImplement(ctx, title, doc, skelDir, memory)
+		if files == nil {
+			// 2026-10-04 修复：note 是编译信息（"编译全绿（N 轮）"）不是错误——
+			// 只有 files==nil 才判失败（LLM 不可用/迭代耗尽），否则产物已真实写盘。
 			receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement",
-				OK: false, Err: errMsg})
+				OK: false, Err: note})
 			break
 		}
 		for name := range files {
