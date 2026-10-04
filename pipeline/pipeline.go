@@ -1810,12 +1810,31 @@ func removeUnusedVars(src, buildOut string) (string, int) {
 	return strings.Join(lines, "\n"), 1
 }
 
-// deterministicClean 编译失败机械修复：import 全量清理（按名）+ 变量一次一个（按行号）。
+// deterministicClean 编译失败机械修复：import 全量清理（按名）+ 变量一次一个（按行号）
+// + 占位注释删除（// Placeholder —— 2026-10-04 实证：行为全过后残留 1 处占位注释，
+// LLM 看不到中部代码（修订轮只注入开头 3000 字符）8 轮修不掉；注释无害，机械删除兜底）。
 func deterministicClean(src, buildOut string) (string, int) {
 	if c, n := removeUnusedImports(src, buildOut); c != "" {
 		return c, n
 	}
-	return removeUnusedVars(src, buildOut)
+	if c, n := removeUnusedVars(src, buildOut); c != "" {
+		return c, n
+	}
+	var sb strings.Builder
+	removed := 0
+	for _, line := range strings.Split(src, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.Contains(trim, "// placeholder") || strings.Contains(trim, "// Placeholder") {
+			removed++
+			continue
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	if removed > 0 {
+		return strings.TrimSuffix(sb.String(), "\n"), removed
+	}
+	return "", 0
 }
 
 // EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
