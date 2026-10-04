@@ -1600,7 +1600,7 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 
 	// ① main.go：自包含完整服务（词典/纠错/意图/反馈/JSONL 落盘/端点/健康检查）——大文件独立调用。
 	sysMain := "你是资深 Go 工程师。只输出 main.go 的**完整代码文本**（自包含、可直接 go build 通过的服务）。" +
-		"硬性要求：①仅用标准库，零第三方依赖；②不许留 TODO/占位/伪代码；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
+		"硬性要求：①仅用标准库，零第三方依赖；②**每个 http.HandleFunc 端点必须实现完整可运行的业务逻辑并返回真实数据**，禁止任何 501 StatusNotImplemented、`// Placeholder`、TODO、panic 占位——验收会逐个真跑打接口断言响应；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
 		"④需求文档要求/提及的**每一个 /v1/ 端点**都必须用 http.HandleFunc(\"/v1/...\", …) 字面量逐一注册（验收会按需求端点清单逐端点核对，缺一即不合格）；" +
 		"⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
 		"纯文本输出，不要 Markdown 围栏、不要 JSON、不要解释。"
@@ -1923,7 +1923,27 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		stubHits = append(stubHits, "panic/TODO `not implemented`")
 	}
 	if len(stubHits) > 0 {
-		gaps = append(gaps, "产物含桩实现（"+strings.Join(stubHits, "；")+"）——必须实现真实业务逻辑，禁止占位")
+		// 缺口具体化：从需求文档提取 E 节端点语义（LLM 只知道"有桩"不会实现；
+		// 2026-10-04 真跑实证：泛化缺口下 LLM 5 轮重写仍生成 501 桩）。
+		var eHints []string
+		if o.Document != "" {
+			for _, line := range strings.Split(o.Document, "\n") {
+				trim := strings.TrimSpace(line)
+				if strings.HasPrefix(trim, "### E") || strings.HasPrefix(trim, "| ") && strings.Contains(trim, "E1 ") || strings.Contains(trim, "E2 ") || strings.Contains(trim, "E3 ") || strings.Contains(trim, "E4 ") || strings.Contains(trim, "E5 ") || strings.Contains(trim, "E6 ") {
+					if strings.Contains(trim, "/v1/voice") || strings.Contains(trim, "E6") {
+						eHints = append(eHints, trim)
+					}
+				}
+			}
+			if len(eHints) > 12 {
+				eHints = eHints[:12]
+			}
+		}
+		sem := ""
+		if len(eHints) > 0 {
+			sem = "；需求文档端点语义（按此实现，禁止 501/占位）：\n" + strings.Join(eHints, "\n")
+		}
+		gaps = append(gaps, "产物含桩实现（"+strings.Join(stubHits, "；")+"）——必须实现真实业务逻辑，禁止占位"+sem)
 	}
 	return gaps
 }
