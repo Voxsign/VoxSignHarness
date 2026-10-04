@@ -3,10 +3,12 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -40,12 +42,25 @@ func newOpenAIClient(p config.Provider, cfg *config.Config) *openaiClient {
 		params:         p.Params,
 		// 超时由 context 统一控制（见 Chat），这里不设 Transport 级硬超时，
 		// 以免与 ctx 超时叠加造成语义不清。
-		httpClient: &http.Client{},
+		// VHS_INSECURE_TLS=1 时跳过 TLS 证书验证（内网/自签网关逃生口，默认关闭）。
+		httpClient: &http.Client{Transport: vhsHTTPTransport()},
 	}
 }
 
-// normalizeEndpoint 规范化端点为完整的 chat/completions URL。
-// 兼容三种形态：
+
+// vhsHTTPTransport 构造默认 Transport；仅当显式设置 VHS_INSECURE_TLS=1 时
+// 跳过 TLS 证书验证（2026-10-04 网关证书验证失败导致 LLM 全挂的逃生口）。
+func vhsHTTPTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if os.Getenv("VHS_INSECURE_TLS") == "1" {
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 显式逃生口，默认关闭
+	}
+	return t
+}
+
+// normalizeEndpoint 规范化端点为完整的 chat URL。
+// 兼容四种形态：
+
 //   - base：             "https://host"                    → "https://host/chat/completions"
 //   - 带 /v1：           "https://host/v1"                 → "https://host/v1/chat/completions"
 //   - 完整路径：         "https://host/v1/chat/completions" → 原样返回
