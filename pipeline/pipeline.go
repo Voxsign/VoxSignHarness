@@ -1329,7 +1329,8 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 	nextSeq := func() int { return len(receipts) + 1 }
 	memory := ""
 	done := false
-	const maxImplRounds = 5
+	// 2026-10-04 加码：5→8（用户"一直给它加码直到成功"；每轮注入当前代码后收敛率提高）
+	const maxImplRounds = 8
 	for round := 1; round <= maxImplRounds && !done; round++ {
 		files, note := o.llmGenerateImplement(ctx, title, doc, skelDir, memory)
 		if files == nil {
@@ -1359,6 +1360,12 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 			break
 		}
 		memory = "上一轮证据门缺口（必须修复后才能完成）：\n" + strings.Join(gaps, "\n")
+		// 2026-10-04 修复：修订轮注入当前产物代码头（LLM 全量重写导致"修A坏B"——
+		// E2 达标下轮退回 null，5 轮耗死）。基于现有代码修改，禁止无关重写。
+		if cur, err := os.ReadFile(filepath.Join(skelDir, "main.go")); err == nil && len(cur) > 0 {
+			head := truncateStr(string(cur), 3000)
+			memory += "\n\n当前产物 main.go（开头截断，其他逻辑保持不变，只修缺口对应函数，输出完整新文件）：\n" + head
+		}
 		receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "evidence", OK: false,
 			Err:  fmt.Sprintf("round %d 证据门 %d 项缺口", round, len(gaps)),
 			Stdout: strings.Join(gaps, "\n")})
@@ -1658,7 +1665,8 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 	}
 	for i := 1; i <= 3; i++ {
-		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
+		curHead := truncateStr(files["main.go"], 2500)
+		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请在以下当前代码基础上**仅修复编译错误**（其他逻辑保持不变）后输出**完整 main.go**。\n\n当前 main.go（截断开头）：\n"+curHead+"\n\n编译错误：\n"+lastErr, req)
 		if mainCode == "" {
 			return nil, "main.go 修复失败: " + note
 		}
