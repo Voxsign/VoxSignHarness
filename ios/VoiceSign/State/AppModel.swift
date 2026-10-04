@@ -85,6 +85,15 @@ final class AppModel: ObservableObject {
     /// 诊断行（M7 真机排障）：上屏显示最近一次轮询状态/错误，避免黑盒"正在处理…"。
     @Published var diagLine: String = ""
 
+    /// T2 滚动修复：每次追加/替换气泡后 +1，RootView 监听它滚动到底。
+    /// 原来监听 rows.count 在"移除三点→追加新行"连续变化时会漏触发，
+    /// 导致用户说完话看不到 Harness 的后续内容。
+    @Published var scrollTick: Int = 0
+
+    /// T2 语音残留修复：语音提交后 1.5s 冷却期内，抑制识别 partial 回写输入框。
+    /// 否则旧音频尾音/新段残留会被识别成字，再次出现在输入框（用户看到"前面输入带进来"）。
+    @Published var voiceCooldown: Bool = false
+
     // 当前任务（打断/续跑用）
     private var currentTaskId: String?
     private var currentView: TaskView?
@@ -98,9 +107,43 @@ final class AppModel: ObservableObject {
 
     private let api = APIClient.shared
     private let sse = SSEClient.shared
+    /// T2 连接感知：网络恢复自动补投的订阅（取消时清理）。
+    private var connSub: AnyCancellable?
 
     init() {
-        rows.append(.harness(Bubble(text: "你好，说点什么。\n语音优先 · 键盘兜底 · 一屏一个决策点")))
+        rows.append(.harness(Bubble(text: "你好，我是 VoiceSign。\n按住说话，我能连接你电脑上的 VoxSign Harness，帮你记想法、查代码、改代码、跑测试、提交、部署。")))
+        // T2 豆包式交互：网络恢复 → 自动补投离线队列（不丢语音指令）。
+        connSub = ConnectivityService.shared.onOnline { [weak self] in
+            guard let self = self else { return }
+            Task { await self.flushQueue() }
+        }
+        // T2 豆包式交互：常听语音识别到完整一句话 → 自动提交（开口即达，无需按按钮）。
+        #if canImport(Speech)
+        SpeechRecognizer.shared.onFinalSegment = { [weak self] text in
+            guard let self = self, !text.isEmpty else { return }
+            Task { @MainActor in self.sendVoice(text) }
+        }
+        #endif
+    }
+
+    /// T2 语音专用发送：与键盘 send 同链路，但气泡标记 fromVoice + 清一轮识别缓冲。
+    func sendVoice(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        #if canImport(Speech)
+        SpeechRecognizer.shared.resetRound()
+        #endif
+        // T3 豆包式：用户开口时立即打断上一段朗读（先听用户说）。
+        VoiceOutputService.shared.stop()
+        appendUser(t, fromVoice: true)
+
+        if VSLogic.isInterruptPhrase(t),
+           let id = currentTaskId, let view = currentView,
+           !VSLogic.isTerminal(view.status) {
+            maybeInterrupt(taskId: id, view: view)
+            return
+        }
+        submit(t)
     }
 
     // MARK: - 发送入口
@@ -157,6 +200,19 @@ final class AppModel: ObservableObject {
         rows.append(.typing)
         Task {
             do {
+                // T2 连接感知：提交前探测——不在线不傻等 15s 超时，直接进离线队列。
+                guard await ConnectivityService.shared.isReachable() else {
+                    removeTyping()
+                    if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "text")) {
+                        DiagLogger.shared.log("QUEUE", "离线直接入队 reqId=\(reqId) 队列=\(DeliveryQueue.shared.count)条")
+                        appendHarness("当前不在线（\(ConnectivityService.shared.lastError)），指令已进入离线队列（\(DeliveryQueue.shared.count) 条待投递），联网后自动补投。",
+                                      view: TaskView(status: "canceled"))
+                    } else {
+                        appendHarness("当前不在线，且离线队列已满，请联网后重试。",
+                                      view: TaskView(status: "canceled"))
+                    }
+                    return
+                }
                 let res = try await api.submitTask(text: text, requestId: reqId)
                 removeTyping()
                 // 多任务加固：新任务开始前清掉上一轮未决的 decision 与执行卡追踪，
@@ -226,7 +282,11 @@ final class AppModel: ObservableObject {
                     failCount = 0
                     DiagLogger.shared.log("POLL", "task=\(taskId) status=\(view.status ?? "nil") options=\(view.options?.count ?? -1) question=\(view.question ?? "-")")
                     await MainActor.run {
-                        self.diagLine = "轮询: \(view.status ?? "?")"
+                        // T2 UI 简化：正常轮询不再写诊断行（不再刷屏"轮询: running"），
+                        // 只有到达终态/决策点才留痕；失败走下面的 catch 单独显示。
+                        if view.status != "running" {
+                            self.diagLine = "轮询: \(view.status ?? "?")"
+                        }
                         self.route(polled: view)
                     }
                     if isPollTerminal(view.status) {
@@ -269,6 +329,10 @@ final class AppModel: ObservableObject {
             applyExecProgress(forStatus: view.status)
             closeExecCard()
             decision = VSLogic.nextDecisionPoint(view)
+            // T3 豆包式：需要用户确认/选择时朗读问题（不看屏也能应答）。
+            if let q = view.question, !q.isEmpty {
+                speak(q)
+            }
             DiagLogger.shared.log("ROUTE", "decision.kind=\(String(describing: decision?.kind)) options=\(decision?.options.count ?? 0)")
         case "done":
             DiagLogger.shared.log("ROUTE", "done → 回执")
@@ -281,7 +345,7 @@ final class AppModel: ObservableObject {
             // 兜底：QUERY 等无四行 receipt 的任务，receipt 卡可能为空 → 补一条可见完成气泡，杜绝"done 了但界面无反应"。
             if view.receipt == nil || view.receipt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
                 let text = view.question?.isEmpty == false ? "完成：\(view.question!)" : "完成（server 已返回 done）"
-                appendHarness(text, view: view)
+                appendHarness(text, view: view, spoken: true)
             }
         case "canceled", "interrupted":
             DiagLogger.shared.log("ROUTE", "\(view.status) → 错误条")
@@ -316,8 +380,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// SSE 连续失败计数（T2：指数退避 + 上限，杜绝无限"重连中"刷屏）。
+    private var reconnectFailures = 0
+
     private func openSSE(taskId: String) {
         sseTask?.cancel()
+        reconnectFailures = 0
         sseTask = Task {
             // 简单重连循环：未到终态则按 after=lastSeq 重连。
             while !Task.isCancelled {
@@ -333,9 +401,20 @@ final class AppModel: ObservableObject {
                     }
                     return // 流正常结束（终态已处理）
                 } catch {
-                    // 断线：短暂退避后按 lastSeq 重连；连续失败给一次 UI 提示后停。
-                    appendHarness("事件流断开，重连中…", view: TaskView(status: "running"))
-                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    // T2：指数退避重连（0.8s→1.6s→…上限 4s），连续失败 5 次后停止，
+                    // 只提示一次"重连中"，不再每 0.8s 刷一条气泡。
+                    reconnectFailures += 1
+                    if reconnectFailures == 1 {
+                        appendHarness("连接波动，自动重连中…", view: TaskView(status: "running"))
+                    }
+                    if reconnectFailures >= 5 {
+                        appendHarness("连接持续不稳定，已停止重连。请检查右上角 ⚙ 服务器地址后重试。",
+                                      view: TaskView(status: "canceled"))
+                        stopPolling()
+                        return
+                    }
+                    let delay = min(Double(reconnectFailures) * 0.8, 4.0)
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     if Task.isCancelled { return }
                 }
             }
@@ -494,10 +573,18 @@ final class AppModel: ObservableObject {
 
     private func appendUser(_ text: String, fromVoice: Bool) {
         rows.append(.user(Bubble(text: text, fromVoice: fromVoice)))
+        scrollTick += 1
     }
 
-    private func appendHarness(_ text: String, view: TaskView) {
+    /// T3 豆包式：Harness 的"真回复"（完成/回执/决策点）朗读；系统提示不读。
+    private func speak(_ text: String) {
+        VoiceOutputService.shared.speak(text)
+    }
+
+    private func appendHarness(_ text: String, view: TaskView, spoken: Bool = false) {
         rows.append(.harness(Bubble(text: text, badges: VSLogic.compressBadges(view))))
+        scrollTick += 1
+        if spoken { speak(text) }
     }
 
     private func removeTyping() {
@@ -538,5 +625,9 @@ final class AppModel: ObservableObject {
         rows.append(.receipt(ReceiptRow(receipt: dp.receipt,
                                         undo: dp.undo,
                                         badges: VSLogic.compressBadges(view))))
+        scrollTick += 1
+        // T3 豆包式：回执朗读摘要（"已完成：动作+结果"），用户不用看屏。
+        let summary = "已完成，\(dp.receipt.action)。\(dp.receipt.result)"
+        speak(summary)
     }
 }
