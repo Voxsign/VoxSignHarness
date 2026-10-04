@@ -137,12 +137,10 @@ final class AppModel: ObservableObject {
         // T3 豆包式：用户开口时立即打断上一段朗读（先听用户说）。
         VoiceOutputService.shared.stop()
 
-        // v2.1 I06/I13/I17：决策点存在 → 语音口答优先（确认/选项/撤销；高风险强制按钮）。
-        if decision != nil, handleVoiceDecision(t) {
-            DiagLogger.shared.log("ASR", "口答已消费: \(t)")
-            return
-        }
-        // 先进理念6：无意义哼哈（嗯/哦/好…）不提交、不生成气泡。
+        // v2.3 用户指令（2026-10-04）"所有拦截都去掉，不要替别人做决定"：
+        // 删除本地口答决策拦截层（确认/选项/撤销/否定词判断）——语音一律作为新指令直通后台，
+        // 不再弹"我听到的是「不要」…"类确认，避免含"不要/不用"的正常长句被误拦导致无反馈。
+        // isNoiseWord 哼哈词过滤保留：防止"好/嗯"这类词提交后触发后台"你想让我做什么"回问。
         if VSLogic.isNoiseWord(t) {
             DiagLogger.shared.log("ASR", "噪声词已忽略: \(t)")
             return
@@ -250,6 +248,8 @@ final class AppModel: ObservableObject {
      */
     func submit(_ text: String) {
         let reqId = VSLogic.genRequestId()
+        // v2.2：先清上一轮残留中间态（typing/execCard），再开始本轮——连续说话不堆积"正在思考"。
+        closeExecCard()
         rows.append(.typing)
         armLongTaskTimers()
         Task {
@@ -455,15 +455,13 @@ final class AppModel: ObservableObject {
                     }
                     return // 流正常结束（终态已处理）
                 } catch {
-                    // T2：指数退避重连（0.8s→1.6s→…上限 4s），连续失败 5 次后停止，
-                    // 只提示一次"重连中"，不再每 0.8s 刷一条气泡。
+                    // T2：指数退避重连（0.8s→1.6s→…上限 4s），连续失败 5 次后停止。
+                    // v2.2 修复（用户反馈"根本啥也没有"）：重连提示**不再进对话流**——
+                    // 只在诊断日志留痕，顶部胶囊由 ConnectivityService 实时反映，避免刷屏顶掉回复。
                     reconnectFailures += 1
-                    if reconnectFailures == 1 {
-                        appendHarness("连接波动，自动重连中…", view: TaskView(status: "running"))
-                    }
+                    DiagLogger.shared.log("SSE", "重连中 failures=\(reconnectFailures) err=\(error.localizedDescription)")
                     if reconnectFailures >= 5 {
-                        appendHarness("连接持续不稳定，已停止重连。请检查右上角 ⚙ 服务器地址后重试。",
-                                      view: TaskView(status: "canceled"))
+                        DiagLogger.shared.log("SSE", "重连失败5次停止，task=\(taskId)")
                         stopPolling()
                         return
                     }
@@ -703,6 +701,13 @@ final class AppModel: ObservableObject {
         longTaskTimer?.cancel()
         typingText = "正在思考…"
         execCardRowId = nil
+        // v2.2 修复：终态到达时删除 rows 里残留的 execCard/typing 中间态气泡，
+        // 只留"用户气泡 + 最终回复"（豆包式干净对话流，不再一轮轮堆积"正在思考"）。
+        rows.removeAll {
+            if case .execCard = $0 { return true }
+            if case .typing = $0 { return true }
+            return false
+        }
     }
 
     private func renderReceipt(_ view: TaskView) {
@@ -712,8 +717,8 @@ final class AppModel: ObservableObject {
                                         undo: dp.undo,
                                         badges: VSLogic.compressBadges(view))))
         scrollTick += 1
-        // T3 豆包式：回执朗读摘要（"已完成：动作+结果"），用户不用看屏。
-        let summary = "已完成，\(dp.receipt.action)。\(dp.receipt.result)"
+        // T3 豆包式：朗读回复内容（v2.3 去"已完成，动作。"前缀，用户原话：已完成什么东西）。
+        let summary = dp.receipt.result
         speak(summary)
     }
 }

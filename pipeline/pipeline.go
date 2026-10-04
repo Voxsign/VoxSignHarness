@@ -3221,8 +3221,28 @@ func writeCounts(sb *strings.Builder, title string, m map[string]int) {
 }
 
 // degradeMsg 由**真实错误**生成降级文案（归因必须准确；未知才说未知）。
+//
+// v2.3（2026-10-04 用户指令："语气词很重要，别像机器人"）：模型不可用时
+// 不再输出"（上游限流（429）…）"机器人括号，改本地人话模板——承认问题、
+// 给可行动建议、带语气词。归因仍来自 attributeLLMError（真实错误，不许瞎说）。
 func degradeMsg(rawErr, searchStdout string) string {
-	return "（" + attributeLLMError(rawErr) + "；检索结果：" + strings.TrimSpace(searchStdout) + "）"
+	reason := attributeLLMError(rawErr)
+	action := "我这边调整一下就能接着干"
+	switch {
+	case strings.Contains(reason, "鉴权"):
+		action = "需要检查一下后台的 API key 配置"
+	case strings.Contains(reason, "限流"), strings.Contains(reason, "额度/预算"):
+		action = "等额度恢复（一般明天就好），你也可以换一条模型通道"
+	case strings.Contains(reason, "超时"):
+		action = "我刚才是超时了，你再说一遍我马上重试"
+	case strings.Contains(reason, "原因未知"):
+		action = "我去查一下后台日志再告诉你"
+	}
+	prefix := "哎呀，这条我一时没答上来——" + reason + "。" + action + "。"
+	if s := strings.TrimSpace(searchStdout); s != "" {
+		return prefix + "\n不过检索到一点线索：\n" + s
+	}
+	return prefix
 }
 
 // attributeLLMError 把真实错误归因成人能行动的一句话。

@@ -1045,6 +1045,14 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentNote, 0.85, nil)
 	}
 
+	// 3.5 元反馈/闲聊仲裁（2026-10-04 用户多轮截图点名"你是想让我做什么"回问）：
+	// 抱怨/试探/元反馈话术（"识别太糟糕""后台有没有干活""懂我吗"）不落入 UNKNOWN 回问——
+	// 归 ASK 交模型直接人话回应。ASK 类永不触发回问（伪代码逻辑层 11：低置信非 NOTE/ASK 才回问）。
+	// 注意：排在单类触发之后——「测试一下」先命中 TEST，不会被这里抢走。
+	if containsAny(text, chatTriggers) {
+		return c.fill(ti, contract.IntentAsk, 0.8, nil)
+	}
+
 	// 4. 无任何触发词 → UNKNOWN，回问
 	return ti
 }
