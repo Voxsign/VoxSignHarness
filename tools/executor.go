@@ -385,6 +385,13 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 
 	if b.Len() == 0 {
 		b.WriteString("远程控制能力已就绪。可以说「看看桌面上有什么」「截个图」「运行 ls 看看」或「有哪些应用在跑」。")
+	} else if !strings.Contains(text, "截图") && !strings.Contains(text, "截个图") &&
+		!strings.Contains(text, "截屏") && !strings.Contains(text, "桌面") &&
+		!strings.Contains(text, "看看") && !strings.Contains(text, "应用") &&
+		!strings.Contains(text, "运行") && !strings.Contains(text, "程序") &&
+		extractReadOnlyCmd(text) == "" {
+		// 纯能力询问（"能控制后台的电脑吗"）：已用桌面列表证明能力，追加引导。
+		b.WriteString("（可以控制。说「远程控制电脑截个图」「运行 ls -la /tmp」即可执行）\n")
 	}
 	return b.String(), "", true
 }
