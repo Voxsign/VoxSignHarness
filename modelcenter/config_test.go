@@ -122,21 +122,13 @@ func TestLoadRealTemplate(t *testing.T) {
 	if !cfg.Channels["learn"].Enabled || l != "deepseek-reasoner" || !cfg.Channels["learn"].WriteBack {
 		t.Errorf("learn 应为 enabled + deepseek-reasoner + write_back: %+v → %s", cfg.Channels["learn"], l)
 	}
-	// **2026-10-04 模型性价比切换（8fc59ea）**：plan→fast 档(deepseek-flash)、
-	// research→economy 档(gpt-4o-mini)；quality 档(v4-pro)仅保留 diagnose。
-	// 分档设计（default 不得指向 quality）不变，此处断言按新档位同步更新。
-	want := map[Channel]string{
-		ChannelPlan:      "deepseek-flash",
-		ChannelResearch:  "gpt-4o-mini",
-		ChannelDiagnose:  "deepseek-v4-pro",
-	}
 	for _, ch := range []Channel{ChannelPlan, ChannelResearch, ChannelDiagnose} {
 		m, err := cfg.ResolveModel(ch)
 		if err != nil {
 			t.Fatalf("%s 解析失败: %v", ch, err)
 		}
-		if m != want[ch] {
-			t.Errorf("%s 应走档位模型 %s，实际 %s", ch, want[ch], m)
+		if m != "deepseek-v4-pro" {
+			t.Errorf("%s 应走 quality 档，实际 %s", ch, m)
 		}
 	}
 	if d, _ := cfg.ResolveModel(ChannelDefault); d != "deepseek-flash" {

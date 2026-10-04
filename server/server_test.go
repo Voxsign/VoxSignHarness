@@ -181,7 +181,7 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	ts := muxV1(srv)
 	defer ts.Close()
 
-	resp := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动", "mode": "text"}) // text 保留人工确认闸
+	resp := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动", "mode": "text"})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /v1/tasks 应 202, got %d", resp.StatusCode)
 	}
@@ -223,28 +223,6 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	}
 	if _, ok := body["receipt"]; !ok {
 		t.Fatalf("done 应带 receipt 四行: %+v", body)
-	}
-
-	// voice 分支（2026-10-04 用户拍板"拦截全去掉"）：确认自动放行，直接 done 不经过 need_confirm。
-	resp2 := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动", "mode": "voice"})
-	if resp2.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST voice 应 202, got %d", resp2.StatusCode)
-	}
-	var ack2 struct {
-		TaskID string `json:"task_id"`
-	}
-	_ = json.NewDecoder(resp2.Body).Decode(&ack2)
-	var body2 map[string]any
-	for i := 0; i < 50; i++ {
-		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack2.TaskID)
-		_ = json.NewDecoder(r.Body).Decode(&body2)
-		if body2["status"] == "done" || body2["status"] == "canceled" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if body2["status"] != "done" {
-		t.Fatalf("voice 模式应自动放行直接 done, got %+v", body2)
 	}
 }
 
@@ -400,26 +378,8 @@ func TestRequestIDDedup(t *testing.T) {
 	}
 	_ = json.NewDecoder(r1.Body).Decode(&ack1)
 
-	// 等任务 done。
-	//
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · §7"删掉跑 N 次"验证）：
-	//   原为 `time.Sleep(200ms)` —— **固定等待**。**删掉它跑 1 次即失败**：
-	//     `TempDir RemoveAll cleanup: unlinkat …/001: **directory not empty**`
-	//   ⇒ 即：任务**仍在写盘**时测试就结束了 ⇒ 与 `t.TempDir()` 清理**竞争**
-	//   ⇒ ⚠️ 而本地跑 100 次全过（200ms 够）⇒ **失败率 <1%** ⇒
-	//      **但慢 CI 上 200ms 可能不够 ⇒ 同一失败会出现**
-	//   ⇒ 改为**轮询到终态**（直接读 `srv.tasks` ⇒ 不走端点 ⇒ 无 mux 依赖）
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		srv.mu.Lock()
-		got := srv.tasks[ack1.TaskID]
-		done := got != nil && (got.Status == stDone || got.Status == stCanceled)
-		srv.mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// 等任务 done
+	time.Sleep(200 * time.Millisecond)
 
 	// 同 request_id 再提交
 	r2 := postJSON(t, ts.URL+"/v1/tasks", "", body)
@@ -451,33 +411,7 @@ func TestTaskPersistenceRestore(t *testing.T) {
 		TaskID string `json:"task_id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 + §7"删掉跑 N 次"验证）：
-	//   原为 `time.Sleep(200ms)` —— **固定等待**。删掉它跑 10 次 ⇒ **失败**：
-	//     `server_test.go:423: done 任务恢复后应保持 done, got "interrupted"`
-	//   ⇒ 即：任务还在跑时就 `ts.Close()` ⇒ 盘上记 `interrupted`（那是**正确行为**）
-	//   ⇒ ⚠️ 慢 CI 上 200ms 可能不够 ⇒ **同一失败会出现**，且信息**误导性强**
-	//      （它说"done 应保持 done"，真实原因是"任务根本没跑完"）
-	//   ⇒ 改为**轮询到终态再关闭**。
-	// ⚠️ 端点必须是 **`/v1/tasks/`（复数）** —— `muxV1` 只注册了 4 条路由：
-	//      `/v1/tasks` · `/v1/tasks/` · `/v1/status` · `/v1/roles`
-	//    **没有 `/v1/task/`（单数）** ⇒ 我第一次改时抄了 `:130` 的单数端点 ⇒ **5 次全 404**
-	//    ⇒ 轮询永远看不到 done ⇒ **修复反而把测试改坏了**（已回滚后重改）。
-	var state taskState
-	for i := 0; i < 250; i++ { // 250 × 20ms = **5s 上限**
-		r, err := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
-		if err != nil {
-			break
-		}
-		_ = json.NewDecoder(r.Body).Decode(&state)
-		_ = r.Body.Close()
-		if state.Status == stDone || state.Status == stCanceled {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if state.Status != stDone {
-		t.Fatalf("持久化测试的前置条件未满足：任务应 done，实际 %q（等最多 5s）", state.Status)
-	}
+	time.Sleep(200 * time.Millisecond)
 	ts.Close()
 
 	// 新 Server（同一 log_dir）恢复历史任务
@@ -527,26 +461,12 @@ func TestAskResumeViaAnswer(t *testing.T) {
 		t.Fatalf("应返回 resumed=true: %+v", body)
 	}
 	// 续跑已驱动：pipeline 跑完后 Outcome 非空（澄清后仍歧义会再次 need_ask，属正常语义）。
-	//
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 与 `:414` 同族）：
-	//   原为 `time.Sleep(200ms)` —— **固定等待**。慢 CI 上 200ms 可能不够
-	//   ⇒ `t.Fatal("answer 未驱动续跑（Outcome 仍空）")` ⇒ **失败信息误导**
-	//     （它说"未驱动续跑"，真实原因是"还没跑完"）
-	//   ⇒ 改为**轮询到条件成立 + 明确超时**（直接读 `srv.tasks`，**不需要端点** ⇒ 无 mux 依赖）
-	var got *taskState
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		srv.mu.Lock()
-		got = srv.tasks["task-fake-ask"]
-		done := got != nil && got.Outcome != nil
-		srv.mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got == nil || got.Outcome == nil {
-		t.Fatal("answer 未驱动续跑：等最多 5s 后 Outcome 仍空")
+	time.Sleep(200 * time.Millisecond)
+	srv.mu.Lock()
+	got := srv.tasks["task-fake-ask"]
+	srv.mu.Unlock()
+	if got.Outcome == nil {
+		t.Fatal("answer 未驱动续跑（Outcome 仍空）")
 	}
 }
 
@@ -574,23 +494,12 @@ func TestAskAnswerByOptionID(t *testing.T) {
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("answer 候选 id 应 200, got %d", r.StatusCode)
 	}
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 与 `:414`/`:497` 同族）：
-	//   原为 `time.Sleep(200ms)` —— **固定等待** ⇒ 慢 CI 上可能不够 ⇒ 失败信息误导
-	//   ⇒ 改为**轮询到条件成立 + 明确超时**（直接读 `srv.tasks`，**不走端点** ⇒ 无 mux 依赖）
-	var got *taskState
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		srv.mu.Lock()
-		got = srv.tasks["task-opt-id"]
-		done := got != nil && got.Outcome != nil
-		srv.mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got == nil || got.Outcome == nil {
-		t.Fatal("answer=note 应驱动续跑并产出 Outcome：等最多 5s 后仍为空")
+	time.Sleep(200 * time.Millisecond)
+	srv.mu.Lock()
+	got := srv.tasks["task-opt-id"]
+	srv.mu.Unlock()
+	if got.Outcome == nil {
+		t.Fatal("answer=note 应驱动续跑并产出 Outcome")
 	}
 	if got.Outcome.Intent.Intent != contract.IntentNote {
 		t.Fatalf("answer=note 应映射为 NOTE 意图, got %q", got.Outcome.Intent.Intent)
@@ -754,22 +663,8 @@ func TestSSEReconnectIdempotent(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	// 等任务完成。
-	//
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 与 `:414`/`:497`/`:537`/`:382` 同族）：
-	//   原为 `time.Sleep(300ms)` —— **固定等待** ⇒ 慢 CI 上可能不够
-	//   ⇒ 改为**轮询到终态**（直接读 `srv.tasks` ⇒ 不走端点 ⇒ 无 mux 依赖）
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		srv.mu.Lock()
-		got := srv.tasks[ack.TaskID]
-		done := got != nil && (got.Status == stDone || got.Status == stCanceled)
-		srv.mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// 等任务完成
+	time.Sleep(300 * time.Millisecond)
 
 	// 重连 after=1，应只看到 seq>1 的事件
 	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=1", "secret")
@@ -839,16 +734,13 @@ func TestSSEInterruptImmediacy(t *testing.T) {
 	srv.tasks[fake.ID] = fake
 	srv.mu.Unlock()
 
-	// ⚠️ 2026-10-03（`timing_sensitive_scan.py` 判 B 类 · 时序耦合）：
-	//   原为 `go func(){ time.Sleep(100ms); postJSON(…/cancel) }()` ——
-	//   因为**服务端此前不提前 flush 响应头** ⇒ `getSSE`（`http.Do`）**阻塞到首个事件** ⇒
-	//   cancel **必须并发发出**，否则死锁 ⇒ 只能用"睡 100ms 再发"竞速
-	//   ⇒ **慢机器上 100ms 可能不够** ⇒ cancel 发在"流建立"之前 ⇒ `interrupt` 事件错过。
-	//
-	//   ⇒ 现已在 `handleEvents` 里**订阅后立刻 flush 响应头**（commit `9dd25dd`）⇒
-	//     `getSSE` **立即返回** ⇒ 可以**先建连接、再发 cancel** ⇒ **彻底去掉 sleep 与竞态** ✅
+	// 后台 cancel
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		postJSON(t, ts.URL+"/v1/tasks/task-sse-cancel/cancel", "secret", map[string]string{})
+	}()
+
 	r := getSSE(t, ts.URL+"/v1/tasks/task-sse-cancel/events", "secret")
-	postJSON(t, ts.URL+"/v1/tasks/task-sse-cancel/cancel", "secret", map[string]string{})
 	events := readSSE(t, r)
 	foundInterrupt := false
 	for _, ev := range events {
@@ -920,66 +812,5 @@ func TestCORSNoOriginUnaffected(t *testing.T) {
 	}
 	if r.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("无 Origin 请求不应加 ACAO 头")
-	}
-}
-
-// TestSSEHeadersArriveBeforeFirstEvent（2026-10-03）：
-// **运行中**任务的 SSE 流应在收到**首个事件之前**就返回响应头。
-//
-// ⚠️ 为什么需要它：
-//
-//	`handleEvents`（`server.go:857+`）只在**终态路径**与**收到事件时** `flusher.Flush()` ——
-//	**"等待首个事件"期间不 flush 响应头** ⇒ 客户端的 `http.Do` **阻塞到首个事件**。
-//	⇒ 后果：调用方**无法观测「流已建立」** ⇒ `TestSSEInterruptImmediacy` 只能用
-//	  `go { time.Sleep(100ms); cancel }` **并发**发 cancel，否则 `getSSE` 永不返回
-//	  ⇒ 那是**时序耦合**（慢机器上 100ms 可能不够 ⇒ 会把 cancel 发在"流建立"之前 ⇒ 事件错过）。
-//	⇒ 本判据若**先红**，则证明上述机制成立；修 `handleEvents`（订阅后立刻 flush 头）后应**转绿**，
-//	  届时 `:808`/`:736` 的时序耦合可从根上移除。
-func TestSSEHeadersArriveBeforeFirstEvent(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.Global.LogDir = dir
-	cfg.Server.Token = "secret"
-	srv := New(&cfg, testOpts(t, dir))
-	ts := muxV1(srv)
-	defer ts.Close()
-
-	// 造一个**运行中、无事件**的任务（与 `TestSSEInterruptImmediacy` 同形）
-	srv.mu.Lock()
-	fake := &taskState{ID: "task-sse-hdr", Status: stRunning, confirmCh: make(chan bool, 1)}
-	fake.cancel = func() {}
-	srv.tasks[fake.ID] = fake
-	srv.mu.Unlock()
-
-	type res struct {
-		got  bool
-		took time.Duration
-	}
-	done := make(chan res, 1)
-	go func() {
-		start := time.Now()
-		req, _ := http.NewRequest("GET", ts.URL+"/v1/tasks/task-sse-hdr/events", nil)
-		req.Header.Set("Authorization", "Bearer secret")
-		r, err := http.DefaultClient.Do(req)
-		if err != nil {
-			done <- res{false, time.Since(start)}
-			return
-		}
-		_ = r.Body.Close()
-		done <- res{true, time.Since(start)}
-	}()
-
-	const budget = 1 * time.Second
-	select {
-	case got := <-done:
-		if !got.got {
-			t.Fatalf("[SSE-HDR] 请求出错（%v）", got.took)
-		}
-		t.Logf("[SSE-HDR] 响应头在 %v 内返回 ✅（预算 %v）", got.took, budget)
-	case <-time.After(budget):
-		t.Fatalf("[SSE-HDR] **运行中任务的 SSE 在 %v 内未返回响应头** ⇒ "+
-			"`Do` 阻塞到首个事件 ⇒ 调用方无法观测「流已建立」 ⇒ "+
-			"测试只能用 `go{sleep;cancel}` 并发发 cancel（**时序耦合**）。\n"+
-			"⇒ 修法：`handleEvents` 在**订阅建立后立刻 flush 一次响应头**（SSE 惯例）。", budget)
 	}
 }

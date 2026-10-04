@@ -74,48 +74,6 @@ func (f *Fetcher) Get(ctx context.Context, id string) (json.RawMessage, error) {
 	return json.RawMessage(b), nil
 }
 
-// KnowhowFromRaw 从技能服务返回的**原始响应**里取出 knowhow。
-//
-// ⚠️ 为什么需要它（2026-10-03 真跑确定，判据 SK-KH-1）：
-//
-//	技能服务 `GET /api/skill/skills/{id}` 的响应是**两层**：
-//	  顶层键：caller · id · **manifest** · ok · personalized · scripts · state · version
-//	  manifest 内部键：description · id · **knowhow** · name · remote_ref · source · tags · version
-//	⇒ **knowhow 在 `manifest.knowhow`**，而 `Knowhow` 期望**顶层**。
-//	⇒ 直接 `json.Unmarshal(raw, &kh)` 得到**全空** ⇒ `CriteriaFromKnowhow` ⇒ 0 条
-//	   ⇒ `AutomatedRatio` ⇒ (0,0)。
-//	⚠️ 我最初猜「剥一层 manifest 就够」——**判据 FAIL 否证了它**（剥一层仍 0 条）。
-//
-// **本函数是加法**（不改任何既有签名）：既有调用方行为不变；需要 knowhow 的调用方改用它。
-// ⚠️ 而"`Fetcher.Get` 是否应直接返回 knowhow"属**接口设计**，待裁（见 Issue #4）。
-func KnowhowFromRaw(raw []byte) (Knowhow, error) {
-	var kh Knowhow
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return kh, fmt.Errorf("响应不是 JSON 对象: %w", err)
-	}
-	m, ok := top["manifest"]
-	if !ok {
-		// 兼容：万一服务改成直接返回 knowhow 顶层
-		if err := json.Unmarshal(raw, &kh); err == nil && (len(kh.Steps)+len(kh.Judging) > 0) {
-			return kh, nil
-		}
-		return kh, fmt.Errorf("响应里既无 manifest 也无顶层 knowhow")
-	}
-	var mm map[string]json.RawMessage
-	if err := json.Unmarshal(m, &mm); err != nil {
-		return kh, fmt.Errorf("manifest 不是 JSON 对象: %w", err)
-	}
-	k, ok := mm["knowhow"]
-	if !ok {
-		return kh, fmt.Errorf("manifest 里没有 knowhow 字段")
-	}
-	if err := json.Unmarshal(k, &kh); err != nil {
-		return kh, fmt.Errorf("knowhow 解析失败: %w", err)
-	}
-	return kh, nil
-}
-
 // Internalize 把**白名单内**的技能内化到本机（元数据 + 内容）。返回内化条数。
 func Internalize(ctx context.Context, f *Fetcher, st *Store, allow map[string]bool) (int, error) {
 	all, err := f.List(ctx)

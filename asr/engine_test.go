@@ -9,7 +9,6 @@ package asr
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -363,33 +362,10 @@ func TestPerformanceP99(t *testing.T) {
 	}
 	sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
 	p50, p99 := durs[n/2], durs[n*99/100]
-
-	// ⚠️ 2026-10-03：**无论通过与否都报告数字**（写到 stderr，`go test` 无 -v 也可见）。
-	//
-	// 为什么：原实现**只在越界时**把 p99 打进失败信息 ⇒ **通过时的值结构性不可观测**
-	// ⇒ 「CI 上典型 p99 是多少 / 方差多大」**答不了** ⇒ 阈值该定多少**没有依据**。
-	// （实测：CI 上 4 次运行 1 次越界 1354µs、3 次通过**但值未知**；本地静默 ~40µs、8 核压满 138µs。）
-	// ⇒ 本行让"参考系"从**印象**变成**可采集的数据**。判据行为不变（阈值仍是 1ms）。
-	//
-	// ⚠️ 写**文件**而不是 stderr/stdout：`scripts/gate.sh:53` 把测试输出收进 `$out`，
-	//   成功时**整段丢弃**；Go 测试框架也会捕获 stdout/stderr（无 -v 时不显示）。
-	//   ⇒ 只有**文件**能跨越这两种吞没 ⇒ 参考系数据才真的可采集。
-	perfOut := os.Getenv("VHS_PERF_OUT")
-	if perfOut == "" {
-		perfOut = filepath.Join(os.TempDir(), "vhs-perf-p99.txt")
+	if p99 > time.Millisecond {
+		t.Fatalf("p99 = %v，超过 1ms 目标", p99)
 	}
-	if f, ferr := os.OpenFile(perfOut, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); ferr == nil {
-		fmt.Fprintf(f, "[perf] p50=%v p99=%v n=%d go=%s\n", p50, p99, n, runtime.Version())
-		f.Close()
-	}
-
-	// OBS-07 标定（2026-10-03 观察报告核对）：原阈值 1ms 落在尾部噪声带——
-	// 今日实测 p99 = 1.354 / 2.057 / 1.1376ms，5 次红 2~3 次，**纯噪声假红**（功能正确性不依赖 1ms）。
-	// 判据意图是"量级标定"（快路应为毫秒内），故放宽到 5ms（噪声带 2.1ms 的 2.4 倍余量），
-	// 同时保留上面"无论通过与否都报告数字"的采集机制，后续可据真实分布收紧。
-	if p99 > 5*time.Millisecond {
-		t.Fatalf("p99 = %v，超过 5ms 量级目标", p99)
-	}
+	t.Logf("快路 p50=%v p99=%v（%d 次，含 Latency 计时开销）", p50, p99, n)
 }
 
 // TestMemoryFootprint 编码验收标准「常驻内存 < 50 MB」。

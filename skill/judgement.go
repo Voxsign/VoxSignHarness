@@ -89,21 +89,6 @@ func criteriaOnly(skillID, version string, kh Knowhow) []Criterion {
 				c.Check = "checkVerifiedOverHearsay"
 				c.Manual = false
 			}
-			// ⚠️ 2026-10-03 新增（target ④「judging 11 条机械化」点名的两条）：
-			//   **只对"可用既有机械装置判定"的条目生效**，不是"看着像就自动化"。
-			//   · 「决策有 ADR」 ⇒ **查文件**（ADR 记录是否存在）
-			//   · 「约束未越界」 ⇒ **用域门禁**（pipeline 的 verdict.Allowed）
-			//   ⚠️ 这两条会**改变自动化率** ⇒ 在 vhs skill-ratio 里对得上（不静默）。
-			if field == "judging" {
-				switch {
-				case strings.Contains(t, "ADR"):
-					c.Check = "checkADRExists"
-					c.Manual = false
-				case strings.Contains(t, "约束未越界"):
-					c.Check = "checkWithinBoundary"
-					c.Manual = false
-				}
-			}
 			out = append(out, c)
 		}
 	}

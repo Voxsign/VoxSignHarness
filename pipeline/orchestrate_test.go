@@ -15,18 +15,10 @@ import (
 // initGitRepo 在 dir 初始化一个干净的 git 仓（带身份 + 一个基线提交）。
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
-	// ⚠️ **不许写 git config**（2026-10-03 事故）：
-	// `git config user.email` 不带 --local/--global 时，写的是"从 cwd 上溯找到的仓库"的 config；
-	// 当 dir 里的仓库不可用时会上溯到**主仓库** ⇒ 覆盖真实身份、并把 core.bare 置 true
-	// （本仓库 .git/config 里出现过 user.email=vhs-test@example.com + bare=true，指纹即此测试）。
-	// ⇒ 身份改由**全局配置回落**（不再显式设置）；若需注入，用命令级 `-c user.email=...`。
 	for _, args := range [][]string{
 		{"init"},
-		// ⚠️ **--local**（2026-10-03 CI 事故）：产品代码 Run() 的 `git commit` 没有 -c 注入，
-		// 依赖仓库 user 配置 ⇒ 无全局身份的 CI runner 会 `fatal: empty ident name`。
-		// `--local` 禁止上溯父仓库 ⇒ 既提供身份，又不污染主仓库 .git/config。
-		{"config", "--local", "user.email", "vhs-test@example.com"},
-		{"config", "--local", "user.name", "vhs-test"},
+		{"config", "user.email", "vhs-test@example.com"},
+		{"config", "user.name", "vhs-test"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -40,8 +32,7 @@ func initGitRepo(t *testing.T, dir string) {
 	add := exec.Command("git", "add", "README.md")
 	add.Dir = dir
 	_ = add.Run()
-	// 身份用**命令级 -c 注入**（不写任何 config ⇒ 无副作用，也不依赖全局身份）
-	cm := exec.Command("git", "-c", "user.email=vhs-test@example.com", "-c", "user.name=vhs-test", "commit", "-m", "baseline")
+	cm := exec.Command("git", "commit", "-m", "baseline")
 	cm.Dir = dir
 	if out, err := cm.CombinedOutput(); err != nil {
 		t.Fatalf("baseline commit failed: %s", out)

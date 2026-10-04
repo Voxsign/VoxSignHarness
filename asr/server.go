@@ -54,40 +54,17 @@ type Server struct {
 func NewServer(p *Pipeline) *Server { return &Server{Pipe: p} }
 
 // Handler 返回路由表。
-// isLoopbackAddr 判断请求来源是否为本机回环地址。
-//
-// ⚠️ **对齐线 A**（`server/server.go:242 isLoopback`）的既有模式 —— 不另起一套。
-func isLoopbackAddr(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// guardLoopback 是**回环鉴权**中间件（NF-5）。
-//
-// 依据（Peter `docs/校准报告-产品与实现-L01.md` §6 修订项 3）：
-//
-//	「NF-5 鉴权：ASR 服务**补回环鉴权**（对齐线 A 的 isLoopback + 绑定 127.0.0.1），非回环拒绝。」
-//
-// 语义（与线 A 一致）：**非回环请求 ⇒ 403**；回环请求 ⇒ 放行。
-//
-// ⚠️ 为什么是"运行时拒绝"而不是"启动时拒绝"（fail-closed）：
-//
-//	线 A 用的是运行时豁免模式；且**启动拒绝会改变启动语义**（绑 0.0.0.0 直接起不来）——
-//	那超出了本条修订项的要求。**不在本条范围内。**
-//
-// 真跑证据（2026-10-03 · 见 Issue #4）：修前线 B 绑 `0.0.0.0:8123`，
-// 从 LAN 请求 `/v1/health` ⇒ **200**（无鉴权）；修后应为 **403**。
-func guardLoopback(next http.Handler) http.Handler {
+// loopbackOnly 拒绝非回环来源（NF5：ASR 服务无鉴权，只允许本机调用）。
+func loopbackOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopbackAddr(r.RemoteAddr) {
-			writeJSON(w, http.StatusForbidden, map[string]string{
-				"error":  "非本机访问被拒（ASR 服务仅接受回环请求）",
-				"advice": "如需远程访问，请在前置代理层做鉴权，或改走线 A（harness 有 token 鉴权）",
-			})
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || !ip.IsLoopback() {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"仅允许本机调用（loopback-only）"}`))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -108,8 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/testpage", s.handleTestRun)
 	mux.HandleFunc("/v1/testlog", s.handleTestLog)
 	mux.HandleFunc("/", s.handleTestPage)
-	// NF-5：**全部端点**外面套回环鉴权（含 catch-all 测试页）
-	return guardLoopback(mux)
+	return loopbackOnly(mux)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
