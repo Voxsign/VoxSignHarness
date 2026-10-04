@@ -67,7 +67,7 @@
 | 8 | E5 run 编排 | 2 个任务的输入 → summary.total=2、逐个投递上游、每个任务 status 与上游一致 |
 | 9 | E5 run 可审计 | 会话 JSONL 有全部任务轨迹（动作/对象/task_id/status/ts） |
 | 10 | E5 语音友好 | 出参 tasks 每项一行短句（≤120 字），无长段落 |
-| 11 | E6 回读 | GET /v1/voice/tasks/{cid} 返回 count=已执行任务数 |
+| 11 | E6 回读 | GET /v1/voice/tasks/{conversation_id} 返回 count=已执行任务数 |
 | 12 | 技术约束 | go build 通过、仅标准库、中文不乱码 |
 
 ## 4. 交付形态
