@@ -6,36 +6,44 @@
 	objectVersion = 70;
 	objects = {
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A0000000000000000000004 /* VoiceSign */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				1A0000000000000000000020 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
-			);
-			path = VoiceSign;
-			sourceTree = "<group>";
+/* Begin PBXContainerItemProxy section */
+		1A0000000000000000000019 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000006;
+			remoteInfo = VoiceSign;
 		};
-		1A0000000000000000000005 /* VoiceSignTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = VoiceSignTests;
-			sourceTree = "<group>";
+		1A0000000000000000000039 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A0000000000000000000006;
+			remoteInfo = VoiceSign;
 		};
-		1A0000000000000000000030 /* VoiceSignUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = VoiceSignUITests;
-			sourceTree = "<group>";
-		};
-/* End PBXFileSystemSynchronizedRootGroup section */
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1A0000000000000000000016 /* VoiceSign.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoiceSign.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000017 /* VoiceSignTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoiceSignTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000034 /* VoiceSignUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoiceSignUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		1A0000000000000000000020 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				"App/Info.plist",
+				App/Info.plist,
 			);
 			target = 1A0000000000000000000006 /* VoiceSign */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		1A0000000000000000000004 /* VoiceSign */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (1A0000000000000000000020 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = VoiceSign; sourceTree = "<group>"; };
+		1A0000000000000000000005 /* VoiceSignTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = VoiceSignTests; sourceTree = "<group>"; };
+		1A0000000000000000000030 /* VoiceSignUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = VoiceSignUITests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A000000000000000000000A /* Frameworks */ = {
@@ -60,6 +68,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1A0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000004 /* VoiceSign */,
+				1A0000000000000000000005 /* VoiceSignTests */,
+				1A0000000000000000000030 /* VoiceSignUITests */,
+				1A0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1A0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1A0000000000000000000016 /* VoiceSign.app */,
+				1A0000000000000000000017 /* VoiceSignTests.xctest */,
+				1A0000000000000000000034 /* VoiceSignUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
 		1A0000000000000000000006 /* VoiceSign */ = {
@@ -205,76 +236,12 @@
 			target = 1A0000000000000000000006 /* VoiceSign */;
 			targetProxy = 1A0000000000000000000019 /* PBXContainerItemProxy */;
 		};
-		1A0000000000000000000019 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 1A0000000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 1A0000000000000000000006;
-			remoteInfo = VoiceSign;
-		};
 		1A0000000000000000000038 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 1A0000000000000000000006 /* VoiceSign */;
 			targetProxy = 1A0000000000000000000039 /* PBXContainerItemProxy */;
 		};
-		1A0000000000000000000039 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 1A0000000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 1A0000000000000000000006;
-			remoteInfo = VoiceSign;
-		};
 /* End PBXTargetDependency section */
-
-/* Begin PBXGroup section */
-		1A0000000000000000000002 = {
-			isa = PBXGroup;
-			children = (
-				1A0000000000000000000004 /* VoiceSign */,
-				1A0000000000000000000005 /* VoiceSignTests */,
-				1A0000000000000000000030 /* VoiceSignUITests */,
-				1A0000000000000000000003 /* Products */,
-			);
-			sourceTree = "<group>";
-		};
-		1A0000000000000000000003 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				1A0000000000000000000016 /* VoiceSign.app */,
-				1A0000000000000000000017 /* VoiceSignTests.xctest */,
-				1A0000000000000000000034 /* VoiceSignUITests.xctest */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-/* End PBXGroup section */
-
-/* Begin PBXFileReference section */
-		1A0000000000000000000016 /* VoiceSign.app */ = {
-			isa = PBXFileReference;
-			explicitFileType = "wrapper.application";
-			includeInIndex = 0;
-			lastKnownFileType = "wrapper.application";
-			path = VoiceSign.app;
-			sourceTree = "<group>";
-		};
-		1A0000000000000000000017 /* VoiceSignTests.xctest */ = {
-			isa = PBXFileReference;
-			explicitFileType = "wrapper.cfbundle";
-			includeInIndex = 0;
-			lastKnownFileType = "wrapper.cfbundle";
-			path = VoiceSignTests.xctest;
-			sourceTree = "<group>";
-		};
-		1A0000000000000000000034 /* VoiceSignUITests.xctest */ = {
-			isa = PBXFileReference;
-			explicitFileType = "wrapper.cfbundle";
-			includeInIndex = 0;
-			lastKnownFileType = "wrapper.cfbundle";
-			path = VoiceSignUITests.xctest;
-			sourceTree = "<group>";
-		};
-/* End PBXFileReference section */
 
 /* Begin XCBuildConfiguration section */
 		1A0000000000000000000010 /* Debug */ = {
@@ -320,15 +287,18 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 6ASMXVQHKK;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceSign/App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = VoxSign;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -339,15 +309,18 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 6ASMXVQHKK;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VoiceSign/App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = VoxSign;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -362,10 +335,14 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VoiceSign.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VoiceSign";
@@ -380,10 +357,14 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/VoiceSign.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/VoiceSign";
@@ -397,10 +378,14 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -413,10 +398,14 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				SDKROOT = iphoneos;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = net.voxsign.ios.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
