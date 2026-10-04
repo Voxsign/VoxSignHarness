@@ -14,16 +14,13 @@ import (
 var (
 	addr       = flag.String("addr", "127.0.0.1:8950", "HTTP network address")
 	dataDir    = flag.String("data-dir", "./data", "Data directory")
-	upstream   = os.Getenv("VHS_UPSTREAM")
-	sessions   = make(map[string][]string)
+	upstream   = flag.String("upstream", "http://127.0.0.1:8941", "Upstream harness address")
+	sessions   = make(map[string][]map[string]interface{})
 	sessionsMu sync.Mutex
 )
 
 func main() {
 	flag.Parse()
-	if upstream == "" {
-		upstream = "http://127.0.0.1:8941"
-	}
 
 	http.HandleFunc("/v1/voice/health", handleVoiceHealth)
 	http.HandleFunc("/v1/voice/parse", handleVoiceParse)
@@ -34,19 +31,20 @@ func main() {
 	http.HandleFunc("/v1/tasks", handleTasks)
 	http.HandleFunc("/v1/tasks/", handleTaskByID)
 
-	fmt.Printf("Listening on %s...\n", *addr)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
-		fmt.Println("Error starting server:", err)
+		fmt.Fprintf(os.Stderr, "Error starting server: %v\n", err)
+		os.Exit(1)
 	}
 }
 
 func handleVoiceHealth(w http.ResponseWriter, r *http.Request) {
 	sessionsMu.Lock()
 	defer sessionsMu.Unlock()
+
 	response := map[string]interface{}{
 		"ok":       true,
 		"service":  "vhs-voice",
-		"upstream": upstream,
+		"upstream": *upstream,
 		"sessions": len(sessions),
 	}
 	json.NewEncoder(w).Encode(response)
@@ -62,6 +60,7 @@ func handleVoiceParse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clean, actions, noiseRemoved := parseText(req.Text)
+
 	response := map[string]interface{}{
 		"clean":         clean,
 		"actions":       actions,
@@ -116,6 +115,7 @@ func handleVoiceDecompose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tasks := decomposeText(req.Clean)
+
 	response := map[string]interface{}{
 		"tasks": tasks,
 	}
@@ -123,7 +123,7 @@ func handleVoiceDecompose(w http.ResponseWriter, r *http.Request) {
 }
 
 func decomposeText(clean string) []map[string]interface{} {
-	// Placeholder for actual decomposition logic
+	// Placeholder logic for decomposing text into tasks
 	return []map[string]interface{}{
 		{"seq": 1, "action": "拉取", "target": "GitHub 仓库 example/repo"},
 	}
@@ -131,49 +131,58 @@ func decomposeText(clean string) []map[string]interface{} {
 
 func handleVoiceResolve(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for resolve logic
-	w.WriteHeader(http.StatusNotImplemented)
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }
 
 func handleVoiceRun(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for run logic
-	w.WriteHeader(http.StatusNotImplemented)
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }
 
 func handleVoiceTasks(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for tasks logic
-	w.WriteHeader(http.StatusNotImplemented)
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }
 
 func handleTasks(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for tasks logic
-	w.WriteHeader(http.StatusNotImplemented)
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }
 
 func handleTaskByID(w http.ResponseWriter, r *http.Request) {
 	// Placeholder for task by ID logic
-	w.WriteHeader(http.StatusNotImplemented)
+	http.Error(w, "Not implemented", http.StatusNotImplemented)
 }
 
-func saveSession(conversationID string, data interface{}) error {
+func saveSession(conversationID string, data map[string]interface{}) error {
 	sessionsMu.Lock()
 	defer sessionsMu.Unlock()
 
-	sessionFile := filepath.Join(*dataDir, "voice_sessions", conversationID+".jsonl")
+	if _, exists := sessions[conversationID]; !exists {
+		sessions[conversationID] = []map[string]interface{}{}
+	}
+	sessions[conversationID] = append(sessions[conversationID], data)
+
+	sessionDir := filepath.Join(*dataDir, "voice_sessions")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return err
+	}
+
+	sessionFile := filepath.Join(sessionDir, fmt.Sprintf("%s.jsonl", conversationID))
 	file, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	jsonData, err := json.Marshal(data)
+	entry, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
 
-	if _, err := file.Write(append(jsonData, '\n')); err != nil {
+	if _, err := file.Write(append(entry, '\n')); err != nil {
 		return err
 	}
 
-	sessions[conversationID] = append(sessions[conversationID], string(jsonData))
 	return nil
 }
