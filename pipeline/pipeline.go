@@ -1814,25 +1814,9 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			break
 		}
 	}
-	// 判据 4：P0 能力存在性（关键字扫描——判据为"有实现痕迹"，非语义级）。
-	type p0 struct{ key, name string }
-	p0s := []p0{
-		{"dictionary", "词典（增删查）"}, {"dict", "词典"},
-		{"correct", "纠错"}, {"intent", "意图分类"},
-		{"feedback", "反馈学习"}, {"jsonl", "JSONL 落盘"},
-		{"append", "append-only 落盘"}, {"/v1/health", "健康检查"},
-		{"v1/process", "业务端点 /v1/process"},
-	}
-	seen := map[string]bool{}
-	for _, p := range p0s {
-		if seen[p.name] {
-			continue
-		}
-		seen[p.name] = true
-		if !strings.Contains(low, p.key) {
-			gaps = append(gaps, "缺 P0 能力实现："+p.name+"（源码中未见 `"+p.key+"`）")
-		}
-	}
+	// 判据 4 已移除（2026-10-04）：旧判据是 ASR 契约硬编码 P0 清单（词典/纠错/process…），
+	// 换需求（语音适配层）后永远报缺 → 5 轮都不收敛。证据门改为需求驱动：
+	// 判据 5（需求端点 ↔ 产物 HandleFunc 差集）才是核心存在性判据；能力语义由校验对齐服务评。
 	// 判据 3：真编译（不许桩）。
 	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", implRoot, "./..."}})
 	if !buildRecv.OK {
@@ -1846,7 +1830,14 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 	if o.Document != "" {
 		reqEP := endpointRefsOf(o.Document)
 		prodEP := endpointHandlersOf(mainSrc)
+		// 2026-10-04 修复：需求文档会引用上游 harness 端点（"只调其 POST /v1/tasks 与 GET
+		// /v1/tasks/{id}"）——那是要调用的，不是产物要注册的。判据 5 只查产物端点族
+		//（/v1/voice/ 前缀；上游端点排除），否则永远误报缺口导致修订死循环。
+		upstreamEP := map[string]bool{"/v1/tasks": true, "/v1/tasks/{id}": true}
 		for ep := range reqEP {
+			if upstreamEP[ep] {
+				continue
+			}
 			if !prodEP[ep] {
 				gaps = append(gaps, "缺需求端点实现："+ep+"（需求文档要求，产物未注册 http.HandleFunc）")
 			}
@@ -1858,7 +1849,10 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 // endpointRefsOf 提取文本中出现的所有 /v1/xxx 端点字面量（需求侧：文档里提到的即算需求端点）。
 func endpointRefsOf(src string) map[string]bool {
 	set := map[string]bool{}
-	re := regexp.MustCompile(`/v1/[a-z_]+`)
+	// 2026-10-04 修复：单级正则 /v1/[a-z_]+ 会把 /v1/voice/health 截成 /v1/voice——
+	// 需求 6 端点被压成 2 个父路径，判据 5 形同虚设（真跑：缺口 8 项全是 ASR 硬编码判据，
+	// 缺 resolve/run 的端点缺口 0 条）。改多级：/v1/voice/resolve、/v1/voice/tasks/{cid} 等全量。
+	re := regexp.MustCompile(`/v1/[a-zA-Z0-9_/{}-]+`)
 	for _, m := range re.FindAllString(src, -1) {
 		set[m] = true
 	}
@@ -1898,7 +1892,8 @@ func docBrief(src string, n int) string {
 // endpointHandlersOf 提取源码中 http.HandleFunc("/v1/xxx", …) 已注册的端点（产物侧：注册才算实现）。
 func endpointHandlersOf(src string) map[string]bool {
 	set := map[string]bool{}
-	re := regexp.MustCompile(`HandleFunc\("/v1/[a-z_]+`)
+	// 2026-10-04 同步多级：/v1/voice/health 完整提取（与 endpointRefsOf 对齐）。
+	re := regexp.MustCompile(`HandleFunc\("/v1/[a-zA-Z0-9_/{}-]+`)
 	for _, m := range re.FindAllString(src, -1) {
 		set[strings.TrimPrefix(m, `HandleFunc("`)] = true
 	}
