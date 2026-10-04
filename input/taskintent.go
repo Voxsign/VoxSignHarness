@@ -955,7 +955,9 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	if cut, _ := lastCorrection(text); cut >= 0 {
 		corrections = 1
 	}
-	if _, _, isOrchestrate := detectOrchestrate(text); !isOrchestrate && corrections == 0 {
+	_, _, isOrch := detectOrchestrate(text)
+	_, _, isImpl := detectImplementOrchestrate(text)
+	if !isOrch && !isImpl && corrections == 0 {
 		if n, labels, hadConn := multiActionClauses(text); multiActionTrips(n, hadConn) {
 			got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 			got.Conflict = contract.ConflictMultiAction
@@ -977,6 +979,15 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 必须先于 2b 单类触发：「沟通记录」含「记录」会命中 noteTriggers，「提交」会命中 commitTriggers——
 	// 长任务「把全部沟通记录和设计文档整理成《…》并保存提交」此前被降级为单条 NOTE 整段 append。
 	if kind, params, ok := detectOrchestrate(text); ok {
+		return c.fill(ti, kind, 0.9, params)
+	}
+
+	// 2a-ter. 实现类长任务（ORCHESTRATE kind=implement）：实现/搭建/修订某能力系统。
+	// 洞2 修复（2026-10-04）：分发必须显式调用 detectImplementOrchestrate——
+	// 否则「把需求文档实现出来…并提交到仓库」被 2b 的 commitTriggers 截成单动作 COMMIT，
+	// 实现类长任务永远不进入编排引擎（此前只加了函数未接入分发，证据门永不触发）。
+	if kind, params, ok := detectImplementOrchestrate(text); ok {
+		params["kind"] = "implement"
 		return c.fill(ti, kind, 0.9, params)
 	}
 
