@@ -703,6 +703,16 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			recv.Stdout = answer
 		}
 		return []contract.Receipt{recv}
+	case contract.IntentEdit:
+		// 2026-10-04 验证器 R6/R7：写文件意图真实执行（此前走 default 占位
+		// "动作待模型工具循环落地"）。路径从"写到/写入/保存到"后提取。
+		path, content := extractWriteTarget(it.CorrectedText)
+		if path == "" {
+			return []contract.Receipt{{Tool: "file", OK: false,
+				Err: "未识别要写入的文件路径（说「把 XX 写到 /path/to/file」）"}}
+		}
+		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
+		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentCommit:
 		// M4-4：在项目域 scope 根执行真实 git 提交（git add -A + commit；不改写历史）。
 		root := o.projectRootForCommit(it)
@@ -753,6 +763,37 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 		recv.Err = err.Error()
 	}
 	return recv
+}
+
+// extractWriteTarget 从"把 XX 写到 /path"类口语提取 (路径, 内容)。
+// 路径 = "写到/写入/保存到/保存为/创建文件"后第一个以 / 开头的词；内容 = 其余文本（去"把"）。
+func extractWriteTarget(text string) (string, string) {
+	marks := []string{"写到", "写入", "保存到", "保存为", "创建文件"}
+	rest := ""
+	for _, m := range marks {
+		if idx := strings.Index(text, m); idx >= 0 {
+			rest = strings.TrimSpace(text[idx+len(m):])
+			text = strings.TrimSpace(text[:idx])
+			break
+		}
+	}
+	if rest == "" {
+		return "", ""
+	}
+	fields := strings.Fields(rest)
+	path := ""
+	for i, f := range fields {
+		if strings.HasPrefix(f, "/") {
+			path = f
+			rest = strings.Join(fields[i+1:], " ")
+			break
+		}
+	}
+	if path == "" {
+		return "", ""
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(text, "把")) + " " + rest
+	return path, strings.TrimSpace(content)
 }
 
 // matchVoiceContract 检测口语文本是否命中语音自举注册的契约能力（Source=="voice"）。

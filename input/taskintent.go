@@ -85,13 +85,20 @@ var (
 	// registerTriggers 是历史触发词表：保留给 actionWords（否定/条件的动作全集）
 	// 与非结构化兜底使用。新判定一律走 registerToolRequest 的结构性判据 ——
 	// 见下方"注册工具意图（架构缺口 A1）"。
-	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具"}
-	deleteTriggers   = []string{"删掉", "删除", "去掉", "移除", "清空"}
-	feasibleAsk      = []string{"能不能", "可不可以", "是否可以", "行不行"}
-	thoughtWords     = []string{"想法", "备忘"}
-	statusQuestion   = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
-	debugPlanWords   = []string{"思路", "怎么做", "方案", "打算"}
-	noteTriggers     = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
+	registerTriggers = []string{"加一个工具", "加个工具", "注册工具", "新增工具", "加个新工具", "加一个新工具",
+		// 2026-10-04 验证器 R11：口语注册"增加一个查看天气的能力"——
+		// "增加一个/新增一个/添加一个"+"能力" 语境命中（"加一个"太宽不加入）。
+		"增加一个", "新增一个", "添加一个"}
+	// writeTriggers 写文件指令（2026-10-04 验证器 R6/R7 逼出）：
+	// "把 XX 写到 /path" 此前被判 TEST（含"测试"字）或 UNKNOWN（无触发词）。
+	// 独立表放最前，先于 TEST 判定。
+	writeTriggers  = []string{"写到", "写入", "保存到", "保存为", "创建文件", "写一个", "写个"}
+	deleteTriggers = []string{"删掉", "删除", "去掉", "移除", "清空"}
+	feasibleAsk    = []string{"能不能", "可不可以", "是否可以", "行不行"}
+	thoughtWords   = []string{"想法", "备忘"}
+	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
+	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
+	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
 	// F4 修复（真实测试 R1/R2/R9）：事实疑问句触发。位于 2b 单类 switch 的 query 分支、
 	// 先于 deploy/edit 判定——「DMZ 发布是不是单向的」是提问不是部署命令（原误判 DEPLOY）。
 	queryTriggers = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
@@ -364,7 +371,7 @@ func containsAnyReturn(text string, keywords []string) (string, bool) {
 var actionWords = func() []string {
 	var all []string
 	for _, group := range [][]string{
-		registerTriggers, deleteTriggers, noteTriggers, queryTriggers,
+		registerTriggers, writeTriggers, deleteTriggers, noteTriggers, queryTriggers,
 		debugTriggers, testTriggers, commitTriggers, deployTriggers,
 		askTriggers, editTriggers,
 	} {
@@ -1062,6 +1069,10 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	//
 	// 2b. 单类触发（长词在前，SPEC v1 §2 表）
 	switch {
+	case containsAny(text, writeTriggers):
+		// 2026-10-04 验证器 R6/R7：写文件指令（把 XX 写到/写入/保存到 /path）
+		// 先于 NOTE/TEST 判定——"把 自动验证器测试文件 写到 /tmp"不再被"测试"劫持。
+		return c.fill(ti, contract.IntentEdit, 0.85, nil)
 	case containsAny(text, noteTriggers):
 		return c.fill(ti, contract.IntentNote, 0.85, nil)
 	case containsAny(text, m2InfoTriggers):
