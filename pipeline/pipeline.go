@@ -1945,6 +1945,35 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		}
 		gaps = append(gaps, "产物含桩实现（"+strings.Join(stubHits, "；")+"）——必须实现真实业务逻辑，禁止占位"+sem)
 	}
+	// 判据 7：行为级真跑（2026-10-04 实证：LLM 生成 parse/decompose 返回软空壳——
+	// 无 501 但 E2 parse actions=null、E3 decompose tasks=null；判据 6 桩检测抓不到软桩。
+	// 必须起产物服务打标准输入断言行为（真装配级，呼应需求判据 2/4）。
+	if len(gaps) == 0 {
+		bin := filepath.Join(implRoot, "impl")
+		if _, err := os.Stat(bin); err == nil {
+			port := "18950"
+			o.run("run", map[string]any{"command": []string{"sh", "-c",
+				"lsof -ti :18950 | xargs kill 2>/dev/null; sleep 0.3; nohup " + bin +
+					" -addr 127.0.0.1:" + port + " >/tmp/vhs_evg_srv.log 2>&1 & echo $! > /tmp/vhs_evg.pid; sleep 1"}})
+			defer o.run("run", map[string]any{"command": []string{"sh", "-c", "kill $(cat /tmp/vhs_evg.pid) 2>/dev/null"}})
+			// E2 parse：标准口语输入必须返回 actions 数组（需求判据 2）。
+			p := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "6", "-X", "POST",
+				"http://127.0.0.1:" + port + "/v1/voice/parse", "-H", "Content-Type: application/json",
+				"-d", `{"text":"就是那个现在开始跑一下测试对吧","conversation_id":"evg-1"}`}})
+			ps := strings.TrimSpace(p.Stdout)
+			if !strings.Contains(ps, `"actions":[`) && !strings.Contains(ps, `"actions": [`) && !strings.Contains(ps, `"actions":[{`) {
+				gaps = append(gaps, "E2 parse 行为不达标：输入「就是那个现在开始跑一下测试对吧」应返回 actions 数组（动作识别），实测="+ps+"——实现动作词表与过滤逻辑，禁止空 actions")
+			}
+			// E3 decompose：复合指令必须拆出多个任务（需求判据 4）。
+			d := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "6", "-X", "POST",
+				"http://127.0.0.1:" + port + "/v1/voice/decompose", "-H", "Content-Type: application/json",
+				"-d", `{"text":"拉取最新版，编译并启动服务，跑长程任务验收测试，输出报告","conversation_id":"evg-1"}`}})
+			ds := strings.TrimSpace(d.Stdout)
+			if !strings.Contains(ds, `"tasks":[`) && !strings.Contains(ds, `"tasks": [`) {
+				gaps = append(gaps, "E3 decompose 行为不达标：复合指令应拆出多个任务（tasks 数组），实测="+ds+"——实现动作分割与任务列表，禁止空 tasks")
+			}
+		}
+	}
 	return gaps
 }
 
