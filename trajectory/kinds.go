@@ -21,8 +21,13 @@ const (
 	IntentSourceTextFallback = "text-fallback"
 )
 
+// KindTaskMetrics 记录结构化任务指标（#52 摘要聚合源：loop/net/space/attr/ok）。
+// 由 pipeline.writeTaskMetrics 写入，Summary 按此聚合。
+const KindTaskMetrics = "task_metrics"
+
 // Kinds 是全部合法 kind 的**唯一真值**（新增 kind 必须在此登记）。
 var Kinds = map[string]bool{
+	KindTaskMetrics:  true,
 	KindInputRaw:     true,
 	KindInputClean:   true,
 	KindInputCorrec:  true,

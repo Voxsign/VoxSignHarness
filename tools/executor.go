@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +95,10 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 		// 2026-10-04 自迭代第二段：语音自举注册的「远程控制电脑」能力 → 真实执行器
 		//（列桌面/截图/运行应用/只读命令白名单）。机器=用户自己的 Mac（harness 宿主）。
 		out, execErr, ok = e.execRemote(args)
+	case "weather":
+		// 2026-10-04 自迭代第三段：语音注册的「查看天气」→ 真实执行器。
+		// 接公开天气 API（wttr.in，无 key），返回当前天气；城市从口语提取，默认自动定位。
+		out, execErr, ok = e.execWeather(args)
 	default:
 		recv.Blocked = fmt.Sprintf("执行器未实现工具 %q（仅内置六工具可执行）", tool)
 		recv.DurationMs = time.Since(start).Milliseconds()
@@ -345,7 +352,9 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 			} else if fi, err := os.Stat(png); err != nil || fi.Size() == 0 {
 				b.WriteString("截图未生成（文件为空或不可读）\n")
 			} else {
-				b.WriteString("已截图：" + png + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
+				// 图片回执：输出相对 URL（/screenshots/<file>），iOS 端拼 base 直接渲染；
+				// 不再输出 Mac 本地绝对路径（真机无法访问）。
+				b.WriteString("已截图：/screenshots/" + filepath.Base(png) + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
 			}
 		}
 	}
@@ -380,6 +389,13 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 
 	if b.Len() == 0 {
 		b.WriteString("远程控制能力已就绪。可以说「看看桌面上有什么」「截个图」「运行 ls 看看」或「有哪些应用在跑」。")
+	} else if !strings.Contains(text, "截图") && !strings.Contains(text, "截个图") &&
+		!strings.Contains(text, "截屏") && !strings.Contains(text, "桌面") &&
+		!strings.Contains(text, "看看") && !strings.Contains(text, "应用") &&
+		!strings.Contains(text, "运行") && !strings.Contains(text, "程序") &&
+		extractReadOnlyCmd(text) == "" {
+		// 纯能力询问（"能控制后台的电脑吗"）：已用桌面列表证明能力，追加引导。
+		b.WriteString("（可以控制。说「远程控制电脑截个图」「运行 ls -la /tmp」即可执行）\n")
 	}
 	return b.String(), "", true
 }
@@ -399,4 +415,61 @@ func extractReadOnlyCmd(text string) string {
 		}
 	}
 	return ""
+}
+
+// weatherCities 常见城市名（中英），口语命中即按城市查天气；未命中自动定位。
+var weatherCities = []string{
+	"北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "武汉", "西安", "南京",
+	"天津", "苏州", "长沙", "青岛", "大连", "厦门", "福州", "合肥", "郑州", "济南",
+	"昆明", "贵阳", "乌鲁木齐", "兰州", "哈尔滨", "长春", "沈阳", "南昌", "南宁", "海口",
+	"利雅得", "迪拜", "多哈", "吉达", "麦加", "麦地那",
+	"Riyadh", "Dubai", "Doha", "Jeddah", "London", "New York", "Tokyo", "Singapore",
+}
+
+// extractCityForWeather 从口语提取城市名（"查一下北京的天气"→北京）；
+// 命中常见城市表则返回，否则空串（wttr.in 自动定位）。
+func extractCityForWeather(text string) string {
+	for _, c := range weatherCities {
+		if strings.Contains(text, c) {
+			return c
+		}
+	}
+	return ""
+}
+
+// execWeather 执行「查看天气」能力：真实调用公开天气 API（wttr.in，无需 key）。
+// 输出人话天气（天气现象/温度/湿度/风速）；失败返回原因回执（网络不可达等），不阻塞。
+func (e *Executor) execWeather(args map[string]any) (string, string, bool) {
+	text := str(args, "text")
+	if text == "" {
+		text = str(args, "pattern")
+	}
+	city := extractCityForWeather(text)
+	queryURL := "https://wttr.in/?format=%C+%t+%h+%w"
+	if city != "" {
+		queryURL = fmt.Sprintf("https://wttr.in/%s?format=%%C+%%t+%%h+%%w", url.QueryEscape(city))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
+	if err != nil {
+		return "", "构造天气请求失败: " + err.Error(), false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "天气服务不可达（网络问题）: " + err.Error(), false
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	raw := strings.TrimSpace(string(body))
+	if resp.StatusCode != 200 || raw == "" {
+		return "", fmt.Sprintf("天气服务返回异常（HTTP %d）", resp.StatusCode), false
+	}
+	// wttr.in format 输出形如 "Patchy rain nearby +22°C 63% 9km/h"
+	where := city
+	if where == "" {
+		where = "当前城市"
+	}
+	out := "天气实况（" + where + "）：" + raw
+	return out, "", true
 }

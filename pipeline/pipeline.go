@@ -84,9 +84,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,15 +134,6 @@ type Options struct {
 
 	// selfhealSvc 异常自愈层（三环）；懒装配。Providers==nil 时恒为 nil（零开销跳过，主链不变）。
 	selfhealSvc *selfheal.Service
-
-	// ConvID 会话标识（同 logDir 下多轮 run 共享；缺省 "default"）。
-	ConvID string
-	// ASRDataDir ASR 数据目录（反馈/黑名单/词典记忆，跨会话全局生效）。
-	ASRDataDir string
-	// RoundEvidence 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）。
-	RoundEvidence string
-	// Document 需求文档全文（实现类任务；证据门/LLM 生成共用）。
-	Document string
 
 	mu    *sync.Mutex
 	guard *risk.Guard
@@ -248,7 +237,8 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// QUERY 高置信（>=0.8）的"这个/那个"是普通口语代词，跳过指代消解，
 	// 否则 refer 候选为空会写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
 	var referOpts []refer.Option
-	if o.Refer != nil && shouldResolveRefer(&intent) {
+	// hasRecent：当前单轮调用无上下文判定，传 false（多轮接线由上层 refer 模块在链上启用时再传 true）。
+	if o.Refer != nil && shouldResolveRefer(&intent, false) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
 			prevAsk := intent.Ask
@@ -470,9 +460,14 @@ type taskMetricsPayload struct {
 }
 
 func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bool) {
+	space := it.Space
+	if space == "" {
+		// 回问/拦截早返回路径发生在 space select 之前：域归属与是否澄清无关，补默认域。
+		space = defaultSpaceFor(it)
+	}
 	p := taskMetricsPayload{
 		Kind:    "task_metrics",
-		Space:   it.Space,
+		Space:   space,
 		Intent:  it.Intent,
 		AttrCls: out.Attribution.Class,
 		LoopMs:  out.LoopMs,
@@ -481,7 +476,7 @@ func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bo
 		OK:      out.Verify.Status != verify.StatusFail && !hasFailure(out.Receipts),
 	}
 	b, _ := json.Marshal(p)
-	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: "task_metrics", Content: string(b)})
+	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindTaskMetrics, Content: string(b)})
 }
 
 // ---------- 集成层小工具（薄封装，规则语义均在被编排的包内） ----------
@@ -580,13 +575,17 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// 自迭代第二段（2026-10-04）：语音自举注册的契约能力优先执行。
 		// 文本命中已注册能力（如「远程控制电脑」）→ 调真实执行器，不再回"无法远程控制"。
 		if capName := o.matchVoiceContract(&it); capName != "" {
+			tool := "remote-desktop"
+			if strings.Contains(capName, "天气") {
+				tool = "weather"
+			}
 			args := map[string]any{
 				"cap":     capName,
 				"text":    it.CorrectedText,
 				"pattern": it.CorrectedText,
 				"log_dir": logDir,
 			}
-			return []contract.Receipt{o.run("remote-desktop", args)}
+			return []contract.Receipt{o.run(tool, args)}
 		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
@@ -599,6 +598,16 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			recv.Stdout = answer
 		}
 		return []contract.Receipt{recv}
+	case contract.IntentEdit:
+		// 2026-10-04 验证器 R6/R7：写文件意图真实执行（此前走 default 占位
+		// "动作待模型工具循环落地"）。路径从"写到/写入/保存到"后提取。
+		path, content := extractWriteTarget(it.CorrectedText)
+		if path == "" {
+			return []contract.Receipt{{Tool: "file", OK: false,
+				Err: "未识别要写入的文件路径（说「把 XX 写到 /path/to/file」）"}}
+		}
+		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
+		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentCommit:
 		// M4-4：在项目域 scope 根执行真实 git 提交（git add -A + commit；不改写历史）。
 		root := o.projectRootForCommit(it)
@@ -651,6 +660,37 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 	return recv
 }
 
+// extractWriteTarget 从"把 XX 写到 /path"类口语提取 (路径, 内容)。
+// 路径 = "写到/写入/保存到/保存为/创建文件"后第一个以 / 开头的词；内容 = 其余文本（去"把"）。
+func extractWriteTarget(text string) (string, string) {
+	marks := []string{"写到", "写入", "保存到", "保存为", "创建文件"}
+	rest := ""
+	for _, m := range marks {
+		if idx := strings.Index(text, m); idx >= 0 {
+			rest = strings.TrimSpace(text[idx+len(m):])
+			text = strings.TrimSpace(text[:idx])
+			break
+		}
+	}
+	if rest == "" {
+		return "", ""
+	}
+	fields := strings.Fields(rest)
+	path := ""
+	for i, f := range fields {
+		if strings.HasPrefix(f, "/") {
+			path = f
+			rest = strings.Join(fields[i+1:], " ")
+			break
+		}
+	}
+	if path == "" {
+		return "", ""
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(text, "把")) + " " + rest
+	return path, strings.TrimSpace(content)
+}
+
 // matchVoiceContract 检测口语文本是否命中语音自举注册的契约能力（Source=="voice"）。
 // 命中返回能力名（如「远程控制电脑」），未命中返回空串。仅查询类意图走此优先路径，
 // 执行动作类意图仍走各自专用执行器（test/git/file…）。
@@ -662,12 +702,41 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	if text == "" {
 		text = it.RawText
 	}
+	// ① 契约名直接命中：文本含能力名（如「远程控制电脑」）→ 执行。
 	for _, c := range o.Tools.All() {
 		if c.Source != "voice" || c.Name == "" {
 			continue
 		}
 		if strings.Contains(text, c.Name) {
 			return c.Name
+		}
+	}
+	// ② 能力询问命中：用户问"能不能控制电脑/能控制后台吗"（未带能力名）——
+	// 不能让模型回"我无法控制"（模型不知道已注册能力），命中后执行器用真实
+	// 桌面列表证明能力。2026-10-04 用户真机实测："能够控制后台的电脑吗"被回"不能"。
+	if strings.Contains(text, "天气") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "天气") {
+				return c.Name
+			}
+		}
+	}
+	// ③ 动作触发：截图/列桌面（"给我截个图"不含"远程控制"字样，但意图明确）。
+	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
+		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
+		}
+	}
+	if strings.Contains(text, "控制电脑") || strings.Contains(text, "控制后台") ||
+		strings.Contains(text, "远程控制") || strings.Contains(text, "控制这台") ||
+		strings.Contains(text, "控制那台") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
 		}
 	}
 	return ""
@@ -753,460 +822,6 @@ func mustGetwd() string {
 	}
 	return "?"
 }
-
-
-// execSkill 技能调用链（线 C 修订卡）：发现→选择→调用→证据留痕→产出→定向提交。
-// 真装配：读技能 SKILL.md（技能系统清单的本地镜像），按其流程产出校准报告骨架。
-func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
-	o.ensureProjectSpace()
-	root := o.projectRootForCommit(it)
-	if root == "" {
-		return []contract.Receipt{{Tool: "skill", OK: false,
-			Err: "技能调用需注册 project 域且 scope 指向项目根"}}
-	}
-	var receipts []contract.Receipt
-	nextSeq := func() int { return len(receipts) + 1 }
-
-	name := strings.TrimSpace(it.Params["skill_name"])
-	action := strings.TrimSpace(it.Params["action"])
-	if name == "" {
-		name = "validate-align" // 缺省技能
-	}
-	if action == "" {
-		action = "校准"
-	}
-
-	// C-01 发现：意图层已识别（skill_name/action 存在）——留痕
-	recv := o.run("search", map[string]any{"pattern": "SKILL.md", "kind": "file"})
-	recv.Tool = "skill"
-	recv.Seq = nextSeq()
-	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
-		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
-
-	// C-02 选择：技能清单来源=技能系统（aiops 远端，Bearer $AIOPS_KEY），失败降级本地镜像。
-	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
-	skillMD := filepath.Join(skillDir, "SKILL.md")
-	catalogSource := "local-mirror"
-	if catalog, err := fetchSkillCatalog(); err == nil && catalog != "" {
-		if strings.Contains(catalog, name) || strings.Contains(catalog, "validate-align") {
-			catalogSource = "aiops-remote"
-		}
-	} else if err != nil {
-		log.Printf("[execSkill] aiops 清单不可用，降级本地镜像: %v", err)
-	}
-	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
-	if _, err := os.Stat(skillMD); err != nil {
-		// 兜底 validate-align（仓库 skills/validate-align/SKILL.md）
-		skillMD = filepath.Join(root, "skills", "validate-align", "SKILL.md")
-	}
-	if _, err := os.Stat(skillMD); err != nil {
-		sel.OK = false
-		sel.Err = "技能 SKILL.md 不存在: " + skillMD
-		receipts = append(receipts, sel)
-		return receipts
-	}
-	sel.OK = true
-	sel.Stdout = "C-02 技能选择: " + skillMD + "（清单来源=" + catalogSource + "）"
-	receipts = append(receipts, sel)
-
-	// C-03 调用：读 SKILL.md → 按技能流程产出报告骨架（LLM 不可用走确定性）。
-	readRecv := o.run("file", map[string]any{"action": "read", "path": skillMD})
-	readRecv.Seq = nextSeq()
-	receipts = append(receipts, readRecv)
-	if !readRecv.OK {
-		return receipts
-	}
-	doc := it.Params["document"]
-	objName := strings.TrimSpace(it.Params["target_doc"])
-	if objName == "" {
-		objName = "VoiceSign-ASR"
-	}
-	report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
-		"> 由 VoiceSign Harness 技能调用链（ORCHESTRATE kind=skill：发现→选择→调用→证据）自动生成。\n\n" +
-		skillReportBody(name, action, readRecv.Stdout, doc, catalogSource)
-	reportName := sanitizePathPart(objName) + "-" + sanitizePathPart(action) + "报告.md"
-	reportAbs := filepath.Join(root, "harness-output", "skill-"+sanitizePathPart(name), reportName)
-	clean, ok := space.ResolveScopePath(root, reportAbs)
-	if !ok {
-		return append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: false,
-			Err: "白名单外写路径被拒绝（越界）: " + reportAbs})
-	}
-	wrecv := o.run("file", map[string]any{
-		"action": "write", "path": clean, "content": report, "log_dir": logDir,
-	})
-	wrecv.Seq = nextSeq()
-	receipts = append(receipts, wrecv)
-	if !wrecv.OK {
-		return receipts
-	}
-
-	// C-04 证据留痕：调用链逐段已入 receipts（发现/选择/调用/产出）——服务层 emit trajectory。
-	receipts = append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: true,
-		Stdout: "C-04 证据留痕: 调用链 4 段已记录（find/select/call/produce）"})
-
-	crecv := o.commitTargetPath(root, clean, "vhs(skill): 生成《"+objName+"-"+action+"报告》技能调用产出（ORCHESTRATE kind=skill）")
-	crecv.Seq = nextSeq()
-	receipts = append(receipts, crecv)
-	return receipts
-}
-
-// skillReportBody 组装技能产出报告（确定性）：技能流程骨架 + 校准对象摘要 + 判据清单占位。
-func skillReportBody(name, action, skillMDContent, doc, catalogSource string) string {
-	var sb strings.Builder
-	sb.WriteString("## 技能信息\n\n")
-	sb.WriteString("- 技能：" + name + "\n- 动作：" + action + "\n")
-	sb.WriteString("- 依据：技能 SKILL.md（清单来源=" + catalogSource + "，见文末摘录）\n\n")
-
-	sb.WriteString("## 技能流程（从 SKILL.md 提取的步骤骨架）\n\n")
-	var steps []string
-	inCode := false
-	for _, ln := range strings.Split(skillMDContent, "\n") {
-		t := strings.TrimSpace(ln)
-		if strings.HasPrefix(t, "```") {
-			inCode = !inCode
-			continue
-		}
-		if inCode {
-			continue
-		}
-		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "# ") {
-			steps = append(steps, strings.TrimLeft(t, "# "))
-		}
-	}
-	if len(steps) == 0 {
-		steps = []string{"（SKILL.md 未解析出章节，见文末摘录）"}
-	}
-	for _, s := range steps {
-		sb.WriteString("- " + s + "\n")
-	}
-
-	sb.WriteString("\n## 校准对象\n\n")
-	if doc != "" {
-		sb.WriteString(truncateStr(doc, 800))
-	} else {
-		sb.WriteString("（未提供校准对象全文，见任务上下文）")
-	}
-	sb.WriteString("\n\n## 判据清单（逐条双证 · 引用真实证据）\n\n")
-	sb.WriteString("> 双证要求（validate-align SKILL.md）：PASS = C 代码证据（文件:行）+ R 运行证据（真跑响应/日志）。\n")
-	sb.WriteString("> 本报告的证据引用策略：判据逐条挂证据路径（代码真值 + 真跑产物），全部可审计可复核。\n\n")
-	for _, c := range defaultSkillCriteria(name, action) {
-		sb.WriteString("- " + c + "\n")
-	}
-	sb.WriteString("\n### 证据引用（双证）\n\n")
-	sb.WriteString("- C 代码证据：仓库源码路径（如 `input/taskintent.go`、`pipeline/pipeline.go`、`tools/executor.go`），见文末摘录与 git 提交历史\n")
-	sb.WriteString("- R 运行证据：`docs/线C验收报告-技能层-20261003.md`（真装配 4/4 二验）、`scripts/accept.sh` 验收数据目录（feedback.jsonl/blacklist.json 可复核）、服务日志\n\n")
-
-	sb.WriteString("## 证据留痕（C-04）\n\n")
-	sb.WriteString("- 发现：意图层（skill_name=" + name + " action=" + action + "）\n")
-	sb.WriteString("- 选择：" + name + "/SKILL.md（本地镜像）\n")
-	sb.WriteString("- 调用：本报告产出（读 SKILL.md → 结构化骨架）\n")
-	sb.WriteString("- 产出：本文件（harness-output/skill-" + sanitizePathPart(name) + "/）\n\n")
-
-	sb.WriteString("## SKILL.md 全文摘录\n\n```markdown\n")
-	sb.WriteString(truncateStr(skillMDContent, 4000))
-	sb.WriteString("\n```\n")
-	return sb.String()
-}
-
-// fetchSkillCatalog 从 aiops 技能系统拉技能清单（线 C 修订卡 C-02：清单来源=技能系统）。
-// Bearer 用 $AIOPS_KEY；网络/鉴权失败返回错误（调用方降级本地镜像并留痕）。
-func fetchSkillCatalog() (string, error) {
-	key := os.Getenv("AIOPS_KEY")
-	if key == "" {
-		return "", fmt.Errorf("AIOPS_KEY 未配置")
-	}
-	req, err := http.NewRequest("GET", "https://aiops.voxsign.ai/api/skill/skills", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("aiops 清单 %d", resp.StatusCode)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	return string(b), nil
-}
-
-// defaultSkillCriteria 按技能/动作给出判据清单（线 C 遗留②：逐条双证的起点）。
-func defaultSkillCriteria(name, action string) []string {
-	switch action {
-	case "校准", "对齐", "校验":
-		return []string{
-			"C1 目标与验收标准分离取证（产物验收 vs 能力验收，不混层）",
-			"C2 三层取证：D 文档校准（判据 SMART 化）→ C 代码证据（文件:行）→ R 运行证据（真跑）",
-			"C3 每条判据双证（C+R）才 PASS；只 C 无 R = ◐ 待真跑；只有文档 = ✗",
-			"C4 评分附改进建议与编排（第 7 步：问题定位/建议/验证/责任/优先级）",
-			"C5 语义级判断走远程模型或人工（不本地文本猜）",
-		}
-	default:
-		return []string{
-			"P1 技能流程步骤可追溯（读 SKILL.md → 按流程执行）",
-			"P2 产出物与技能能力一致（结构完整、可审计）",
-			"P3 证据留痕四段（发现/选择/调用/产出）",
-		}
-	}
-}
-
-// bracketTitle 抽取《…》书名号目标（与 input 层 extractBookTitle 语义一致）。
-var bracketTitle = regexp.MustCompile(`《([^》]+)》`)
-
-// hasDeicticDocRef 判定文本是否含文档指代（"这份/该文档/此文档/这份需求说明书"等）。
-func hasDeicticDocRef(text string) bool {
-	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "这个", "这些", "那", "它"} {
-		if strings.Contains(text, d) {
-			return true
-		}
-	}
-	return false
-}
-
-// referTargetFromSlots 从本会话上下文槽读最近含《…》的记录，抽书名号作为指代目标。
-func (o *Options) referTargetFromSlots() string {
-	convID := strings.TrimSpace(o.ConvID)
-	if convID == "" {
-		convID = "default"
-	}
-	recs := serverReadContextSlots(o.logDir(), convID)
-	for i := len(recs) - 1; i >= 0; i-- {
-		if t, ok := recs[i]["text"].(string); ok {
-			if m := bracketTitle.FindStringSubmatch(t); len(m) == 2 {
-				return m[1]
-			}
-		}
-	}
-	return ""
-}
-
-// slotLatestDocument 读会话槽最近一条 has_doc=true 记录的 doc_full（指代命中后恢复全文）。
-// 2026-10-03 记忆增强：配合 referTargetFromSlots，让"那个事"不仅解出书名号，还能拿到可执行的 document。
-func slotLatestDocument(logDir, convID string) string {
-	recs := serverReadContextSlots(logDir, convID)
-	for i := len(recs) - 1; i >= 0; i-- {
-		if b, ok := recs[i]["has_doc"].(bool); ok && b {
-			if d, ok := recs[i]["doc_full"].(string); ok && d != "" {
-				return d
-			}
-		}
-	}
-	return ""
-}
-
-// loadASRMemory 读 ASR 服务沉淀（feedback.jsonl 最近 10 条 / blacklist.json / dictionary.json 教词），
-// 生成"我学到的用户偏好"摘要。空目录/空文件 → 返回 ""（不注入，无副作用）。
-// 2026-10-04：ASR 学到的东西跨会话全局生效 —— 这就是"越来越懂你"的记忆来源。
-func (o *Options) loadASRMemory() string {
-	if o.ASRDataDir == "" {
-		return ""
-	}
-	var parts []string
-	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "feedback.jsonl")); err == nil {
-		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-		start := len(lines) - 10
-		if start < 0 {
-			start = 0
-		}
-		for _, ln := range lines[start:] {
-			var rec map[string]any
-			if json.Unmarshal([]byte(ln), &rec) == nil {
-				rawT, _ := rec["raw"].(string)
-				cor, _ := rec["corrected"].(string)
-				acc, _ := rec["accepted"].(bool)
-				if acc && rawT != "" && cor != "" && rawT != cor {
-					parts = append(parts, "✔确认:"+rawT+"→"+cor)
-				} else if !acc && rawT != "" {
-					parts = append(parts, "✘标错:"+rawT+"→"+cor)
-				}
-			}
-		}
-	}
-	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "blacklist.json")); err == nil {
-		m := map[string]string{}
-		if json.Unmarshal(raw, &m) == nil {
-			for t := range m {
-				parts = append(parts, "黑名单:"+t)
-			}
-		}
-	}
-	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "dictionary.json")); err == nil {
-		var d struct {
-			Terms []struct {
-				Term   string `json:"term"`
-				Source string `json:"source"`
-			} `json:"terms"`
-		}
-		if json.Unmarshal(raw, &d) == nil {
-			for _, t := range d.Terms {
-				if t.Source == "model" || t.Source == "manual" {
-					parts = append(parts, "教词:"+t.Term)
-				}
-			}
-		}
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, "；")
-}
-
-// memoryBlock 把 memory 拼成 prompt 后缀（空 → ""，长 → 截断 1200）。
-func memoryBlock(memory string) string {
-	if memory == "" {
-		return ""
-	}
-	return "\n\n" + truncateStr(memory, 1200)
-}
-
-// memoryContext 从 intent.Context 提取"我学到的"记忆（asr-memory / project-map），
-// 拼进 LLM prompt —— 让"越来越懂你"真正被模型消费。
-// 2026-10-04 修复：此前 Context 只有注入无消费点（纸面记忆），LLM 看不到 ASR 沉淀。
-func (o *Options) memoryContext(it contract.Intent) string {
-	var parts []string
-	for _, c := range it.Context {
-		if strings.HasPrefix(c, "asr-memory: ") {
-			parts = append(parts, "- 用户偏好（ASR 沉淀）："+strings.TrimPrefix(c, "asr-memory: "))
-		}
-		if strings.HasPrefix(c, "project-map:") {
-			parts = append(parts, "- 项目背景："+strings.TrimPrefix(c, "project-map:"))
-		}
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "记忆上下文（你从用户/过往会话学到的，应尊重并在输出中体现）：\n" + strings.Join(parts, "\n")
-}
-
-// writeASRSlot 把 ASR 沉淀快照 append 到 <logDir>/context_slots/asr.jsonl（槽体系内、可审计）。
-func (o *Options) writeASRSlot(line string) {
-	dir := filepath.Join(o.logDir(), "context_slots")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "asr.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	_, _ = f.WriteString(line + "\n")
-	_ = f.Close()
-}
-
-// serverReadContextSlots 读槽（server.go 同函数导出代理——避免 import cycle：pipeline 不依赖 server）。
-// 实际由 server 包写入；pipeline 经此只读。放在本文件尾部。
-func serverReadContextSlots(logDir, convID string) []map[string]any {
-	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
-	if err != nil {
-		return nil
-	}
-	var out []map[string]any
-	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if ln == "" {
-			continue
-		}
-		var rec map[string]any
-		if json.Unmarshal([]byte(ln), &rec) == nil {
-			out = append(out, rec)
-		}
-	}
-	return out
-}
-
-// ---------- 多轮指代接线（2026-10-04）：refer.Recent 会话槽读写 ----------
-//
-// 背景：refer.Resolver 的 Recent（跨轮上下文）生产路径此前**零构造**——grep RecentEntity{
-// 仅出现在测试代码，"这个方案"永远回问。此处补上"写入端 + 读取端"：
-//   - 执行成功的轮次把对话核心实体 append 到 <logDir>/context_slots/<convID>.jsonl
-//     （与文档槽/ASR 槽同体系：append-only、会话隔离、可审计）；
-//   - 下一轮 refer 解析前从同槽读回，注入 resolver.Recent。
-// 会话隔离：按 ConvID 分文件；CLI 缺省 "default"（同 logDir 下多轮 run 共享），
-// server 按真实会话 ID 隔离，不跨会话猜（与 358b2f0 指代固化槽同范式）。
-
-const recentSlotMax = 16 // 上下文窗口上限（防槽无限膨胀）
-
-// extractRecentEntities 从文本提取可作指代上下文的核心实体：
-// 拉丁专名（OT-ODP/SPoG/DMZ…）+ 书名号《…》内容 + 引号短语。去重、带时间戳。
-func extractRecentEntities(text string) []refer.RecentEntity {
-	seen := map[string]bool{}
-	var out []refer.RecentEntity
-	now := time.Now().Format(time.RFC3339)
-	add := func(e, kind string) {
-		if e == "" || seen[e] {
-			return
-		}
-		seen[e] = true
-		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
-	}
-	// 拉丁大写专名（含 - 连接可 0..N 段）：OT-ODP / SPoG / DMZ / NGSA
-	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
-	for _, m := range re.FindAllString(text, -1) {
-		add(m, "project")
-	}
-	// 《…》书名号文档（2-30 字）
-	re2 := regexp.MustCompile(`《([^》]{2,30})》`)
-	for _, m := range re2.FindAllStringSubmatch(text, -1) {
-		add(m[1], "file")
-	}
-	// 引号短语（4-30 字，像实体名/专有表述）
-	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
-	for _, m := range re3.FindAllStringSubmatch(text, -1) {
-		add(m[1], "project")
-	}
-	return out
-}
-
-// writeRecentEntities 把最近实体 append 到会话槽（append-only、可审计）。
-func writeRecentEntities(logDir, convID string, ents []refer.RecentEntity) {
-	dir := filepath.Join(logDir, "context_slots")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(filepath.Join(dir, convID+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	for _, e := range ents {
-		rec := map[string]any{"type": "recent_entity", "space": e.Space, "entity": e.Entity, "kind": e.Kind, "ts": e.Ts}
-		if b, err := json.Marshal(rec); err == nil {
-			_, _ = f.Write(append(b, '\n'))
-		}
-	}
-}
-
-// loadRecentEntities 从会话槽读最近实体（type=recent_entity），ts 倒序取前 N。
-func loadRecentEntities(logDir, convID string) []refer.RecentEntity {
-	recs := serverReadContextSlots(logDir, convID)
-	var out []refer.RecentEntity
-	for _, r := range recs {
-		if r["type"] != "recent_entity" {
-			continue
-		}
-		ent, _ := r["entity"].(string)
-		if ent == "" {
-			continue
-		}
-		kind, _ := r["kind"].(string)
-		if kind == "" {
-			kind = "project"
-		}
-		sp, _ := r["space"].(string)
-		if sp == "" {
-			sp = "default"
-		}
-		ts, _ := r["ts"].(string)
-		out = append(out, refer.RecentEntity{Space: sp, Entity: ent, Kind: kind, Ts: ts})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ts > out[j].Ts })
-	if len(out) > recentSlotMax {
-		out = out[:recentSlotMax]
-	}
-	return out
-}
-
 
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
@@ -1294,16 +909,6 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	return receipts
 }
 
-// implCapabilityBrief 是实现类任务的 P0 能力清单兜底摘要（LLM 不可用时骨架仍可编译）。
-// 洞4（2026-10-04）起以需求文档端点清单注入为主，本清单仅作无文档兜底。
-const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配与纠错安全）
-②文本纠错：清洗 + 词典纠错（正常文本不被改坏）
-③意图分类：NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 五类
-④反馈学习：✔/✘ 回馈落盘 feedback.jsonl（append-only）
-⑤数据落盘：traces/usage 等 JSONL append-only，独立数据目录（data-dir 可配）
-⑥HTTP 端点：/v1/health、/v1/process（JSON 请求/响应）
-⑦只监听 127.0.0.1（非回环拒绝），鉴权可占位但须有`
-
 // llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
 // 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
 //
@@ -1371,672 +976,6 @@ func deterministicSummary(title string, sourceNames []string, merged string) str
 	sb.WriteString("\n```\n")
 	return sb.String()
 }
-
-
-// sanitizePathPart 把标题转为安全的路径分段（保留中英文数字与连字符）。
-func sanitizePathPart(s string) string {
-	var sb strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-			sb.WriteRune(r)
-		case r >= 0x4e00 && r <= 0x9fff:
-			sb.WriteRune(r)
-		default:
-			sb.WriteRune('-')
-		}
-	}
-	out := strings.Trim(sb.String(), "-")
-	if out == "" {
-		out = "implementation"
-	}
-	return out
-}
-
-// asciiSlug 把标题转为 ASCII 安全名（module path 用；非 ASCII 一律 '-'，空则回退 impl）。
-func asciiSlug(s string) string {
-	var sb strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			sb.WriteRune(r)
-		} else {
-			sb.WriteRune('-')
-		}
-	}
-	out := strings.Trim(sb.String(), "-")
-	if out == "" {
-		out = "impl"
-	}
-	return out
-}
-
-// llmGenerateImplement（L-01 验收 2026-10-03）：需求文档 → LLM 生成**完整可运行**
-// 的 Go 实现 → 写盘 → go build 真编译验证 → 编译错误回喂修复（≤2 轮）。
-//
-// **逐文件生成**（2026-10-03 真跑实测）：aiops 网关对 /api/model/chat 有 ~60s 硬上限
-// （裸调 12000 tokens 60.6s → 504 Gateway Time-out）；单文件生成实测 36s/11913 字符 ✅。
-// ⇒ 拆成 main.go（自包含完整服务）一次调用 + go.mod/README 小文件，避免网关 504。
-//
-// 返回 (files, note)：files=nil 表示 LLM 不可用/迭代耗尽（调用方回落确定性骨架）；
-// note 为失败原因或"编译全绿（N 轮）"。
-// chatWithFallback（2026-10-04 适配 provider 新 API + 模型调度）：按 pref 顺序尝试 provider，
-// 失败/异常自动切下一个（欠费/故障不卡死；对齐"最差模型兜底"需求）。
-func (o *Options) chatWithFallback(ctx context.Context, pref []string, req provider.ChatRequest) (provider.ChatResponse, error) {
-	if o == nil || o.Providers == nil {
-		return provider.ChatResponse{}, fmt.Errorf("providers nil")
-	}
-	var lastErr error
-	for _, name := range pref {
-		p, err := o.Providers.Get(name)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		resp, err := p.Chat(ctx, req)
-		if err != nil {
-			lastErr = fmt.Errorf("%s: %w", name, err)
-			log.Printf("[llm-trace] %s attempt=FAIL retryable=true err=%v", name, err)
-			continue
-		}
-		return resp, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("provider 候选列表为空")
-	}
-	return provider.ChatResponse{}, lastErr
-}
-
-// stripCodeFence 剥离 LLM 输出的 Markdown 代码围栏（```go ... ```）。
-func stripCodeFence(s string) string {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if i := strings.Index(s, "\n"); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSpace(s)
-		if strings.HasSuffix(s, "```") {
-			s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
-		}
-	}
-	return s
-}
-
-func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir, memory string) (map[string]string, string) {
-	if o == nil || o.Providers == nil {
-		return nil, "providers nil"
-	}
-	// 清掉骨架残留 .go（2026-10-03 实证：骨架 domain.go/router.go 与 LLM 自包含 main.go 冲突，
-	// 编译报 ./router.go:21 undefined: writeJSON → 修复轮永远修不掉非 LLM 生成的文件）。
-	// LLM 自包含生成后只保留 LLM 产物（main.go/go.mod/README），目录内其他 .go 一律移除。
-	if ents, err := os.ReadDir(skelDir); err == nil {
-		for _, e := range ents {
-			n := e.Name()
-			if strings.HasSuffix(n, ".go") {
-				_ = os.Remove(filepath.Join(skelDir, n))
-			}
-		}
-	}
-	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini，不再单点卡死。
-	// genWithPref：按 pref 降级链调度（fast=deepseek 等；gpt4o/gpt-mini 质量最稳）。
-	// 2026-10-03 真跑实证：①fast 曾 1.8s 返回<200 字符短输出 → 判无效（输出质量无法被调度层感知）；
-	// ②gpt-4o 输出必带 ```go Markdown 围栏 → 直接写盘必编译失败（expected 'package'）→ stripCodeFence 剥离。
-	genWithPref := func(pref []string, minLen int, sysMsg, usrMsg string) (string, string) {
-		resp, err := o.chatWithFallback(ctx, pref, provider.ChatRequest{
-			Messages: []contract.Message{
-				{Role: "system", Content: sysMsg},
-				{Role: "user", Content: usrMsg},
-			},
-			// 2026-10-03 真跑实证：MaxTokens 上限会令模型用满 12000 tokens → 网关 60s 504/超时；
-			// 不设上限 → 模型自然收敛（裸调实测 36s/11913 字符）。故此处不传 MaxTokens。
-			ResponseFormat: noJSON(),
-		})
-		if err != nil {
-			return "", "fast Chat err: " + err.Error()
-		}
-		c := stripCodeFence(resp.Content)
-		if len(c) < minLen {
-			return "", fmt.Sprintf("LLM 输出过短(%d 字符)判为无效，调度跳过", len(c))
-		}
-		return c, ""
-	}
-	// 质量门按文件分级：main.go≥200（完整服务）；go.mod≥20（module+go 行仅 ~35 字符，
-	// 2026-10-03 实证 200 会误杀合法 go.mod → 整个实现失败）；README≥50。
-	gen := func(sysMsg, usrMsg string) (string, string) {
-		return genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 200, sysMsg, usrMsg)
-	}
-
-	// 2026-10-04 洞4 修复：需求文档端点清单 + 要点摘要必须注入 prompt。
-	// 此前 req 只喂硬编码 implCapabilityBrief（ASR 能力清单）——清单恰好匹配 ASR 需求时
-	// 看似可用；换需求（语音适配层）后 LLM 无需求信息 → 生成错误内容 → 证据门永远缺口 →
-	// 修订死循环到 blocked。正解：从 doc 提取端点清单注入（复用 endpointRefsOf 证据门逻辑），
-	// 摘要控制长度（网关 60s 上限），语义判据仍由证据门兜底。
-	req := "目标产品标题：" + title + "\n\n需求文档要求实现的端点清单（验收逐端点核对，必须全部注册）：\n" +
-		sortedEndpoints(doc) + "\n\n需求要点摘要（简要）：\n" + docBrief(doc, 1200) +
-		"\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief + memoryBlock(memory)
-	if o.RoundEvidence != "" {
-		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
-		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"
-	}
-	files := map[string]string{}
-
-	// ① main.go：自包含完整服务（词典/纠错/意图/反馈/JSONL 落盘/端点/健康检查）——大文件独立调用。
-	sysMain := "你是资深 Go 工程师。只输出 main.go 的**完整代码文本**（自包含、可直接 go build 通过的服务）。" +
-		"硬性要求：①仅用标准库，零第三方依赖；②不许留 TODO/占位/伪代码；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
-		"④需求文档要求/提及的**每一个 /v1/ 端点**都必须用 http.HandleFunc(\"/v1/...\", …) 字面量逐一注册（验收会按需求端点清单逐端点核对，缺一即不合格）；" +
-		"⑤可独立运行（监听 127.0.0.1，addr/data-dir 用 flag 或环境变量）。" +
-		"纯文本输出，不要 Markdown 围栏、不要 JSON、不要解释。"
-	mainCode, note := genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain, req)
-	if mainCode == "" {
-		return nil, "main.go 生成失败: " + note
-	}
-	files["main.go"] = mainCode
-
-	// ② go.mod：小文件独立调用。
-	modCode, note := genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 20, "你是 Go 工程师。只输出 go.mod 的完整文本：module 名用 harness-output/impl（ASCII 小写，中文 module 非法），go 版本 1.21。纯文本，不要围栏。", req)
-	if modCode == "" {
-		return nil, "go.mod 生成失败: " + note
-	}
-	files["go.mod"] = modCode
-
-	// ③ README.md：小文件，失败不致命（跳过仍可编译）。
-	if rd, rn := gen("你是技术文档作者。输出 README.md 的简短中文运行说明（启动命令/端点/数据文件）。纯文本，不要围栏。", req); rd != "" {
-		files["README.md"] = rd
-	} else {
-		log.Printf("[llmGenerateImplement] README 生成跳过（%s）", rn)
-	}
-
-	if err := writeFilesToDisk(skelDir, files); err != nil {
-		return nil, "写盘失败: " + err.Error()
-	}
-	// 真编译验证（不许桩）：go build -C <skelDir> ./...（Go 1.20+ -C 支持，runCmd Dir 固定故用 -C）。
-	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
-	if buildRecv.OK {
-		return files, "编译全绿（0 轮修复）"
-	}
-	// 编译失败 → ①确定性清理未使用 import（机械错误，LLM 修复不稳定——2026-10-03 实证 3 轮仍失败）；
-	// ②仍失败才回喂 LLM（≤3 轮）。
-	log.Printf("[llmGenerate] 编译失败（首轮），错误：\n%s", truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 1200))
-	// 调试保留：LLM 产物副本（骨架兜底会覆盖写盘产物，这里留一份供编译错误分析）。
-	_ = os.WriteFile("/tmp/llm_main_debug.go", []byte(files["main.go"]), 0o644)
-	cleanErrs := buildRecv.Stdout + "\n" + buildRecv.Stderr
-	lastErr := truncateStr(cleanErrs, 2500)
-	if cleaned, n := removeUnusedImports(files["main.go"], cleanErrs); cleaned != "" {
-		log.Printf("[llmGenerate] 确定性清理 %d 个未使用 import，重编译", n)
-		files["main.go"] = cleaned
-		if err := writeFilesToDisk(skelDir, files); err == nil {
-			recv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
-			if recv.OK {
-				return files, fmt.Sprintf("编译全绿（确定性清理 %d 个未使用 import）", n)
-			}
-			// 关键：清理后仍有错误（非 import），必须更新 lastErr——
-			// 否则修复轮拿旧错误（import）修，永远修不掉清理后暴露的真实错误（2026-10-03 实证循环）。
-			log.Printf("[llmGenerate] 清理后仍失败，更新修复轮错误信息：\n%s", truncateStr(recv.Stdout+"\n"+recv.Stderr, 800))
-			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
-		}
-	}
-	for i := 1; i <= 3; i++ {
-		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请仅修复编译错误后重新输出**完整 main.go**（不要省略其它部分）。\n\n编译错误：\n"+lastErr, req)
-		if mainCode == "" {
-			return nil, "main.go 修复失败: " + note
-		}
-		// 修复轮产物同样先做确定性 import 清理（LLM 重生成必带未用 import——
-		// 2026-10-03 实证：不清理则修复轮永远卡在 "imported and not used"，3 轮耗尽）。
-		if c2, n2 := removeUnusedImports(mainCode, lastErr); c2 != "" {
-			log.Printf("[llmGenerate] 修复轮 %d 确定性清理 %d 个未使用 import", i, n2)
-			files["main.go"] = c2
-		} else {
-			files["main.go"] = mainCode
-		}
-		if err := writeFilesToDisk(skelDir, files); err != nil {
-			return nil, "写盘失败: " + err.Error()
-		}
-		buildRecv = o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
-		if buildRecv.OK {
-			return files, fmt.Sprintf("编译全绿（%d 轮修复）", i)
-		}
-		lastErr = truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
-	}
-	return nil, "编译迭代 3 轮仍未通过"
-}
-
-// parseGenFiles 解析 LLM 返回的 {"files":{...}} JSON（容忍 ```json 围栏与前后杂质）。
-func parseGenFiles(content string) (map[string]string, string) {
-	c := strings.TrimSpace(content)
-	if i := strings.Index(c, "```"); i >= 0 {
-		// 去掉首个围栏行与结尾围栏
-		rest := c[i:]
-		if j := strings.Index(rest, "\n"); j >= 0 {
-			rest = rest[j+1:]
-		}
-		if k := strings.LastIndex(rest, "```"); k >= 0 {
-			rest = rest[:k]
-		}
-		c = strings.TrimSpace(rest)
-	}
-	if i := strings.Index(c, "{"); i >= 0 {
-		c = c[i:]
-	}
-	if j := strings.LastIndex(c, "}"); j >= 0 {
-		c = c[:j+1]
-	}
-	var parsed struct {
-		Files map[string]string `json:"files"`
-	}
-	if err := json.Unmarshal([]byte(c), &parsed); err != nil {
-		return nil, "LLM 输出非合法 JSON: " + err.Error()
-	}
-	if len(parsed.Files) == 0 {
-		return nil, "LLM 输出空文件集"
-	}
-	return parsed.Files, ""
-}
-
-// writeFilesToDisk 把生成文件写入 skelDir（先建目录）。
-func writeFilesToDisk(dir string, files map[string]string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for name, content := range files {
-		if name != filepath.Base(name) {
-			return fmt.Errorf("非法文件名（含路径分隔）: %q", name)
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// removeUnusedImports 从 Go 源码确定性移除编译错误报告中的未使用 import（机械错误）。
-// 匹配 go build 错误形如 `./main.go:4:2: "bufio" imported and not used`；import 块内的
-// `	"bufio"` 行逐行删除。2026-10-03 实证：LLM 修复轮对这类错误修复不稳定（3 轮仍失败），
-// 确定性清理是 harness 的工程兜底（不依赖 LLM 运气）。返回清理后的源码与清理数量。
-func removeUnusedImports(src, buildOut string) (string, int) {
-	unused := map[string]bool{}
-	for _, m := range regexp.MustCompile(`"(.*?)" imported and not used`).FindAllStringSubmatch(buildOut, -1) {
-		if len(m) == 2 && m[1] != "" {
-			unused[m[1]] = true
-		}
-	}
-	if len(unused) == 0 {
-		return "", 0
-	}
-	var sb strings.Builder
-	removed := 0
-	for _, line := range strings.Split(src, "\n") {
-		trim := strings.TrimSpace(line)
-		skip := false
-		for imp := range unused {
-			if trim == `"`+imp+`"` {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			removed++
-			continue
-		}
-		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-	return strings.TrimSuffix(sb.String(), "\n"), removed
-}
-
-// EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
-// 返回缺口列表；空列表 = 证据门全过（产物存在且非空、真编译通过、P0 能力存在性）。
-//
-// 判据（对齐 dsh"完成前收集证据"）：
-//  1. 产物目录存在且 main.go 非空（骨架/占位/空文件 → 缺口）
-//  2. main.go 不含 TODO/占位标记（LLM 语义实现 vs 确定性骨架兜底的区分）
-//  3. go build -C <产物根> ./... 真编译通过（不许桩）
-//  4. P0 能力存在性：词典/纠错/意图/反馈/JSONL 落盘/健康检查（关键字扫描产物源码）
-func (o *Options) EvidenceGaps(out *Outcome) []string {
-	if out == nil {
-		return []string{"任务无产物（Outcome 为空）"}
-	}
-	// 从回执提取 harness-output/ 产物根目录（stdout 形如 "writed: /abs/harness-output/<title>/main.go"）。
-	// 2026-10-03 修复：stdout 多行（writed 路径 + VHS_BACKUP_PATH: ...），TrimPrefix 后 line 是整块，
-	// HasSuffix(main.go) 永远失败 → implRoot 空 → Glob 回退取错目录（读到别的任务骨架 → 判"含 todo"假 FAIL）。
-	// 只取第一行（writed 路径行）。
-	implRoot := ""
-	for _, r := range out.Receipts {
-		stdout := strings.TrimSpace(r.Stdout)
-		if nl := strings.IndexByte(stdout, '\n'); nl > 0 {
-			stdout = stdout[:nl]
-		}
-		line := strings.TrimSpace(strings.TrimPrefix(stdout, "writed:"))
-		if p := filepath.Clean(line); strings.Contains(p, "harness-output") {
-			if strings.HasSuffix(p, "main.go") || strings.HasSuffix(p, "go.mod") {
-				implRoot = filepath.Dir(p)
-			}
-		}
-	}
-	if implRoot == "" {
-		// 回执未必含路径：回退扫项目根 harness-output/。
-		if candidates, _ := filepath.Glob("harness-output/*"); len(candidates) > 0 {
-			implRoot = candidates[len(candidates)-1]
-		}
-	}
-	if implRoot == "" {
-		return []string{"未找到实现产物目录（harness-output/ 缺失）"}
-	}
-
-	var gaps []string
-	mainPath := filepath.Join(implRoot, "main.go")
-	mainBytes, err := os.ReadFile(mainPath)
-	if err != nil || len(mainBytes) == 0 {
-		return append(gaps, "main.go 缺失或为空（"+mainPath+"）")
-	}
-	mainSrc := string(mainBytes)
-	// 判据 2：骨架/占位检测（确定性骨架的特征注释）。
-	low := strings.ToLower(mainSrc)
-	for _, marker := range []string{"todo", "占位", "not implemented", "code generated by voice sign harness"} {
-		if strings.Contains(low, marker) {
-			gaps = append(gaps, "main.go 仍是骨架/占位（含 `"+marker+"` 标记），未产出完整实现")
-			break
-		}
-	}
-	// 判据 4：P0 能力存在性（关键字扫描——判据为"有实现痕迹"，非语义级）。
-	type p0 struct{ key, name string }
-	p0s := []p0{
-		{"dictionary", "词典（增删查）"}, {"dict", "词典"},
-		{"correct", "纠错"}, {"intent", "意图分类"},
-		{"feedback", "反馈学习"}, {"jsonl", "JSONL 落盘"},
-		{"append", "append-only 落盘"}, {"/v1/health", "健康检查"},
-		{"v1/process", "业务端点 /v1/process"},
-	}
-	seen := map[string]bool{}
-	for _, p := range p0s {
-		if seen[p.name] {
-			continue
-		}
-		seen[p.name] = true
-		if !strings.Contains(low, p.key) {
-			gaps = append(gaps, "缺 P0 能力实现："+p.name+"（源码中未见 `"+p.key+"`）")
-		}
-	}
-	// 判据 3：真编译（不许桩）。
-	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", implRoot, "./..."}})
-	if !buildRecv.OK {
-		gaps = append(gaps, "真编译失败："+truncateStr(buildRecv.Stderr, 300))
-	}
-	// 判据 5：需求端点 ↔ 产物路由端点存在性（洞 1，2026-10-04 无人工干预测试复现：
-	// 需求 7 端点产物仅 2 端点（/v1/health+/v1/process），P0 关键字仍判"齐全"放行）。
-	// 需求侧：从 o.Document（需求全文）提取所有出现的 /v1/xxx 字面量；
-	// 产物侧：从 main.go 提取 http.HandleFunc("/v1/xxx") 已注册端点；
-	// 差集 = 缺口 → 证据门 FAIL → 多轮修订（RoundEvidence 回喂 LLM 补齐端点）。
-	if o.Document != "" {
-		reqEP := endpointRefsOf(o.Document)
-		prodEP := endpointHandlersOf(mainSrc)
-		for ep := range reqEP {
-			if !prodEP[ep] {
-				gaps = append(gaps, "缺需求端点实现："+ep+"（需求文档要求，产物未注册 http.HandleFunc）")
-			}
-		}
-	}
-	return gaps
-}
-
-// endpointRefsOf 提取文本中出现的所有 /v1/xxx 端点字面量（需求侧：文档里提到的即算需求端点）。
-func endpointRefsOf(src string) map[string]bool {
-	set := map[string]bool{}
-	re := regexp.MustCompile(`/v1/[a-z_]+`)
-	for _, m := range re.FindAllString(src, -1) {
-		set[m] = true
-	}
-	return set
-}
-
-// sortedEndpoints 将端点集合排序为逐行清单（LLM prompt 用，稳定可读）。
-func sortedEndpoints(src string) string {
-	if src == "" {
-		return "（需求文档为空——无端点清单）"
-	}
-	eps := endpointRefsOf(src)
-	if len(eps) == 0 {
-		return "（需求文档未提及 /v1/ 端点）"
-	}
-	var list []string
-	for ep := range eps {
-		list = append(list, ep)
-	}
-	sort.Strings(list)
-	return strings.Join(list, "\n")
-}
-
-// docBrief 截取需求文档前 n 字符作为要点摘要（含标题与首个判据表，控制 prompt 长度）。
-func docBrief(src string, n int) string {
-	if src == "" {
-		return "（无需求文档）"
-	}
-	s := strings.TrimSpace(src)
-	if len([]rune(s)) <= n {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:n]) + "\n…（文档过长，以上为摘要，完整判据以端点清单 + 证据门为准）"
-}
-
-// endpointHandlersOf 提取源码中 http.HandleFunc("/v1/xxx", …) 已注册的端点（产物侧：注册才算实现）。
-func endpointHandlersOf(src string) map[string]bool {
-	set := map[string]bool{}
-	re := regexp.MustCompile(`HandleFunc\("/v1/[a-z_]+`)
-	for _, m := range re.FindAllString(src, -1) {
-		set[strings.TrimPrefix(m, `HandleFunc("`)] = true
-	}
-	return set
-}
-
-// deterministicImplementSkeleton 生成可编译 Go 代码骨架（LLM 不可用时仍产出）。
-// 文件：README.md / go.mod / main.go / router.go / domain.go（服务骨架 + 需求映射）。
-// 目标：harness-output/<title>/ 下 `go build ./...` 可通过；实现逻辑留 TODO 交实现阶段。
-func deterministicImplementSkeleton(title, doc string) map[string]string {
-	// module 名必须 ASCII（Go 限制：中文 module path 非法）；目录名可保留中文。
-	mod := "harness-output/" + asciiSlug(title)
-	if mod == "harness-output/" {
-		mod = "harness-output/impl"
-	}
-	// 从需求文档提取章节标题作为领域要点注释（真实结构，不编造）。
-	var chapters []string
-	for _, ln := range strings.Split(doc, "\n") {
-		ln = strings.TrimSpace(ln)
-		if strings.HasPrefix(ln, "#") && !strings.HasPrefix(ln, "## 全文") {
-			chapters = append(chapters, strings.TrimLeft(ln, "# "))
-		}
-	}
-	if len(chapters) > 12 {
-		chapters = chapters[:12]
-	}
-	chapNote := "  // 需求章节：\n"
-	for _, c := range chapters {
-		chapNote += "  //  - " + c + "\n"
-	}
-
-	mainGo := `// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.
-// 目标产品：` + title + `
-// 骨架：可编译服务入口（配置/路由/健康检查/鉴权占位）。实现逻辑见 domain.go 与 router.go 的 TODO。
-package main
-
-import (
-	"encoding/json"
-	"flag"
-	"log"
-	"net/http"
-	"os"
-)
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
-func main() {
-	addr := flag.String("addr", envOr("VHS_ADDR", "127.0.0.1:8787"), "监听地址（默认回环，非回环拒绝）")
-	dataDir := flag.String("data-dir", envOr("VHS_DATA", "./data"), "数据目录")
-	flag.Parse()
-
-	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-		log.Fatalf("创建数据目录失败: %v", err)
-	}
-	app := NewApp(*dataDir)
-
-	mux := http.NewServeMux()
-	app.RegisterRoutes(mux) // router.go
-
-	srv := &http.Server{Addr: *addr, Handler: mux}
-	log.Printf("服务监听 %s（数据目录 %s）", *addr, *dataDir)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("服务退出: %v", err)
-	}
-}
-
-// writeJSON 统一 JSON 响应（与 vhs-asr 契约一致）。
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-`
-
-	routerGo := `// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.
-// 路由注册：/v1/health 健康检查 + /v1/process 核心处理（契约骨架，TODO 由实现阶段填充）。
-package main
-
-import "net/http"
-
-// App 是服务装配根对象（领域逻辑在 domain.go）。
-type App struct {
-	DataDir string
-}
-
-func NewApp(dataDir string) *App { return &App{DataDir: dataDir} }
-
-// RegisterRoutes 注册全部端点（鉴权占位：回环绑定 + 可选 token 头）。
-func (a *App) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/health", a.handleHealth)
-	mux.HandleFunc("/v1/process", a.handleProcess)
-}
-
-func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "data_dir": a.DataDir})
-}
-
-// handleProcess 核心处理端点：TODO 按需求文档实现（意图/词典/反馈/个性化闭环）。
-func (a *App) handleProcess(w http.ResponseWriter, r *http.Request) {
-	// TODO(实现阶段): 解析请求体 → 领域处理 → 响应（含 traces 留痕）
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "error": "骨架未实现"})
-}
-`
-
-	domainGo := `// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.
-// 领域层骨架：按需求文档拆分的模块接口与 TODO。
-package main
-
-//` + chapNote + `
-// TODO(实现阶段)：
-//  1. 意图/词典/反馈等核心机制的领域实现（对照需求文档各章）
-//  2. 数据层持久化（文件/DB，append-only、有界、过期策略）
-//  3. 非功能验收：鉴权、上限、性能分步计时、红线 4 条逐条落地
-//  4. 验收映射：每达成一条验收标准回填证据（见 docs/<title>-实现计划.md）
-`
-
-	goMod := "module " + mod + "\n\ngo 1.21\n"
-
-	readme := `# ` + title + `（Harness 产出代码骨架）
-
-> 由 VoiceSign Harness 多步编排（ORCHESTRATE kind=implement）自动生成，2026-10-03。
-
-## 内容
-- main.go 服务入口（配置/健康检查/鉴权占位）
-- router.go 路由注册（/v1/health、/v1/process）
-- domain.go 领域层 TODO（需求章节见文件头注释）
-
-## 使用
-` + "```bash\ncd " + mod + "\ngo build ./...   # 骨架可编译\n" + "```\n" + `
-
-## 需求映射
-- 实现计划（完整）：docs/` + sanitizePathPart(title) + `-实现计划.md
-- 需求全文：用户提交的附件 document（见实现计划「需求文档全文摘录」）
-
-## 状态
-骨架阶段（可编译、可运行 /v1/health）；核心逻辑待实现阶段按需求文档填充。
-`
-
-	return map[string]string{
-		"README.md": readme,
-		"go.mod":    goMod,
-		"main.go":   mainGo,
-		"router.go": routerGo,
-		"domain.go": domainGo,
-	}
-}
-
-// deterministicImplementPlan 确定性生成实现计划（LLM 不可用时的降级，仍产出真实可迭代文件）。
-// 结构：目标 → 需求要点提取（章节标题/关键词）→ 模块清单 → 接口/数据契约 → 验收映射 → 实施步骤。
-func deterministicImplementPlan(title, doc string) string {
-	var sb strings.Builder
-	sb.WriteString("## 实现目标\n\n")
-	fmt.Fprintf(&sb, "- 产品：%s\n", title)
-	sb.WriteString("- 依据：用户提供的需求文档（见文末全文摘录）\n\n")
-
-	sb.WriteString("## 需求要点（确定性提取）\n\n")
-	lines := strings.Split(doc, "\n")
-	type hdr struct {
-		level int
-		text  string
-	}
-	headers := make([]hdr, 0, 32)
-	for _, ln := range lines {
-		ln = strings.TrimSpace(ln)
-		if strings.HasPrefix(ln, "#") {
-			level := 0
-			for _, r := range ln {
-				if r != '#' {
-					break
-				}
-				level++
-			}
-			text := strings.TrimSpace(strings.TrimLeft(ln, "#"))
-			headers = append(headers, hdr{level, text})
-		}
-	}
-	if len(headers) == 0 {
-		sb.WriteString("- 文档未含 Markdown 标题；建议人工复核需求结构。\n")
-	} else {
-		for _, h := range headers {
-			if h.level == 1 {
-				fmt.Fprintf(&sb, "- **%s**\n", h.text)
-			} else if h.level == 2 {
-				fmt.Fprintf(&sb, "  - %s\n", h.text)
-			}
-		}
-	}
-
-	sb.WriteString("\n## 建议模块划分（骨架，待实现时细化）\n\n")
-	sb.WriteString("| 模块 | 职责 | 关键接口 |\n|---|---|---|\n")
-	sb.WriteString("| cmd/ 入口 | 服务装配与启动 | main() |\n")
-	sb.WriteString("| server/ 路由 | HTTP 端点与鉴权 | /v1/* |\n")
-	sb.WriteString("| 领域逻辑 | 需求核心机制（意图/词典/反馈） | 领域服务方法 |\n")
-	sb.WriteString("| 数据层 | 持久化（文件/DB） | 读写接口 |\n")
-
-	sb.WriteString("\n## 验收映射（以需求文档验收标准为准）\n\n")
-	sb.WriteString("> 由实现阶段逐条对照需求文档验收标准展开，每达成一条回填证据。\n\n")
-
-	sb.WriteString("## 实施步骤（骨架）\n\n")
-	sb.WriteString("1. 解析需求文档，抽取模块与接口契约\n")
-	sb.WriteString("2. 搭服务骨架（路由/配置/数据目录）\n")
-	sb.WriteString("3. 实现核心机制，逐模块真跑验证\n")
-	sb.WriteString("4. 对照验收标准逐条复核，补证据\n")
-	sb.WriteString("5. 交付（含自测与验收报告）\n\n")
-
-	sb.WriteString("## 需求文档全文摘录\n\n```markdown\n")
-	sb.WriteString(truncateStr(doc, 6000))
-	sb.WriteString("\n```\n")
-	return sb.String()
-}
-
 
 // commitTargetPath 定向提交单个文件：git add -- <abs> →（无 diff 则幂等跳过）→ git commit → git log -1 取 hash。
 // 绝不 `git add -A`，避免扫入工作区无关未跟踪文件。
@@ -2558,7 +1497,10 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 //  5. NOTE/EDIT/COMMIT/DEBUG → true（真操作指代消解保持原行为）。
 //
 //     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
-func shouldResolveRefer(it *contract.Intent) bool {
+//
+// hasRecent=true 表示多轮上下文存在最近指代目标：QUERY 即使有实体也做指代接线
+// （"查一下这个方案"在多轮中"这个方案"可回指前文实体）。
+func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
 	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
@@ -2568,9 +1510,13 @@ func shouldResolveRefer(it *contract.Intent) bool {
 	}
 	switch it.Intent {
 	case contract.IntentQuery:
-		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 不解析
+		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 默认不解析；
+		// 但多轮上下文有最近指代目标（hasRecent）→ 接线解析（"查一下这个方案"回指前文实体）。
 		if it.Confidence >= 0.8 {
-			return isBareReferent(text)
+			if isBareReferent(text) {
+				return true
+			}
+			return hasRecent
 		}
 		return true
 	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit, contract.IntentDebug:
