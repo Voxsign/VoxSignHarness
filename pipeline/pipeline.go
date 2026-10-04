@@ -84,7 +84,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,6 +136,15 @@ type Options struct {
 
 	// selfhealSvc 异常自愈层（三环）；懒装配。Providers==nil 时恒为 nil（零开销跳过，主链不变）。
 	selfhealSvc *selfheal.Service
+
+	// ConvID 会话标识（同 logDir 下多轮 run 共享；缺省 "default"）。
+	ConvID string
+	// ASRDataDir ASR 数据目录（反馈/黑名单/词典记忆，跨会话全局生效）。
+	ASRDataDir string
+	// RoundEvidence 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）。
+	RoundEvidence string
+	// Document 需求文档全文（实现类任务；证据门/LLM 生成共用）。
+	Document string
 
 	mu    *sync.Mutex
 	guard *risk.Guard
@@ -904,7 +915,7 @@ func fetchSkillCatalog() (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("AIOPS_KEY 未配置")
 	}
-	req, err := http.NewRequest("GET", "https://aiops.peterzou.com/api/skill/skills", nil)
+	req, err := http.NewRequest("GET", "https://aiops.voxsign.ai/api/skill/skills", nil)
 	if err != nil {
 		return "", err
 	}
@@ -1283,6 +1294,16 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	return receipts
 }
 
+// implCapabilityBrief 是实现类任务的 P0 能力清单兜底摘要（LLM 不可用时骨架仍可编译）。
+// 洞4（2026-10-04）起以需求文档端点清单注入为主，本清单仅作无文档兜底。
+const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配与纠错安全）
+②文本纠错：清洗 + 词典纠错（正常文本不被改坏）
+③意图分类：NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 五类
+④反馈学习：✔/✘ 回馈落盘 feedback.jsonl（append-only）
+⑤数据落盘：traces/usage 等 JSONL append-only，独立数据目录（data-dir 可配）
+⑥HTTP 端点：/v1/health、/v1/process（JSON 请求/响应）
+⑦只监听 127.0.0.1（非回环拒绝），鉴权可占位但须有`
+
 // llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
 // 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
 //
@@ -1398,6 +1419,48 @@ func asciiSlug(s string) string {
 //
 // 返回 (files, note)：files=nil 表示 LLM 不可用/迭代耗尽（调用方回落确定性骨架）；
 // note 为失败原因或"编译全绿（N 轮）"。
+// chatWithFallback（2026-10-04 适配 provider 新 API + 模型调度）：按 pref 顺序尝试 provider，
+// 失败/异常自动切下一个（欠费/故障不卡死；对齐"最差模型兜底"需求）。
+func (o *Options) chatWithFallback(ctx context.Context, pref []string, req provider.ChatRequest) (provider.ChatResponse, error) {
+	if o == nil || o.Providers == nil {
+		return provider.ChatResponse{}, fmt.Errorf("providers nil")
+	}
+	var lastErr error
+	for _, name := range pref {
+		p, err := o.Providers.Get(name)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := p.Chat(ctx, req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", name, err)
+			log.Printf("[llm-trace] %s attempt=FAIL retryable=true err=%v", name, err)
+			continue
+		}
+		return resp, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("provider 候选列表为空")
+	}
+	return provider.ChatResponse{}, lastErr
+}
+
+// stripCodeFence 剥离 LLM 输出的 Markdown 代码围栏（```go ... ```）。
+func stripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if i := strings.Index(s, "\n"); i >= 0 {
+			s = s[i+1:]
+		}
+		s = strings.TrimSpace(s)
+		if strings.HasSuffix(s, "```") {
+			s = strings.TrimSpace(strings.TrimSuffix(s, "```"))
+		}
+	}
+	return s
+}
+
 func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir, memory string) (map[string]string, string) {
 	if o == nil || o.Providers == nil {
 		return nil, "providers nil"
@@ -1418,7 +1481,7 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	// 2026-10-03 真跑实证：①fast 曾 1.8s 返回<200 字符短输出 → 判无效（输出质量无法被调度层感知）；
 	// ②gpt-4o 输出必带 ```go Markdown 围栏 → 直接写盘必编译失败（expected 'package'）→ stripCodeFence 剥离。
 	genWithPref := func(pref []string, minLen int, sysMsg, usrMsg string) (string, string) {
-		resp, _, err := o.Providers.ChatWithFallback(ctx, pref, provider.ChatRequest{
+		resp, err := o.chatWithFallback(ctx, pref, provider.ChatRequest{
 			Messages: []contract.Message{
 				{Role: "system", Content: sysMsg},
 				{Role: "user", Content: usrMsg},

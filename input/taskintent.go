@@ -772,6 +772,7 @@ func detectImplementOrchestrate(text string) (string, map[string]string, bool) {
 		}
 	}
 	reviseHit := false
+
 	for _, w := range reviseVerbs {
 		if idx := strings.Index(text, w); idx >= 0 && (vi < 0 || idx < vi) {
 			if insideBookTitle(text, idx, idx+len(w)) {
@@ -1385,4 +1386,15 @@ func askForKind(kind string) string {
 	default:
 		return taskAskTemplate
 	}
+}
+
+// insideBookTitle 判断 [start,end) 区间是否完全落在书名号《…》内。
+// 用途：动词/名词匹配排除文档名成分（如《全景开发文档》里的"开发"不是实现动词）。
+func insideBookTitle(text string, start, end int) bool {
+	i := strings.Index(text, "《")
+	j := strings.Index(text, "》")
+	if i < 0 || j <= i {
+		return false
+	}
+	return start >= i && end <= j
 }
