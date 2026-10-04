@@ -21,8 +21,8 @@ struct RootView: View {
                 ConnectionStatusView()
                 Spacer()
                 Text("VoxSign")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.primary)
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(VSColor.brandGradient)
                 Spacer()
                 // 设置入口（T3 修复：齿轮常驻顶部，不再随角色条隐藏）
                 Button {
@@ -76,6 +76,7 @@ struct RootView: View {
             InputBarView()
         }
         .background(VSColor.bg.ignoresSafeArea())
+        .preferredColorScheme(.light)
         .sheet(isPresented: $model.showSettings) {
             SettingsView()
         }

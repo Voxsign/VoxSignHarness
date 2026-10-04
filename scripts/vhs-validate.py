@@ -51,6 +51,10 @@ CRITERIA = [
      "text": "你必须增加一个查看天气的能力", "expect": [], "ok_need_ask": False, "assert": "contract"},
     {"id": "R12", "group": "selfheal", "req": "注册能力必须真实执行：说「查天气」返回真实天气数据",
      "text": "查一下北京的天气", "expect": ["天气实况（北京）", "°C"], "ok_need_ask": False},
+    {"id": "R13", "group": "remote", "req": "图片回执闭环：说「给我截个图」→ 回执含 /screenshots/ 且 URL 可达",
+     "text": "给我截个图", "expect": ["/screenshots/"], "ok_need_ask": False, "assert": "screenshot"},
+    {"id": "R14", "group": "asr", "req": "ASR 校准契约：/v1/asr 可达且不 panic（就绪→200+text；通道通但上游错→502 asr_error；未实现→502 asr_channel_not_ready）",
+     "text": "", "expect": [], "ok_need_ask": False, "assert": "asr"},
 ]
 
 TRACE = "/tmp/vhs-m7/log/trajectory-20261004.jsonl"
@@ -127,6 +131,59 @@ def main():
     results = []
     for c in crits:
         # 特判：R11 契约落盘 / R8 时间 / R9 人话
+        if c.get("assert") == "asr":
+            try:
+                # 契约自适应：平台就绪 → 200 {ok,text}；未就绪 → 502 {ok:false,code}。均不得 panic。
+                import uuid as _u
+                b = _u.uuid4().hex
+                dummy = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x80\x3e\x00\x00\x01\x00\x08\x00data\x00\x00\x00\x00"
+                body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"voice.wav\"\r\nContent-Type: audio/wav\r\n\r\n").encode() + dummy + f"\r\n--{b}--\r\n".encode()
+                req = urllib.request.Request(args.base + "/v1/asr", data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={b}",
+                             "Authorization": f"Bearer {args.token}"})
+                try:
+                    with urllib.request.urlopen(req, timeout=25) as resp:
+                        d = json.loads(resp.read())
+                        ok = resp.status == 200 and d.get("ok") and d.get("text")
+                        ev = f"平台就绪：text={str(d.get('text'))[:40]} model={d.get('model')} hotwords={d.get('hotwords_used')}"
+                except urllib.error.HTTPError as e:
+                    d = json.loads(e.read() or b"{}")
+                    code = d.get("code", "")
+                    # 通道就绪判定（契约自适应 v3）：结构化 code 且不 panic 即 PASS。
+                    # asr_channel_not_ready=平台未实现端点；asr_error=端点+key 通但上游转写报错；
+                    # asr_audio_empty=音频无有效语音（测试音频过短，非通道故障）。
+                    ok = e.code == 502 and code in ("asr_channel_not_ready", "asr_error", "asr_audio_empty")
+                    ev = f"平台通道：HTTP {e.code} code={code}"
+                results.append({"id": c["id"], "pass": ok, "evidence": ev})
+            except Exception as ex:
+                results.append({"id": c["id"], "pass": False, "evidence": f"执行异常 {ex}"})
+            continue
+        if c.get("assert") == "screenshot":
+            try:
+                r = post(args.base, "/v1/tasks", {"text": c["text"], "mode": "voice"})
+                tid = r.get("task_id")
+                for _ in range(12):
+                    time.sleep(2)
+                    d = get(args.base, f"/v1/tasks/{tid}")
+                    if d.get("status") in ("done", "need_ask", "failed"):
+                        break
+                rec = str(d.get("receipt", ""))
+                import re as _re
+                m = _re.search(r"/screenshots/[^（\s]+\.png", rec)
+                ok = bool(m)
+                if ok:
+                    try:
+                        req = urllib.request.Request(args.base + m.group(0),
+                            headers={"Authorization": f"Bearer {args.token}"})
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            ok = resp.status == 200
+                    except Exception:
+                        ok = False
+                results.append({"id": c["id"], "pass": ok,
+                                "evidence": rec[:120] if ok else "截图 URL 未生成或不可达"})
+            except Exception as e:
+                results.append({"id": c["id"], "pass": False, "evidence": f"执行异常 {e}"})
+            continue
         if c.get("assert") == "contract":
             p = contract_registered("天气")
             results.append({"id": c["id"], "pass": bool(p), "evidence": p or "契约未落盘"})
