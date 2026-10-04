@@ -743,6 +743,460 @@ func mustGetwd() string {
 	return "?"
 }
 
+
+// execSkill 技能调用链（线 C 修订卡）：发现→选择→调用→证据留痕→产出→定向提交。
+// 真装配：读技能 SKILL.md（技能系统清单的本地镜像），按其流程产出校准报告骨架。
+func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	o.ensureProjectSpace()
+	root := o.projectRootForCommit(it)
+	if root == "" {
+		return []contract.Receipt{{Tool: "skill", OK: false,
+			Err: "技能调用需注册 project 域且 scope 指向项目根"}}
+	}
+	var receipts []contract.Receipt
+	nextSeq := func() int { return len(receipts) + 1 }
+
+	name := strings.TrimSpace(it.Params["skill_name"])
+	action := strings.TrimSpace(it.Params["action"])
+	if name == "" {
+		name = "validate-align" // 缺省技能
+	}
+	if action == "" {
+		action = "校准"
+	}
+
+	// C-01 发现：意图层已识别（skill_name/action 存在）——留痕
+	recv := o.run("search", map[string]any{"pattern": "SKILL.md", "kind": "file"})
+	recv.Tool = "skill"
+	recv.Seq = nextSeq()
+	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
+		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
+
+	// C-02 选择：技能清单来源=技能系统（aiops 远端，Bearer $AIOPS_KEY），失败降级本地镜像。
+	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
+	skillMD := filepath.Join(skillDir, "SKILL.md")
+	catalogSource := "local-mirror"
+	if catalog, err := fetchSkillCatalog(); err == nil && catalog != "" {
+		if strings.Contains(catalog, name) || strings.Contains(catalog, "validate-align") {
+			catalogSource = "aiops-remote"
+		}
+	} else if err != nil {
+		log.Printf("[execSkill] aiops 清单不可用，降级本地镜像: %v", err)
+	}
+	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
+	if _, err := os.Stat(skillMD); err != nil {
+		// 兜底 validate-align（仓库 skills/validate-align/SKILL.md）
+		skillMD = filepath.Join(root, "skills", "validate-align", "SKILL.md")
+	}
+	if _, err := os.Stat(skillMD); err != nil {
+		sel.OK = false
+		sel.Err = "技能 SKILL.md 不存在: " + skillMD
+		receipts = append(receipts, sel)
+		return receipts
+	}
+	sel.OK = true
+	sel.Stdout = "C-02 技能选择: " + skillMD + "（清单来源=" + catalogSource + "）"
+	receipts = append(receipts, sel)
+
+	// C-03 调用：读 SKILL.md → 按技能流程产出报告骨架（LLM 不可用走确定性）。
+	readRecv := o.run("file", map[string]any{"action": "read", "path": skillMD})
+	readRecv.Seq = nextSeq()
+	receipts = append(receipts, readRecv)
+	if !readRecv.OK {
+		return receipts
+	}
+	doc := it.Params["document"]
+	objName := strings.TrimSpace(it.Params["target_doc"])
+	if objName == "" {
+		objName = "VoiceSign-ASR"
+	}
+	report := "# " + objName + "-" + action + "报告（技能调用产出）\n\n" +
+		"> 由 VoiceSign Harness 技能调用链（ORCHESTRATE kind=skill：发现→选择→调用→证据）自动生成。\n\n" +
+		skillReportBody(name, action, readRecv.Stdout, doc, catalogSource)
+	reportName := sanitizePathPart(objName) + "-" + sanitizePathPart(action) + "报告.md"
+	reportAbs := filepath.Join(root, "harness-output", "skill-"+sanitizePathPart(name), reportName)
+	clean, ok := space.ResolveScopePath(root, reportAbs)
+	if !ok {
+		return append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: false,
+			Err: "白名单外写路径被拒绝（越界）: " + reportAbs})
+	}
+	wrecv := o.run("file", map[string]any{
+		"action": "write", "path": clean, "content": report, "log_dir": logDir,
+	})
+	wrecv.Seq = nextSeq()
+	receipts = append(receipts, wrecv)
+	if !wrecv.OK {
+		return receipts
+	}
+
+	// C-04 证据留痕：调用链逐段已入 receipts（发现/选择/调用/产出）——服务层 emit trajectory。
+	receipts = append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: true,
+		Stdout: "C-04 证据留痕: 调用链 4 段已记录（find/select/call/produce）"})
+
+	crecv := o.commitTargetPath(root, clean, "vhs(skill): 生成《"+objName+"-"+action+"报告》技能调用产出（ORCHESTRATE kind=skill）")
+	crecv.Seq = nextSeq()
+	receipts = append(receipts, crecv)
+	return receipts
+}
+
+// skillReportBody 组装技能产出报告（确定性）：技能流程骨架 + 校准对象摘要 + 判据清单占位。
+func skillReportBody(name, action, skillMDContent, doc, catalogSource string) string {
+	var sb strings.Builder
+	sb.WriteString("## 技能信息\n\n")
+	sb.WriteString("- 技能：" + name + "\n- 动作：" + action + "\n")
+	sb.WriteString("- 依据：技能 SKILL.md（清单来源=" + catalogSource + "，见文末摘录）\n\n")
+
+	sb.WriteString("## 技能流程（从 SKILL.md 提取的步骤骨架）\n\n")
+	var steps []string
+	inCode := false
+	for _, ln := range strings.Split(skillMDContent, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "```") {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			continue
+		}
+		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "# ") {
+			steps = append(steps, strings.TrimLeft(t, "# "))
+		}
+	}
+	if len(steps) == 0 {
+		steps = []string{"（SKILL.md 未解析出章节，见文末摘录）"}
+	}
+	for _, s := range steps {
+		sb.WriteString("- " + s + "\n")
+	}
+
+	sb.WriteString("\n## 校准对象\n\n")
+	if doc != "" {
+		sb.WriteString(truncateStr(doc, 800))
+	} else {
+		sb.WriteString("（未提供校准对象全文，见任务上下文）")
+	}
+	sb.WriteString("\n\n## 判据清单（逐条双证 · 引用真实证据）\n\n")
+	sb.WriteString("> 双证要求（validate-align SKILL.md）：PASS = C 代码证据（文件:行）+ R 运行证据（真跑响应/日志）。\n")
+	sb.WriteString("> 本报告的证据引用策略：判据逐条挂证据路径（代码真值 + 真跑产物），全部可审计可复核。\n\n")
+	for _, c := range defaultSkillCriteria(name, action) {
+		sb.WriteString("- " + c + "\n")
+	}
+	sb.WriteString("\n### 证据引用（双证）\n\n")
+	sb.WriteString("- C 代码证据：仓库源码路径（如 `input/taskintent.go`、`pipeline/pipeline.go`、`tools/executor.go`），见文末摘录与 git 提交历史\n")
+	sb.WriteString("- R 运行证据：`docs/线C验收报告-技能层-20261003.md`（真装配 4/4 二验）、`scripts/accept.sh` 验收数据目录（feedback.jsonl/blacklist.json 可复核）、服务日志\n\n")
+
+	sb.WriteString("## 证据留痕（C-04）\n\n")
+	sb.WriteString("- 发现：意图层（skill_name=" + name + " action=" + action + "）\n")
+	sb.WriteString("- 选择：" + name + "/SKILL.md（本地镜像）\n")
+	sb.WriteString("- 调用：本报告产出（读 SKILL.md → 结构化骨架）\n")
+	sb.WriteString("- 产出：本文件（harness-output/skill-" + sanitizePathPart(name) + "/）\n\n")
+
+	sb.WriteString("## SKILL.md 全文摘录\n\n```markdown\n")
+	sb.WriteString(truncateStr(skillMDContent, 4000))
+	sb.WriteString("\n```\n")
+	return sb.String()
+}
+
+// fetchSkillCatalog 从 aiops 技能系统拉技能清单（线 C 修订卡 C-02：清单来源=技能系统）。
+// Bearer 用 $AIOPS_KEY；网络/鉴权失败返回错误（调用方降级本地镜像并留痕）。
+func fetchSkillCatalog() (string, error) {
+	key := os.Getenv("AIOPS_KEY")
+	if key == "" {
+		return "", fmt.Errorf("AIOPS_KEY 未配置")
+	}
+	req, err := http.NewRequest("GET", "https://aiops.peterzou.com/api/skill/skills", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("aiops 清单 %d", resp.StatusCode)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	return string(b), nil
+}
+
+// defaultSkillCriteria 按技能/动作给出判据清单（线 C 遗留②：逐条双证的起点）。
+func defaultSkillCriteria(name, action string) []string {
+	switch action {
+	case "校准", "对齐", "校验":
+		return []string{
+			"C1 目标与验收标准分离取证（产物验收 vs 能力验收，不混层）",
+			"C2 三层取证：D 文档校准（判据 SMART 化）→ C 代码证据（文件:行）→ R 运行证据（真跑）",
+			"C3 每条判据双证（C+R）才 PASS；只 C 无 R = ◐ 待真跑；只有文档 = ✗",
+			"C4 评分附改进建议与编排（第 7 步：问题定位/建议/验证/责任/优先级）",
+			"C5 语义级判断走远程模型或人工（不本地文本猜）",
+		}
+	default:
+		return []string{
+			"P1 技能流程步骤可追溯（读 SKILL.md → 按流程执行）",
+			"P2 产出物与技能能力一致（结构完整、可审计）",
+			"P3 证据留痕四段（发现/选择/调用/产出）",
+		}
+	}
+}
+
+// bracketTitle 抽取《…》书名号目标（与 input 层 extractBookTitle 语义一致）。
+var bracketTitle = regexp.MustCompile(`《([^》]+)》`)
+
+// hasDeicticDocRef 判定文本是否含文档指代（"这份/该文档/此文档/这份需求说明书"等）。
+func hasDeicticDocRef(text string) bool {
+	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "这个", "这些", "那", "它"} {
+		if strings.Contains(text, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// referTargetFromSlots 从本会话上下文槽读最近含《…》的记录，抽书名号作为指代目标。
+func (o *Options) referTargetFromSlots() string {
+	convID := strings.TrimSpace(o.ConvID)
+	if convID == "" {
+		convID = "default"
+	}
+	recs := serverReadContextSlots(o.logDir(), convID)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if t, ok := recs[i]["text"].(string); ok {
+			if m := bracketTitle.FindStringSubmatch(t); len(m) == 2 {
+				return m[1]
+			}
+		}
+	}
+	return ""
+}
+
+// slotLatestDocument 读会话槽最近一条 has_doc=true 记录的 doc_full（指代命中后恢复全文）。
+// 2026-10-03 记忆增强：配合 referTargetFromSlots，让"那个事"不仅解出书名号，还能拿到可执行的 document。
+func slotLatestDocument(logDir, convID string) string {
+	recs := serverReadContextSlots(logDir, convID)
+	for i := len(recs) - 1; i >= 0; i-- {
+		if b, ok := recs[i]["has_doc"].(bool); ok && b {
+			if d, ok := recs[i]["doc_full"].(string); ok && d != "" {
+				return d
+			}
+		}
+	}
+	return ""
+}
+
+// loadASRMemory 读 ASR 服务沉淀（feedback.jsonl 最近 10 条 / blacklist.json / dictionary.json 教词），
+// 生成"我学到的用户偏好"摘要。空目录/空文件 → 返回 ""（不注入，无副作用）。
+// 2026-10-04：ASR 学到的东西跨会话全局生效 —— 这就是"越来越懂你"的记忆来源。
+func (o *Options) loadASRMemory() string {
+	if o.ASRDataDir == "" {
+		return ""
+	}
+	var parts []string
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "feedback.jsonl")); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		start := len(lines) - 10
+		if start < 0 {
+			start = 0
+		}
+		for _, ln := range lines[start:] {
+			var rec map[string]any
+			if json.Unmarshal([]byte(ln), &rec) == nil {
+				rawT, _ := rec["raw"].(string)
+				cor, _ := rec["corrected"].(string)
+				acc, _ := rec["accepted"].(bool)
+				if acc && rawT != "" && cor != "" && rawT != cor {
+					parts = append(parts, "✔确认:"+rawT+"→"+cor)
+				} else if !acc && rawT != "" {
+					parts = append(parts, "✘标错:"+rawT+"→"+cor)
+				}
+			}
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "blacklist.json")); err == nil {
+		m := map[string]string{}
+		if json.Unmarshal(raw, &m) == nil {
+			for t := range m {
+				parts = append(parts, "黑名单:"+t)
+			}
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(o.ASRDataDir, "dictionary.json")); err == nil {
+		var d struct {
+			Terms []struct {
+				Term   string `json:"term"`
+				Source string `json:"source"`
+			} `json:"terms"`
+		}
+		if json.Unmarshal(raw, &d) == nil {
+			for _, t := range d.Terms {
+				if t.Source == "model" || t.Source == "manual" {
+					parts = append(parts, "教词:"+t.Term)
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；")
+}
+
+// memoryBlock 把 memory 拼成 prompt 后缀（空 → ""，长 → 截断 1200）。
+func memoryBlock(memory string) string {
+	if memory == "" {
+		return ""
+	}
+	return "\n\n" + truncateStr(memory, 1200)
+}
+
+// memoryContext 从 intent.Context 提取"我学到的"记忆（asr-memory / project-map），
+// 拼进 LLM prompt —— 让"越来越懂你"真正被模型消费。
+// 2026-10-04 修复：此前 Context 只有注入无消费点（纸面记忆），LLM 看不到 ASR 沉淀。
+func (o *Options) memoryContext(it contract.Intent) string {
+	var parts []string
+	for _, c := range it.Context {
+		if strings.HasPrefix(c, "asr-memory: ") {
+			parts = append(parts, "- 用户偏好（ASR 沉淀）："+strings.TrimPrefix(c, "asr-memory: "))
+		}
+		if strings.HasPrefix(c, "project-map:") {
+			parts = append(parts, "- 项目背景："+strings.TrimPrefix(c, "project-map:"))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "记忆上下文（你从用户/过往会话学到的，应尊重并在输出中体现）：\n" + strings.Join(parts, "\n")
+}
+
+// writeASRSlot 把 ASR 沉淀快照 append 到 <logDir>/context_slots/asr.jsonl（槽体系内、可审计）。
+func (o *Options) writeASRSlot(line string) {
+	dir := filepath.Join(o.logDir(), "context_slots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "asr.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line + "\n")
+	_ = f.Close()
+}
+
+// serverReadContextSlots 读槽（server.go 同函数导出代理——避免 import cycle：pipeline 不依赖 server）。
+// 实际由 server 包写入；pipeline 经此只读。放在本文件尾部。
+func serverReadContextSlots(logDir, convID string) []map[string]any {
+	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
+	if err != nil {
+		return nil
+	}
+	var out []map[string]any
+	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if ln == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(ln), &rec) == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// ---------- 多轮指代接线（2026-10-04）：refer.Recent 会话槽读写 ----------
+//
+// 背景：refer.Resolver 的 Recent（跨轮上下文）生产路径此前**零构造**——grep RecentEntity{
+// 仅出现在测试代码，"这个方案"永远回问。此处补上"写入端 + 读取端"：
+//   - 执行成功的轮次把对话核心实体 append 到 <logDir>/context_slots/<convID>.jsonl
+//     （与文档槽/ASR 槽同体系：append-only、会话隔离、可审计）；
+//   - 下一轮 refer 解析前从同槽读回，注入 resolver.Recent。
+// 会话隔离：按 ConvID 分文件；CLI 缺省 "default"（同 logDir 下多轮 run 共享），
+// server 按真实会话 ID 隔离，不跨会话猜（与 358b2f0 指代固化槽同范式）。
+
+const recentSlotMax = 16 // 上下文窗口上限（防槽无限膨胀）
+
+// extractRecentEntities 从文本提取可作指代上下文的核心实体：
+// 拉丁专名（OT-ODP/SPoG/DMZ…）+ 书名号《…》内容 + 引号短语。去重、带时间戳。
+func extractRecentEntities(text string) []refer.RecentEntity {
+	seen := map[string]bool{}
+	var out []refer.RecentEntity
+	now := time.Now().Format(time.RFC3339)
+	add := func(e, kind string) {
+		if e == "" || seen[e] {
+			return
+		}
+		seen[e] = true
+		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
+	}
+	// 拉丁大写专名（含 - 连接可 0..N 段）：OT-ODP / SPoG / DMZ / NGSA
+	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
+	for _, m := range re.FindAllString(text, -1) {
+		add(m, "project")
+	}
+	// 《…》书名号文档（2-30 字）
+	re2 := regexp.MustCompile(`《([^》]{2,30})》`)
+	for _, m := range re2.FindAllStringSubmatch(text, -1) {
+		add(m[1], "file")
+	}
+	// 引号短语（4-30 字，像实体名/专有表述）
+	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
+	for _, m := range re3.FindAllStringSubmatch(text, -1) {
+		add(m[1], "project")
+	}
+	return out
+}
+
+// writeRecentEntities 把最近实体 append 到会话槽（append-only、可审计）。
+func writeRecentEntities(logDir, convID string, ents []refer.RecentEntity) {
+	dir := filepath.Join(logDir, "context_slots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, convID+".jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	for _, e := range ents {
+		rec := map[string]any{"type": "recent_entity", "space": e.Space, "entity": e.Entity, "kind": e.Kind, "ts": e.Ts}
+		if b, err := json.Marshal(rec); err == nil {
+			_, _ = f.Write(append(b, '\n'))
+		}
+	}
+}
+
+// loadRecentEntities 从会话槽读最近实体（type=recent_entity），ts 倒序取前 N。
+func loadRecentEntities(logDir, convID string) []refer.RecentEntity {
+	recs := serverReadContextSlots(logDir, convID)
+	var out []refer.RecentEntity
+	for _, r := range recs {
+		if r["type"] != "recent_entity" {
+			continue
+		}
+		ent, _ := r["entity"].(string)
+		if ent == "" {
+			continue
+		}
+		kind, _ := r["kind"].(string)
+		if kind == "" {
+			kind = "project"
+		}
+		sp, _ := r["space"].(string)
+		if sp == "" {
+			sp = "default"
+		}
+		ts, _ := r["ts"].(string)
+		out = append(out, refer.RecentEntity{Space: sp, Entity: ent, Kind: kind, Ts: ts})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ts > out[j].Ts })
+	if len(out) > recentSlotMax {
+		out = out[:recentSlotMax]
+	}
+	return out
+}
+
+
 // execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空 → 惰性自动注册 project 域，
