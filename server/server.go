@@ -157,7 +157,13 @@ func (e sseEvent) flattened() map[string]any {
 
 // Server 持有配置、pipeline 模板与任务表。
 // platformAIOpsBase 自建平台入口（与 config/model-center.json gateway.base_url 一致）。
-const platformAIOpsBase = "https://aiops.peterzou.com"
+// 支持 VHS_PLATFORM_BASE 覆盖（域名迁移期：peterzou.com 证书链失效时切 voxsign.ai）。
+var platformAIOpsBase = func() string {
+	if v := os.Getenv("VHS_PLATFORM_BASE"); v != "" {
+		return v
+	}
+	return "https://aiops.peterzou.com"
+}()
 
 type Server struct {
 	cfg  *config.Config
