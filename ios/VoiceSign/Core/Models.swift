@@ -51,6 +51,8 @@ struct Receipt: Equatable {
     var files: String = ""
     var result: String = ""
     var undo: String = ""
+    /// v2.3（用户需求：微信式反馈"处理完了之后有多少时间"）：本轮处理耗时（秒），UI 显示"已处理 X 秒"。
+    var elapsedSec: Double = 0
 }
 
 /// 撤销按钮裁决结果。

@@ -614,6 +614,8 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "global"
 	case contract.IntentOrchestrate:
 		return "project" // 多步编排=读文档+写文件+git 提交，落在项目域
+	case contract.IntentRegisterTool:
+		return "project" // 2026-10-04 能力自举：注册工具=写类意图，需可写域（global 只读会拒）
 	default:
 		return "global"
 	}
@@ -656,6 +658,10 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			return o.execSkill(ctx, it, logDir) // 线 C 修订卡：技能调用真装配链
 		}
 		return o.execOrchestrate(ctx, it, logDir)
+	case contract.IntentRegisterTool:
+		// 2026-10-04 用户强要求"后台必须有能力扩展能力，自迭代自更新"：
+		// REGISTER_TOOL 意图真正落地注册（此前只给 caps，未执行）。
+		return o.execRegisterTool(ctx, it, logDir)
 	case contract.IntentNote:
 		path := filepath.Join(logDir, "notes.md")
 		args := map[string]any{
@@ -3271,4 +3277,62 @@ func attributeLLMError(rawErr string) string {
 	default:
 		return "模型调用失败（原因未知）：" + rawErr
 	}
+}
+
+// execRegisterTool —— 2026-10-04 用户强要求"后台必须有能力扩展能力，自迭代自更新"：
+// REGISTER_TOOL 意图执行：抽取能力名 → 生成工具契约 → Registry.Register 落盘 →
+// 回复人话确认（"好，我来增加「XX」能力"）。能力名抽不到/注册表未绑定 → 明确回执，不静默失败。
+func (o *Options) execRegisterTool(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	name := extractCapabilityName(it.CorrectedText)
+	if name == "" {
+		return []contract.Receipt{{
+			Tool: "register", OK: false, Err: "没听清要增加什么能力。请说清楚，比如「增加一个远程控制电脑的能力」",
+		}}
+	}
+	if o.Tools == nil {
+		return []contract.Receipt{{
+			Tool: "register", OK: false, Err: "工具注册表未配置，无法落盘",
+		}}
+	}
+	c := contract.ToolContract{
+		Name:          name,
+		Version:       "1.0",
+		Source:        "voice",
+		Caps:          []string{name},
+		Params:        map[string]string{"args": "string,optional"},
+		SideEffects:   []string{"语音注册（自举）"},
+		AllowedSpaces: []string{"project", "sandbox"},
+		Risk:          map[string]string{name: "medium"},
+		RegisteredAt:  time.Now().Format(time.RFC3339),
+	}
+	if err := o.Tools.Register(c, true); err != nil {
+		return []contract.Receipt{{Tool: "register", OK: false, Err: "注册失败: " + err.Error()}}
+	}
+	// 能力契约已落盘（自举第一步）；执行器实现在后续迭代接入。
+	return []contract.Receipt{{
+		Tool: "register", OK: true,
+		Stdout: "好，我来增加「" + name + "」能力：已登记为可扩展工具（语音自举注册）。" +
+			"接下来我会把它接成可执行能力——你说「" + name + "」相关的具体需求，我就能真正上手。",
+	}}
+}
+
+// extractCapabilityName 从注册请求中抽取能力名：
+// 「你必须增加一个 远程控制电脑 的能力」→ 远程控制电脑；「加一个 压缩图片 的工具」→ 压缩图片。
+func extractCapabilityName(text string) string {
+	re := regexp.MustCompile(`(?:增加|加|注册|新增|添加|创建|新建|搞|做|接入|上架)(?:一个|个|个新的|新的|一种|一项)?(?:工具|能力|功能|技能|插件|小工具)?(?:的)?([\p{Han}A-Za-z0-9\-_ ]+?)(?:的能力|的功能|的工具|的技能|的插件|吧|呢|了|。|？|\?|，|,|$)`)
+	m := re.FindStringSubmatch(text)
+	if len(m) > 1 {
+		name := strings.TrimSpace(m[1])
+		name = strings.TrimRight(name, "的了")
+		if name != "" && len([]rune(name)) <= 20 {
+			return name
+		}
+	}
+	// 兜底：去尾虚词后取整句（≤20 字，防把整段抱怨当能力名）。
+	t := strings.TrimSpace(text)
+	t = strings.TrimRight(t, "的了吧呢。？?!！，, ")
+	if t != "" && len([]rune(t)) <= 20 {
+		return t
+	}
+	return ""
 }

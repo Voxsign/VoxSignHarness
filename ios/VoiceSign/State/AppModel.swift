@@ -107,6 +107,8 @@ final class AppModel: ObservableObject {
 
     private let api = APIClient.shared
     private let sse = SSEClient.shared
+    /// v2.3：本轮提交时刻（渲染"已处理 X 秒"用）。
+    private var lastSubmitAt = Date()
     /// T2 连接感知：网络恢复自动补投的订阅（取消时清理）。
     private var connSub: AnyCancellable?
 
@@ -248,6 +250,8 @@ final class AppModel: ObservableObject {
      */
     func submit(_ text: String) {
         let reqId = VSLogic.genRequestId()
+        // v2.3（用户需求：微信式"已处理 X 秒"）：记录提交时刻，done 时算耗时。
+        lastSubmitAt = Date()
         // v2.2：先清上一轮残留中间态（typing/execCard），再开始本轮——连续说话不堆积"正在思考"。
         closeExecCard()
         rows.append(.typing)
@@ -713,12 +717,15 @@ final class AppModel: ObservableObject {
     private func renderReceipt(_ view: TaskView) {
         let dp = VSLogic.nextDecisionPoint(view)
         guard dp.kind == .receipt else { return }
-        rows.append(.receipt(ReceiptRow(receipt: dp.receipt,
+        var receipt = dp.receipt
+        // v2.3（用户需求：微信式"已处理 X 秒"）：记录本轮耗时，气泡上方显示。
+        receipt.elapsedSec = Date().timeIntervalSince(lastSubmitAt)
+        rows.append(.receipt(ReceiptRow(receipt: receipt,
                                         undo: dp.undo,
                                         badges: VSLogic.compressBadges(view))))
         scrollTick += 1
         // T3 豆包式：朗读回复内容（v2.3 去"已完成，动作。"前缀，用户原话：已完成什么东西）。
-        let summary = dp.receipt.result
+        let summary = receipt.result
         speak(summary)
     }
 }

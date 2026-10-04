@@ -161,6 +161,13 @@ struct ReceiptCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // v2.3（用户需求：微信式反馈"处理完了之后有多少时间"）：气泡上方显示"已处理 X.X 秒"。
+            if receipt.elapsedSec > 0.01 {
+                Text("已处理 \(String(format: "%.1f", receipt.elapsedSec)) 秒")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 2)
+            }
             // 豆包式人话气泡：直接显示后台回复内容。
             // v2.3 用户原话"什么？又是给我反馈的'已完成'？已完成什么东西？"——去掉"已完成，动作。"前缀，
             // 界面只保留实质内容（后台说什么就显示什么）。
