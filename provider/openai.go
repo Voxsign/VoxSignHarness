@@ -173,7 +173,13 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		// 2026-10-04 修复：voxsign 网关鉴权头是 X-AIops-Key（read key），非 Authorization Bearer
+		//（真跑实证：Bearer 401 "missing or invalid read X-AIops-Key"；curl 带 X-AIops-Key 200）。
+		if strings.Contains(c.url, "aiops.voxsign.ai") || strings.Contains(c.url, "aiops.peterzou.com") {
+			req.Header.Set("X-AIops-Key", c.apiKey)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
 	}
 
 	raw, err := c.httpClient.Do(req)
