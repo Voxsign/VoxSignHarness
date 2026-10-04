@@ -9,6 +9,7 @@ package modelcenter
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,7 +167,7 @@ func NewRegistry(cfg Config) (*Registry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("通道 %q 模型解析失败（fail-closed）: %w", ch, err)
 		}
-		r.clients[ch] = &chatClient{endpoint: endpoint, key: key, model: model, timeout: timeout, hc: &http.Client{}}
+		r.clients[ch] = &chatClient{endpoint: endpoint, key: key, model: model, timeout: timeout, hc: &http.Client{Transport: modelcenterTransport()}}
 	}
 	r.tokens[ChannelLearn] = WriteToken{channel: ChannelLearn}
 	return r, nil
@@ -213,4 +214,14 @@ func (r *Registry) WriteBackToken(ch Channel) (WriteToken, bool) {
 	}
 	t, ok := r.tokens[ChannelLearn]
 	return t, ok
+}
+
+// modelcenterTransport 构造默认 Transport；仅当显式设置 VHS_INSECURE_TLS=1 时
+// 跳过 TLS 证书验证（2026-10-04 网关证书验证失败导致 LLM 全挂的逃生口）。
+func modelcenterTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if os.Getenv("VHS_INSECURE_TLS") == "1" {
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 显式逃生口，默认关闭
+	}
+	return t
 }
