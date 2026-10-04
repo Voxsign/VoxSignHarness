@@ -249,7 +249,8 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// QUERY 高置信（>=0.8）的"这个/那个"是普通口语代词，跳过指代消解，
 	// 否则 refer 候选为空会写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
 	var referOpts []refer.Option
-	if o.Refer != nil && shouldResolveRefer(&intent) {
+	// hasRecent：当前单轮调用无上下文判定，传 false（多轮接线由上层 refer 模块在链上启用时再传 true）。
+	if o.Refer != nil && shouldResolveRefer(&intent, false) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
 			prevAsk := intent.Ask
@@ -471,9 +472,14 @@ type taskMetricsPayload struct {
 }
 
 func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bool) {
+	space := it.Space
+	if space == "" {
+		// 回问/拦截早返回路径发生在 space select 之前：域归属与是否澄清无关，补默认域。
+		space = defaultSpaceFor(it)
+	}
 	p := taskMetricsPayload{
 		Kind:    "task_metrics",
-		Space:   it.Space,
+		Space:   space,
 		Intent:  it.Intent,
 		AttrCls: out.Attribution.Class,
 		LoopMs:  out.LoopMs,
@@ -482,7 +488,7 @@ func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bo
 		OK:      out.Verify.Status != verify.StatusFail && !hasFailure(out.Receipts),
 	}
 	b, _ := json.Marshal(p)
-	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: "task_metrics", Content: string(b)})
+	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindTaskMetrics, Content: string(b)})
 }
 
 // ---------- 集成层小工具（薄封装，规则语义均在被编排的包内） ----------
@@ -581,13 +587,17 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// 自迭代第二段（2026-10-04）：语音自举注册的契约能力优先执行。
 		// 文本命中已注册能力（如「远程控制电脑」）→ 调真实执行器，不再回"无法远程控制"。
 		if capName := o.matchVoiceContract(&it); capName != "" {
+			tool := "remote-desktop"
+			if strings.Contains(capName, "天气") {
+				tool = "weather"
+			}
 			args := map[string]any{
 				"cap":     capName,
 				"text":    it.CorrectedText,
 				"pattern": it.CorrectedText,
 				"log_dir": logDir,
 			}
-			return []contract.Receipt{o.run("remote-desktop", args)}
+			return []contract.Receipt{o.run(tool, args)}
 		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
@@ -600,6 +610,16 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			recv.Stdout = answer
 		}
 		return []contract.Receipt{recv}
+	case contract.IntentEdit:
+		// 2026-10-04 验证器 R6/R7：写文件意图真实执行（此前走 default 占位
+		// "动作待模型工具循环落地"）。路径从"写到/写入/保存到"后提取。
+		path, content := extractWriteTarget(it.CorrectedText)
+		if path == "" {
+			return []contract.Receipt{{Tool: "file", OK: false,
+				Err: "未识别要写入的文件路径（说「把 XX 写到 /path/to/file」）"}}
+		}
+		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
+		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentCommit:
 		// M4-4：在项目域 scope 根执行真实 git 提交（git add -A + commit；不改写历史）。
 		root := o.projectRootForCommit(it)
@@ -652,6 +672,37 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 	return recv
 }
 
+// extractWriteTarget 从"把 XX 写到 /path"类口语提取 (路径, 内容)。
+// 路径 = "写到/写入/保存到/保存为/创建文件"后第一个以 / 开头的词；内容 = 其余文本（去"把"）。
+func extractWriteTarget(text string) (string, string) {
+	marks := []string{"写到", "写入", "保存到", "保存为", "创建文件"}
+	rest := ""
+	for _, m := range marks {
+		if idx := strings.Index(text, m); idx >= 0 {
+			rest = strings.TrimSpace(text[idx+len(m):])
+			text = strings.TrimSpace(text[:idx])
+			break
+		}
+	}
+	if rest == "" {
+		return "", ""
+	}
+	fields := strings.Fields(rest)
+	path := ""
+	for i, f := range fields {
+		if strings.HasPrefix(f, "/") {
+			path = f
+			rest = strings.Join(fields[i+1:], " ")
+			break
+		}
+	}
+	if path == "" {
+		return "", ""
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(text, "把")) + " " + rest
+	return path, strings.TrimSpace(content)
+}
+
 // matchVoiceContract 检测口语文本是否命中语音自举注册的契约能力（Source=="voice"）。
 // 命中返回能力名（如「远程控制电脑」），未命中返回空串。仅查询类意图走此优先路径，
 // 执行动作类意图仍走各自专用执行器（test/git/file…）。
@@ -663,12 +714,41 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	if text == "" {
 		text = it.RawText
 	}
+	// ① 契约名直接命中：文本含能力名（如「远程控制电脑」）→ 执行。
 	for _, c := range o.Tools.All() {
 		if c.Source != "voice" || c.Name == "" {
 			continue
 		}
 		if strings.Contains(text, c.Name) {
 			return c.Name
+		}
+	}
+	// ② 能力询问命中：用户问"能不能控制电脑/能控制后台吗"（未带能力名）——
+	// 不能让模型回"我无法控制"（模型不知道已注册能力），命中后执行器用真实
+	// 桌面列表证明能力。2026-10-04 用户真机实测："能够控制后台的电脑吗"被回"不能"。
+	if strings.Contains(text, "天气") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "天气") {
+				return c.Name
+			}
+		}
+	}
+	// ③ 动作触发：截图/列桌面（"给我截个图"不含"远程控制"字样，但意图明确）。
+	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
+		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
+		}
+	}
+	if strings.Contains(text, "控制电脑") || strings.Contains(text, "控制后台") ||
+		strings.Contains(text, "远程控制") || strings.Contains(text, "控制这台") ||
+		strings.Contains(text, "控制那台") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "远程控制") {
+				return c.Name
+			}
 		}
 	}
 	return ""
@@ -2825,7 +2905,10 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 //  5. NOTE/EDIT/COMMIT/DEBUG → true（真操作指代消解保持原行为）。
 //
 //     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
-func shouldResolveRefer(it *contract.Intent) bool {
+//
+// hasRecent=true 表示多轮上下文存在最近指代目标：QUERY 即使有实体也做指代接线
+// （"查一下这个方案"在多轮中"这个方案"可回指前文实体）。
+func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
 	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
@@ -2835,9 +2918,13 @@ func shouldResolveRefer(it *contract.Intent) bool {
 	}
 	switch it.Intent {
 	case contract.IntentQuery:
-		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 不解析
+		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 默认不解析；
+		// 但多轮上下文有最近指代目标（hasRecent）→ 接线解析（"查一下这个方案"回指前文实体）。
 		if it.Confidence >= 0.8 {
-			return isBareReferent(text)
+			if isBareReferent(text) {
+				return true
+			}
+			return hasRecent
 		}
 		return true
 	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit, contract.IntentDebug:
