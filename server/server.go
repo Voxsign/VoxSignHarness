@@ -113,6 +113,7 @@ type taskState struct {
 	ConvID    string               `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
 	Text      string               `json:"text,omitempty"`            // M4-1 ② need_ask 续跑原文
 	Document  string               `json:"document,omitempty"`        // 附件/需求文档全文（长程任务输入，修订卡2 附；落轨迹）
+	Mode      string               `json:"mode,omitempty"`            // voice|text；voice 确认自动放行
 	Status    string               `json:"status"`
 	Role      string               `json:"role,omitempty"` // M5-3：当前角色
 	Question  string               `json:"question,omitempty"`
@@ -281,6 +282,7 @@ type runReq struct {
 	Text           string `json:"text"`
 	RequestID      string `json:"request_id,omitempty"`      // 幂等重试键（对齐 /v1/tasks）
 	ConversationID string `json:"conversation_id,omitempty"` // 指代固化会话（用户点名 conversation_id 必加）
+	Mode           string `json:"mode,omitempty"`            // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 }
 
 // tryDedup M4-1 ①：同 request_id 重复提交 → 返回既有任务（不重复执行/写轨迹）。
@@ -319,7 +321,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	// OBS-04/08/09/10 修复（2026-10-03 观察报告核对）：统一走 spawnTask，
 	// 不再手工构造 taskState —— 补齐 persist（落盘）/ byReq（request_id 去重）/
 	// Role（初始 planner）/ Text / Document / startedAt / writeContextSlot（conversation_id 槽）。
-	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID)
+	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID, req.Mode)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
 }
 
@@ -391,7 +393,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID)
+	ts := s.spawnTask(req.Text, "", req.RequestID, "", req.ConversationID, "voice") // 语音入口天然 voice：确认自动放行
 	// 判据 ④：执行路径同样必带 intent_source（本次意图来自线 B ⇒ asr-intent）
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"task_id": ts.ID, "intent": intent, "intent_source": "asr-intent",
@@ -533,18 +535,20 @@ type tasksPostReq struct {
 	RequestID string `json:"request_id,omitempty"`      // M4-1 ① 重试去重键
 	Document  string `json:"document,omitempty"`        // 附件/需求文档全文（长程任务输入通道，修订卡2 附）
 	ConvID    string `json:"conversation_id,omitempty"` // 会话标识（指代固化上下文槽，缺省 "default"）
+	Mode      string `json:"mode,omitempty"`            // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。document 非空时挂载到任务上下文（落轨迹）。
 // convID 非空时作为指代固化上下文槽键（缺省 "default"）。
 // 状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, document, convID string) *taskState {
+func (s *Server) spawnTask(text, spaceHint, requestID, document, convID, mode string) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
 		Document:  document,
+		Mode:      mode, // voice→确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 		Status:    stRunning,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		startedAt: time.Now(),
@@ -582,6 +586,12 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	o.Document = ts.Document               // 附件文档全文 → 实现类长程任务消费（修订卡2 附）
 	o.ASRDataDir = s.cfg.Global.ASRDataDir // ASR 沉淀进入记忆槽（2026-10-04）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
+		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
+		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
+		if ts.Mode == "" || ts.Mode == "voice" {
+			fmt.Printf("confirm-auto-approve task=%s q=%s\n", taskID, question)
+			return true, nil
+		}
 		s.mu.Lock()
 		s.markStatus(ts, stNeedConfirm)
 		ts.Question = question
@@ -894,7 +904,7 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document, req.ConvID)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Document, req.ConvID, req.Mode)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 

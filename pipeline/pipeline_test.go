@@ -93,25 +93,26 @@ func TestPipelineWritesAttribution(t *testing.T) {
 
 // TestPipelineOrdering（SPEC #5）：执行不得在 space_check/risk 之前；拦截即止。
 func TestPipelineOrdering(t *testing.T) {
-	// 未知域写意图 → 必须在 space_check 拦截，绝不执行。
+	// 2026-10-04 语音场景修复：写意图无点名域默认落 project（消除"跑一下测试/提交代码"→越界）；
+	// 无项目根时以 FAILED 收据表达，而非 global 只读域 BOUNDARY_VIOLATION。
 	called := false
 	o := testOptions(t, func(string, string) (bool, error) { called = true; return true, nil })
-	// 直接对 global 只读域发起 COMMIT（无 proj 域）→ boundary_violation
+	// 直接发起 COMMIT（无 proj 域）→ 默认 project 域，执行被放行；无项目根 → FAILED
 	out, err := Run(context.Background(), o, "提交代码")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Verdict.Allowed {
-		t.Fatal("global 只读域不应放行 COMMIT")
+	if !out.Verdict.Allowed {
+		t.Fatal("写意图默认落 project 域，应被放行（不再对 global 越界）")
 	}
-	if called {
-		t.Fatal("被拦截的动作不得调用 ConfirmFn")
+	if !called {
+		t.Fatal("COMMIT 为 human 级确认，应调用 ConfirmFn（voice 模式由 server 自动放行）")
 	}
-	if len(out.Receipts) != 0 {
-		t.Fatal("被拦截不得产生执行回执")
+	if !strings.Contains(out.View.Result, "FAILED") {
+		t.Fatalf("无项目根应报 FAILED（而非越界）: %q", out.View.Result)
 	}
-	if !strings.Contains(out.View.Result, "BOUNDARY_VIOLATION") {
-		t.Fatalf("结果行应标越界: %q", out.View.Result)
+	if strings.Contains(out.View.Result, "BOUNDARY_VIOLATION") {
+		t.Fatalf("不应再标越界: %q", out.View.Result)
 	}
 }
 

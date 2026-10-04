@@ -181,7 +181,7 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	ts := muxV1(srv)
 	defer ts.Close()
 
-	resp := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动"})
+	resp := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动", "mode": "text"}) // text 保留人工确认闸
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /v1/tasks 应 202, got %d", resp.StatusCode)
 	}
@@ -223,6 +223,28 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	}
 	if _, ok := body["receipt"]; !ok {
 		t.Fatalf("done 应带 receipt 四行: %+v", body)
+	}
+
+	// voice 分支（2026-10-04 用户拍板"拦截全去掉"）：确认自动放行，直接 done 不经过 need_confirm。
+	resp2 := postJSON(t, ts.URL+"/v1/tasks", "", map[string]string{"text": "在 proj 提交所有改动", "mode": "voice"})
+	if resp2.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST voice 应 202, got %d", resp2.StatusCode)
+	}
+	var ack2 struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp2.Body).Decode(&ack2)
+	var body2 map[string]any
+	for i := 0; i < 50; i++ {
+		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack2.TaskID)
+		_ = json.NewDecoder(r.Body).Decode(&body2)
+		if body2["status"] == "done" || body2["status"] == "canceled" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if body2["status"] != "done" {
+		t.Fatalf("voice 模式应自动放行直接 done, got %+v", body2)
 	}
 }
 
