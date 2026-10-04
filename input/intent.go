@@ -14,6 +14,15 @@ var (
 	shellTriggers    = []string{"运行", "执行", "跑一下", "命令"}
 	// infoTriggers：知识问答类触发词（架构 §5.2：翻译/总结/摘要/问答/研究…），交模型。
 	infoTriggers = []string{"翻译", "总结", "摘要", "问答", "搜索", "查一下", "解释", "研究"}
+	// chatTriggers：抱怨/元反馈/闲聊话术（2026-10-04 用户实测高频原话）。
+	// 此前这类话术落入 UNKNOWN → 触发"你是想让我做什么"回问（用户连续三轮截图点名）。
+	// 修复：并入 INFO 类交模型/本地直接回应，Ask 永不触发。
+	chatTriggers = []string{
+		"糟糕", "乱七八糟", "一塌糊涂", "没有反馈", "啥都没有", "没有反应", "有没有反应",
+		"懂我", "懂你", "效果怎么样", "有没有干活", "在干嘛", "干什么呢", "有什么用",
+		"有什么意义", "没价值", "不好用", "怎么用", "你也不管", "没管", "老是", "一直提示",
+		"拦截", "听不懂", "听不清", "没听懂", "不明白", "扯", "试试看", "测试一下",
+	}
 )
 
 // pathVerbs 是「文件夹/目录/文件」前词可能残留的动词前缀，按长词在前排列避免抢先切分。
@@ -100,6 +109,13 @@ func (c *Classifier) Classify(text string) contract.Intent {
 
 	case containsAny(text, infoTriggers):
 		// INFO：知识问答类输入，交模型（M2）；Ask 永不触发。
+		intent.Intent = contract.IntentInfo
+		intent.Confidence = clamp(baseInfo)
+
+	case containsAny(text, chatTriggers):
+		// CHAT/元反馈：抱怨、试探、闲聊类输入（"后台有没有干活""识别太糟糕""懂我吗"）。
+		// 2026-10-04 用户多轮截图点名"你是想让我做什么"回问——此类话术不得落入 UNKNOWN。
+		// 并入 INFO 交模型/本地直接回应（如"我能理解你是在试探…"），Ask 永不触发。
 		intent.Intent = contract.IntentInfo
 		intent.Confidence = clamp(baseInfo)
 

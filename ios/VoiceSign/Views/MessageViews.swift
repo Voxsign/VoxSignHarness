@@ -161,8 +161,10 @@ struct ReceiptCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // 豆包式人话气泡：一条"已完成，动作。结果"（不再绿色四行卡，不显示徽章）
-            Text("已完成，\(receipt.action)。\(receipt.result)")
+            // 豆包式人话气泡：直接显示后台回复内容。
+            // v2.3 用户原话"什么？又是给我反馈的'已完成'？已完成什么东西？"——去掉"已完成，动作。"前缀，
+            // 界面只保留实质内容（后台说什么就显示什么）。
+            Text(receipt.result)
                 .font(.system(size: 14))
                 .foregroundColor(.black)
                 .padding(.horizontal, 12).padding(.vertical, 9)

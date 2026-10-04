@@ -104,7 +104,17 @@ final class SpeechRecognizer: ObservableObject {
         transcript = ""
     }
 
+    /// v2.3 重入防护：isRecording 是异步置位，快速连按时 start() 可能被重复调用，
+    /// 导致 installTap 二次注册崩溃。启动中/录音中直接忽略。
+    private var starting = false
+
     func start() {
+        guard !isRecording, !starting else {
+            print("[ASR] start 忽略（已在录音/启动中）")
+            return
+        }
+        starting = true
+        defer { starting = false }
         // 豆包式：按下瞬间立即进录音态（UI 先反馈，不等引擎就绪）。
         // 先清掉上一轮未决任务（final 未到/异常挂起时，新按住不会被旧任务挡住）。
         task?.cancel()
@@ -187,6 +197,11 @@ final class SpeechRecognizer: ObservableObject {
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             print("[ASR] session 已激活 (record)")
             DiagLogger.shared.log("ASR", "session 已激活")
+            // v2.3 崩溃修复（用户实测：快速连按秒崩）：AVAudioEngine 已有 tap 时再次 installTap
+            // 会抛 ObjC NSException（'nullptr == Tap()'，Swift do-catch 捕不到）→ 直接闪退。
+            // 防御策略：installTap 前**幂等清理**——引擎还在跑就停、已有 tap 就移除，再开新 tap。
+            if engine.isRunning { engine.stop() }
+            engine.inputNode.removeTap(onBus: 0)
 
             let req = SFSpeechAudioBufferRecognitionRequest()
             req.shouldReportPartialResults = true
