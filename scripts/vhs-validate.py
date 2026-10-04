@@ -49,6 +49,8 @@ CRITERIA = [
     # 自举注册（09020a8：能力自迭代第一段）
     {"id": "R11", "group": "selfheal", "req": "语音能力自举注册落盘契约",
      "text": "你必须增加一个查看天气的能力", "expect": [], "ok_need_ask": False, "assert": "contract"},
+    {"id": "R12", "group": "selfheal", "req": "注册能力必须真实执行：说「查天气」返回真实天气数据",
+     "text": "查一下北京的天气", "expect": ["天气实况（北京）", "°C"], "ok_need_ask": False},
 ]
 
 TRACE = "/tmp/vhs-m7/log/trajectory-20261004.jsonl"

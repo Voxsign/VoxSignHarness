@@ -690,7 +690,11 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 				"pattern": it.CorrectedText,
 				"log_dir": logDir,
 			}
-			return []contract.Receipt{o.run("remote-desktop", args)}
+			tool := "remote-desktop"
+			if strings.Contains(capName, "天气") {
+				tool = "weather"
+			}
+			return []contract.Receipt{o.run(tool, args)}
 		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
@@ -818,6 +822,13 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	// ② 能力询问命中：用户问"能不能控制电脑/能控制后台吗"（未带能力名）——
 	// 不能让模型回"我无法控制"（模型不知道已注册能力），命中后执行器用真实
 	// 桌面列表证明能力。2026-10-04 用户真机实测："能够控制后台的电脑吗"被回"不能"。
+	if strings.Contains(text, "天气") {
+		for _, c := range o.Tools.All() {
+			if c.Source == "voice" && strings.Contains(c.Name, "天气") {
+				return c.Name
+			}
+		}
+	}
 	if strings.Contains(text, "控制电脑") || strings.Contains(text, "控制后台") ||
 		strings.Contains(text, "远程控制") || strings.Contains(text, "控制这台") ||
 		strings.Contains(text, "控制那台") {
