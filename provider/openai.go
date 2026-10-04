@@ -68,7 +68,10 @@ func vhsHTTPTransport() *http.Transport {
 // 同时去掉任意尾部斜杠（如 "https://host/"、"https://host/v1/"）。
 func normalizeEndpoint(ep string) string {
 	ep = strings.TrimRight(ep, "/")
-	if !strings.HasSuffix(ep, "/chat/completions") {
+	// 2026-10-04 修复：网关 /api/model/chat 已是完整 chat 端点（POST 直通 chat.completion），
+	// normalize 若再拼 /chat/completions → /api/model/chat/chat/completions → 404 no such endpoint
+	// （真跑实证：curl 直 POST /api/model/chat 返回 200 chat.completion）。
+	if !strings.HasSuffix(ep, "/chat/completions") && !strings.HasSuffix(ep, "/chat") {
 		ep += "/chat/completions"
 	}
 	return ep
