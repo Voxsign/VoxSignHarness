@@ -93,26 +93,26 @@ func TestPipelineWritesAttribution(t *testing.T) {
 
 // TestPipelineOrdering（SPEC #5）：执行不得在 space_check/risk 之前；拦截即止。
 func TestPipelineOrdering(t *testing.T) {
-	t.Skip("2026-10-04 用户拍板：写/执行类意图默认落 project 可写域（消除语音越界），旧断言“global 只读拒 COMMIT”已过时，待按新语义重写断言")
-	// 未知域写意图 → 必须在 space_check 拦截，绝不执行。
+	// 2026-10-04 语音场景修复：写意图无点名域默认落 project（消除"跑一下测试/提交代码"→越界）；
+	// 无项目根时以 FAILED 收据表达，而非 global 只读域 BOUNDARY_VIOLATION。
 	called := false
 	o := testOptions(t, func(string, string) (bool, error) { called = true; return true, nil })
-	// 直接对 global 只读域发起 COMMIT（无 proj 域）→ boundary_violation
+	// 直接发起 COMMIT（无 proj 域）→ 默认 project 域，执行被放行；无项目根 → FAILED
 	out, err := Run(context.Background(), o, "提交代码")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Verdict.Allowed {
-		t.Fatal("global 只读域不应放行 COMMIT")
+	if !out.Verdict.Allowed {
+		t.Fatal("写意图默认落 project 域，应被放行（不再对 global 越界）")
 	}
-	if called {
-		t.Fatal("被拦截的动作不得调用 ConfirmFn")
+	if !called {
+		t.Fatal("COMMIT 为 human 级确认，应调用 ConfirmFn（voice 模式由 server 自动放行）")
 	}
-	if len(out.Receipts) != 0 {
-		t.Fatal("被拦截不得产生执行回执")
+	if !strings.Contains(out.View.Result, "FAILED") {
+		t.Fatalf("无项目根应报 FAILED（而非越界）: %q", out.View.Result)
 	}
-	if !strings.Contains(out.View.Result, "BOUNDARY_VIOLATION") {
-		t.Fatalf("结果行应标越界: %q", out.View.Result)
+	if strings.Contains(out.View.Result, "BOUNDARY_VIOLATION") {
+		t.Fatalf("不应再标越界: %q", out.View.Result)
 	}
 }
 
@@ -229,7 +229,6 @@ func TestMechanicalImpactExcludesLogDir(t *testing.T) {
 
 // TestSummaryAggregation（#52）：跑 2 个任务后摘要含任务数/通过率/均值/按域/按归因。
 func TestSummaryAggregation(t *testing.T) {
-	t.Skip("L HEAD 摘要生成缺按域段落（实现缺口），待补齐后恢复")
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下摘要任务A"); err != nil {
 		t.Fatal(err)
@@ -302,7 +301,6 @@ func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 
 // TestSummaryNetExcludesNoLLM（M4-1 ④）：纯管线 NOTE 不计入 Net 均值。
 func TestSummaryNetExcludesNoLLM(t *testing.T) {
-	t.Skip("L HEAD Net 统计缺“纯管线任务不计入”标注（实现缺口），待补齐后恢复")
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下纯管线A"); err != nil {
 		t.Fatal(err)
@@ -389,13 +387,18 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	mustRun("git", "config", "user.email", "vhs@test")
-	mustRun("git", "config", "user.name", "vhs")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	if err := os.WriteFile(filepath.Join(projDir, "init.txt"), []byte("init\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mustRun("git", "add", "-A")
-	mustRun("git", "commit", "-q", "-m", "init")
+	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
 	before := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))
 
 	// 制造未提交改动
@@ -448,11 +451,16 @@ func TestCommitRefusedNoExec(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	mustRun("git", "config", "user.email", "vhs@test")
-	mustRun("git", "config", "user.name", "vhs")
+	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
+	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
+	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
+	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	mustRun("git", "config", "--local", "user.email", "vhs@test")
+	mustRun("git", "config", "--local", "user.name", "vhs")
 	_ = os.WriteFile(filepath.Join(projDir, "a.txt"), []byte("a\n"), 0o644)
 	mustRun("git", "add", "-A")
-	mustRun("git", "commit", "-q", "-m", "init")
+	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
 	before := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))
 
 	_ = o.Spaces.Add(&space.Manifest{
@@ -521,33 +529,36 @@ func TestQueryHighConfidenceSkipsReferAsk(t *testing.T) {
 	}
 }
 
-// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断）。
+// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断；
+// 2026-10-04 多轮指代接线新增 hasRecent 参数——有会话上下文时 QUERY 非裸指代也解析）。
 func TestShouldResolveReferGate(t *testing.T) {
 	cases := []struct {
-		name   string
-		intent string
-		conf   float64
-		text   string
-		want   bool
+		name      string
+		intent    string
+		conf      float64
+		text      string
+		hasRecent bool
+		want      bool
 	}{
-		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false},
-		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", true},
-		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", true},
-		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false},
-		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", true},
-		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", true},
-		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false},
-		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", true},
-		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false},
-		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false},
-		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", true},
-		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", true},
+		{"QUERY 高置信 0.9", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 恰好 0.8", contract.IntentQuery, 0.8, "查一下这个方案", false, false},
+		{"QUERY 低置信 0.79", contract.IntentQuery, 0.79, "这个", false, true},
+		{"NOTE 无问句", contract.IntentNote, 0.85, "记一下 上次那个文件", false, true},
+		{"NOTE 含问句（口语代词豁免）", contract.IntentNote, 0.85, "记一下 这个能用吗", false, false},
+		{"EDIT", contract.IntentEdit, 0.9, "改一下 那个文件", false, true},
+		{"COMMIT", contract.IntentCommit, 0.85, "把改动提交", false, true},
+		{"UNKNOWN 无操作动词（陈述引用/元指令）", contract.IntentUnknown, 0.2, "随便看看", false, false},
+		{"QUERY 裸指代（真歧义）", contract.IntentQuery, 0.9, "查一下这个", false, true},
+		{"QUERY 有实体（不歧义）", contract.IntentQuery, 0.9, "查一下这个方案", false, false},
+		{"QUERY 有实体+有上下文（多轮指代接线）", contract.IntentQuery, 0.9, "查一下这个方案", true, true},
+		{"UNKNOWN 陈述引用（isNominalMention）", contract.IntentUnknown, 0.2, "我那个前端的问题又不过来", false, false},
+		{"DEBUG 操作指代", contract.IntentDebug, 0.85, "修那个", false, true},
+		{"QUERY+打开 操作指代", contract.IntentQuery, 0.85, "打开上次那个", false, true},
 	}
 	for _, c := range cases {
 		it := contract.Intent{Intent: c.intent, Confidence: c.conf, CorrectedText: c.text}
-		if got := shouldResolveRefer(&it); got != c.want {
-			t.Errorf("shouldResolveRefer(%s conf=%v text=%q) = %v, want %v", c.name, c.conf, c.text, got, c.want)
+		if got := shouldResolveRefer(&it, c.hasRecent); got != c.want {
+			t.Errorf("shouldResolveRefer(%s conf=%v text=%q hasRecent=%v) = %v, want %v", c.name, c.conf, c.text, c.hasRecent, got, c.want)
 		}
 	}
 }
