@@ -93,6 +93,14 @@ final class ConnectivityService: ObservableObject {
         probe()
     }
 
+    /// 服务器/机器码绑定变更后重置探测：清掉旧连接状态与错误，回到 unknown 并立即重探当前 base。
+    func reset() {
+        lastError = ""
+        latencyMs = 0
+        setState(.unknown)
+        probe()
+    }
+
     /// 探活：GET /v1/status，5s 超时。成功 → online；失败 → offline（并记错误）。
     /// UI v3：成功时记录延迟毫秒（设置页连接状态行显示"延迟 Xms"）。
     func probe() {
