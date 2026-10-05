@@ -89,7 +89,20 @@ func (r *Registry) SetDefault(id string) error {
 		return ErrNotFound
 	}
 	r.defaultID = id
-	return r.save()
+	return r.saveLocked()
+}
+
+// saveLocked 序列化落盘（调用方必须已持有写锁；RWMutex 不可重入，故不复取锁）。
+func (r *Registry) saveLocked() error {
+	b, err := json.MarshalIndent(r.profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := r.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.path)
 }
 
 // Get 取单模型画像。

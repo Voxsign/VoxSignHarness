@@ -48,6 +48,7 @@ type SelfItem struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 	SourceTrajectory string   `json:"source_trajectory,omitempty"` // 来源轨迹引用（可审计）
 	Confidence      float64   `json:"confidence"`                  // 0–1，外部信号分级
+	Status          Status    `json:"status,omitempty"`            // 生命周期：active/superseded/decayed
 }
 
 // MemoryItem 一条记忆条目（STM 热区 / LTM 归档共用）。
