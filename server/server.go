@@ -198,6 +198,12 @@ type Server struct {
 
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
 func New(cfg *config.Config, o *pipeline.Options) *Server {
+	// C0 受控串行：对【模板】Options 初始化一次共享串行闸。后续每任务 `o := *tmpl` 浅拷贝
+	// 会复制 o.mu 指针 → 所有任务共享同一把锁，跨任务串行生效（修复此前模板 mu=nil、每任务
+	// Run 内各建新锁导致闸失效的浅拷贝 bug）。详见 pipeline.Options.EnableSerialGate 注释。
+	if o != nil {
+		o.EnableSerialGate()
+	}
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
 	s.asrBH = newBulkhead(2)
 	s.asrCB = &circuitBreaker{}

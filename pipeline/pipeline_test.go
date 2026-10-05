@@ -794,3 +794,29 @@ func TestRequestIDPassthroughAndTrajectory(t *testing.T) {
 		t.Fatalf("轨迹里 %d 条 Entry 的 request_id != client-req-xyz: %v", len(bad), bad)
 	}
 }
+
+// TestSerialGateSharedAcrossClones 验证 C0 串行闸跨任务生效：
+// EnableSerialGate 后，浅拷贝克隆与模板共享同一把 *sync.Mutex（server 每任务 o:=*tmpl）。
+// 反向对照：未 EnableSerialGate 时克隆 mu 各为 nil（即此前闸失效的 bug 形态）。
+func TestSerialGateSharedAcrossClones(t *testing.T) {
+	tmpl := testOptions(t, nil)
+	tmpl.EnableSerialGate()
+	if tmpl.mu == nil {
+		t.Fatal("EnableSerialGate 后模板 mu 应非 nil")
+	}
+	c1 := *tmpl
+	c2 := *tmpl
+	if c1.mu != tmpl.mu || c2.mu != tmpl.mu {
+		t.Fatal("克隆必须与模板共享同一把串行闸指针（跨任务串行生效）")
+	}
+
+	// 对照：未初始化的 Options，浅拷贝后 mu 仍为 nil（Run 将各自懒建新锁 → 不串行）
+	fresh := testOptions(t, nil)
+	if fresh.mu != nil {
+		t.Fatal("新 Options 未经 EnableSerialGate，mu 应为 nil")
+	}
+	cf := *fresh
+	if fresh.mu != nil || cf.mu != nil {
+		t.Fatal("对照克隆 mu 应保持 nil")
+	}
+}
