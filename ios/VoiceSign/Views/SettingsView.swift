@@ -79,7 +79,14 @@ struct SettingsView: View {
                             .frame(width: 8, height: 8)
                         Text(conn.state == .online ? "已连接" : (conn.state == .reconnecting ? "正在重连…" : "离线"))
                         Spacer()
+                        // UI v3：延迟小字（豆包式 12.5pt 灰字，如「延迟 42ms」）。
+                        if conn.state == .online && conn.latencyMs > 0 {
+                            Text("延迟 \(conn.latencyMs)ms")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
                     }
+                    Button("立即重探") { conn.probe() }
                     if !conn.lastError.isEmpty {
                         Text(conn.lastError).font(.system(size: 11)).foregroundColor(.secondary)
                     }
@@ -151,8 +158,20 @@ struct SettingsView: View {
                     if googleBusy {
                         ProgressView().frame(maxWidth: .infinity)
                     } else {
-                        Label("使用 Google 登录", systemImage: "person.crop.circle.badge.checkmark")
-                            .frame(maxWidth: .infinity)
+                        // UI v3：Google 官方四色 G（自绘）+ 登录文案（豆包式居中白按钮）。
+                        HStack(spacing: 8) {
+                            GoogleLogo()
+                            Text("使用 Google 登录")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.black.opacity(0.85))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.black.opacity(0.1), lineWidth: 0.5)
+                        )
                     }
                 }
                 .disabled(googleBusy)
@@ -514,6 +533,47 @@ struct SettingsView: View {
 }
 
 
+// MARK: - Google 官方四色 G（UI v3 自绘，非图片）
+
+/// 豆包式登录按钮用的 Google 品牌标识：四色环 + 白色 G 字形。
+struct GoogleLogo: View {
+    var body: some View {
+        ZStack {
+            // 蓝底圆环
+            Circle().fill(Color(red: 0.259, green: 0.522, blue: 0.957)) // #4285F4
+            // 黄（左上 90° 扇形）
+            sector(start: .degrees(180), end: .degrees(270))
+                .fill(Color(red: 0.988, green: 0.737, blue: 0.031))     // #FBBC05
+            // 绿（左下 90° 扇形）
+            sector(start: .degrees(90), end: .degrees(180))
+                .fill(Color(red: 0.204, green: 0.659, blue: 0.325))     // #34A853
+            // 红（右下 90° 扇形）
+            sector(start: .degrees(0), end: .degrees(90))
+                .fill(Color(red: 0.918, green: 0.263, blue: 0.208))     // #EA4335
+            // 白色 G 字形（semibold，视觉对齐官方 G 的位置）
+            Text("G")
+                .font(.system(size: 17, weight: .heavy))
+                .foregroundColor(.white)
+                .offset(x: -1, y: 0)
+        }
+        .frame(width: 20, height: 20)
+    }
+
+    private func sector(start: Angle, end: Angle) -> some Shape {
+        // 圆心在 (10,10)，半径 10，画 90° 扇形（SwiftUI Path 角度从 3 点方向起、顺时针为正）。
+        Path { p in
+            p.move(to: CGPoint(x: 10, y: 10))
+            p.addArc(center: CGPoint(x: 10, y: 10),
+                     radius: 10,
+                     startAngle: start,
+                     endAngle: end,
+                     clockwise: false)
+            p.closeSubpath()
+        }
+    }
+}
+
+
 // MARK: - 服务器行（拆分自 ForEach，规避 Swift 类型检查超时）
 
 private struct ServerRowView: View {
@@ -528,11 +588,14 @@ private struct ServerRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(srv.name).font(.system(size: 14, weight: .medium))
                 Text(srv.base).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+                // UI v3：连接方式 chips——机器码 / 同网直连 / 云端转发（豆包式小标签）。
                 if srv.isMachineBound || srv.usesRelay {
-                    Text([srv.isMachineBound ? "机器码" : nil,
-                          srv.usesRelay ? "云端转发" : nil]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 10)).foregroundColor(.blue)
+                    HStack(spacing: 4) {
+                        if srv.isMachineBound {
+                            chip("机器码", .blue)
+                        }
+                        chip(srv.usesRelay ? "云端转发" : "同网直连", srv.usesRelay ? .blue : .green)
+                    }
                 }
             }
             Spacer()
@@ -547,5 +610,14 @@ private struct ServerRowView: View {
                 Button("删除", role: .destructive) { settings.removeServer(srv.id) }
             }
         }
+    }
+
+    private func chip(_ text: String, _ color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 5).padding(.vertical, 1.5)
+            .background(color.opacity(0.12))
+            .foregroundColor(color)
+            .cornerRadius(4)
     }
 }

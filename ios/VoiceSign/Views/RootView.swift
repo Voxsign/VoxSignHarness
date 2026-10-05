@@ -16,28 +16,32 @@ struct RootView: View {
             // 只保留顶部连接状态胶囊 + 打断系统条 + 对话流 + 决策点 + 输入条。
 
             // T2 连接状态胶囊：绿=在线 · 黄=重连 · 灰=离线排队（网络状态永远透明）
-            // T3 豆包式：顶部一行 = 连接胶囊（左）+ 标题（中）+ 设置齿轮（右）
+            // T3 豆包式：顶部一行 = 连接胶囊（左）+ 纯黑标题（中）+ harness 状态点（预留）+ 设置齿轮（右）
             HStack(spacing: 8) {
                 ConnectionStatusView()
                 Spacer()
                 Text("VoxSign")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .foregroundStyle(VSColor.brandGradient)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.black)
+                // UI v3：标题右侧 5pt harness 状态点（idle 灰 / busy 蓝呼吸 / decision 橙）——
+                // 刻意压到最小，不破坏豆包式顶栏克制感。
+                HarnessDot(state: model.harnessState)
                 Spacer()
                 // 设置入口（T3 修复：齿轮常驻顶部，不再随角色条隐藏）
                 Button {
                     model.showSettings = true
                 } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.secondary)
-                        .frame(width: 32, height: 32)
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.black)
+                        .frame(width: 34, height: 34)
                         .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("vhs.settings")
                 .padding(.trailing, 10)
             }
             .padding(.leading, 12)
+            .background(.ultraThinMaterial)
 
             // 红色打断系统条（可关闭）
             if let bar = model.systemBar {
@@ -52,6 +56,14 @@ struct RootView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
+                        // UI v3 豆包式空态：新会话只有一行极淡灰字（无欢迎屏、无示例卡片堆）。
+                        if model.rows.isEmpty {
+                            Text("说点什么，或按住下方按钮说话")
+                                .font(.system(size: 14))
+                                .foregroundColor(Color(red: 0.682, green: 0.682, blue: 0.698)) // #AEAEB2
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 80)
+                        }
                         ForEach(model.rows) { row in
                             rowView(row)
                         }
@@ -93,6 +105,34 @@ struct RootView: View {
         case .execCard: TypingView(text: model.typingText)
         case .receipt(let r):
             ReceiptCardView(receipt: r.receipt, undo: r.undo, badges: r.badges, onRollback: { model.rollback() })
+        }
+    }
+}
+
+// MARK: - Harness 状态点（UI v3 预留位，豆包式 5pt 极小状态件）
+
+/// 顶栏标题右侧 5pt 状态点：idle 灰 / busy 蓝呼吸 / decision 橙。
+/// 刻意压到最小、不带文字——能力上线后也不破坏豆包式顶栏的克制感。
+struct HarnessDot: View {
+    let state: HarnessState
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.6)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+                .scaleEffect(state == .busy ? 1.0 + 0.35 * max(0, sin(t * 5)) : 1.0)
+                .opacity(state == .idle ? 0.55 : 1.0)
+        }
+        .padding(.leading, 2)
+    }
+
+    private var color: Color {
+        switch state {
+        case .idle: return Color.gray
+        case .busy: return VSColor.blue
+        case .decision: return Color.orange
         }
     }
 }

@@ -43,6 +43,8 @@ struct Bubble: Identifiable {
     var text: String
     var badges: [Badge] = []
     var fromVoice: Bool = false
+    /// UI v3：语音消息录音秒数（气泡内显示 "3″"）。
+    var voiceSeconds: Int? = nil
 }
 
 /// 执行卡一行阶段状态。
@@ -58,6 +60,14 @@ struct ExecCardState: Identifiable {
     var stages: [StageState]
 }
 
+// MARK: - Harness 状态（UI v3 豆包式顶栏 5pt 状态点，真实推导）
+
+enum HarnessState: Equatable {
+    case idle       // 灰：无任务
+    case busy       // 蓝呼吸：任务执行中
+    case decision   // 橙：等待用户确认/选择
+}
+
 // MARK: - AppModel
 
 @MainActor
@@ -67,6 +77,9 @@ final class AppModel: ObservableObject {
     @Published var rows: [ChatRow] = []
     @Published var decision: DecisionPoint? = nil
     @Published var systemBar: SystemBarInfo? = nil
+
+    /// UI v3：顶栏状态点数据源（busy / decision / idle）。
+    @Published var harnessState: HarnessState = .idle
 
     // 角色折叠条
     @Published var activeRole: String = "executor"
@@ -113,7 +126,8 @@ final class AppModel: ObservableObject {
     private var connSub: AnyCancellable?
 
     init() {
-        rows.append(.harness(Bubble(text: "你好，我是 VoiceSign。\n按住说话，我能连接你电脑上的 VoxSign Harness，帮你记想法、查代码、改代码、跑测试、提交、部署。")))
+        // UI v3（豆包式空态）：启动不再预置欢迎气泡——新会话只有一行灰字空态
+        //（"说点什么，或按住下方按钮说话"），彻底对齐豆包新会话形态。
         // T2 豆包式交互：网络恢复 → 自动补投离线队列（不丢语音指令）。
         connSub = ConnectivityService.shared.onOnline { [weak self] in
             guard let self = self else { return }
@@ -252,6 +266,8 @@ final class AppModel: ObservableObject {
         let reqId = VSLogic.genRequestId()
         // v2.3（用户需求：微信式"已处理 X 秒"）：记录提交时刻，done 时算耗时。
         lastSubmitAt = Date()
+        // UI v3：任务开始 → 顶栏状态点 busy（蓝呼吸）。
+        harnessState = .busy
         // v2.2：先清上一轮残留中间态（typing/execCard），再开始本轮——连续说话不堆积"正在思考"。
         closeExecCard()
         rows.append(.typing)
@@ -379,6 +395,7 @@ final class AppModel: ObservableObject {
         switch view.status {
         case "running":
             DiagLogger.shared.log("ROUTE", "running → 继续轮询")
+            harnessState = .busy
             syncRole(VSLogic.roleForStatus(view.status))
             applyExecProgress(forStatus: view.status)
         case "need_ask", "need_confirm":
@@ -386,6 +403,8 @@ final class AppModel: ObservableObject {
             stopPolling()
             applyExecProgress(forStatus: view.status)
             closeExecCard()
+            // UI v3：等待确认/选择 → 顶栏状态点 decision（橙）。
+            harnessState = .decision
             decision = VSLogic.nextDecisionPoint(view)
             // T3 豆包式：需要用户确认/选择时朗读问题（不看屏也能应答）。
             if let q = view.question, !q.isEmpty {
@@ -396,6 +415,8 @@ final class AppModel: ObservableObject {
             DiagLogger.shared.log("ROUTE", "done → 回执")
             stopPolling()
             sseTask?.cancel()
+            // UI v3：任务完成 → 顶栏状态点回 idle（灰）。
+            harnessState = .idle
             syncRole(VSLogic.roleForStatus(view.status))
             closeExecCard()
             decision = nil
@@ -409,6 +430,8 @@ final class AppModel: ObservableObject {
             DiagLogger.shared.log("ROUTE", "\(view.status) → 错误条")
             stopPolling()
             closeExecCard()
+            // UI v3：任务终止 → 顶栏状态点回 idle（灰）。
+            harnessState = .idle
             if systemBar == nil {
                 decision = VSLogic.nextDecisionPoint(view)
             }
@@ -542,6 +565,8 @@ final class AppModel: ObservableObject {
     func answer(_ ans: String) {
         guard let id = currentTaskId else { return }
         decision = nil
+        // UI v3：应答后任务续跑 → 顶栏状态点 busy（蓝）。
+        harnessState = .busy
         Task {
             do {
                 try await api.answer(id, ans)
@@ -628,7 +653,13 @@ final class AppModel: ObservableObject {
     // MARK: - 对话流渲染助手
 
     private func appendUser(_ text: String, fromVoice: Bool) {
-        rows.append(.user(Bubble(text: text, fromVoice: fromVoice)))
+        var bubble = Bubble(text: text, fromVoice: fromVoice)
+        #if canImport(Speech)
+        if fromVoice, SpeechRecognizer.shared.lastHoldSeconds > 0 {
+            bubble.voiceSeconds = SpeechRecognizer.shared.lastHoldSeconds
+        }
+        #endif
+        rows.append(.user(bubble))
         scrollTick += 1
     }
 
