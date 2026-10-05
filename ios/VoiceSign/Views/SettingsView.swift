@@ -31,6 +31,9 @@ struct SettingsView: View {
     @State private var newName = ""
     @State private var newBase = ""
     @State private var newToken = ""
+    // P1 云端模式：Google 登录状态。
+    @State private var googleBusy = false
+    @State private var googleError = ""
 
     var body: some View {
         NavigationStack {
@@ -45,6 +48,44 @@ struct SettingsView: View {
                         newName = ""; newBase = ""; newToken = ""
                     } label: {
                         Label("添加服务器", systemImage: "plus.circle")
+                    }
+                }
+
+                // —— Google 登录（云端模式：租户 = 谷歌账户）——
+                Section("Google 登录") {
+                    if let auth = settings.googleAuth {
+                        LabeledContent("账户") { Text(auth.email).font(.system(size: 13)) }
+                        LabeledContent("档位") { Text(tierLabel(auth.tier)).font(.system(size: 13)) }
+                        if let u = auth.quotaUsed, let l = auth.quotaLimit {
+                            LabeledContent("今日额度") { Text("\(u) / \(l)").font(.system(size: 13)) }
+                        }
+                        if let t = auth.trialUntil, !t.isEmpty {
+                            LabeledContent("体验会员") { Text("至 \(t)").font(.system(size: 13)) }
+                        }
+                        HStack {
+                            Button("刷新登录态") { refreshMe() }
+                            Button("退出登录", role: .destructive) { settings.logoutGoogle() }
+                        }
+                        if !googleError.isEmpty {
+                            Text(googleError).font(.system(size: 11)).foregroundColor(.red)
+                        }
+                    } else {
+                        Button {
+                            loginGoogle()
+                        } label: {
+                            if googleBusy {
+                                ProgressView().frame(maxWidth: .infinity)
+                            } else {
+                                Label("使用 Google 登录", systemImage: "person.crop.circle.badge.checkmark")
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .disabled(googleBusy)
+                        if !googleError.isEmpty {
+                            Text(googleError).font(.system(size: 11)).foregroundColor(.red)
+                        }
+                        Text("登录后自动写入当前服务器的 Bearer token；云端地址需已指向 VoxSign 云端 harness。")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
                     }
                 }
 
@@ -134,9 +175,49 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Google 登录（云端模式）
+
+    /// 发起 Google 授权（PKCE）→ 换会话 JWT → 写入当前服务器。
+    private func loginGoogle() {
+        googleBusy = true
+        googleError = ""
+        Task {
+            defer { googleBusy = false }
+            do {
+                let (code, verifier) = try await AuthService.shared.authorize(base: settings.base)
+                let result = try await APIClient.shared.loginGoogle(code: code, verifier: verifier)
+                settings.setGoogleLogin(result, base: settings.base)
+                conn.probe()
+            } catch {
+                googleError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 刷新登录态（GET /v1/me）。
+    private func refreshMe() {
+        googleError = ""
+        Task {
+            do {
+                let me = try await APIClient.shared.me()
+                settings.refreshAuth(me)
+            } catch {
+                googleError = error.localizedDescription
+            }
+        }
+    }
+
+    private func tierLabel(_ tier: String) -> String {
+        switch tier {
+        case "free": return "免费（每日额度内）"
+        case "prime": return "Prime"
+        case "enterprise": return "Enterprise"
+        default: return tier
+        }
+    }
+
     /// 添加服务器表单（豆包式：给新设备起名 + 地址 + token）。
-    private var addServerSheet: some View {
-        NavigationStack {
+    private var addServerSheet: some View {        NavigationStack {
             Form {
                 Section("新服务器") {
                     TextField("名称（如：我的 Mac / 云服务器）", text: $newName)
