@@ -15,19 +15,21 @@ package zhiji
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"time"
 )
 
 // Zhiji 知己运行时（Phase 0 组装入口）。
 type Zhiji struct {
-	Store      *Store
-	Log        *CallLogStore
-	Contract   Contract
-	Registry   *Registry
-	Router     *Router
+	Store    *Store
+	Log      *CallLogStore
+	Contract Contract
+	Registry *Registry
+	Router   *Router
 	Compressor *Compressor
 	Vault      VaultWriter
 	Reflector  *Reflector
+	RawLog     *RawLog // v1.1 原始观察 append-only（raw.jsonl）
 
 	runCancel context.CancelFunc
 }
@@ -65,21 +67,47 @@ func NewZhiji(dir string, vault VaultWriter) (*Zhiji, error) {
 		Compressor: compressor,
 		Vault:      vault,
 		Reflector:  reflector,
+		RawLog:     NewRawLog(filepath.Join(dir, "raw.jsonl")),
 	}, nil
 }
 
-// OnInput 每轮输入：写 STM 热区事件 + 输入门控信号（主循环阶段 1-3 调用）。
+// OnInput 每轮输入（主循环阶段 1-3 调用）。
+// 顺序（v1.1 §7.1）：① RawLog.Append 原始观察全保留 → ② 可选规则版 Classify 打四类分 →
+// ③ TouchSTM 滚动工作记忆 → ④ MarkInput 输入门控信号。
 // summary 为输入摘要/原始文本；importance 由调用方按信号强度给出（默认 3）。
 func (z *Zhiji) OnInput(summary string, importance float64) {
 	if importance <= 0 {
 		importance = 3
 	}
-	z.Store.TouchSTM(MemoryItem{
+	// ① 原始观察 append-only（永不删；即使 RawLog 未配置也不阻塞主链路）
+	if z.RawLog != nil {
+		_ = z.RawLog.Append(RawObs{
+			Text:       summary,
+			Provenance: Provenance{Origin: "user_input"},
+		})
+	}
+	item := MemoryItem{
 		Text:       summary,
 		Layer:      LayerBehavior,
 		Domain:     DomainSession,
 		Importance: importance,
-	}, 10)
+	}
+	// ② 可选：规则版四类打分写回 Kind/KindScore（P0 增强；不改 Importance 与三因子公式）
+	if z.Reflector != nil && z.Reflector.DefaultSystemOne != nil {
+		scores := z.Reflector.Classify(item)
+		best := MemKind("")
+		bestScore := 0.0
+		for k, v := range scores {
+			if v > bestScore {
+				best, bestScore = k, v
+			}
+		}
+		if best != "" {
+			item.Kind = best
+			item.KindScore = bestScore
+		}
+	}
+	z.Store.TouchSTM(item, 10)
 	z.Store.MarkInput() // 输入门控：有输入活动，反思线程正常节拍
 }
 

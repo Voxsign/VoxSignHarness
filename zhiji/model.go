@@ -51,6 +51,26 @@ type SelfItem struct {
 	Confidence       float64   `json:"confidence"`                  // 0–1，外部信号分级
 }
 
+// MemKind 四类记忆类型（架构 v1.1 §6.1：写入侧重叠打分，非单选）。
+type MemKind string
+
+const (
+	MemKindEpisodic    MemKind = "episodic"    // 情节记忆：带时间锚的事件叙述
+	MemKindSemantic    MemKind = "semantic"    // 语义记忆：概念/事实/知识
+	MemKindProcedural  MemKind = "procedural"  // 程序记忆：怎么做/步骤/技能
+	MemKindPreference  MemKind = "preference"  // 偏好记忆：我喜欢/我讨厌/价值观
+)
+
+// Provenance 结构化来源链（架构 v1.1 §6.1：谁产生/哪轮/哪个模型/置信度/上游 ID）。
+// 与扁平 Source string 并存：Source 保留 reflect:stm 约定（SyncVault 依赖），Prov 是补充。
+type Provenance struct {
+	Origin      string   `json:"origin,omitempty"`       // user_input|tool_call|reflect|feedback|imported
+	TurnID      string   `json:"turn_id,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Confidence  float64  `json:"confidence,omitempty"`    // 0–1
+	DerivedFrom []string `json:"derived_from,omitempty"`  // 上游观察/条目 ID
+}
+
 // MemoryItem 一条记忆条目（STM 热区 / LTM 归档共用）。
 type MemoryItem struct {
 	ID         string    `json:"id"`
@@ -63,6 +83,13 @@ type MemoryItem struct {
 	LastSeen   time.Time `json:"last_seen"`
 	Hash       string    `json:"hash,omitempty"` // 写前验证去重用
 	Source     string    `json:"source,omitempty"`
+	// v1.1 新增（全部 omitempty，旧 JSON 零值兼容；不改 Importance 语义与三因子公式）
+	Kind      MemKind     `json:"kind,omitempty"`        // 四类记忆打分（标注列，不改既有检索）
+	KindScore float64     `json:"kind_score,omitempty"`  // 0–1，缺省回退 Importance/10
+	Entities  []string    `json:"entities,omitempty"`     // 实体抽取（代码正则，P1）
+	Keywords  []string    `json:"keywords,omitempty"`     // 词法索引入口（P1）
+	Embedding []float32   `json:"embedding,omitempty"`   // Phase1.5 填，先留空
+	Prov      *Provenance `json:"prov,omitempty"`        // 结构化来源链
 }
 
 // Relevance 计算当前 query 的相关性（架构 §12：三因子打分输入之一）。

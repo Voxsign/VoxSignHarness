@@ -58,9 +58,31 @@ func (c *Compressor) Compress(ctx context.Context, in CompressInput) (Compressed
 	}
 	// 探针召回：压缩后对预埋细节做一次检索验证（survival rate 北极星）。
 	if c.store != nil {
+		// v1.1 钩子：压缩产物里若出现预埋探针的 KeyDetail → 标记召回。
+		// 骨架实现只增不删，不改变既有压缩输出；P1 换成 BudgetSearch 显式召回 decayed 探针。
+		c.markProbeHits(out.Summary)
 		out.DetailSurvival = c.store.SurvivalRate()
 	}
 	return out, nil
+}
+
+// markProbeHits 粗匹配：压缩后文本里出现某探针的 KeyDetail → 标记该探针已召回。
+// 只动探针 Recalled 状态，不改压缩输出；先快照 probes 再调 ProbeRecall（避免 RLock→Lock 死锁）。
+func (c *Compressor) markProbeHits(compressed string) {
+	if compressed == "" || c.store == nil {
+		return
+	}
+	c.store.mu.RLock()
+	probes := append([]SurvivalProbe(nil), c.store.probes...)
+	c.store.mu.RUnlock()
+	for _, p := range probes {
+		if p.Recalled || p.KeyDetail == "" {
+			continue
+		}
+		if containsFold(compressed, p.KeyDetail) {
+			c.store.ProbeRecall(p.ID)
+		}
+	}
 }
 
 // defaultCompress Phase 0 确定性压缩：

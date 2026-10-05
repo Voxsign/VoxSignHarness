@@ -45,12 +45,14 @@ type ReflectStats struct {
 type ReflectFn func(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, error)
 
 // Reflector 反思线程调度器。
+//
+// v1.1 耦合说明：匿名嵌入 *DefaultSystemOne，Interval/MaxIdle/Threshold/Classify/Route/Gate 等
+// 直接提升到 Reflector 命名空间（r.Interval == r.DefaultSystemOne.Interval，r.Gate(...) == r.DefaultSystemOne.Gate(...)）——
+// 同一份真值，SetInterval/外部赋值与 r.Gate 读到的永远一致，绝不漂移。
 type Reflector struct {
+	*DefaultSystemOne // 匿名嵌入：提升 Interval/MaxIdle/Threshold/DeepMinImp 与全部 SystemOne 方法
 	Store     *Store
-	Interval  time.Duration // 唤醒节律（默认 60s，可调 60–600s）
-	InputGate bool          // 输入门控（默认 true）
-	MaxIdle   time.Duration // 最大空转保底（默认 3600s）
-	Threshold float64       // 重要性累计阈值（默认 30）
+	InputGate bool // 输入门控（默认 true）
 
 	Reflect ReflectFn // 深反思执行体（默认 DefaultReflect）
 
@@ -58,19 +60,23 @@ type Reflector struct {
 	stats ReflectStats
 }
 
-// NewReflector 构造反思调度器（默认参数）。
+// NewReflector 构造反思调度器（默认参数；数值与 reflect.go 现有常量逐位一致）。
 func NewReflector(store *Store) *Reflector {
 	return &Reflector{
-		Store:     store,
-		Interval:  DefaultInterval,
+		Store: store,
+		DefaultSystemOne: &DefaultSystemOne{
+			Threshold:  DefaultThreshold,
+			MaxIdle:    DefaultMaxIdle,
+			Interval:   DefaultInterval,
+			DeepMinImp: DeepReflectMinImp,
+		},
 		InputGate: true,
-		MaxIdle:   DefaultMaxIdle,
-		Threshold: DefaultThreshold,
 		Reflect:   DefaultReflect,
 	}
 }
 
 // SetInterval 调整唤醒节律（架构：区间 60–600s；越界 clamp）。
+// 写入 r.Interval（经匿名嵌入落到 r.DefaultSystemOne.Interval），Gate 下一拍即见。
 func (r *Reflector) SetInterval(d time.Duration) {
 	if d < MinInterval {
 		d = MinInterval
@@ -100,28 +106,51 @@ func (r *Reflector) Tick(ctx context.Context, now time.Time) (skip bool, deep bo
 	}
 	idle := now.Sub(r.Store.LastInput())
 
-	if r.InputGate {
+	if r.InputGate && r.DefaultSystemOne != nil {
+		// v1.1：三段门控从硬编码 switch 抽到 SystemOne.Gate（经匿名嵌入提升为 r.Gate）；
+		// DefaultSystemOne 的 Interval/MaxIdle/Threshold 与原常量同值，行为逐位不变。
+		imp := r.Store.ImportanceScore()
+		gSkip, gIdleForced, gDeep := r.Gate(idle, imp)
 		switch {
-		case idle > r.MaxIdle:
+		case gIdleForced:
 			// 保底：即使无输入也做一次浅扫（检查状态一致性），不深反思。
 			r.mu.Lock()
 			r.stats.IdleForced++
 			r.mu.Unlock()
 			_ = r.shallowSweep(now)
 			return false, false, nil
-		case idle >= r.Interval:
+		case gSkip:
 			// 超过一个节律无新输入 → 跳过（没有可反思的新东西）。
 			r.mu.Lock()
 			r.stats.Skips++
 			r.mu.Unlock()
 			return true, false, nil
+		case gDeep:
+			// 节律内有输入活动：浅扫 + 深反思。
+			_ = r.shallowSweep(now)
+			r.mu.Lock()
+			r.stats.DeepReflect++
+			r.mu.Unlock()
+			written, rejected, rerr := r.deepReflect(ctx)
+			if rerr != nil {
+				return false, true, rerr
+			}
+			r.mu.Lock()
+			r.stats.Written += int64(written)
+			r.stats.Rejected += int64(rejected)
+			r.mu.Unlock()
+			return false, true, nil
+		default:
+			// 节律内有输入但累计重要性未达阈值 → 浅扫即止。
+			_ = r.shallowSweep(now)
+			return false, false, nil
 		}
 	}
 
-	// 节律内有输入活动：正常检查——浅扫 + 判断深反思。
+	// InputGate 关闭（或 DefaultSystemOne 未注入）：原路径——浅扫 + 判断深反思。
 	_ = r.shallowSweep(now)
 	imp := r.Store.ImportanceScore()
-	if imp >= r.Threshold {
+	if r.DefaultSystemOne != nil && imp >= r.Threshold {
 		r.mu.Lock()
 		r.stats.DeepReflect++
 		r.mu.Unlock()
@@ -235,6 +264,10 @@ func (r *Reflector) verifySelf(s SelfItem) bool {
 
 // DefaultReflect Phase 0 默认深反思：从 STM 高信号事件（importance≥6）提炼
 // 行为层记忆；从多次成功教训提炼机制层策略。Phase 1 起替换为小模型。
+//
+// 可选增强（v1.1，默认不启用）：可把 s.Search("", 5, ...) 换成
+// s.BudgetSearch("", RetrieveBudget{MaxItems: 24, MaxHops: 3}, ...) 做候选召回；
+// 当前保持 Search 不变，默认筛选 importance>=DeepReflectMinImp && layer==behavior 逐位一致。
 func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, error) {
 	// 简化：深反思动作由上层（主循环）在写入 STM 时同步构造候选；
 	// 默认实现从 STM 抓 importance 最高的事件作为待固化记忆。
