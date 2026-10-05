@@ -87,6 +87,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,6 +234,16 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		corrected, corrections = o.Dict.Correct(cleaned)
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindInputCorrec, Content: corrected})
+
+	// ③.5 天气直通（离线、免 LLM）：只要口语含"天气"就直接查 wttr.in 返回。
+	// 背景（2026-10-05 真机）：天气意图原先靠 LLM ActionPlan 触发，LLM 欠费/超时时
+	// 整条"查天气"退化为"上游 5xx"。wttr.in 无需 key、本机 200，故天气走确定性直连，
+	// 不再依赖 LLM。命中即返回 done；未命中返回 false 继续正常分类。
+	if wout, ok := o.tryWeather(ctx, corrected, start); ok {
+		wout.RequestID = out.RequestID
+		emit(trajectory.Entry{Kind: trajectory.KindFinal, Content: contract.RenderReceipt(wout.View)})
+		return *wout, nil
+	}
 
 	// ④ TaskClassifier.ClassifyTask（空间候选取自注册域列表）
 	classifier := input.NewTaskClassifier(confOf(o.Cfg), spaceHints(o.Spaces))
@@ -754,7 +765,89 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	return ""
 }
 
-// ---------- 多步编排（ORCHESTRATE，组织者式路由） ----------
+// weatherCityRe 从"查一下加利利亚的天气吧"提取地点候选：取"…的天气"前的名词段。
+var weatherCityRe = regexp.MustCompile(`([^，,。！？!？ ]{1,20}?)的?天气`)
+
+// tryWeather 天气直通：口语含"天气"时直接查 wttr.in（无 key、离线可用），不依赖 LLM。
+// 命中返回 done Outcome 与 true；否则返回 false 继续正常意图分类。
+// 失败策略（任务要求）：先按提取到的城市查；非 200/空 → 回退自动定位（按出口 IP），
+// 并在回执里说明"未识别到 X，给你当前位置"。全程 < 5s。
+func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) (*Outcome, bool) {
+	if !strings.Contains(text, "天气") {
+		return nil, false
+	}
+	city := ""
+	if m := weatherCityRe.FindStringSubmatch(text); len(m) == 2 {
+		city = strings.TrimSpace(m[1])
+		// 去掉前引导词：查一下/帮我/问/现在/今天/明天/北京…里的动词前缀
+		for _, p := range []string{"帮我查一下", "帮我查", "帮我", "查一下", "查下", "查", "问一下", "问", "现在", "今天", "明天", "请问", "一下"} {
+			city = strings.TrimPrefix(city, p)
+		}
+		city = strings.TrimSpace(city)
+	}
+	client := &http.Client{Timeout: 6 * time.Second}
+	fetch := func(loc string) (string, int) {
+		u := "https://wttr.in/?format=%C+%t+%h+%w&lang=zh"
+		if loc != "" {
+			u = "https://wttr.in/" + url.QueryEscape(loc) + "?format=%C+%t+%h+%w&lang=zh"
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return "", 0
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", 0
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return strings.TrimSpace(string(body)), resp.StatusCode
+	}
+	where, raw, code := "当前位置", "", 0
+	cityOK := false
+	if city != "" {
+		raw, code = fetch(city)
+		if code == 200 && raw != "" && !strings.Contains(raw, "Unknown location") {
+			cityOK = true
+			where = city
+		}
+	}
+	if !cityOK {
+		// 回退：自动定位（按本机出口 IP）
+		if r2, c2 := fetch(""); c2 == 200 && r2 != "" {
+			raw, code = r2, c2
+			where = "当前位置"
+		}
+	}
+	out := &Outcome{}
+	out.LoopMs = time.Since(start).Milliseconds()
+	note := ""
+	if city != "" && !cityOK {
+		note = "（没识别到「" + city + "」的天气，给你按当前位置查到的：）"
+	}
+	if code == 200 && raw != "" {
+		out.View = contract.ReceiptView{
+			Action: "查天气", Files: "—",
+			Result: "天气实况（" + where + "）：" + raw + note, Undo: "—（只读查询）",
+		}
+		out.Attribution = o.attribution(out.RequestID, contract.AttrModel,
+			"天气直通 wttr.in（HTTP 200）", "pipeline.tryWeather", "无需进一步操作")
+	} else {
+		out.View = contract.ReceiptView{
+			Action: "查天气", Files: "—",
+			Result: "天气服务暂时没查到（wttr.in HTTP " + itoa(code) + "），你可以过会儿再问一次，或换个城市名。", Undo: "—",
+		}
+		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
+			"天气查询失败（HTTP "+itoa(code)+"）", "pipeline.tryWeather", "稍后重试")
+	}
+	o.writeAttribution(out.Attribution)
+	o.write(trajectory.Entry{Kind: trajectory.KindInputRaw, Content: text})
+	o.write(trajectory.Entry{Kind: "weather", Content: out.View.Result})
+	return out, true
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
+
 //
 // 【设计取舍：方案 B】复合/长任务由组织者确定性拆成 read→summarize→write→commit 子序列，
 // 在 harness 自身闭环跑完（不外包给外部 shell 脚本）。动作计划不由模型 function-calling 产出，
@@ -3522,6 +3615,11 @@ func attributeLLMError(rawErr string) string {
 		return "鉴权失败（API key 无效/未配置）—— 请更换或配置 key，重试前无需等待"
 	case strings.Contains(e, "429"), strings.Contains(e, "rate limit"), strings.Contains(e, "too many requests"):
 		return "上游限流（429）—— 稍后重试"
+	case strings.Contains(e, "402"), strings.Contains(e, "payment required"),
+		strings.Contains(e, "insufficient"), strings.Contains(e, "余额"), strings.Contains(e, "欠费"):
+		// 2026-10-05 真机：上游实为 402 Payment Required（账户欠费），被 model-center 包成 502。
+		// 必须在 5xx 分支之前识别，否则误报"5xx 非本机问题"，误导排查方向。
+		return "模型账户余额/额度不足（上游 402 Payment Required）—— 需充值/换 key，不是本机网络问题"
 	case strings.Contains(e, "500"), strings.Contains(e, "502"), strings.Contains(e, "503"), strings.Contains(e, "504"):
 		return "上游服务错误（HTTP 5xx）—— 非本机问题，稍后重试"
 	case strings.Contains(e, "timeout"), strings.Contains(e, "deadline"), strings.Contains(e, "超时"):
