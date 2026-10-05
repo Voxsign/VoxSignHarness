@@ -37,6 +37,7 @@ import (
 	"voicesign-harness/contract"
 	"voicesign-harness/pipeline"
 	"voicesign-harness/tools"
+	"voicesign-harness/trajectory"
 )
 
 // version 与 main.go 同步（M3 INTERACT-v1 端点集）。
@@ -50,8 +51,8 @@ const (
 	stNeedConfirm = "need_confirm"    // 强确认（红条）
 	stDone        = "done"
 	stCanceled    = "canceled"
-	stRevoked     = "revoked" // 架构 v1 §6.2：撤回已完成任务（已标记，副作用清理走既有 rollback）
-	stPending     = "pending" // 预留：排队未开始（未来调度器用）
+	stRevoked     = "revoked"     // 架构 v1 §6.2：撤回已完成任务（已标记，副作用清理走既有 rollback）
+	stPending     = "pending"     // 预留：排队未开始（未来调度器用）
 	stInterrupted = "interrupted" // M4-1 ③：重启恢复的未完成任务，不自动续跑
 )
 
@@ -105,7 +106,7 @@ func stepName(status string) string {
 
 // taskState 是一次异步任务的完整状态（含 rollback 所需的可逆/备份信息）。
 type taskState struct {
-	Document string // 需求文档全文（实现类任务；续跑/回答时随 Options.Document 回传）
+	Document  string               // 需求文档全文（实现类任务；续跑/回答时随 Options.Document 回传）
 	ID        string               `json:"task_id"`
 	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
@@ -138,6 +139,9 @@ type taskState struct {
 
 	confirmCh chan bool
 	cancel    context.CancelFunc
+	// doneCh 在任务到达终态（done/failed/canceled）时关闭。C2 调度器 worker 占 sem 期间
+	// <-doneCh 等待任务真正结束再释放槽；默认直跑路径无人等待，零行为变化。
+	doneCh chan struct{}
 
 	// M6-1 SSE：事件记录 + 活跃订阅者。
 	eventSeq  int
@@ -195,13 +199,35 @@ type Server struct {
 	// activityVer 任务状态版本号（架构 v1 §5）：markStatus 每次迁移递增；
 	// 心跳循环据此发现状态变化并立即补发（防毫秒级状态闪烁漏报）。
 	activityVer int64
+
+	// sched C2 进程内调度器（VHS_USE_SCHEDULER=true 时创建；nil=旧直跑路径逐字节不变）。
+	sched *Scheduler
 }
 
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
 func New(cfg *config.Config, o *pipeline.Options) *Server {
+	// C0 受控串行：对【模板】Options 初始化一次共享串行闸。后续每任务 `o := *tmpl` 浅拷贝
+	// 会复制 o.mu 指针 → 所有任务共享同一把锁，跨任务串行生效（修复此前模板 mu=nil、每任务
+	// Run 内各建新锁导致闸失效的浅拷贝 bug）。详见 pipeline.Options.EnableSerialGate 注释。
+	// 但 C2 调度器接管并发时（VHS_USE_SCHEDULER=true 且 VHS_MAX_CONCURRENT>1），不再锁死串行——
+	// 并发上限由调度器 sem 控制（多 Runner 并发=目标态）；默认直跑 / 调度器=1 仍保留串行闸兜底。
+	if o != nil && !(cfg.Server.UseScheduler && cfg.Server.MaxConcurrent > 1) {
+		o.EnableSerialGate()
+	}
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
 	s.asrBH = newBulkhead(2)
 	s.asrCB = &circuitBreaker{}
+	// C2：VHS_USE_SCHEDULER=true（灰度，默认 false）时创建进程内调度器接管任务排队；
+	// exec 闭包跑 runPipeline 并 <-doneCh 等任务真正结束，使 sem 绑住真实并发。
+	if cfg.Server.UseScheduler {
+		sc := NewScheduler(cfg.Server.MaxConcurrent, 64)
+		sc.exec = func(t *schedTask) {
+			s.runPipeline(t.ts, t.ctx, t.text, t.spaceHint, t.document)
+			<-t.ts.doneCh
+		}
+		s.sched = sc
+		sc.Start()
+	}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
 	}
@@ -242,9 +268,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/devices/register", s.deviceToken(s.handleDevicesRegister))
 	mux.HandleFunc("/v1/devices/heartbeat", s.deviceToken(s.handleDevicesHeartbeat))
 	// 异网转发（relay）：443 唯一入口，按机器码路由。自带设备 token 鉴权，不走 s.auth。
-	mux.HandleFunc("/v1/relay/connect", s.handleRelayConnect)        // Mac agent 常驻 SSE 出站
-	mux.HandleFunc("/v1/relay/respond", s.handleRelayRespond)        // Mac agent 回报响应
-	mux.HandleFunc("/v1/relay/", s.handleRelayForward)              // 客户端转发入口 /v1/relay/{code}/{path...}
+	mux.HandleFunc("/v1/relay/connect", s.handleRelayConnect) // Mac agent 常驻 SSE 出站
+	mux.HandleFunc("/v1/relay/respond", s.handleRelayRespond) // Mac agent 回报响应
+	mux.HandleFunc("/v1/relay/", s.handleRelayForward)        // 客户端转发入口 /v1/relay/{code}/{path...}
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
@@ -258,8 +284,17 @@ func logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		log.Printf("req %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+		log.Printf("req rid=%s %s %s %d %s", requestIDFromReq(r), r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// requestIDFromReq 取客户端透传的 request_id（X-Request-Id 头）；缺省返回 "-"。
+// P0-4a/b：入口日志 ↔ 轨迹/selfheal/ASR 日志用同一 rid 贯串通链。
+func requestIDFromReq(r *http.Request) string {
+	if id := strings.TrimSpace(r.Header.Get("X-Request-Id")); id != "" {
+		return id
+	}
+	return "-"
 }
 
 // statusRecorder 记录响应状态码，供访问日志输出。
@@ -342,7 +377,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": code, "error": msg})
 		return
 	}
-	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）resp=%s", asrURL, status, truncate(string(data), 300))
+	log.Printf("ASR: rid=%s 平台 %s → HTTP %d（text_len 见响应）resp=%s", requestIDFromReq(r), asrURL, status, truncate(string(data), 300))
 	if status != http.StatusOK {
 		var perr map[string]any
 		_ = json.Unmarshal(data, &perr)
@@ -372,8 +407,8 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
 		return
 	}
-	log.Printf("ASR: 校准成功 model=%s duration_ms=%d text_len=%d wall_ms=%d",
-		pr.Model, pr.DurMs, len(pr.Text), time.Since(asrStart).Milliseconds())
+	log.Printf("ASR: rid=%s 校准成功 model=%s duration_ms=%d text_len=%d wall_ms=%d",
+		requestIDFromReq(r), pr.Model, pr.DurMs, len(pr.Text), time.Since(asrStart).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model,
 		"hotwords_used": len(hotwords)})
@@ -435,7 +470,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Start() error {
 	mux := s.Handler()
 	addr := s.cfg.ServerBind()
-	fmt.Printf("vhs server listening on %s (token_set=%v)\n", addr, s.cfg.Server.Token != "")
+	fmt.Printf("vhs server listening on %s (token_set=%v) 实际ASR端点=%s\n", addr, s.cfg.Server.Token != "", asrEndpoint())
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -573,6 +608,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// 克隆模板 Options，注入本任务的 ConfirmFn（桥接到手机 /v1/confirm）。
 	o := *s.tmpl
+	// P0-4b：旧入口 /v1/run 也透传客户端 X-Request-Id（无则空→pipeline 自生成，向后兼容）。
+	if rid := strings.TrimSpace(r.Header.Get("X-Request-Id")); rid != "" {
+		o.RequestID = rid
+	}
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 网关确认自动放行，不挂起等待
 		//（否则 iOS 无确认交互 → 任务永久 waiting，用户实测"卡住"）。
@@ -598,7 +637,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go func() {
+	safeGo("handleRun:"+ts.ID, func() {
 		out, err := pipeline.Run(ctx, &o, req.Text)
 		s.mu.Lock()
 		ts.Outcome = &out
@@ -611,7 +650,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			ts.Status = stDone
 		}
 		s.mu.Unlock()
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
 }
@@ -621,12 +660,15 @@ type voiceReq struct {
 	Text string `json:"text"`
 }
 
-// asrEndpoint 返回线 B 地址（可配；默认本机 8123）。
+// asrEndpoint 返回线 B 地址（可配 VHS_ASR_ENDPOINT；默认本机 8787）。
+// P0-3：以实际承担 ASR 个性化服务（线B）的 vhs-asr 监听端口为准。
+// 查证结论：vhs-asr（cmd/vhs-asr）默认监听 127.0.0.1:8787 并暴露 /v1/process；
+// vhs-voice（:8950）是语音适配层（转发主 harness :8941），非线B。旧默认 8123 为配置漂移。
 func asrEndpoint() string {
 	if v := os.Getenv("VHS_ASR_ENDPOINT"); v != "" {
 		return v
 	}
-	return "http://127.0.0.1:8123"
+	return "http://127.0.0.1:8787"
 }
 
 // handleVoice：**线 A 接语音的入口**。
@@ -647,7 +689,9 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}（ASR 识别文本）"})
 		return
 	}
-	intent, err := s.callASRProcess(r.Context(), req.Text)
+	// P0-4b：真实 ASR 会话 id 桥接——客户端经 X-Session-Id 透传时用之，缺省仍 "voice"（不破坏既有 schema）。
+	sid := r.Header.Get("X-Session-Id")
+	intent, err := s.callASRProcess(r.Context(), req.Text, sid)
 	if err != nil {
 		// ② **不静默降级**：明确 503 + degraded，且**不创建任何任务**
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -676,6 +720,10 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	s.tasks[ts.ID] = ts
 	s.mu.Unlock()
 	o := *s.tmpl
+	// P0-4b：旧入口 /v1/voice 也透传客户端 X-Request-Id（无则空→pipeline 自生成，向后兼容）。
+	if rid := strings.TrimSpace(r.Header.Get("X-Request-Id")); rid != "" {
+		o.RequestID = rid
+	}
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		ts.Status = stWaiting
@@ -692,7 +740,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 			return false, errors.New("任务被取消")
 		}
 	}
-	go func() {
+	safeGo("voice:"+ts.ID, func() {
 		out, err := pipeline.Run(ctx, &o, req.Text)
 		s.mu.Lock()
 		ts.Outcome = &out
@@ -705,13 +753,17 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 			ts.Status = stDone
 		}
 		s.mu.Unlock()
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": ts.ID, "intent": intent})
 }
 
 // callASRProcess 调线 B 的 POST /v1/process（**只走 HTTP**）。
-func (s *Server) callASRProcess(ctx context.Context, text string) (map[string]any, error) {
-	body, _ := json.Marshal(map[string]string{"text": text, "session_id": "voice"})
+// sessionID 为空时缺省 "voice"（P0-4b：可桥接真实会话 id）。
+func (s *Server) callASRProcess(ctx context.Context, text, sessionID string) (map[string]any, error) {
+	if sessionID == "" {
+		sessionID = "voice"
+	}
+	body, _ := json.Marshal(map[string]string{"text": text, "session_id": sessionID})
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(asrEndpoint(), "/")+"/v1/process", bytes.NewReader(body))
@@ -1009,18 +1061,25 @@ func clampPriority(p int) int {
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, priority int) *taskState {
+// 返回 (ts, accepted)：sched 队列满时 accepted=false（→ HTTP 429）并撤销注册；默认直跑恒 true。
+func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, priority int) (*taskState, bool) {
+	// 调度器接管时初始状态 pending（排队未开始）；默认直跑仍 running（逐字节不变）。
+	initStatus := stRunning
+	if s.sched != nil {
+		initStatus = stPending
+	}
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
 		Mode:      mode, // voice→确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 		Document:  document,
-		Status:    stRunning,
+		Status:    initStatus,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		Priority:  clampPriority(priority),
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
+		doneCh:    make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
@@ -1033,8 +1092,24 @@ func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, pr
 	s.persist(ts)
 	s.mu.Unlock()
 
+	// C2 调度路径：入队（byReq 注册与入队同临界区外撤销，防同 id 重复入队）。
+	if s.sched != nil {
+		ok := s.sched.Enqueue(&schedTask{ts: ts, ctx: ctx, text: text, spaceHint: spaceHint, document: document})
+		if !ok {
+			s.mu.Lock()
+			delete(s.tasks, ts.ID)
+			if requestID != "" {
+				delete(s.byReq, requestID)
+			}
+			s.mu.Unlock()
+			cancel()
+			return ts, false
+		}
+		return ts, true
+	}
+
 	s.runPipeline(ts, ctx, text, spaceHint, document)
-	return ts
+	return ts, true
 }
 
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
@@ -1049,6 +1124,9 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	ctx, cancel := context.WithTimeout(ctx, taskMaxDeadline)
 	o := *s.tmpl
 	o.Document = document
+	o.RequestID = ts.RequestID // P0-4b：入口 request_id 贯通到 pipeline 轨迹（空则 pipeline 自生成）
+	// §7.4 S3：pipeline 细粒度进度事件桥进 SSE（kind:"internal"，区别于 markStatus 的 transition）。
+	o.ProgressObserver = func(stage, detail string) { s.bridgeFromBus(ts, stage, detail) }
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
 		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
@@ -1077,10 +1155,22 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	if spaceHint != "" {
 		fullText = "在 " + spaceHint + " " + text
 	}
-	go func() {
+	safeGo("pipeline:"+ts.ID, func() {
 		defer cancel() // 任务结束（含超时/取消）时释放 deadline 定时器
+		// C2：任务 goroutine 退出时关闭 doneCh（终态/挂起都算），供调度器 worker 释放槽。select 防双关（need_ask 续跑会再进此函数）。
+		defer func() {
+			if ts.doneCh != nil {
+				select {
+				case <-ts.doneCh:
+				default:
+					close(ts.doneCh)
+				}
+			}
+		}()
+		// C1：pipeline.Run 收进 Runner（ob=nil：SSE/CLI 细粒度事件仍走 o.ProgressObserver=bridgeFromBus，零行为变化）。
 		runStart := time.Now()
-		out, err := pipeline.Run(ctx, &o, fullText)
+		rn := NewRunner(ts, &o, nil)
+		out, err := rn.Run(ctx, fullText)
 		loopMs := time.Since(runStart).Milliseconds()
 		// 结构化计时日志（手机侧定位用，一行一条）：total_ms = 分类+LLM+工具全段。
 		log.Printf("[timing] task=%s total_ms=%d loop_ms=%d intent=%s text=%q",
@@ -1161,7 +1251,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			})
 			s.persist(ts)
 		}
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 }
 
 // maxAskRounds 是同一任务允许的最大澄清轮次（缺口 G8 修复）。
@@ -1320,7 +1410,12 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document, req.Priority)
+	ts, accepted := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document, req.Priority)
+	if !accepted {
+		// C2：调度器队列满 → 429 Too Many Requests。
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "task queue full, retry later"})
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
@@ -1445,7 +1540,12 @@ func (s *Server) handleCancelSub(w http.ResponseWriter, r *http.Request, ts *tas
 }
 
 // writeTaskView 按 INTERACT-v1 形状渲染（receipt=四行，attribution=六格）。
+//
+// race 修复：ts 各字段由 runPipeline 后台 goroutine 持 s.mu 写（Outcome/Status/Role…），
+// 本函数是 GET /v1/tasks/{id} 轮询读端。快照必须在同一把 s.mu 内完成，再锁外写 HTTP，
+// 否则读 ts.Outcome/ts.Status 与后台写并发 → DATA RACE（-race 门）。
 func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
+	s.mu.Lock()
 	body := map[string]any{"task_id": ts.ID, "status": ts.Status, "role": ts.Role}
 	if ts.Question != "" {
 		body["question"] = ts.Question
@@ -1463,6 +1563,7 @@ func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
 			body["reversible"] = true
 		}
 	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -1691,6 +1792,24 @@ func (s *Server) emitEvent(ts *taskState, typ string, data map[string]any) {
 	}
 }
 
+// bridgeFromBus 把 pipeline 的细粒度进度事件桥进 SSE（设计 §7.4）。
+//
+//	kind:"internal" = 细粒度内部阶段（pipeline ProgressObserver 回调）；
+//	区别于 markStatus 发的 kind:"transition" 粗粒度状态迁移（phase）。
+//
+// 复用 ts.eventSeq++ 编号（桥层不另编号），事件 append 进 ts.events → ?after= 重放自动覆盖。
+// 由 pipeline goroutine 回调，须自己持 s.mu（emitEvent 读写 ts.eventSeq/events/listeners）。
+func (s *Server) bridgeFromBus(ts *taskState, stage, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emitEvent(ts, "stage", map[string]any{
+		"kind":   "internal",
+		"stage":  stage,
+		"detail": detail,
+		"trace":  ts.RequestID,
+	})
+}
+
 // markStatus 改状态并落盘（调用方已持 mu 或立即释放）。
 func (s *Server) markStatus(ts *taskState, status string) {
 	s.activityVer++ // 状态迁移 → 版本递增（心跳循环据此立即补发，架构 v1 §5）
@@ -1700,6 +1819,37 @@ func (s *Server) markStatus(ts *taskState, status string) {
 		"role": ts.Role, "phase": status, "step": stepName(status),
 	})
 	s.persist(ts)
+}
+
+// onTaskPanic 是后台任务 goroutine 被 safeGo recover 后的统一收尾（P0-2）：
+//  1. 把任务标记 canceled（panic 视为异常终止，绝不留 stRunning 假活）；
+//  2. 把 panic 写为轨迹 error kind（best-effort，供事后重放/归因）。
+//
+// 此时调用方 goroutine 的 `defer mu.Unlock()` 已在 unwind 阶段先行执行完毕（body defer 内层先跑，
+// safeGo 的 recover defer 外层后跑），故这里可安全重新加锁。
+func (s *Server) onTaskPanic(ts *taskState, o *pipeline.Options, r any) {
+	if ts != nil {
+		s.mu.Lock()
+		ts.Err = fmt.Sprintf("panic: %v", r)
+		s.markStatus(ts, stCanceled)
+		s.mu.Unlock()
+	}
+	rid := ""
+	if ts != nil {
+		// S0/P0-4b：panic 轨迹的 request_id 与 pipeline 同一来源（ts.RequestID）；空则 ts.ID 兜底，
+		// 使 panic 记录能 join 进请求链（入口→轨迹→日志）。
+		rid = ts.RequestID
+		if rid == "" {
+			rid = ts.ID
+		}
+	}
+	if o != nil && o.Trace != nil {
+		_ = o.Trace.Write(trajectory.Entry{
+			RequestID: rid,
+			Kind:      trajectory.KindError,
+			Content:   fmt.Sprintf("后台任务 goroutine panic: %v", r),
+		})
+	}
 }
 
 // ---------- rollback 辅助（可逆性/备份抽取） ----------

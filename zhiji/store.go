@@ -41,9 +41,11 @@ type Store struct {
 	stm         []MemoryItem // STM 热区（按 LastSeen 降序滚动）
 	ltm         []MemoryItem // LTM 归档
 	probes      []SurvivalProbe
-	lastInputAt time.Time // 输入门控信号（有输入才更新）
-	importance   float64   // 当前累计重要性（触发深反思阈值判断）
-	nextID       int
+	Graph       *Graph      // v1.1 关系图（graph.json；空图时 BudgetSearch 退化）
+	Vec         *VectorIndex // v1.2 可选向量索引（nil 退化为纯词法；BudgetSearch 混合锚点）
+	lastInputAt time.Time   // 输入门控信号（有输入才更新）
+	importance  float64     // 当前累计重要性（触发深反思阈值判断）
+	nextID      int
 }
 
 // NewStore 创建/加载存储。dir 不存在会自动创建。
@@ -78,6 +80,13 @@ func (s *Store) load() error {
 	if err := readJSON(filepath.Join(s.dir, "probes.json"), &s.probes); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// v1.1 关系图（graph.json 不存在视为空图，与其他四 JSON 一致）
+	if s.Graph == nil {
+		s.Graph = NewGraph()
+	}
+	if err := s.Graph.Load(filepath.Join(s.dir, "graph.json")); err != nil {
+		return err
+	}
 	s.nextID = 1
 	for _, it := range s.selfModel {
 		if n, ok := parseNumSuffix(it.ID); ok && n >= s.nextID {
@@ -100,7 +109,14 @@ func (s *Store) SaveAll() error {
 	if err := writeJSON(filepath.Join(s.dir, "ltm.json"), s.ltm); err != nil {
 		return err
 	}
-	return writeJSON(filepath.Join(s.dir, "probes.json"), s.probes)
+	if err := writeJSON(filepath.Join(s.dir, "probes.json"), s.probes); err != nil {
+		return err
+	}
+	// v1.1 关系图（独立 graph.json；前面四个 JSON 写失败即返回，不影响它们）
+	if s.Graph != nil {
+		return s.Graph.Save(filepath.Join(s.dir, "graph.json"))
+	}
+	return nil
 }
 
 // ---- 自我模型 ----
@@ -116,6 +132,9 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	}
 	item.UpdatedAt = time.Now()
 	item.Confidence = clamp01(item.Confidence)
+	if item.Status == "" {
+		item.Status = StatusActive // 新建条目默认 active；superseded 替换逻辑见下（旧条目置 superseded，新条目保持 active）
+	}
 
 	// 查找同层同文本旧条目 → superseded
 	for i := range s.selfModel {
@@ -129,9 +148,6 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	}
 	if item.Version == 0 {
 		item.Version = 1
-	}
-	if item.Status == "" {
-		item.Status = StatusActive
 	}
 	s.selfModel = append(s.selfModel, item)
 	return item, nil
@@ -172,9 +188,11 @@ func (s *Store) Baseline() string {
 // ---- 记忆条目 ----
 
 // WriteMemory 写一条记忆（行为层教训/机制层策略；写前验证见 reflect.go）。
+// v1.2：append 到 ltm 后自动把 (id,text) 喂进向量索引（Vec==nil 时零额外开销）。
+// 锁纪律：持 s.mu 写锁期间只做内存追加；(id,text) 在锁内快照后立即放锁，再调 Vec.Upsert，
+// 避免持写锁做外部调用（Vec.Upsert 自带锁且不回调 Store，无锁序环）。
 func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if item.ID == "" {
 		item.ID = fmt.Sprintf("mem-%d", s.nextID)
 		s.nextID++
@@ -190,21 +208,33 @@ func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 		item.Domain = DomainSession
 	}
 	s.ltm = append(s.ltm, item)
+	idxID, idxText := item.ID, item.Text // 锁内快照
+	s.mu.Unlock()
+	s.indexUpsert(idxID, idxText)
 	return item, nil
 }
 
+// indexUpsert 把刚写入的记忆条目同步进可选向量索引（v1.2 写路径自动接通）。
+// 调用约定：进入前必须已释放 s.mu；idxID/idxText 为锁内快照。Vec==nil 时一行返回、零开销。
+func (s *Store) indexUpsert(idxID, idxText string) {
+	if s.Vec == nil {
+		return
+	}
+	s.Vec.Upsert(idxID, idxText)
+}
+
 // TouchSTM 向 STM 热区写事件（每轮消息后异步抽取调用；滚动窗口）。
+// v1.2：append + 滚动裁剪 + 重要性累计全部完成后，(id,text) 锁内快照、放锁再喂向量索引。
 func (s *Store) TouchSTM(item MemoryItem, window int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if item.ID == "" {
 		item.ID = fmt.Sprintf("mem-%d", s.nextID)
 		s.nextID++
 	}
-	if item.Status == "" {
-		item.Status = StatusActive
-	}
 	item.LastSeen = time.Now()
+	if item.Status == "" {
+		item.Status = StatusActive // STM 热区=激活态；否则 Search/写前验证/外化全部跳过它（写不进去=检索不到）
+	}
 	s.stm = append(s.stm, item)
 	// 滚动窗口：保留最近 window 条（架构 §6.3 浅扫=工作记忆滚动更新）
 	if window > 0 && len(s.stm) > window {
@@ -213,6 +243,9 @@ func (s *Store) TouchSTM(item MemoryItem, window int) {
 	}
 	// 重要性累计（触发深反思阈值判断）
 	s.importance += item.Importance
+	idxID, idxText := item.ID, item.Text // 锁内快照
+	s.mu.Unlock()
+	s.indexUpsert(idxID, idxText)
 }
 
 // MarkInput 输入门控信号（架构 2026-10-05 决策：无新输入跳过反思）。
@@ -243,8 +276,16 @@ func (s *Store) ResetImportance() {
 	s.importance = 0
 }
 
+// scoreItem 三因子打分（从 Search 内部抽出复用；公式与权重逐位不变：0.4/0.35/0.25，半衰期 30min）。
+// rec = 0.5^((now-LastSeen)/HalfLife)；score = 0.4·rec + 0.35·(importance/10) + 0.25·relevance。
+func (s *Store) scoreItem(it MemoryItem, query string, now time.Time) float64 {
+	rec := math.Pow(0.5, float64(now.Sub(it.LastSeen))/float64(RecencyHalfLife))
+	rel := it.Relevance(query)
+	return WRecency*rec + WImportance*clampImportance(it.Importance)/10 + WRelevance*rel
+}
+
 // Search 三因子打分检索（架构 §12：w1·Recency + w2·Importance + w3·Relevance）。
-// 检索范围：LTM（行为/机制层）+ STM 热区；进程内，微秒级。
+// 检索范围：LTM（行为/机制层）+ STM 热区；进程内，微秒级。行为与 v1.0 逐位一致。
 func (s *Store) Search(query string, k int, now time.Time) []MemoryItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -257,13 +298,10 @@ func (s *Store) Search(query string, k int, now time.Time) []MemoryItem {
 			if it.Status != StatusActive {
 				continue
 			}
-			rec := math.Pow(0.5, float64(now.Sub(it.LastSeen))/float64(RecencyHalfLife))
-			rel := it.Relevance(query)
-			score := WRecency*rec + WImportance*clampImportance(it.Importance)/10 + WRelevance*rel
 			scored = append(scored, struct {
 				it  MemoryItem
 				rec float64
-			}{it, score})
+			}{it, s.scoreItem(it, query, now)})
 		}
 	}
 	merge(s.ltm)
@@ -277,6 +315,304 @@ func (s *Store) Search(query string, k int, now time.Time) []MemoryItem {
 		out = append(out, scored[i].it)
 	}
 	return out
+}
+
+// ---- v1.1 预算检索闭环（架构 v1.1 §7.2）----
+
+// 默认检索预算（知己小库适配；空值字段取这些常量）。
+const (
+	DefaultBudgetMaxItems = 24              // 总条目上限（远小于 Jev-Mem 的 60）
+	DefaultBudgetMaxHops  = 3               // 图扩展跳数上限（远小于 Jev-Mem 的 8）
+	DefaultBudgetDeadline = 2 * time.Second // 死线（主循环每轮都注入，比 Jev-Mem 的 15s 紧）
+	DefaultBudgetMinScore = 0.1             // 候选低于此分不再扩展
+	DefaultSeedCount      = 12              // 词法锚点数（Jev-Mem 30）
+	DefaultExpandTopK     = 3               // 每轮沿激活视图扩 top-3 邻居
+)
+
+// RetrieveBudget 预算检索的硬约束（触顶必停）。
+type RetrieveBudget struct {
+	MaxItems  int           // 总条目上限（默认 24）
+	MaxTokens int           // 注入 token 预算（对齐 800–1200；P0 不强制截断）
+	MaxHops   int           // 图扩展跳数上限（默认 3）
+	Deadline  time.Duration // 死线（默认 2s）
+	MinScore  float64       // 候选低于此分不再扩展（默认 0.1）
+}
+
+// normalize 零值补默认常量。
+func (b *RetrieveBudget) normalize() {
+	if b.MaxItems <= 0 {
+		b.MaxItems = DefaultBudgetMaxItems
+	}
+	if b.MaxHops <= 0 {
+		b.MaxHops = DefaultBudgetMaxHops
+	}
+	if b.Deadline <= 0 {
+		b.Deadline = DefaultBudgetDeadline
+	}
+	if b.MinScore <= 0 {
+		b.MinScore = DefaultBudgetMinScore
+	}
+}
+
+// Trace 预算检索闭环轨迹（落 decision JSONL；影子模式可审计对比线上 Search）。
+type Trace struct {
+	SeedCount  int        `json:"seed_count"`
+	Hops       int        `json:"hops"`
+	ViewsHit   []EdgeRel  `json:"views_hit,omitempty"`
+	StopReason string     `json:"stop_reason"` // enough|low_value|budget|deadline
+}
+
+// RetrieveSeeds 词法种子（复用 scoreItem 排序取前 n；STM∪LTM active 合并，与 Search 同源）。
+func (s *Store) RetrieveSeeds(query string, n int, now time.Time) []MemoryItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type scoredItem struct {
+		it    MemoryItem
+		score float64
+	}
+	var all []scoredItem
+	for _, it := range s.ltm {
+		if it.Status == StatusActive {
+			all = append(all, scoredItem{it, s.scoreItem(it, query, now)})
+		}
+	}
+	for _, it := range s.stm {
+		if it.Status == StatusActive {
+			all = append(all, scoredItem{it, s.scoreItem(it, query, now)})
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
+	if n <= 0 || n > len(all) {
+		n = len(all)
+	}
+	out := make([]MemoryItem, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, all[i].it)
+	}
+	return out
+}
+
+// hybridSeeds 混合锚点：词法种子 ∪ 向量召回种子（按 nodeID 去重，词法打分顺序在前）。
+// Vec==nil 或向量无召回时，逐位返回 RetrieveSeeds 结果——现有 BudgetSearch 行为零变化。
+// 老路径一行不动；向量召回的 nodeID 回填到 ltm/stm 里对应 active 条目，未入库即跳过。
+func (s *Store) hybridSeeds(query string, n int, now time.Time) []MemoryItem {
+	base := s.RetrieveSeeds(query, n, now)
+	if s.Vec == nil {
+		return base
+	}
+	vhits := s.Vec.Search(query, n)
+	if len(vhits) == 0 {
+		return base
+	}
+	// 建 nodeID -> active 条目视图（ltm∪stm）；RetrieveSeeds 已释放读锁，这里重新取锁，不嵌套。
+	s.mu.RLock()
+	byID := map[string]MemoryItem{}
+	for _, it := range s.ltm {
+		if it.Status == StatusActive {
+			byID[it.ID] = it
+		}
+	}
+	for _, it := range s.stm {
+		if it.Status == StatusActive {
+			byID[it.ID] = it
+		}
+	}
+	s.mu.RUnlock()
+	have := map[string]bool{}
+	out := make([]MemoryItem, 0, len(base)+len(vhits))
+	for _, it := range base {
+		have[it.ID] = true
+		out = append(out, it)
+	}
+	for _, h := range vhits {
+		if have[h.NodeID] {
+			continue
+		}
+		it, ok := byID[h.NodeID]
+		if !ok {
+			continue
+		}
+		have[h.NodeID] = true
+		out = append(out, it)
+	}
+	return out
+}
+
+// ExpandByGraph 沿图边找 seedID 的邻居（rel=0 表示不按视图过滤），
+// 回填到 ltm/stm 里对应 ID 的条目；找不到则空（图上邻居 ID 未入库即跳过）。
+func (s *Store) ExpandByGraph(seedID string, rel EdgeRel, limit int) []MemoryItem {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.Graph == nil {
+		return nil
+	}
+	var edges []Edge
+	if rel == "" {
+		edges = s.Graph.Neighbors(seedID)
+	} else {
+		edges = s.Graph.Neighbors(seedID, rel)
+	}
+	neighborIDs := map[string]bool{}
+	for _, e := range edges {
+		switch {
+		case e.From == seedID:
+			neighborIDs[e.To] = true
+		case e.To == seedID:
+			neighborIDs[e.From] = true
+		}
+	}
+	if limit > 0 && len(neighborIDs) > limit {
+		ids := make([]string, 0, len(neighborIDs))
+		for id := range neighborIDs {
+			ids = append(ids, id)
+		}
+		neighborIDs = map[string]bool{}
+		for i := 0; i < limit && i < len(ids); i++ {
+			neighborIDs[ids[i]] = true
+		}
+	}
+	byID := map[string]MemoryItem{}
+	for _, it := range s.ltm {
+		byID[it.ID] = it
+	}
+	for _, it := range s.stm {
+		byID[it.ID] = it
+	}
+	var out []MemoryItem
+	for id := range neighborIDs {
+		if it, ok := byID[id]; ok {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// BudgetSearch 预算检索闭环（架构 v1.1 §7.2：Route → 取 12 种子 → 循环打分/Assess/沿激活视图扩 top-3 邻居 → 硬预算触顶必停）。
+// 停止原因：enough（证据够）| low_value（再搜没用）| budget（条目/跳数触顶）| deadline（超时）。
+// 空图时退化为 Search 超集（结果不比 Search 差）。
+func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]MemoryItem, Trace) {
+	b.normalize()
+	trace := Trace{StopReason: "budget"}
+
+	// 空图退化：直接退化为 Search 超集（MaxItems 上限内全部 active 条目）
+	if s.Graph == nil || s.Graph.IsEmpty() {
+		out := s.Search(query, b.MaxItems, now)
+		trace.SeedCount = len(out)
+		return out, trace
+	}
+
+	// 路由（P0 规则版）
+	one := &DefaultSystemOne{}
+	views, hops := one.Route(query)
+	if hops <= 0 {
+		hops = b.MaxHops
+	} else if hops > b.MaxHops {
+		hops = b.MaxHops
+	}
+	for rel, w := range views {
+		if w >= 0.1 {
+			trace.ViewsHit = append(trace.ViewsHit, rel)
+		}
+	}
+
+	deadline := now.Add(b.Deadline)
+	seeds := s.hybridSeeds(query, DefaultSeedCount, now)
+	trace.SeedCount = len(seeds)
+
+	// 闭环 beam：去重收集（按 scoreItem 最终排序收口）
+	collected := map[string]MemoryItem{}
+	var order []string
+	add := func(it MemoryItem) bool {
+		if _, ok := collected[it.ID]; ok {
+			return false
+		}
+		collected[it.ID] = it
+		order = append(order, it.ID)
+		return true
+	}
+	for _, it := range seeds {
+		add(it)
+	}
+
+	current := seeds
+	for hop := 0; hop < hops; hop++ {
+		if time.Now().After(deadline) {
+			trace.StopReason = "deadline"
+			break
+		}
+		if len(collected) >= b.MaxItems {
+			trace.StopReason = "budget"
+			break
+		}
+		// 沿激活视图扩 top-3 邻居
+		newIDs := []string{}
+		for _, it := range current {
+			for rel, w := range views {
+				if w < 0.1 {
+					continue
+				}
+				for _, nb := range s.ExpandByGraph(it.ID, rel, DefaultExpandTopK) {
+					if add(nb) {
+						newIDs = append(newIDs, nb.ID)
+					}
+					if len(collected) >= b.MaxItems {
+						break
+					}
+				}
+				if len(collected) >= b.MaxItems {
+					break
+				}
+			}
+			if len(collected) >= b.MaxItems {
+				break
+			}
+		}
+		trace.Hops++
+		// Assess：基于当前全部证据做停止决策
+		var ev []MemoryItem
+		for _, id := range order {
+			ev = append(ev, collected[id])
+		}
+		enough, lowValue := one.Assess(ev)
+		if enough {
+			trace.StopReason = "enough"
+			break
+		}
+		if lowValue {
+			trace.StopReason = "low_value"
+			break
+		}
+		if len(newIDs) == 0 {
+			// 图上无新邻居可扩 → 停
+			trace.StopReason = "budget"
+			break
+		}
+		// 下一轮从新加入的条目继续扩展
+		current = current[:0]
+		for _, id := range newIDs {
+			current = append(current, collected[id])
+		}
+	}
+
+	// 收口：按 scoreItem 降序，截到 MaxItems
+	type scoredItem struct {
+		it    MemoryItem
+		score float64
+	}
+	var all []scoredItem
+	for _, id := range order {
+		it := collected[id]
+		all = append(all, scoredItem{it, s.scoreItem(it, query, now)})
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
+	if len(all) > b.MaxItems {
+		all = all[:b.MaxItems]
+	}
+	out := make([]MemoryItem, 0, len(all))
+	for _, si := range all {
+		out = append(out, si.it)
+	}
+	return out, trace
 }
 
 // DecayAndEvict 遗忘（架构 §12 遗忘纪律）：低分区降权可恢复，不硬删。
