@@ -646,9 +646,11 @@ private struct ServerRowView: View {
         .contentShape(Rectangle())
         .onTapGesture { settings.switchServer(srv.id); conn.probe() }
         .swipeActions {
-            if settings.servers.count > 1 {
-                Button("删除", role: .destructive) { settings.removeServer(srv.id) }
+            // 解除机器码绑定：清除 machineCode，服务器条目保留（按普通自建使用）。
+            if srv.isMachineBound {
+                Button("解绑") { settings.unbindMachine(srv.id) }
             }
+            Button("删除", role: .destructive) { settings.removeServer(srv.id) }
         }
     }
 

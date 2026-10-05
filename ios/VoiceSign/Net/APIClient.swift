@@ -104,10 +104,19 @@ final class APIClient {
 
     // MARK: - 端点
 
-    /// POST /v1/tasks {text, space?, request_id?} → 202 {task_id,status}；同 request_id → 200 deduped。
-    func submitTask(text: String, space: String? = nil, requestId: String) async throws -> CreateTaskResponse {
+    /// POST /v1/tasks {text, space?, request_id?, attachments?} → 202 {task_id,status}；同 request_id → 200 deduped。
+    /// v2.4：attachments 非空时随 body 提交资料（服务端忽略未知字段）。
+    func submitTask(text: String, space: String? = nil, requestId: String, attachments: [Attachment] = []) async throws -> CreateTaskResponse {
         var body: [String: Any] = ["text": text, "request_id": requestId]
         if let space = space { body["space"] = space }
+        if !attachments.isEmpty {
+            body["attachments"] = attachments.map { a -> [String: Any] in
+                ["kind": a.kind.rawValue,
+                 "title": a.title,
+                 "text": a.text ?? "",
+                 "file": a.fileName ?? ""]
+            }
+        }
         let (code, data) = try await request("POST", "/v1/tasks", body: body)
         let j = decodeJSON(data)
         guard (200...299).contains(code), let tid = j["task_id"] as? String else {
