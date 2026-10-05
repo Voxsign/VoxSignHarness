@@ -66,8 +66,8 @@ final class SettingsStore: ObservableObject {
     /// 当前活动服务器 id（自建模式），持久化。
     @Published var activeServerID: String = ""
 
-    /// 云道地址（开发期指向本机云端模拟；正式域名上线后切换 https://voxsign.ai）。
-    var cloudBase: String { "http://192.168.8.186:8898" }
+    /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
+    var cloudBase: String { "https://voxsign.ai" }
 
     /// 当前生效的 base（下游兼容用）。
     var base: String {
