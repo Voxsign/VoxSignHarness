@@ -20,6 +20,8 @@ enum VSColor {
     static let harnessBubble = Color.white
     /// 卡片级阴影（App Store 精致度：柔和低透明度，不抢内容）
     static let shadow = Color.black.opacity(0.06)
+    /// UI v3 豆包式 AI 气泡阴影：刻意压到几乎看不见（设计稿：opacity 0.045 / radius 0.75）。
+    static let shadowSoft = Color.black.opacity(0.045)
     /// 用户气泡高光（顶部左上更亮，增加立体感）
     static var userBubbleGradientHigh: LinearGradient {
         LinearGradient(colors: [Color(red: 0.32, green: 0.55, blue: 1.0), purple],
@@ -29,9 +31,11 @@ enum VSColor {
     static var brandGradient: LinearGradient {
         LinearGradient(colors: [blue, purple], startPoint: .topLeading, endPoint: .bottomTrailing)
     }
-    /// 用户气泡：蓝紫渐变（豆包式）
+    /// UI v3 用户气泡：豆包同款 135° 蓝紫渐变 #4E7CFF → #8E6BFF（仅用户气泡与语音按钮使用）。
     static var userBubbleGradient: LinearGradient {
-        LinearGradient(colors: [blue, purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+        LinearGradient(colors: [Color(red: 0.306, green: 0.486, blue: 1.0),
+                                Color(red: 0.557, green: 0.42, blue: 1.0)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
     }
     static let userBubble = blue
     static let receiptGreen = Color(red: 0.90, green: 0.97, blue: 0.91)
@@ -69,11 +73,22 @@ struct UserBubbleView: View {
     var body: some View {
         HStack {
             Spacer()
-            HStack(alignment: .bottom, spacing: 6) {
-                if bubble.fromVoice { WaveView() }
+            HStack(alignment: .center, spacing: 6) {
+                if bubble.fromVoice {
+                    WaveView()
+                        // UI v3：录音态声波为白色；完成态保持白色细条（豆包同款）。
+                        .opacity(0.9)
+                }
                 Text(bubble.text)
                     .foregroundColor(.white)
                     .padding(.horizontal, 12).padding(.vertical, 8)
+                // UI v3：语音消息时长（豆包同款 "3″" 小字）。
+                if let secs = bubble.voiceSeconds {
+                    Text("\(secs)″")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.85))
+                        .padding(.trailing, 4)
+                }
             }
             .background(VSColor.userBubbleGradientHigh)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18,
@@ -93,7 +108,8 @@ struct HarnessBubbleView: View {
                 .background(VSColor.harnessBubble)
                 .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
                                                   bottomTrailingRadius: 18, topTrailingRadius: 18))
-                .shadow(color: VSColor.shadow, radius: 5, x: 0, y: 2)
+                // UI v3：AI 气泡阴影压到几乎看不见（豆包式）。
+                .shadow(color: VSColor.shadowSoft, radius: 0.75, x: 0, y: 1)
             Spacer()
         }
     }

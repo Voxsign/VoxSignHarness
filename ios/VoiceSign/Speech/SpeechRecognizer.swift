@@ -26,6 +26,10 @@ final class SpeechRecognizer: ObservableObject {
     /// 校准失败态：显示「识别失败，请再按一次」（不回退本地识别）。
     @Published var asrFailed: Bool = false
 
+    /// UI v3：按住录音累计秒数（语音气泡时长显示，如 "3″"）。startHold 清零，stopHold/cancelHold 定格。
+    private(set) var lastHoldSeconds: Int = 0
+    private var holdTimer: Timer?
+
     private let engine = AVAudioEngine()
     /// 录音 WAV 文件（平台校准用）与对应 URL。
     private var audioFile: AVAudioFile?
@@ -52,6 +56,13 @@ final class SpeechRecognizer: ObservableObject {
     /// 按住开始录音（纯录音，不喂任何本地识别）。
     func startHold() {
         holdMode = true
+        // UI v3：按住录音计时（语音气泡时长）。
+        lastHoldSeconds = 0
+        holdTimer?.invalidate()
+        holdTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isRecording else { return }
+            self.lastHoldSeconds += 1
+        }
         // 用户要说话，先停掉上一段回复朗读（录音 session 也会切走 playback）。
         VoiceOutputService.shared.stop()
         start()
@@ -61,6 +72,8 @@ final class SpeechRecognizer: ObservableObject {
     /// 校准成功 → 一次性出文字 → 自动提交；失败 → asrFailed 提示（无本地兜底）。
     func stopHold() {
         holdMode = false
+        holdTimer?.invalidate()
+        holdTimer = nil
         endRecordingSession()
         startCalibration()
     }
@@ -70,6 +83,8 @@ final class SpeechRecognizer: ObservableObject {
         print("[ASR] cancelHold（上滑取消）")
         DiagLogger.shared.log("ASR", "cancelHold（上滑取消）")
         holdMode = false
+        holdTimer?.invalidate()
+        holdTimer = nil
         calibrating = false
         asrFailed = false
         audioFile = nil

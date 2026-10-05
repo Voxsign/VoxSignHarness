@@ -46,6 +46,9 @@ final class ConnectivityService: ObservableObject {
     /// 最近一次探测错误描述（设置页排障用）。
     @Published private(set) var lastError: String = ""
 
+    /// UI v3：最近一次成功探测的延迟（毫秒），设置页连接状态行显示。
+    @Published private(set) var latencyMs: Int = 0
+
     // 探测参数（可调；真机实测后按需收紧）。
     private let heartbeatInterval: TimeInterval = 30
     private let probeTimeout: TimeInterval = 5
@@ -91,9 +94,11 @@ final class ConnectivityService: ObservableObject {
     }
 
     /// 探活：GET /v1/status，5s 超时。成功 → online；失败 → offline（并记错误）。
+    /// UI v3：成功时记录延迟毫秒（设置页连接状态行显示"延迟 Xms"）。
     func probe() {
         guard !isProbing else { return }
         isProbing = true
+        let started = Date()
         Task {
             defer { isProbing = false }
             do {
@@ -107,9 +112,11 @@ final class ConnectivityService: ObservableObject {
                     group.cancelAll()
                     return first
                 }
+                let latency = Int(Date().timeIntervalSince(started) * 1000)
                 await MainActor.run {
                     self.setState(.online)
                     self.lastError = ""
+                    self.latencyMs = latency
                 }
             } catch {
                 await MainActor.run {
