@@ -12,8 +12,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
+	"runtime/debug"
 	"time"
 )
 
@@ -224,4 +226,32 @@ func doOnceHdr(ctx context.Context, method, url string, body []byte, timeout tim
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	return resp.StatusCode, data, nil
+}
+
+// safeGo 启动一个受 panic 保护的后台 goroutine（P0-2）。
+//
+// 动机：此前业务后台 goroutine 裸 `go func(){...}()`，pipeline.Run 内任意 panic 会
+// 直接 crash 整个 server（一个请求的 bug 拖垮全部在线任务）。safeGo 把单个任务的
+// panic 隔离在它自己的 goroutine 里：打日志+栈、调用 onPanic 做收尾（标记任务 canceled、
+// 写轨迹 error），进程继续存活。
+//
+// onPanic 可为 nil；onPanic 自身也被 recover 包裹，绝不因收尾失败二次崩溃。
+//
+// 注意：调用方若在 goroutine 体内 `defer mu.Unlock()`，该 defer 会在本函数 recover 之前
+// 完成 unwind，故 onPanic 执行时调用方持有的锁通常已释放——可安全重新加锁。
+func safeGo(name string, fn func(), onPanic func(recovered any)) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[safeGo] %s: panic recovered: %v\n%s", name, r, debug.Stack())
+				if onPanic != nil {
+					func() {
+						defer func() { _ = recover() }() // onPanic 自身不得再崩
+						onPanic(r)
+					}()
+				}
+			}
+		}()
+		fn()
+	}()
 }
