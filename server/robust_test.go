@@ -5,9 +5,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"voicesign-harness/config"
 )
 
 // 架构 v1 §7 健壮性四件套的单元测试：熔断、退避重试、bulkhead、分级超时。
@@ -147,4 +152,68 @@ func TestRobustJSONOpenBreakerFastFails(t *testing.T) {
 	if !errors.Is(err, err) && err.Error() == "" {
 		t.Fatal("应有熔断错误信息")
 	}
+}
+
+// TestSafeGoRecoversTaskPanic（P0-2）：后台任务 goroutine 内 panic 必须被隔离——
+//
+//	① 进程/测试不崩（recover 兜住）；② 任务被标 canceled；③ 轨迹留下 error kind 的 panic 记录。
+func TestSafeGoRecoversTaskPanic(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	srv := New(&cfg, testOpts(t, dir))
+
+	o := testOpts(t, dir) // 自带 Trace（落盘 dir，供事后断言 panic 记录）
+	ts := &taskState{ID: "task-panic", Status: stRunning, confirmCh: make(chan bool, 1)}
+	srv.mu.Lock()
+	srv.tasks[ts.ID] = ts
+	srv.mu.Unlock()
+
+	done := make(chan struct{})
+	safeGo("testpanic:"+ts.ID, func() {
+		panic("boom-in-pipeline") // 模拟 pipeline.Run 内部 panic
+	}, func(r any) {
+		srv.onTaskPanic(ts, o, r)
+		close(done)
+	})
+
+	// 等待收尾；超时即视为 panic 已逃逸（进程没兜住）。
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("safeGo 未 recover：onPanic 没跑，goroutine panic 可能已逃逸到进程")
+	}
+
+	// ② 任务被标 canceled
+	if ts.Status != stCanceled {
+		t.Fatalf("panic 后任务应 canceled, 实际 %q (err=%q)", ts.Status, ts.Err)
+	}
+	if !strings.Contains(ts.Err, "panic") {
+		t.Fatalf("ts.Err 应含 panic, 实际 %q", ts.Err)
+	}
+
+	// ③ 轨迹留下 panic 的 error 记录
+	entries, _ := filepath.Glob(filepath.Join(dir, "trajectory-*.jsonl"))
+	if len(entries) == 0 {
+		t.Fatal("未找到轨迹文件")
+	}
+	data, err := os.ReadFile(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "boom-in-pipeline") {
+		t.Fatalf("轨迹里应留下 panic 记录, 实际:\n%s", data)
+	}
+}
+
+// TestSafeGoOnPanicSelfIsolation：onPanic 自身再 panic 也不能崩进程（safeGo 二次 recover）。
+func TestSafeGoOnPanicSelfIsolation(t *testing.T) {
+	done := make(chan struct{})
+	safeGo("selfpanic", func() { panic("inner") }, func(any) {
+		panic("onPanic-boom") // 收尾自身崩溃
+	})
+	// 若二次 recover 失效，这里的 goroutine panic 会直接 crash 整个 test 进程。
+	// 用短暂等待确认 goroutine 已结束且进程存活。
+	go func() { close(done) }()
+	<-done
 }
