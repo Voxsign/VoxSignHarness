@@ -135,7 +135,13 @@ final class AuthService: NSObject {
             self.session = auth
             auth?.presentationContextProvider = self
             auth?.prefersEphemeralWebBrowserSession = false
-            auth?.start()
+            // start() 返回 false 表示弹窗失败（如无可呈现的 window），此时 completion 不会被调用——
+            // 必须立即抛错，否则 continuation 永不恢复、用户无任何反馈。
+            if auth?.start() != true {
+                auth = nil
+                self.session = nil
+                cont.resume(throwing: APIError.transport("无法弹出 Google 授权窗口，请重试"))
+            }
         }
     }
 
@@ -170,11 +176,15 @@ final class AuthService: NSObject {
 extension AuthService: ASWebAuthenticationPresentationContextProviding {
     @MainActor
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // 顶层 window（设置页所在场景）；无窗口时回退 main window。
-        let scene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }
-        return scene?.windows.first ?? UIApplication.shared.windows.first ?? ASPresentationAnchor()
+        // 优先取前台 scene 的 keyWindow；无 keyWindow 时取第一个 window。
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for scene in scenes where scene.activationState == .foregroundActive {
+            if let key = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+                return key
+            }
+        }
+        if let w = scenes.first?.windows.first { return w }
+        return ASPresentationAnchor()
     }
 }
 

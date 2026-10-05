@@ -34,6 +34,7 @@ struct SettingsView: View {
     // P1 云端模式：Google 登录状态。
     @State private var googleBusy = false
     @State private var googleError = ""
+    @State private var showGoogleAlert = false
 
     var body: some View {
         NavigationStack {
@@ -172,6 +173,11 @@ struct SettingsView: View {
             .sheet(isPresented: $showAdd) {
                 addServerSheet
             }
+            .alert("Google 登录失败", isPresented: $showGoogleAlert) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(googleError.isEmpty ? "未知错误" : googleError)
+            }
         }
     }
 
@@ -190,6 +196,7 @@ struct SettingsView: View {
                 conn.probe()
             } catch {
                 googleError = error.localizedDescription
+                showGoogleAlert = true
             }
         }
     }
