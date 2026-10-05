@@ -33,6 +33,7 @@ type DeviceRecord struct {
 	LastSeen     time.Time `json:"last_seen"`
 	State        string    `json:"state,omitempty"`  // 架构 v1 §5：idle|busy|decision|standby
 	Pending      int       `json:"pending,omitempty"` // 活动任务数（decision/busy 时）
+	Tenant       string    `json:"tenant,omitempty"`  // 归属租户（多租户隔离；本地默认 "default"）
 	RegisteredAt time.Time `json:"registered_at"`
 }
 
@@ -166,6 +167,12 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 	rec.Base = in.Base
 	rec.Online = true
 	rec.LastSeen = time.Now()
+	// 租户归属：云端经 JWT 注册时按上下文写入；否则默认 "default"（本地/单租户 E2E）。
+	if t := ctxTenant(r.Context()); t != "" {
+		rec.Tenant = t
+	} else if rec.Tenant == "" {
+		rec.Tenant = "default"
+	}
 	s.devices.save()
 	s.devices.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
