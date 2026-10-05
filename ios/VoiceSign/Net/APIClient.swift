@@ -177,6 +177,48 @@ final class APIClient {
                               tasks: j["tasks"] as? Int)
     }
 
+    // MARK: - Google 登录（云端模式）
+
+    /// POST /v1/auth/google {code, code_verifier} → 会话 JWT + 租户/档位/配额。
+    func loginGoogle(code: String, verifier: String) async throws -> GoogleLoginResult {
+        let (code2, data) = try await request("POST", "/v1/auth/google",
+                                              body: ["code": code, "code_verifier": verifier])
+        let j = decodeJSON(data)
+        guard (200...299).contains(code2), let token = j["token"] as? String else {
+            throw APIError.http(code2, String(decoding: data, as: UTF8.self))
+        }
+        let quota = (j["quota"] as? [String: Any]).map { q in
+            GoogleLoginResult.GoogleQuota(used: q["used"] as? Int,
+                                         limit: q["limit"] as? Int,
+                                         resetsAt: q["resets_at"] as? String)
+        }
+        return GoogleLoginResult(token: token,
+                                 tenant: j["tenant"] as? String ?? "",
+                                 email: j["email"] as? String ?? "",
+                                 tier: j["tier"] as? String ?? "",
+                                 trialUntil: j["trial_until"] as? String,
+                                 quota: quota)
+    }
+
+    /// GET /v1/me → 登录态刷新（档位/额度/试用期）。
+    func me() async throws -> MeResult {
+        let (code, data) = try await request("GET", "/v1/me")
+        let j = decodeJSON(data)
+        guard (200...299).contains(code) else {
+            throw APIError.http(code, String(decoding: data, as: UTF8.self))
+        }
+        let quota = (j["quota"] as? [String: Any]).map { q in
+            GoogleLoginResult.GoogleQuota(used: q["used"] as? Int,
+                                         limit: q["limit"] as? Int,
+                                         resetsAt: q["resets_at"] as? String)
+        }
+        return MeResult(tenant: j["tenant"] as? String ?? "",
+                        email: j["email"] as? String ?? "",
+                        tier: j["tier"] as? String ?? "",
+                        trialUntil: j["trial_until"] as? String,
+                        quota: quota)
+    }
+
     /// GET /v1/roles → 多角色折叠条数据（active 态）。
     func roles() async throws -> RolesResponse {
         let (code, data) = try await request("GET", "/v1/roles")
