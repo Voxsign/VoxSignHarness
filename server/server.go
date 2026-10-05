@@ -158,12 +158,12 @@ func (e sseEvent) flattened() map[string]any {
 
 // Server 持有配置、pipeline 模板与任务表。
 // platformAIOpsBase 自建平台入口（与 config/model-center.json gateway.base_url 一致）。
-// 支持 VHS_PLATFORM_BASE 覆盖（域名迁移期：peterzou.com 证书链失效时切 voxsign.ai）。
+// 支持 VHS_PLATFORM_BASE 覆盖（2026-10-05：peterzou.com 域名 SNI/证书与服务器不符，已切 aiops.voxsign.ai）。
 var platformAIOpsBase = func() string {
 	if v := os.Getenv("VHS_PLATFORM_BASE"); v != "" {
 		return v
 	}
-	return "https://aiops.peterzou.com"
+	return "https://aiops.voxsign.ai"
 }()
 
 type Server struct {
@@ -331,7 +331,8 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 		Err   string `json:"error"`
 		Code  string `json:"code"`
 	}
-	if err := json.Unmarshal(data, &pr); err != nil || !pr.OK || pr.Text == "" {
+	// 空文本是合法结果（静音/环境音），不算平台异常；仅 JSON 失败或 ok=false 才算。
+	if err := json.Unmarshal(data, &pr); err != nil || !pr.OK {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
 		return
