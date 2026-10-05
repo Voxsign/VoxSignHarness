@@ -2,12 +2,15 @@
 //  AuthService.swift
 //  VoiceSign
 //
-//  Google 登录（P1 云端模式）：OIDC Authorization Code + PKCE。
-//  链路（对齐 docs/云端谷歌登录与发布架构-20261004.md §4）：
+//  Google 登录（云端模式）：OIDC Authorization Code + PKCE，iOS 类型 OAuth Client。
+//  链路（对齐 docs/云端谷歌登录与发布架构-20261004.md §4，修订为 iOS client）：
 //    1. 生成 code_verifier + code_challenge(S256)
 //    2. ASWebAuthenticationSession 打开 accounts.google.com 授权页
+//       （redirect_uri = com.googleusercontent.apps.<client-id>:// 自定义 scheme，
+//        iOS 100% 可靠截获——Web client 的 http://127.0.0.1 回调节截获在真机不可靠）
 //    3. 用户授权 → 回调截获 ?code=
-//    4. POST 云端 /v1/auth/google {code, code_verifier} → 会话 JWT
+//    4. iOS 公开客户端 + PKCE 换 id_token（无需 client_secret，iOS 零机密）
+//    5. POST 云端 /v1/auth/google {id_token} → 服务端 JWKS RS256 验签 → 租户 → 会话 JWT
 //  零第三方依赖：纯 AuthenticationServices + CryptoKit。
 //
 
@@ -16,18 +19,19 @@ import AuthenticationServices
 import CryptoKit
 import UIKit
 
-/// Google OAuth 参数（Web application 类型 client，与云端 harness 共用）。
+/// Google OAuth 参数（iOS 类型 client；公开安全，可内嵌）。
 enum GoogleOAuth {
-    /// Google Cloud Console 创建（Web application）；公开安全，可内嵌。
+    /// Google Cloud Console 创建（iOS 类型，Bundle ID net.voxsign.ios）。
     static var clientID: String {
-        "914563065668-ap9ik9bs7r3pmo993ragoqktle92nvof.apps.googleusercontent.com"
+        "914563065668-urvk0ku7fofste2h1glhqlh5r3acl3u9.apps.googleusercontent.com"
     }
-    /// 正式域名回调（Console 已注册）。公网必须 HTTPS（ATS）。
-    static let productionRedirectURI = "https://voxsign.ai/auth/callback"
-    /// 本地模拟回调（Console 已注册；iOS 15.5+ 支持 http://127.0.0.1）。
-    static let localRedirectURI = "http://127.0.0.1"
+    /// iOS 类型 client 的授权回调：反向域名 scheme（Console 自动注册，含 .apps.googleusercontent.com 后缀）。
+    static var redirectURI: String { "com.googleusercontent.apps.\(clientID)://" }
+    /// ASWebAuthenticationSession 的 callbackURLScheme（去掉 ://）。
+    static var callbackScheme: String { "com.googleusercontent.apps.\(clientID)" }
     static let scope = "openid email profile"
     static let authorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
+    static let tokenEndpoint = "https://oauth2.googleapis.com/token"
 }
 
 /// POST /v1/auth/google 的返回（会话 JWT + 租户信息）。
@@ -68,34 +72,22 @@ struct MeResult: Decodable, Equatable {
     }
 }
 
-/// Google 登录编排：PKCE + ASWebAuthenticationSession + 服务端换码。
+/// Google 登录编排：PKCE + ASWebAuthenticationSession + iOS 换 id_token + 云端验签。
 final class AuthService: NSObject {
     static let shared = AuthService()
 
     private var session: ASWebAuthenticationSession?
 
-    /// 根据当前服务器地址选择回调：
-    /// - 正式域名（https://voxsign.ai 前缀）→ 正式回调 https://voxsign.ai/auth/callback；
-    /// - 其余（局域网 IP http://192.168.x.x / 本地模拟）→ 本地回调 http://127.0.0.1，
-    ///   与云端 harness 的 VHS_GOOGLE_REDIRECT_URI=http://127.0.0.1 匹配。
-    func redirectURI(for base: String) -> String {
-        if base.hasPrefix("https://voxsign.ai") || base.hasPrefix("https://voicesign.ai") {
-            return GoogleOAuth.productionRedirectURI
-        }
-        return GoogleOAuth.localRedirectURI
-    }
-
-    /// 发起 Google 授权，返回 authorization code（已带 PKCE verifier 供后续换码）。
+    /// 发起 Google 授权，返回 authorization code + PKCE verifier。
     func authorize(base: String) async throws -> (code: String, verifier: String) {
         let verifier = Self.generateVerifier()
         let challenge = Self.s256Challenge(verifier)
-        let redirect = redirectURI(for: base)
         guard var comps = URLComponents(string: GoogleOAuth.authorizationEndpoint) else {
             throw APIError.transport("OAuth 端点无效")
         }
         comps.queryItems = [
             URLQueryItem(name: "client_id", value: GoogleOAuth.clientID),
-            URLQueryItem(name: "redirect_uri", value: redirect),
+            URLQueryItem(name: "redirect_uri", value: GoogleOAuth.redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: GoogleOAuth.scope),
             URLQueryItem(name: "code_challenge", value: challenge),
@@ -105,9 +97,39 @@ final class AuthService: NSObject {
         guard let url = comps.url else {
             throw APIError.transport("OAuth URL 构造失败")
         }
-        let scheme = redirect.hasPrefix("https") ? "https" : "http"
-        let code = try await startSession(url: url, callbackScheme: scheme)
+        let code = try await startSession(url: url, callbackScheme: GoogleOAuth.callbackScheme)
         return (code, verifier)
+    }
+
+    /// iOS 公开客户端 + PKCE 换 id_token（无需 client_secret；token 不经云端，iOS 零机密）。
+    func exchangeIDToken(code: String, verifier: String) async throws -> String {
+        var comps = URLComponents()
+        comps.queryItems = [
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "client_id", value: GoogleOAuth.clientID),
+            URLQueryItem(name: "redirect_uri", value: GoogleOAuth.redirectURI),
+            URLQueryItem(name: "code_verifier", value: verifier),
+        ]
+        guard let endpoint = URL(string: GoogleOAuth.tokenEndpoint),
+              let body = comps.percentEncodedQuery else {
+            throw APIError.transport("Google token 端点无效")
+        }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body.data(using: .utf8)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw APIError.transport("Google token 交换无响应")
+        }
+        guard (200...299).contains(http.statusCode),
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let idToken = j["id_token"] as? String, !idToken.isEmpty else {
+            let body = String(decoding: data, as: UTF8.self)
+            throw APIError.http(http.statusCode, body)
+        }
+        return idToken
     }
 
     // MARK: - ASWebAuthenticationSession

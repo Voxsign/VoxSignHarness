@@ -215,7 +215,29 @@ func (s *Server) Handler() http.Handler {
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
-	return mux
+	return logRequests(mux)
+}
+
+// logRequests 访问日志中间件：记录 method/path/status/耗时（诊断与排障用；
+// 仅打印不落任务轨迹，避免污染可复现轨迹）。
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("req %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+// statusRecorder 记录响应状态码，供访问日志输出。
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 // handleASR 接收 iOS 录音（multipart file=WAV），base64 后转发平台 model-center 的 /api/model/asr
