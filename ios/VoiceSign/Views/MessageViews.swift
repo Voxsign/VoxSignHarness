@@ -73,45 +73,132 @@ struct UserBubbleView: View {
     var body: some View {
         HStack {
             Spacer()
-            HStack(alignment: .center, spacing: 6) {
-                if bubble.fromVoice {
-                    WaveView()
-                        // UI v3：录音态声波为白色；完成态保持白色细条（豆包同款）。
-                        .opacity(0.9)
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(alignment: .center, spacing: 6) {
+                    if bubble.fromVoice {
+                        WaveView()
+                            // UI v3：录音态声波为白色；完成态保持白色细条（豆包同款）。
+                            .opacity(0.9)
+                    }
+                    Text(bubble.text)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                    // UI v3：语音消息时长（豆包同款 "3″" 小字）。
+                    if let secs = bubble.voiceSeconds {
+                        Text("\(secs)″")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.trailing, 4)
+                    }
                 }
-                Text(bubble.text)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                // UI v3：语音消息时长（豆包同款 "3″" 小字）。
-                if let secs = bubble.voiceSeconds {
-                    Text("\(secs)″")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.85))
-                        .padding(.trailing, 4)
+                .background(VSColor.userBubbleGradientHigh)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18,
+                                                  bottomTrailingRadius: 4, topTrailingRadius: 18))
+                .shadow(color: VSColor.shadow, radius: 6, x: 0, y: 2)
+
+                // 附件 chips：灰底小标签，不喧宾夺主；图片类如有 localPath 显示 40×40 缩略图。
+                if !bubble.attachments.isEmpty {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        ForEach(bubble.attachments) { att in
+                            attachmentChip(att)
+                        }
+                    }
                 }
             }
-            .background(VSColor.userBubbleGradientHigh)
-            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 18,
-                                              bottomTrailingRadius: 4, topTrailingRadius: 18))
-            .shadow(color: VSColor.shadow, radius: 6, x: 0, y: 2)
+        }
+    }
+
+    @ViewBuilder
+    private func attachmentChip(_ att: Attachment) -> some View {
+        if att.kind == .image, let p = att.localPath, let img = UIImage(contentsOfFile: p) {
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        } else {
+            HStack(spacing: 5) {
+                Image(systemName: chipIcon(att.kind))
+                    .font(.system(size: 11))
+                Text(att.title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func chipIcon(_ kind: AttachmentKind) -> String {
+        switch kind {
+        case .text: return "doc.text"
+        case .url:  return "link"
+        case .image: return "photo"
+        case .file: return "doc"
         }
     }
 }
 
 struct HarnessBubbleView: View {
     let bubble: Bubble
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     var body: some View {
         HStack {
-            Text(bubble.text)
-                .foregroundColor(.black)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(VSColor.harnessBubble)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
-                                                  bottomTrailingRadius: 18, topTrailingRadius: 18))
-                // UI v3：AI 气泡阴影压到几乎看不见（豆包式）。
-                .shadow(color: VSColor.shadowSoft, radius: 0.75, x: 0, y: 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bubble.text)
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(VSColor.harnessBubble)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
+                                                      bottomTrailingRadius: 18, topTrailingRadius: 18))
+                    // UI v3：AI 气泡阴影压到几乎看不见（豆包式）。
+                    .shadow(color: VSColor.shadowSoft, radius: 0.75, x: 0, y: 1)
+
+                // 轻量信息行：消耗 · 时间 + …菜单（无朗读/喇叭主按钮，不常用收进菜单）。
+                infoRow
+            }
             Spacer()
         }
+    }
+
+    private var infoRow: some View {
+        HStack(spacing: 6) {
+            if let tokens = bubble.costTokens {
+                Text("消耗 \(tokens)")
+            }
+            Text(Self.timeFormatter.string(from: bubble.timestamp))
+            Spacer(minLength: 0)
+            Menu {
+                Button {
+                    UIPasteboard.general.string = bubble.text
+                } label: {
+                    Label("复制", systemImage: "doc.on.doc")
+                }
+                Button {
+                    VoiceOutputService.shared.speak(bubble.text)
+                } label: {
+                    Label("朗读", systemImage: "waveform")
+                }
+                ShareLink(item: bubble.text)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundColor(.secondary)
+        .padding(.leading, 4)
+        .padding(.trailing, 2)
     }
 }
 
@@ -204,26 +291,25 @@ struct ReceiptCardView: View {
     let onRollback: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // v2.3（用户需求：微信式反馈"处理完了之后有多少时间"）：气泡上方显示"已处理 X.X 秒"。
-            if receipt.elapsedSec > 0.01 {
-                Text("已处理 \(String(format: "%.1f", receipt.elapsedSec)) 秒")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 2)
+        VStack(alignment: .leading, spacing: 8) {
+            // 状态行：✅ 已完成 主文案 + · X.X 秒 次要（elapsedSec > 0.01 时显示）。
+            HStack(spacing: 6) {
+                Text("✅ 已完成")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.black)
+                if receipt.elapsedSec > 0.01 {
+                    Text("· \(String(format: "%.1f", receipt.elapsedSec)) 秒")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
             }
-            // 豆包式人话气泡：直接显示后台回复内容。
-            // v2.3 用户原话"什么？又是给我反馈的'已完成'？已完成什么东西？"——去掉"已完成，动作。"前缀，
-            // 界面只保留实质内容（后台说什么就显示什么）。
+
+            // 内容文本（后台人话回复）。
             Text(receipt.result)
                 .font(.system(size: 14))
                 .foregroundColor(.black)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(VSColor.harnessBubble)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 18, bottomLeadingRadius: 4,
-                                                  bottomTrailingRadius: 18, topTrailingRadius: 18))
+
             // 图片回执（闭环验收场景）：后台截图回执含 "/screenshots/<file>.png" → 直接渲染图片。
-            // 图片 URL = 当前活动服务器 base + 相对路径（截图经 /screenshots/ 静态端点提供）。
             if let shotURL = ScreenshotURL.from(receipt.result, base: SettingsStore.shared.base) {
                 AsyncImage(url: shotURL) { phase in
                     switch phase {
@@ -238,19 +324,29 @@ struct ReceiptCardView: View {
                         ProgressView().frame(width: 80, height: 80)
                     }
                 }
-                .padding(.leading, 4)
             }
-            // 撤销小字（I07 保留；I17 命中区≥44pt，且支持口答"撤销"）
+
+            // 撤销按钮行（次要按钮，命中区 ≥44pt）。
             if undo.show {
                 Button(action: onRollback) {
-                    Text("可撤销")
-                        .font(.system(size: 11))
+                    Text("撤销")
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                         .frame(minHeight: 44)
-                        .padding(.horizontal, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.plain)
             }
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+        )
+        .shadow(color: VSColor.shadowSoft, radius: 4, x: 0, y: 2)
     }
 }
 

@@ -2,7 +2,7 @@
 //  RootView.swift
 //  VoiceSign
 //
-//  根视图：多角色折叠条 / 红色打断系统条 / 对话流（气泡·执行卡·回执卡）/ 决策点区 / 底部输入条 / 设置页。
+//  根视图：顶栏（会话入口 + 连接状态点 + 标题 + …菜单）/ 红色打断系统条 / 对话流（气泡·执行卡·回执卡）/ 决策点区 / 底部输入条 / 设置页 / 会话列表。
 //
 
 import SwiftUI
@@ -13,34 +13,53 @@ struct RootView: View {
     var body: some View {
         VStack(spacing: 0) {
             // T3 豆包式简化：不再显示角色条（Planner/Executor/Verifier 收敛进执行卡内部状态）。
-            // 只保留顶部连接状态胶囊 + 打断系统条 + 对话流 + 决策点 + 输入条。
-
-            // T2 连接状态胶囊：绿=在线 · 黄=重连 · 灰=离线排队（网络状态永远透明）
-            // T3 豆包式：顶部一行 = 连接胶囊（左）+ 纯黑标题（中）+ harness 状态点（预留）+ 设置齿轮（右）
-            HStack(spacing: 8) {
-                ConnectionStatusView()
-                Spacer()
-                Text("VoxSign")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.black)
-                // UI v3：标题右侧 5pt harness 状态点（idle 灰 / busy 蓝呼吸 / decision 橙）——
-                // 刻意压到最小，不破坏豆包式顶栏克制感。
-                HarnessDot(state: model.harnessState)
-                Spacer()
-                // 设置入口（T3 修复：齿轮常驻顶部，不再随角色条隐藏）
+            // 顶栏（极简）：[会话历史小图标] [5pt 状态点] [VoxSign] … [ellipsis Menu]
+            HStack(spacing: 6) {
+                // 左上：会话历史入口（只占 34pt 触控区，不占视觉）
                 Button {
-                    model.showSettings = true
+                    model.showSessions = true
                 } label: {
-                    Image(systemName: "gearshape")
+                    Image(systemName: "bubble.left.and.bubble.right")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.black)
                         .frame(width: 34, height: 34)
                         .contentShape(Rectangle())
                 }
-                .accessibilityIdentifier("vhs.settings")
+                .accessibilityIdentifier("vhs.sessions")
+
+                // 5pt 连接/ harness 状态点（蓝=正常 · 红=离线 · 灰=重连/未知 · 橙=决策）
+                ConnectionDotView(conn: ConnectivityService.shared.state,
+                                  harness: model.harnessState)
+
+                Text("VoxSign")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(.black)
+
+                Spacer()
+
+                // 右上：… 更多菜单（设置 / 新建会话）
+                Menu {
+                    Button {
+                        model.newSession()
+                    } label: {
+                        Label("新建会话", systemImage: "square.and.pencil")
+                    }
+                    Button {
+                        model.showSettings = true
+                    } label: {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.black)
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("vhs.more")
                 .padding(.trailing, 10)
             }
-            .padding(.leading, 12)
+            .padding(.leading, 6)
             .background(.ultraThinMaterial)
 
             // 红色打断系统条（可关闭）
@@ -92,6 +111,9 @@ struct RootView: View {
         .sheet(isPresented: $model.showSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $model.showSessions) {
+            SessionListView()
+        }
     }
 
     @ViewBuilder
@@ -109,12 +131,13 @@ struct RootView: View {
     }
 }
 
-// MARK: - Harness 状态点（UI v3 预留位，豆包式 5pt 极小状态件）
+// MARK: - 顶栏 5pt 连接状态点（豆包式极简）
 
-/// 顶栏标题右侧 5pt 状态点：idle 灰 / busy 蓝呼吸 / decision 橙。
-/// 刻意压到最小、不带文字——能力上线后也不破坏豆包式顶栏的克制感。
-struct HarnessDot: View {
-    let state: HarnessState
+/// 5pt 圆点：颜色由 `TopBarDot.tone(conn:harness:)` 决定（红/蓝/灰/橙）；
+/// busy / decision 时沿用呼吸动画。不带文字、不带胶囊——保持顶栏克制。
+struct ConnectionDotView: View {
+    let conn: ConnectionState
+    let harness: HarnessState
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.6)) { timeline in
@@ -122,17 +145,28 @@ struct HarnessDot: View {
             Circle()
                 .fill(color)
                 .frame(width: 5, height: 5)
-                .scaleEffect(state == .busy ? 1.0 + 0.35 * max(0, sin(t * 5)) : 1.0)
-                .opacity(state == .idle ? 0.55 : 1.0)
+                .scaleEffect(animating ? 1.0 + 0.35 * max(0, sin(t * 5)) : 1.0)
+                .opacity(conn == .unknown ? 0.55 : 1.0)
         }
         .padding(.leading, 2)
+        .accessibilityIdentifier("vhs.status.dot")
+    }
+
+    private var tone: DotTone {
+        TopBarDot.tone(conn: conn, harness: harness)
     }
 
     private var color: Color {
-        switch state {
-        case .idle: return Color.gray
-        case .busy: return VSColor.blue
-        case .decision: return Color.orange
+        switch tone {
+        case .blue:   return VSColor.blue
+        case .red:    return Color.red
+        case .gray:   return Color.gray
+        case .orange: return Color.orange
         }
+    }
+
+    /// 仅在 harness 正在忙碌 / 需要决策时做呼吸动画（静态状态点不抖）。
+    private var animating: Bool {
+        harness == .busy || harness == .decision
     }
 }

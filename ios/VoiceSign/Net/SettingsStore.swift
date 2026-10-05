@@ -128,12 +128,26 @@ final class SettingsStore: ObservableObject {
     }
 
     func removeServer(_ id: String) {
-        guard servers.count > 1 else { return }   // 至少保留一台
         servers.removeAll { $0.id == id }
         if activeServerID == id {
-            activeServerID = servers[0].id
+            activeServerID = servers.first?.id ?? ""
+        }
+        // 允许删到 0 台（不再"至少保留一台"）；删空且处于自建模式时回落云道默认模式，界面自洽。
+        if servers.isEmpty && mode == .selfHosted {
+            setMode(.cloud)
         }
         persist()
+        // 重置探测：清掉旧服务器连接状态，立即对当前 base 重探。
+        ConnectivityService.shared.reset()
+    }
+
+    /// 解除机器码绑定：清除 machineCode（保留服务器条目与地址/token/转发方式），
+    /// 之后该服务器按普通自建服务器使用（可改名/改地址/删除）。
+    func unbindMachine(_ id: String) {
+        guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
+        servers[idx].machineCode = nil
+        persist()
+        ConnectivityService.shared.reset()
     }
 
     /// 更新当前活动服务器的地址/token（设置页编辑）。

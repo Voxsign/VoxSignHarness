@@ -45,6 +45,12 @@ struct Bubble: Identifiable {
     var fromVoice: Bool = false
     /// UI v3：语音消息录音秒数（气泡内显示 "3″"）。
     var voiceSeconds: Int? = nil
+    /// v2.4：随本条消息提交的资料附件。
+    var attachments: [Attachment] = []
+    /// v2.4：本条回复消耗的 token（harness 气泡可显示）。
+    var costTokens: Int? = nil
+    /// v2.4：消息时间戳（会话历史排序/显示用）。
+    var timestamp: Date = Date()
 }
 
 /// 执行卡一行阶段状态。
@@ -95,6 +101,14 @@ final class AppModel: ObservableObject {
     @Published var statusLine: String = ""
     @Published var inputText: String = ""
 
+    // v2.4 多会话（默认隐藏，不占主界面）
+    @Published var showSessions: Bool = false
+    @Published var currentSessionID: String = ""
+    var sessions: [ChatSession] { SessionStore.shared.sessions }
+
+    // v2.4 附件（资料）：输入条待提交的附件
+    @Published var pendingAttachments: [Attachment] = []
+
     /// 诊断行（M7 真机排障）：上屏显示最近一次轮询状态/错误，避免黑盒"正在处理…"。
     @Published var diagLine: String = ""
 
@@ -126,8 +140,12 @@ final class AppModel: ObservableObject {
     private var connSub: AnyCancellable?
 
     init() {
-        // UI v3（豆包式空态）：启动不再预置欢迎气泡——新会话只有一行灰字空态
-        //（"说点什么，或按住下方按钮说话"），彻底对齐豆包新会话形态。
+        // v2.4 多会话：确保至少一个会话，并把当前对话流 rows 还原成该会话的历史消息。
+        // UI v3（豆包式空态）：新会话只有一行灰字空态（"说点什么，或按住下方按钮说话"）。
+        SessionStore.shared.ensureInitialSession()
+        currentSessionID = SessionStore.shared.currentSessionID
+        rows = Self.messagesToRows(SessionStore.shared.loadMessages(for: currentSessionID))
+
         // T2 豆包式交互：网络恢复 → 自动补投离线队列（不丢语音指令）。
         connSub = ConnectivityService.shared.onOnline { [weak self] in
             guard let self = self else { return }
@@ -227,7 +245,8 @@ final class AppModel: ObservableObject {
         let text = inputText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         inputText = ""
-        appendUser(text, fromVoice: false)
+        let atts = pendingAttachments
+        appendUser(text, fromVoice: false, attachments: atts)
 
         if VSLogic.isInterruptPhrase(text),
            let id = currentTaskId, let view = currentView,
@@ -235,7 +254,7 @@ final class AppModel: ObservableObject {
             maybeInterrupt(taskId: id, view: view)
             return
         }
-        submit(text)
+        submit(text, attachments: atts)
     }
 
     // MARK: - 提交 → SSE 流转
@@ -262,7 +281,7 @@ final class AppModel: ObservableObject {
      *     POST /v1/tasks/{id}/answer {answer:ans}
      *     → 清 decision；重新 openSSE(id) 续跑
      */
-    func submit(_ text: String) {
+    func submit(_ text: String, attachments: [Attachment] = []) {
         let reqId = VSLogic.genRequestId()
         // v2.3（用户需求：微信式"已处理 X 秒"）：记录提交时刻，done 时算耗时。
         lastSubmitAt = Date()
@@ -287,7 +306,9 @@ final class AppModel: ObservableObject {
                     }
                     return
                 }
-                let res = try await api.submitTask(text: text, requestId: reqId)
+                let res = try await api.submitTask(text: text, requestId: reqId, attachments: attachments)
+                // v2.4：提交成功后清空待提交附件（断网入队/失败分支不清，附件随在线提交链路）。
+                pendingAttachments = []
                 removeTyping()
                 // 多任务加固：新任务开始前清掉上一轮未决的 decision 与执行卡追踪，
                 // 避免上一轮 SSE/轮询残留把新任务误判成旧状态（首条卡/次条好的时序矛盾）。
@@ -652,8 +673,8 @@ final class AppModel: ObservableObject {
 
     // MARK: - 对话流渲染助手
 
-    private func appendUser(_ text: String, fromVoice: Bool) {
-        var bubble = Bubble(text: text, fromVoice: fromVoice)
+    private func appendUser(_ text: String, fromVoice: Bool, attachments: [Attachment] = []) {
+        var bubble = Bubble(text: text, fromVoice: fromVoice, attachments: attachments)
         #if canImport(Speech)
         if fromVoice, SpeechRecognizer.shared.lastHoldSeconds > 0 {
             bubble.voiceSeconds = SpeechRecognizer.shared.lastHoldSeconds
@@ -758,5 +779,125 @@ final class AppModel: ObservableObject {
         // T3 豆包式：朗读回复内容（v2.3 去"已完成，动作。"前缀，用户原话：已完成什么东西）。
         let summary = receipt.result
         speak(summary)
+    }
+
+    // MARK: - v2.4 附件（资料）
+
+    func addAttachment(_ a: Attachment) {
+        pendingAttachments.append(a)
+    }
+
+    func removeAttachment(_ id: String) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
+    /// 兼容重载：视图层以附件对象形式调用 removeAttachment(_:)。
+    func removeAttachment(_ a: Attachment) {
+        pendingAttachments.removeAll { $0.id == a.id }
+    }
+
+    // MARK: - v2.4 多会话切换
+
+    /// 切到指定会话：先把当前 rows 回写原会话 → switchTo → 加载新会话 rows → 清理中间态。
+    func switchSession(_ id: String) {
+        guard id != currentSessionID else { return }
+        persistCurrentRows()
+        SessionStore.shared.switchTo(id: id)
+        currentSessionID = id
+        loadCurrentRows()
+        resetTransientState()
+    }
+
+    /// 新会话：先保存当前会话 → createSession → 加载空 rows → 清理中间态。
+    func newSession() {
+        persistCurrentRows()
+        let s = SessionStore.shared.createSession(title: "新会话")
+        currentSessionID = s.id
+        loadCurrentRows()
+        resetTransientState()
+    }
+
+    /// 删除会话：先保存当前 rows；删后若删的是当前会话则切到剩余第一个并加载。
+    @discardableResult
+    func deleteSession(_ id: String) -> Bool {
+        persistCurrentRows()
+        let ok = SessionStore.shared.deleteSession(id: id)
+        guard ok else { return false }
+        currentSessionID = SessionStore.shared.currentSessionID
+        loadCurrentRows()
+        resetTransientState()
+        return true
+    }
+
+    // MARK: - v2.4 会话内部辅助
+
+    /// 把当前对话流 rows 回写到当前会话。
+    private func persistCurrentRows() {
+        guard !currentSessionID.isEmpty else { return }
+        SessionStore.shared.saveMessages(Self.rowsToMessages(rows), for: currentSessionID)
+    }
+
+    /// 按当前 currentSessionID 从仓库加载对话流 rows。
+    private func loadCurrentRows() {
+        rows = Self.messagesToRows(SessionStore.shared.loadMessages(for: currentSessionID))
+    }
+
+    /// 切/删/新建会话后清理中间态（决策点/系统条/附件/输入/进行中任务）。
+    private func resetTransientState() {
+        decision = nil
+        systemBar = nil
+        pendingAttachments = []
+        inputText = ""
+        sseTask?.cancel()
+        pollTask?.cancel()
+        sseTask = nil
+        pollTask = nil
+        currentTaskId = nil
+        currentView = nil
+        execCardRowId = nil
+        longTaskTimer?.cancel()
+        scrollTick += 1
+    }
+
+    // MARK: - ChatRow ↔ StoredMessage 转换
+
+    /// rows → 可持久化消息（typing/execCard 不持久化；回执行→harness 文本，undo 不持久化）。
+    static func rowsToMessages(_ rows: [ChatRow]) -> [StoredMessage] {
+        rows.compactMap { row -> StoredMessage? in
+            switch row {
+            case .user(let b):
+                return StoredMessage(id: b.id.uuidString, role: "user", text: b.text,
+                                     fromVoice: b.fromVoice, voiceSeconds: b.voiceSeconds,
+                                     attachments: b.attachments, timestamp: b.timestamp)
+            case .harness(let b):
+                return StoredMessage(id: b.id.uuidString, role: "harness", text: b.text,
+                                     badges: b.badges, attachments: b.attachments,
+                                     costTokens: b.costTokens, timestamp: b.timestamp)
+            case .receipt(let r):
+                return StoredMessage(id: r.id.uuidString, role: "harness", text: r.receipt.result,
+                                     badges: r.badges, elapsedSec: r.receipt.elapsedSec)
+            case .typing, .execCard:
+                return nil
+            }
+        }
+    }
+
+    /// 持久化消息 → rows（user 还原气泡含附件/语音；harness 还原徽章/token/时间）。
+    static func messagesToRows(_ messages: [StoredMessage]) -> [ChatRow] {
+        messages.map { m -> ChatRow in
+            switch m.role {
+            case "user":
+                var b = Bubble(text: m.text, fromVoice: m.fromVoice, attachments: m.attachments)
+                b.voiceSeconds = m.voiceSeconds
+                b.timestamp = m.timestamp
+                return .user(b)
+            default:
+                // harness 消息（含回执结果文本）：还原为普通 harness 气泡。
+                var b = Bubble(text: m.text, badges: m.badges, attachments: m.attachments)
+                b.costTokens = m.costTokens
+                b.timestamp = m.timestamp
+                return .harness(b)
+            }
+        }
     }
 }

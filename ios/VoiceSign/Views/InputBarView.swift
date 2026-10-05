@@ -1,13 +1,15 @@
 //
 //  InputBarView.swift
-//  VoiceSign
+//  VoxSign
 //
-//  豆包式底部输入条（T3，99% 复刻豆包交互；UI v3 对齐设计稿）：
-//  - 默认"按住说话"：中间「按住 说话」胶囊 + 右侧大圆钮同为热区
-//  - 按住 → 立即变红 + 顶部浅色语音状态条（5 态：正在听 / 没听到声音 / 取消 / 校准 / 失败）
-//  - 上滑超过 -80pt → 取消态（可滑回继续录音）；松手 → 自动校准 → 自动发送
-//  - 左侧键盘图标切换打字模式：TextField + 发送
-//  - 录音时 TTS 暂停；提交后输入区立即清空（无残留）
+//  豆包式底部输入条（聊天面视图 T3 改造）：
+//  - 三件套：[＋ 添加资料] | [输入框] | [🎤 语音 / ⬆ 发送]
+//  - 输入框常显（打字即用，无键盘/语音切换）；去掉云电脑/项目/技能等默认项入口
+//  - 右侧按钮双态：空文本=麦克风（按住说话热区）；有文本=蓝色发送箭头
+//  - 按住说话 → 输入条整体变为红色「松开 发送」条（白字红底，豆包同款）；
+//    上滑 -80pt →「松开 取消」（可滑回继续录音）；松手发送
+//  - 5 态语音状态条（正在听 / 没听到声音 / 取消 / 校准 / 失败）保留在输入区上方
+//  - AI 消息操作行不朗读/喇叭按钮（收进 MessageViews 的「…」菜单）
 //
 
 import SwiftUI
@@ -18,7 +20,9 @@ struct InputBarView: View {
     @EnvironmentObject var speech: SpeechRecognizer
     #endif
 
-    @State private var keyboardMode: Bool = false
+    // 附件面板（＋ 添加资料 → Sheet）
+    @State private var showAttachPanel: Bool = false
+
     // v2.1 I14：3s 无识别提示（不显示逐字期间的补偿反馈）
     @State private var transcriptSnap: String = ""
     @State private var silentSeconds: Int = 0
@@ -26,77 +30,16 @@ struct InputBarView: View {
     // UI v3：上滑取消态（-80pt 阈值，可滑回继续录音——豆包同款手感）
     @State private var cancelling: Bool = false
 
+    private var isTyping: Bool { !model.inputText.isEmpty }
+
     var body: some View {
         VStack(spacing: 0) {
             #if canImport(Speech)
             // UI v3 豆包式浅色语音状态条（5 态，按住/松手期间显示在输入区上方）。
-            if !keyboardMode {
-                if speech.calibrating {
-                    voiceStatusBar(kind: .calibrating, primary: "正在校准…", secondary: "识别完成后自动发送")
-                } else if speech.emptyRecording {
-                    voiceStatusBar(kind: .silent, primary: "没录到声音，请重说", secondary: "录音是空的，这次没有发送")
-                } else if speech.asrFailed {
-                    voiceStatusBar(kind: .failed, primary: "识别失败，请再按一次", secondary: "没有听清，这次没有发送")
-                } else if speech.isRecording {
-                    if cancelling {
-                        voiceStatusBar(kind: .cancelling, primary: "松开手指，取消发送", secondary: "手指移回下方可继续录音")
-                    } else if noSpeechDetected {
-                        voiceStatusBar(kind: .silent, primary: "没听到声音，请说话", secondary: "再靠近一点，或松开手指取消")
-                    } else {
-                        voiceStatusBar(kind: .listening, primary: "正在听…", secondary: "松开 发送 · 上滑取消")
-                    }
-                } else if speech.unavailable {
-                    Text("语音不可用：请在 系统设置→VoiceSign 中允许 麦克风 与 语音识别")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.gray.opacity(0.12))
-                        .cornerRadius(10)
-                        .padding(.horizontal, 12).padding(.top, 6)
-                }
-            }
+            voiceStatusSection
             #endif
 
-            HStack(spacing: 12) {
-                // 键盘/语音切换（豆包式：左侧小图标切换两种输入）
-                Button {
-                    #if canImport(Speech)
-                    if speech.isRecording { speech.cancelHold() }
-                    cancelling = false
-                    #endif
-                    withAnimation { keyboardMode.toggle() }
-                } label: {
-                    Image(systemName: keyboardMode ? "mic.fill" : "keyboard")
-                        .font(.system(size: 17))
-                        .foregroundColor(.secondary)
-                        .frame(width: 30, height: 30)
-                }
-                .accessibilityIdentifier("vhs.mode")
-
-                if keyboardMode {
-                    // 打字模式（豆包式：输入框 + 蓝色发送）
-                    TextField("说点什么，或打字…", text: $model.inputText)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("vhs.input")
-                        .disabled(model.decision != nil)
-                    Button {
-                        model.send()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(model.decision != nil || model.inputText.isEmpty ? .gray : VSColor.blue)
-                    }
-                    .accessibilityIdentifier("vhs.send")
-                    .disabled(model.decision != nil || model.inputText.isEmpty)
-                } else {
-                    // UI v3：中间「按住 说话」胶囊（也是按住说话热区，扩大可用面积，豆包同款）
-                    holdToTalkCapsule
-                    // 按住说话大圆钮（豆包式主交互）
-                    holdToTalkButton
-                }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+            inputRow
         }
         .background(.ultraThinMaterial)
         // UI v3：输入条顶部 0.5pt 极淡描边（豆包式）。
@@ -105,9 +48,145 @@ struct InputBarView: View {
                 .fill(Color.black.opacity(0.08))
                 .frame(height: 0.5)
         }
+        .sheet(isPresented: $showAttachPanel) {
+            AttachmentPanelView()
+                .environmentObject(model)
+        }
     }
 
-    // MARK: - UI v3 豆包式浅色语音状态条（5 态）
+    // MARK: - 输入行（三件套 / 录音态红色条）
+
+    private var inputRow: some View {
+        HStack(spacing: 10) {
+            // 录音中：整行被红色「松开 发送」条覆盖（手势宿主仍为下方按钮，保证拖拽连续）。
+            if speechRecording {
+                redHoldBar
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
+            // 录音态下三件套淡出但保留在层级中（右侧按钮=手势宿主，按住拖拽不中断）。
+            HStack(spacing: 10) {
+                addAttachButton
+                textField
+                rightButton
+            }
+            .opacity(speechRecording ? 0.0 : 1.0)
+            .allowsHitTesting(!speechRecording)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .animation(.easeOut(duration: 0.12), value: speechRecording)
+    }
+
+    /// ＋ 添加资料（紧凑豆包式），弹出附件面板。
+    private var addAttachButton: some View {
+        Button {
+            showAttachPanel = true
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 18))
+                Text("添加资料")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(.secondary)
+        }
+        .accessibilityIdentifier("vhs.attach")
+    }
+
+    /// 输入框：常显，占位符「发消息或语音指令…」。
+    private var textField: some View {
+        TextField("发消息或语音指令…", text: $model.inputText, axis: .vertical)
+            .lineLimit(...4)
+            .font(.system(size: 15))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .accessibilityIdentifier("vhs.input")
+    }
+
+    /// 右侧双态按钮：空文本=麦克风（按住说话热区）；有文本=蓝色发送箭头。
+    @ViewBuilder
+    private var rightButton: some View {
+        if isTyping {
+            Button {
+                model.send()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(model.decision != nil ? .gray : VSColor.blue)
+            }
+            .accessibilityIdentifier("vhs.send")
+            .disabled(model.decision != nil)
+        } else {
+            // 麦克风：按住说话热区（手势宿主，录音期间保持在层级中以维持拖拽连续）。
+            Image(systemName: "mic.fill")
+                .font(.system(size: 20))
+                .foregroundColor(.secondary)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+                .accessibilityIdentifier("vhs.mic")
+                .gesture(holdGesture)
+        }
+    }
+
+    /// 豆包同款红色「松开 发送」条：白字红底，整行覆盖；上滑取消时变灰「松开 取消」。
+    private var redHoldBar: some View {
+        HStack {
+            Spacer()
+            Text(cancelling ? "松开 取消" : "松开 发送")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white)
+            Spacer()
+        }
+        .frame(height: 40)
+        .frame(maxWidth: .infinity)
+        .background(cancelling
+                    ? Color(red: 0.55, green: 0.56, blue: 0.58)
+                    : Color(red: 0.96, green: 0.26, blue: 0.26))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: (cancelling ? Color.gray : Color.red).opacity(0.3), radius: 6, x: 0, y: 2)
+        .animation(.easeOut(duration: 0.12), value: cancelling)
+    }
+
+    // MARK: - 语音状态（5 态）段
+
+    @ViewBuilder
+    private var voiceStatusSection: some View {
+        if speech.calibrating {
+            voiceStatusBar(kind: .calibrating, primary: "正在校准…", secondary: "识别完成后自动发送")
+        } else if speech.emptyRecording {
+            voiceStatusBar(kind: .silent, primary: "没录到声音，请重说", secondary: "录音是空的，这次没有发送")
+        } else if speech.asrFailed {
+            voiceStatusBar(kind: .failed, primary: "识别失败，请再按一次", secondary: "没有听清，这次没有发送")
+        } else if speech.isRecording {
+            if cancelling {
+                voiceStatusBar(kind: .cancelling, primary: "松开手指，取消发送", secondary: "手指移回下方可继续录音")
+            } else if noSpeechDetected {
+                voiceStatusBar(kind: .silent, primary: "没听到声音，请说话", secondary: "再靠近一点，或松开手指取消")
+            } else {
+                voiceStatusBar(kind: .listening, primary: "正在听…", secondary: "松开 发送 · 上滑取消")
+            }
+        } else if speech.unavailable {
+            Text("语音不可用：请在 系统设置→VoxSign 中允许 麦克风 与 语音识别")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.12))
+                .cornerRadius(10)
+                .padding(.horizontal, 12).padding(.top, 6)
+        }
+    }
+
+    private var speechRecording: Bool {
+        #if canImport(Speech)
+        return speech.isRecording
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - 豆包式浅色语音状态条（5 态）
 
     private enum VoiceStatusKind {
         case listening, silent, cancelling, calibrating, failed
@@ -167,16 +246,12 @@ struct InputBarView: View {
     private func statusColors(_ kind: VoiceStatusKind) -> (Color, Color) {
         switch kind {
         case .listening:
-            // 红底深红字（豆包录音态）
             return (Color(red: 1.0, green: 0.925, blue: 0.922), Color(red: 0.776, green: 0.184, blue: 0.149))
         case .silent, .failed:
-            // 橙底深橙字
             return (Color(red: 1.0, green: 0.957, blue: 0.898), Color(red: 0.702, green: 0.416, blue: 0.0))
         case .cancelling:
-            // 灰底深灰字
             return (Color(red: 0.929, green: 0.929, blue: 0.941), Color(red: 0.333, green: 0.333, blue: 0.361))
         case .calibrating:
-            // 蓝底深蓝字
             return (Color(red: 0.918, green: 0.941, blue: 1.0), Color(red: 0.137, green: 0.333, blue: 0.78))
         }
     }
@@ -191,69 +266,10 @@ struct InputBarView: View {
         }
     }
 
-    // MARK: - 按住说话（豆包同款手势：按下录音 / 上滑取消可滑回 / 松手发送）
+    // MARK: - 按住说话手势（按下录音 / 上滑取消可滑回 / 松手发送）
 
     #if canImport(Speech)
-    /// 中间「按住 说话」胶囊：38pt 高浅灰底，按压变红；与右侧大圆钮共用同一手势逻辑。
-    private var holdToTalkCapsule: some View {
-        Capsule()
-            .fill(capsuleFill)
-            .frame(height: 38)
-            .overlay(
-                Text(speech.isRecording ? (cancelling ? "松开 取消" : "松开 发送") : "按住 说话")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(capsuleTextColor)
-            )
-            .contentShape(Capsule())
-            .gesture(holdGesture)
-            .animation(.easeOut(duration: 0.12), value: speech.isRecording)
-            .animation(.easeOut(duration: 0.12), value: cancelling)
-            .accessibilityIdentifier("vhs.hold.capsule")
-    }
-
-    private var capsuleFill: Color {
-        if speech.isRecording {
-            return cancelling ? Color(red: 0.776, green: 0.184, blue: 0.149).opacity(0.9) : Color.red
-        }
-        return Color.black.opacity(0.06)
-    }
-
-    private var capsuleTextColor: Color {
-        if speech.isRecording {
-            return .white
-        }
-        return Color(red: 0.557, green: 0.557, blue: 0.576)
-    }
-
-    /// 右侧大圆钮：46pt 蓝紫渐变，按下变红呼吸（豆包式主交互）。
-    private var holdToTalkButton: some View {
-        ZStack {
-            // 录音时的呼吸光圈（豆包式：按下有明确视觉反馈）
-            if speech.isRecording {
-                Circle()
-                    .fill(Color.red.opacity(0.15))
-                    .frame(width: 76, height: 76)
-                    .transition(.scale)
-            }
-            Image(systemName: speech.isRecording ? "waveform" : "mic.fill")
-                .font(.system(size: 26, weight: .medium))
-                .foregroundColor(.white)
-                .frame(width: 64, height: 64)
-                .background(speech.isRecording
-                            ? AnyShapeStyle(LinearGradient(colors: [Color(red: 1.0, green: 0.24, blue: 0.24), Color(red: 0.85, green: 0.15, blue: 0.30)], startPoint: .top, endPoint: .bottom))
-                            : AnyShapeStyle(VSColor.brandGradient))
-                .clipShape(Circle())
-                .shadow(color: speech.isRecording ? Color.red.opacity(0.35) : VSColor.purple.opacity(0.3), radius: 8, x: 0, y: 3)
-                .contentShape(Circle())
-                .scaleEffect(speech.isRecording ? 1.05 : 1.0)
-                .animation(.easeOut(duration: 0.12), value: speech.isRecording)
-                .accessibilityIdentifier("vhs.hold")
-                .gesture(holdGesture)
-        }
-        .frame(height: 64)
-    }
-
-    /// UI v3：胶囊与大圆钮共用手势——按下录音；dy < -80pt 进取消态（可滑回继续）；松手按态发送。
+    /// 麦克风按钮手势——按下录音；dy < -80pt 进取消态（可滑回继续）；松手按态发送。
     private var holdGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
@@ -275,6 +291,10 @@ struct InputBarView: View {
                 }
                 cancelling = false
             }
+    }
+    #else
+    private var holdGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
     }
     #endif
 }

@@ -63,7 +63,8 @@ struct UndoInfo: Equatable {
 }
 
 /// 轻标签徽章（kind: state/intent/domain/risk；tone: blue/green/red/amber/gray）。
-struct Badge: Equatable {
+/// v2.4：增加 Codable 遵循（会话历史持久化需要），字段与成员级初始化器保持不变。
+struct Badge: Equatable, Codable {
     let kind: String
     let label: String
     let tone: String
@@ -102,4 +103,81 @@ struct RoleInfo: Equatable {
     let id: String
     let label: String
     var active: Bool
+}
+
+// MARK: - v2.4 附件（资料）
+
+/// 附件种类：文本粘贴 / URL / 图片（相册）/ 文件（Files App）。
+enum AttachmentKind: String, Codable {
+    case text
+    case url
+    case image
+    case file
+}
+
+/// 一条随消息提交给 harness 上下文的资料附件。
+struct Attachment: Identifiable, Codable, Equatable {
+    var id: String            // UUID().uuidString
+    var kind: AttachmentKind
+    var title: String
+    var text: String?         // text 类=正文；url 类=URL 字符串
+    var fileName: String?     // file 类=文件名
+    var localPath: String?    // image/file 类=本地路径（预览用）
+}
+
+// MARK: - v2.4 多会话持久化模型
+
+/// 会话中一条可持久化消息（用户气泡 / harness 气泡 / 回执行）。
+/// typing/execCard 中间态不持久化。
+struct StoredMessage: Identifiable, Codable, Equatable {
+    var id: String
+    var role: String          // "user" | "harness"
+    var text: String
+    var badges: [Badge] = []
+    var fromVoice: Bool = false
+    var voiceSeconds: Int? = nil
+    var attachments: [Attachment] = []
+    var costTokens: Int? = nil
+    var timestamp: Date = Date()
+    var elapsedSec: Double? = nil   // 回执"已处理 X 秒"
+}
+
+/// 一个本地会话（多会话：默认隐藏，大部分时候是单对话流）。
+struct ChatSession: Identifiable, Codable, Equatable {
+    var id: String
+    var title: String
+    var createdAt: Date
+    var updatedAt: Date
+    var serverBase: String? = nil
+    var messages: [StoredMessage] = []
+}
+
+// MARK: - v2.4 顶栏状态点（纯函数，视图与测试共用）
+
+/// 状态点色调。
+enum DotTone {
+    case blue    // 在线·任务执行中/空闲
+    case red     // 离线（无条件）
+    case gray    // 重连中 / 未知
+    case orange  // 在线·等待用户确认/选择
+}
+
+/// 顶栏状态点裁决：连接态 × harness 态 → 色调。
+enum TopBarDot {
+    /// conn: ConnectivityService.ConnectionState；harness: AppModel.HarnessState。
+    /// 规则：offline→.red（无条件）；online: decision→.orange、busy→.blue、idle→.blue；
+    /// reconnecting/unknown→.gray。
+    static func tone(conn: ConnectionState, harness: HarnessState) -> DotTone {
+        switch conn {
+        case .offline:
+            return .red
+        case .online:
+            switch harness {
+            case .decision: return .orange
+            case .busy, .idle: return .blue
+            }
+        case .reconnecting, .unknown:
+            return .gray
+        }
+    }
 }
