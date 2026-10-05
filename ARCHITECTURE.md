@@ -130,8 +130,11 @@ pipeline `input` 的确定性分类器产出的 `contract.Intent` 必须满足�
   - `llmSummarize` 诊断日志带 rid；
   - 旧入口 `/v1/run`(handleRun)、`/v1/voice`(handleVoice) 从 `X-Request-Id` 头注入 `o.RequestID`（无则空→自生成）。
 - **后续待办（只记录建议，不碰 ios/ 代码）**：
-  - iOS 端发起请求时应**主动发送 `X-Request-Id`**（由 App 生成/透传），使入口→轨迹→日志
-    端到端同 id；当前服务端已就绪（读头透传），缺的是客户端发头。
+  - **iOS 发版清单（合并为一次发版，C4 阶段落地，不单独发）**：
+    - ① 出站请求加 `X-Request-Id` 头（App 生成/透传）；
+    - ② 请求体加 `session_id` / `speaker_id` 字段。
+    以上三项**合并进同一次 iOS 发版**（与 C4 的 APIClient.swift 改动同批），不单独发版；
+    当前服务端已就绪（读头/读体透传），缺的是客户端发头/发字段。
   - iOS 应同时透传**真实 `X-Session-Id`**（按住说话的会话 id），服务端已桥接 `callASRProcess`
     （缺省仍 "voice"，不破坏既有 schema）。
 
