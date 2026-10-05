@@ -64,11 +64,12 @@ var validAction = map[string]bool{
 //   - stdout：v2 无此字段，省略（如需可并入 params）；
 //   - model：模型类失败（fast/jev 调用）填被调模型名，工具类失败留空。
 type Trace struct {
-	Tool   string         `json:"tool"`
-	Params map[string]any `json:"params,omitempty"`
-	Error  *TraceError    `json:"error,omitempty"`
-	Model  string         `json:"model,omitempty"`
-	Raw    string         `json:"-"` // 原始错误文本，仅本地指纹用，不上送模型
+	Tool      string         `json:"tool"`
+	Params    map[string]any `json:"params,omitempty"`
+	Error     *TraceError    `json:"error,omitempty"`
+	Model     string         `json:"model,omitempty"`
+	Raw       string         `json:"-"` // 原始错误文本，仅本地指纹用，不上送模型
+	RequestID string         `json:"-"` // P0-4a：本地关联 request_id（日志/轨迹贯通用，不上送模型）
 }
 
 // TraceError 是 v2 轨迹里的错误结构。
