@@ -30,6 +30,12 @@ CGO_ENABLED=0 ~/go-sdk/go/bin/go test -tags archstub ./e2e -run TestArch -v
 **`eval/cases/RATIFICATION-REQUEST-2026-10-05.md`**（待 Peter/指定签署人审阅签署）。
 历史提案：`eval/cases/RATIFICATION-PROPOSAL-2026-10-03.md`。
 
+## 后续待办入口
+
+- **iOS 发版清单（合并一次发版，C4 阶段，不单独发）**：APIClient 出站加 `X-Request-Id` 头 +
+  请求体加 `session_id`/`speaker_id` 字段，三项同批发版。服务端已就绪，详见 `ARCHITECTURE.md` §5 后续待办。
+
+
 ## 常用命令
 
 | 命令 | 作用 |
