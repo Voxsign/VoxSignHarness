@@ -35,7 +35,7 @@ const (
 )
 
 const (
-	cbThreshold = 5                    // 连续失败阈值
+	cbThreshold = 8                    // 连续失败阈值（平台偶发抖动时不误伤，8 次才熔断）
 	cbCooldown  = 30 * time.Second     // 打开后冷却窗口
 	cbHalfMax   = 1                     // 半开期只放行 1 个探活请求
 )

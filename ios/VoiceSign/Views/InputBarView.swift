@@ -33,6 +33,8 @@ struct InputBarView: View {
             if !keyboardMode {
                 if speech.calibrating {
                     voiceStatusBar(kind: .calibrating, primary: "正在校准…", secondary: "识别完成后自动发送")
+                } else if speech.emptyRecording {
+                    voiceStatusBar(kind: .silent, primary: "没录到声音，请重说", secondary: "录音是空的，这次没有发送")
                 } else if speech.asrFailed {
                     voiceStatusBar(kind: .failed, primary: "识别失败，请再按一次", secondary: "没有听清，这次没有发送")
                 } else if speech.isRecording {

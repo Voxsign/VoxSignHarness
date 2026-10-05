@@ -25,6 +25,8 @@ final class SpeechRecognizer: ObservableObject {
     @Published var calibrating: Bool = false
     /// 校准失败态：显示「识别失败，请再按一次」（不回退本地识别）。
     @Published var asrFailed: Bool = false
+    /// 松手后 WAV 为空（没录到声音）→ 提示重说（与 asrFailed 分开，给用户明确原因）。
+    @Published var emptyRecording: Bool = false
 
     /// UI v3：按住录音累计秒数（语音气泡时长显示，如 "3″"）。startHold 清零，stopHold/cancelHold 定格。
     private(set) var lastHoldSeconds: Int = 0
@@ -87,6 +89,7 @@ final class SpeechRecognizer: ObservableObject {
         holdTimer = nil
         calibrating = false
         asrFailed = false
+        emptyRecording = false
         audioFile = nil
         audioURL = nil
         engine.inputNode.removeTap(onBus: 0)
@@ -110,15 +113,25 @@ final class SpeechRecognizer: ObservableObject {
     private func startCalibration() {
         calibrating = true
         asrFailed = false
+        emptyRecording = false
         guard let url = audioURL, FileManager.default.fileExists(atPath: url.path),
               let audioData = try? Data(contentsOf: url), !audioData.isEmpty else {
-            // 无有效录音（没说话/录音失败）→ 提示重说。
+            // 无有效录音（没说话/录音失败）→ 明确提示"没录到声音"，与识别失败区分。
             calibrating = false
-            asrFailed = true
+            emptyRecording = true
             return
         }
-        print("[ASR] WAV bytes=\(audioData.count) at \(url.lastPathComponent)")
-        DiagLogger.shared.log("ASR", "WAV bytes=\(audioData.count)")
+        // WAV 有文件但 data chunk 为空（如转换失败）→ 同样按"没录到声音"处理。
+        let wavDataLen = wavDataChunkLength(audioData)
+        if wavDataLen == 0 {
+            print("[ASR] WAV data chunk empty (bytes=\(audioData.count))")
+            DiagLogger.shared.log("ASR", "WAV data empty bytes=\(audioData.count)")
+            calibrating = false
+            emptyRecording = true
+            return
+        }
+        print("[ASR] WAV bytes=\(audioData.count) dataLen=\(wavDataLen) at \(url.lastPathComponent)")
+        DiagLogger.shared.log("ASR", "WAV bytes=\(audioData.count) dataLen=\(wavDataLen)")
         uploadAudio(audioData) { [weak self] text, ok in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -234,26 +247,54 @@ final class SpeechRecognizer: ObservableObject {
             engine.inputNode.removeTap(onBus: 0)
 
             let node = engine.inputNode
-            let format = node.outputFormat(forBus: 0)
-            print("[ASR] installTap format=\(format.sampleRate)Hz ch=\(format.channelCount)")
-            // v2.4 ASR 校准：录音写 WAV（平台千问 + 个性化热词校准）。
+            let hardwareFormat = node.outputFormat(forBus: 0)
+            print("[ASR] installTap format=\(hardwareFormat.sampleRate)Hz ch=\(hardwareFormat.channelCount)")
+            // v2.5 录音修复：AVAudioFile 统一写 16k Int16 单声道。
+            // 1) 旧版强制 channels=1 写文件，但 tap buffer 用硬件格式（可能 2ch），
+            //    af.write 因声道不匹配静默失败 → WAV data chunk 为空 → 平台 422 asr_audio_empty。
+            // 2) 16k Int16 是平台 ASR 标准输入格式（已实测 200）：文件体积比 48k Float32 小 12 倍，
+            //    上传更快、平台预处理更省，端到端延迟更稳。
+            // tap 按硬件格式收 buffer，用 AVAudioConverter 转成目标格式再写文件。
             let fileURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("vhs-voice-\(Int(Date().timeIntervalSince1970 * 1000)).wav")
-            let fileFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                           sampleRate: format.sampleRate, channels: 1, interleaved: false) ?? format
-            audioFile = try? AVAudioFile(forWriting: fileURL,
-                                         settings: fileFormat.settings,
-                                         commonFormat: .pcmFormatFloat32, interleaved: false)
+            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                             sampleRate: 16000, channels: 1, interleaved: false)!
+            do {
+                audioFile = try AVAudioFile(forWriting: fileURL,
+                                            settings: targetFormat.settings,
+                                            commonFormat: .pcmFormatInt16, interleaved: false)
+            } catch {
+                print("[ASR] AVAudioFile create FAIL: \(error.localizedDescription)")
+                DiagLogger.shared.log("ASR", "AVAudioFile FAIL: \(error.localizedDescription)")
+                audioFile = nil
+            }
             audioURL = fileURL
-            node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat)
+            node.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { [weak self] buffer, _ in
                 guard let self = self else { return }
                 guard let af = self.audioFile else { return }
-                do {
-                    try af.write(from: buffer)
-                } catch {
-                    // 格式不匹配/写入失败会导致 WAV data chunk 为空（平台 422 asr_audio_empty）。
-                    print("[ASR] tap write FAIL: \(error.localizedDescription)")
-                    DiagLogger.shared.log("ASR", "tap write FAIL: \(error.localizedDescription)")
+                guard let cv = converter else { return }
+                let ratio = targetFormat.sampleRate / hardwareFormat.sampleRate
+                let cap = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+                guard let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: cap) else { return }
+                var convErr: NSError?
+                let status = cv.convert(to: outBuf, error: &convErr) { _, outStatus in
+                    outStatus.pointee = .haveData
+                    return buffer
+                }
+                if convErr != nil {
+                    print("[ASR] convert FAIL: \(convErr!.localizedDescription)")
+                    return
+                }
+                if status == .haveData || status == .inputRanDry {
+                    if outBuf.frameLength > 0 {
+                        do {
+                            try af.write(from: outBuf)
+                        } catch {
+                            print("[ASR] tap write FAIL: \(error.localizedDescription)")
+                            DiagLogger.shared.log("ASR", "tap write FAIL: \(error.localizedDescription)")
+                        }
+                    }
                 }
             }
             engine.prepare()
@@ -291,6 +332,21 @@ final class SpeechRecognizer: ObservableObject {
         case .undetermined: return "undetermined"
         @unknown default: return "unknown"
         }
+    }
+
+    /// 解析 WAV 头里 data chunk 的字节长度（4 字节小端）。解析失败返回 -1。
+    private func wavDataChunkLength(_ data: Data) -> Int {
+        guard data.count >= 12, data[0] == 0x52, data[1] == 0x49, data[2] == 0x46, data[3] == 0x46 else {
+            return -1
+        }
+        var offset = 12
+        while offset + 8 <= data.count {
+            let id = String(data: data.subdata(in: offset..<offset + 4), encoding: .ascii) ?? ""
+            let len = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 4, as: UInt32.self) }
+            if id == "data" { return Int(len) }
+            offset += 8 + Int(len)
+        }
+        return -1
     }
 
     /// P1 一轮一清：发送后清空识别缓冲，下一轮从空白开始。
