@@ -39,6 +39,13 @@ var Kinds = map[string]bool{
 	KindReceipts:     true,
 	KindFinal:        true,
 	KindError:        true,
+	// P0-1：13 阶段中间判定事件登记（此前 pipeline 写入点引用这些 kind 但未登记 ⇒ 被 Validate 静默丢弃）。
+	KindRefer:       true,
+	KindSpaceCheck:  true,
+	KindRisk:        true,
+	KindConfirm:     true,
+	KindVerify:      true,
+	KindAttribution: true,
 }
 
 // KnownKind 报告 kind 是否已登记。
