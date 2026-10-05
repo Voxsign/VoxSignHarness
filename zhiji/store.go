@@ -188,9 +188,11 @@ func (s *Store) Baseline() string {
 // ---- 记忆条目 ----
 
 // WriteMemory 写一条记忆（行为层教训/机制层策略；写前验证见 reflect.go）。
+// v1.2：append 到 ltm 后自动把 (id,text) 喂进向量索引（Vec==nil 时零额外开销）。
+// 锁纪律：持 s.mu 写锁期间只做内存追加；(id,text) 在锁内快照后立即放锁，再调 Vec.Upsert，
+// 避免持写锁做外部调用（Vec.Upsert 自带锁且不回调 Store，无锁序环）。
 func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if item.ID == "" {
 		item.ID = fmt.Sprintf("mem-%d", s.nextID)
 		s.nextID++
@@ -206,13 +208,25 @@ func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 		item.Domain = DomainSession
 	}
 	s.ltm = append(s.ltm, item)
+	idxID, idxText := item.ID, item.Text // 锁内快照
+	s.mu.Unlock()
+	s.indexUpsert(idxID, idxText)
 	return item, nil
 }
 
+// indexUpsert 把刚写入的记忆条目同步进可选向量索引（v1.2 写路径自动接通）。
+// 调用约定：进入前必须已释放 s.mu；idxID/idxText 为锁内快照。Vec==nil 时一行返回、零开销。
+func (s *Store) indexUpsert(idxID, idxText string) {
+	if s.Vec == nil {
+		return
+	}
+	s.Vec.Upsert(idxID, idxText)
+}
+
 // TouchSTM 向 STM 热区写事件（每轮消息后异步抽取调用；滚动窗口）。
+// v1.2：append + 滚动裁剪 + 重要性累计全部完成后，(id,text) 锁内快照、放锁再喂向量索引。
 func (s *Store) TouchSTM(item MemoryItem, window int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if item.ID == "" {
 		item.ID = fmt.Sprintf("mem-%d", s.nextID)
 		s.nextID++
@@ -229,6 +243,9 @@ func (s *Store) TouchSTM(item MemoryItem, window int) {
 	}
 	// 重要性累计（触发深反思阈值判断）
 	s.importance += item.Importance
+	idxID, idxText := item.ID, item.Text // 锁内快照
+	s.mu.Unlock()
+	s.indexUpsert(idxID, idxText)
 }
 
 // MarkInput 输入门控信号（架构 2026-10-05 决策：无新输入跳过反思）。
