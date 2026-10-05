@@ -331,6 +331,112 @@ func TestRouterRuleTableAndShadow(t *testing.T) {
 	}
 }
 
+// ---- compress.go ----
+
+func TestCompressKeepsDecisionEssentials(t *testing.T) {
+	s := newTestStore(t)
+	c := NewCompressor(s)
+	full := "[goal] 主目标：沙特市场落地\n[rule] 资质未确认不承诺日期\n[pending] 客户名单待确认\n" +
+		"tool_result: {\"status\":\"ok\"}\n中间过程文本 A\n中间过程文本 B\n[goal] 主目标：沙特市场落地（重复无害）"
+	out, err := c.Compress(context.Background(), CompressInput{Full: full})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Goals) == 0 || len(out.Rules) == 0 || len(out.Pending) == 0 {
+		t.Fatalf("决策要件应原样保留，got %+v", out)
+	}
+	if out.DroppedToolResult != 1 {
+		t.Fatalf("tool-result 应被清除，got dropped=%d", out.DroppedToolResult)
+	}
+	if out.Summary == "" {
+		t.Fatal("应有主体摘要")
+	}
+}
+
+// ---- cloud.go ----
+
+type fakeVault struct {
+	written []VaultEntry
+	read    []VaultEntry
+}
+
+func (f *fakeVault) Write(_ context.Context, e VaultEntry) error {
+	f.written = append(f.written, e)
+	return nil
+}
+func (f *fakeVault) Read(_ context.Context) ([]VaultEntry, error) { return f.read, nil }
+
+func TestVaultClientWriteRejectsEmpty(t *testing.T) {
+	c := NewVaultClient("")
+	if err := c.Write(context.Background(), VaultEntry{Text: ""}); err == nil {
+		t.Fatal("空文本应拒绝")
+	}
+	if err := c.Write(context.Background(), VaultEntry{Text: "x", Type: "rule"}); err == nil {
+		t.Fatal("空 key + 网络应失败（非 2xx 或连接错误）")
+	}
+}
+
+// ---- integration.go ----
+
+func TestZhijiIntegrationFlow(t *testing.T) {
+	vault := &fakeVault{}
+	z, err := NewZhiji(tmpDir(t), vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = z.Close() }()
+	_ = z.Registry.Register(ModelProfile{ID: "cheap"})
+	_ = z.Registry.Register(ModelProfile{ID: "mid"})
+	_ = z.Registry.Register(ModelProfile{ID: "premium"})
+
+	// 输入 → 决策注入 → 任务结束 → 路由
+	z.OnInput("用户询问沙特资质流程", 5)
+	base, err := z.BeforeDecision(context.Background(), "沙特 资质")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Goals == "" {
+		t.Fatal("决策注入应含目标基线")
+	}
+	if err := z.OnTaskEnd(context.Background(), CallLog{TaskProfile: "t-saudi", Model: "mid", Outcome: "success", Cost: 1.0}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := z.OnDecide(TaskProfile{Complexity: 0.1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ModelID != "cheap" {
+		t.Fatalf("低复杂度应路由 cheap，got %+v", d)
+	}
+
+	// 反思阈值 → 深反思 → 外化
+	for i := 0; i < 5; i++ {
+		z.OnInput("沙特客户偏好本地语言回复", 7)
+	}
+	_, _, _ = z.Reflector.Tick(context.Background(), time.Now().Add(30*time.Second))
+	n, err := z.SyncVault(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("外化应写出至少 1 条")
+	}
+	if len(vault.written) == 0 {
+		t.Fatal("vault 假实现应收到写入")
+	}
+
+	// 压缩
+	out, err := z.Compress(context.Background(), CompressInput{
+		Full: "[goal] 主目标：沙特市场落地\n[rule] 不猜测用户未表达的意图\n中间过程文本",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Goals) == 0 {
+		t.Fatal("压缩应保留目标")
+	}
+}
+
 // ---- 持久化 ----
 
 func TestStorePersistRoundTrip(t *testing.T) {
