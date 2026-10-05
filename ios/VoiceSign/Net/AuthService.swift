@@ -25,10 +25,14 @@ enum GoogleOAuth {
     static var clientID: String {
         "914563065668-urvk0ku7fofste2h1glhqlh5r3acl3u9.apps.googleusercontent.com"
     }
-    /// iOS 类型 client 的授权回调：反向域名 scheme（Console 自动注册，含 .apps.googleusercontent.com 后缀）。
-    static var redirectURI: String { "com.googleusercontent.apps.\(clientID)://" }
+    /// iOS 类型 client 的授权回调：反向域名 scheme。
+    /// 注意：Console 注册的是**不含** `.apps.googleusercontent.com` 后缀的部分（已验证：带后缀 → redirect_uri_mismatch）。
+    private static var schemePrefix: String {
+        "com.googleusercontent.apps.\(clientID.replacingOccurrences(of: ".apps.googleusercontent.com", with: ""))"
+    }
+    static var redirectURI: String { "\(schemePrefix)://" }
     /// ASWebAuthenticationSession 的 callbackURLScheme（去掉 ://）。
-    static var callbackScheme: String { "com.googleusercontent.apps.\(clientID)" }
+    static var callbackScheme: String { schemePrefix }
     static let scope = "openid email profile"
     static let authorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth"
     static let tokenEndpoint = "https://oauth2.googleapis.com/token"
