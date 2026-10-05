@@ -69,13 +69,17 @@ type ServerCfg struct {
 // CloudCfg 云端模式参数（VHS_MODE=cloud 时启用）。
 // 设计见 docs/云端谷歌登录与发布架构-20261004.md：谷歌账户即租户、配额三档、会话 JWT。
 type CloudCfg struct {
-	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID（Web application）
+	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID（Web application，code 交换用）
 	GoogleClientSecret string `json:"google_client_secret,omitempty"` // env VHS_GOOGLE_CLIENT_SECRET
-	RedirectURI        string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI，默认 https://voicesign.ai/auth/callback
-	JWTSecret          string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET；缺省首次启动自动生成并持久化 <log_dir>/cloud/jwt-secret
-	FreeDailyTasks     int    `json:"free_daily_tasks,omitempty"`     // 免费档每日任务额度，默认 30
-	TrialDays          int    `json:"trial_days,omitempty"`           // 新租户体验会员天数，默认 15（期间按 Prime 计）
-	TokenTTLHours      int    `json:"token_ttl_hours,omitempty"`      // 会话 JWT 有效期，默认 10
+	// env VHS_GOOGLE_CLIENT_IDS：逗号分隔的受信 client ID 列表（验签 aud 用）。
+	// iOS 类型 client 签发的 id_token aud 是 iOS client ID，必须列入才可通过验签。
+	// 为空时退回 GoogleClientID（单个）。
+	GoogleClientIDs string `json:"google_client_ids,omitempty"`
+	RedirectURI     string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI，默认 https://voicesign.ai/auth/callback
+	JWTSecret       string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET；缺省首次启动自动生成并持久化 <log_dir>/cloud/jwt-secret
+	FreeDailyTasks  int    `json:"free_daily_tasks,omitempty"`     // 免费档每日任务额度，默认 30
+	TrialDays       int    `json:"trial_days,omitempty"`           // 新租户体验会员天数，默认 15（期间按 Prime 计）
+	TokenTTLHours   int    `json:"token_ttl_hours,omitempty"`      // 会话 JWT 有效期，默认 10
 }
 
 // Global 全局参数。
@@ -306,6 +310,7 @@ func Load(configPath string) (Config, error) {
 	}
 	envString(&cfg.Cloud.GoogleClientID, "VHS_GOOGLE_CLIENT_ID")
 	envString(&cfg.Cloud.GoogleClientSecret, "VHS_GOOGLE_CLIENT_SECRET")
+	envString(&cfg.Cloud.GoogleClientIDs, "VHS_GOOGLE_CLIENT_IDS")
 	envString(&cfg.Cloud.RedirectURI, "VHS_GOOGLE_REDIRECT_URI")
 	envString(&cfg.Cloud.JWTSecret, "VHS_JWT_SECRET")
 	envInt(&cfg.Cloud.FreeDailyTasks, "VHS_FREE_DAILY_TASKS")

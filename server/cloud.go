@@ -184,9 +184,23 @@ func fetchJWKS() (*jwksDoc, error) {
 	return &doc, nil
 }
 
+// acceptsAud 判断 id_token 的 aud 是否为受信 client：优先 VHS_GOOGLE_CLIENT_IDS（逗号分隔，
+// 支持 iOS 类型 client 与 Web client 并存），未配置时退回单个 VHS_GOOGLE_CLIENT_ID。
+func (c *cloudAuth) acceptsAud(aud string) bool {
+	ids := c.cfg.Cloud.GoogleClientIDs
+	if ids == "" {
+		return aud == c.cfg.Cloud.GoogleClientID
+	}
+	for _, id := range strings.Split(ids, ",") {
+		if aud == strings.TrimSpace(id) {
+			return true
+		}
+	}
+	return false
+}
+
 // verifyGoogleIDToken 校验 Google id_token：RS256 验签 + iss/aud/exp。
-func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) {
-	parts := strings.Split(idToken, ".")
+func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) {	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("id_token 段数错误")
 	}
@@ -229,7 +243,7 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 	if tok.Iss != "accounts.google.com" && tok.Iss != "https://accounts.google.com" {
 		return nil, fmt.Errorf("iss 非法: %s", tok.Iss)
 	}
-	if tok.Aud != c.cfg.Cloud.GoogleClientID {
+	if !c.acceptsAud(tok.Aud) {
 		return nil, fmt.Errorf("aud 非法（非本应用签发的 token）")
 	}
 	if tok.Exp < now {
