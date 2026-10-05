@@ -33,6 +33,7 @@ type DeviceRecord struct {
 	LastSeen     time.Time `json:"last_seen"`
 	State        string    `json:"state,omitempty"`  // 架构 v1 §5：idle|busy|decision|standby
 	Pending      int       `json:"pending,omitempty"` // 活动任务数（decision/busy 时）
+	Tenant       string    `json:"tenant,omitempty"`  // 归属租户（多租户隔离；本地默认 "default"）
 	RegisteredAt time.Time `json:"registered_at"`
 }
 
@@ -99,6 +100,22 @@ func newDeviceToken() string {
 	return hex.EncodeToString(b)
 }
 
+// findByToken 按访问 token 反查设备（设备凭证中间件用）。未命中返回 nil。
+// O(n)：设备数量为手级数（个位数），无需索引。持锁由调用方决定（这里自行加锁，只读安全）。
+func (r *deviceRegistry) findByToken(tok string) *DeviceRecord {
+	if tok == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, d := range r.devices {
+		if d != nil && d.Token == tok {
+			return d
+		}
+	}
+	return nil
+}
+
 // deviceToken 设备接口鉴权：Bearer/X-Token == 服务端 VHS_TOKEN。
 // （云道模式下 register/heartbeat 由 Harness 端持有 VHS_TOKEN 调用，不要求会话 JWT。）
 //
@@ -139,6 +156,7 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		MachineCode string `json:"machine_code"`
 		Name        string `json:"name"`
 		Base        string `json:"base"`
+		Token       string `json:"token"` // 可选：显式指定访问 token（云道/Mac 两侧写同一 token）；缺省自动签发
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
@@ -149,16 +167,29 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "machine_code 不能为空"})
 		return
 	}
+	in.Token = strings.TrimSpace(in.Token)
 	s.devices.mu.Lock()
 	rec, ok := s.devices.devices[in.MachineCode]
 	if !ok {
-		rec = &DeviceRecord{MachineCode: in.MachineCode, Token: newDeviceToken(), RegisteredAt: time.Now()}
+		rec = &DeviceRecord{MachineCode: in.MachineCode, RegisteredAt: time.Now()}
 		s.devices.devices[in.MachineCode] = rec
+	}
+	// 显式 token 优先覆盖；首次注册且未显式给才自动签发。
+	if in.Token != "" {
+		rec.Token = in.Token
+	} else if rec.Token == "" {
+		rec.Token = newDeviceToken()
 	}
 	rec.Name = in.Name
 	rec.Base = in.Base
 	rec.Online = true
 	rec.LastSeen = time.Now()
+	// 租户归属：云端经 JWT 注册时按上下文写入；否则默认 "default"（本地/单租户 E2E）。
+	if t := ctxTenant(r.Context()); t != "" {
+		rec.Tenant = t
+	} else if rec.Tenant == "" {
+		rec.Tenant = "default"
+	}
 	s.devices.save()
 	s.devices.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
