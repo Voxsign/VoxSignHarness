@@ -482,19 +482,27 @@ struct SettingsView: View {
         }
     }
 
+    /// 云道转发地址：https://voxsign.ai/relay/<机器码>（云端按机器码路由到该机反向连接；
+    /// 端口只按服务分不按机器分，转发请求全部复用 443）。
+    private func relayBase(code: String) -> String {
+        let cloud = settings.cloudBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(cloud)/relay/\(code)"
+    }
+
     /// 保存机器码方式：检测（直连 or 转发通道）通过才保存。
     private func saveMachine(_ info: MachineInfo) {
         mcBusy = true
         mcError = ""
         Task {
-            let ok = await APIClient.shared.healthCheck(base: mcRelay ? settings.cloudBase : info.base)
+            let saveBase = mcRelay ? relayBase(code: mcCode) : info.base
+            let ok = await APIClient.shared.healthCheck(base: saveBase)
             mcBusy = false
             guard ok else {
                 mcError = "无法连接（确认机器在线\(mcRelay ? "、云道转发可用" : "")）"
                 return
             }
             settings.addServer(name: info.name,
-                               base: info.base,
+                               base: saveBase,
                                token: info.token,
                                machineCode: mcCode,
                                viaRelay: mcRelay)
