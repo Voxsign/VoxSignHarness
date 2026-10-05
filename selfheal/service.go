@@ -101,13 +101,13 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Tr
 	})
 	if err != nil {
 		// 404/5xx/超时/网络：薄降级。错误信息只含状态码+截断响应体（传输层已保证不含 key）。
-		log.Printf("[selfheal] diag Chat 失败，跳过诊断（不阻断主链）: %v", err)
+		log.Printf("[selfheal] rid=%s diag Chat 失败，跳过诊断（不阻断主链）: %v", primary.RequestID, err)
 		return nil
 	}
 
 	d, err := parseDiagnosis(resp.Content)
 	if err != nil {
-		log.Printf("[selfheal] diag JSON 解析失败，跳过诊断: %v", err)
+		log.Printf("[selfheal] rid=%s diag JSON 解析失败，跳过诊断: %v", primary.RequestID, err)
 		return nil
 	}
 	d.Source = "model"
