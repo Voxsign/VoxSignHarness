@@ -53,6 +53,8 @@ func main() {
 		cmdSummary()
 	case "compare":
 		cmdCompare()
+	case "machine-code":
+		cmdMachineCode()
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -72,6 +74,7 @@ func usage() {
   vhs task           跑 data/20-tasks.jsonl 的 20 条样例并统计通过率
   vhs summary        打印当日每日摘要（轨迹聚合）
   vhs compare        单工对比方法说明（#49，降级为报告）
+  vhs machine-code   打印本机机器码（装机生成，用于云道机器码绑定）
   vhs version        打印版本、Go 版本与平台`)
 }
 
@@ -170,6 +173,7 @@ func cmdServe() {
 		// serve 模式下人工确认走手机 /v1/confirm，此处直接拒绝（不阻塞）。
 		return false, nil
 	})
+	startDeviceRegistration(cfg) // VHS_DEVICE_SERVER 非空时自动注册 + 心跳
 	if err := server.New(cfg, opts).Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "server 退出:", err)
 		os.Exit(1)

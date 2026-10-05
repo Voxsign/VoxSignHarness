@@ -174,6 +174,8 @@ type Server struct {
 
 	// cloud 云端模式（VHS_MODE=cloud）：谷歌登录/租户/配额；nil=本地模式。
 	cloud *cloudAuth
+	// devices 设备注册表（云道机器码机制）；云端模式创建，本地模式 nil。
+	devices *deviceRegistry
 
 	mu    sync.Mutex
 	tasks map[string]*taskState
@@ -185,6 +187,7 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
+		s.devices = newDeviceRegistry(cfg.Global.LogDir)
 	}
 	s.restore()
 	return s
@@ -212,6 +215,10 @@ func (s *Server) Handler() http.Handler {
 	// 云端模式（VHS_MODE=cloud）：谷歌登录 + 租户/配额查询。
 	mux.HandleFunc("/v1/auth/google", s.public(s.handleAuthGoogle))
 	mux.HandleFunc("/v1/me", s.auth(s.handleMe))
+	// 云道设备注册表（机器码机制）：register/heartbeat 需 VHS_TOKEN；lookup 免鉴权（机器码即凭证）。
+	mux.HandleFunc("/v1/devices/lookup", s.public(s.handleDevicesLookup))
+	mux.HandleFunc("/v1/devices/register", s.deviceToken(s.handleDevicesRegister))
+	mux.HandleFunc("/v1/devices/heartbeat", s.deviceToken(s.handleDevicesHeartbeat))
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
