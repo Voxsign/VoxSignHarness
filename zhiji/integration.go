@@ -117,11 +117,26 @@ func (z *Zhiji) BeforeDecision(ctx context.Context, query string) (*Baseline, er
 }
 
 // OnTaskEnd 任务结束：全量轨迹日志 + 反馈信号（主循环产物落盘后调用）。
+// v1.3：LogTrajectory 落盘后，自动从本任务文本挑 2–3 个低显著关键细节预埋 detail-survival 探针
+// （A4；供压缩后测召回率）。探针失败不影响轨迹落盘；Store 未配置时跳过。
 func (z *Zhiji) OnTaskEnd(ctx context.Context, log CallLog) error {
 	if log.TaskProfile == "" {
 		return errors.New("zhiji: OnTaskEnd 需要 task_profile")
 	}
-	return z.Contract.LogTrajectory(ctx, log)
+	if err := z.Contract.LogTrajectory(ctx, log); err != nil {
+		return err
+	}
+	// A4 探针自动预埋（best-effort）：slot 用 task_profile，细节从本任务文本抽取。
+	if z.Store != nil {
+		slot := log.TaskProfile
+		if slot == "" {
+			slot = "auto"
+		}
+		for _, detail := range extractLowSalienceDetails(taskEndCorpus(log), 3) {
+			z.Store.Probe(slot, detail)
+		}
+	}
+	return nil
 }
 
 // OnDecide 元层路由钩子（影子模式：只记录推荐，不改变线上；Phase 2 切线上）。
