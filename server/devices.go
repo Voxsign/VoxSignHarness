@@ -31,7 +31,32 @@ type DeviceRecord struct {
 	Token        string    `json:"token"` // 云道为该机器下发的访问凭证
 	Online       bool      `json:"online"`
 	LastSeen     time.Time `json:"last_seen"`
+	State        string    `json:"state,omitempty"`  // 架构 v1 §5：idle|busy|decision|standby
+	Pending      int       `json:"pending,omitempty"` // 活动任务数（decision/busy 时）
 	RegisteredAt time.Time `json:"registered_at"`
+}
+
+// heartbeatPeriod 状态 → 心跳周期（架构 v1 §5.1 频率映射）。
+func heartbeatPeriod(state string) time.Duration {
+	switch state {
+	case "decision":
+		return 5 * time.Second
+	case "busy":
+		return 15 * time.Second
+	case "standby":
+		return 5 * time.Minute
+	default: // idle
+		return 2 * time.Minute
+	}
+}
+
+// deviceOnline 窗口化在线判定（架构 v1 §5.3）：now − last_seen < 3×当前周期
+// 才算在线——慢心跳（idle/standby）不会误判离线。
+func deviceOnline(rec *DeviceRecord) bool {
+	if rec == nil || rec.LastSeen.IsZero() {
+		return false
+	}
+	return time.Since(rec.LastSeen) < 3*heartbeatPeriod(rec.State)
 }
 
 // deviceRegistry 设备注册表（<log_dir>/devices/devices.json 持久化）。
@@ -123,10 +148,13 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "machine_code": rec.MachineCode, "token": rec.Token})
 }
 
-// POST /v1/devices/heartbeat {machine_code} → 更新在线状态；未注册机器码 → 404 提示先注册。
+// POST /v1/devices/heartbeat {machine_code, state, pending} → 更新在线状态 + 状态；
+// 未注册机器码 → 404 提示先注册。online 判定窗口化（架构 v1 §5.3）。
 func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MachineCode string `json:"machine_code"`
+		State       string `json:"state"`
+		Pending     int    `json:"pending"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
@@ -141,11 +169,15 @@ func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 	rec.Online = true
 	rec.LastSeen = time.Now()
+	if in.State != "" {
+		rec.State = in.State
+	}
+	rec.Pending = in.Pending
 	s.devices.save()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "online": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "online": true, "state": rec.State})
 }
 
-// POST /v1/devices/lookup {machine_code} → {name, base, online, token}。
+// POST /v1/devices/lookup {machine_code} → {name, base, online, state, pending, token}。
 // 免鉴权：机器码即凭证。未注册/离线仍返回（iOS 探测直连后决定同网直连或云道转发）。
 func (s *Server) handleDevicesLookup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -163,5 +195,7 @@ func (s *Server) handleDevicesLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name": rec.Name, "base": rec.Base, "online": rec.Online, "token": rec.Token})
+		"name": rec.Name, "base": rec.Base,
+		"online": deviceOnline(rec), "state": rec.State, "pending": rec.Pending,
+		"token": rec.Token})
 }
