@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -739,5 +740,57 @@ func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
 	}
 	if !strings.Contains(userContent, `"model":"fast"`) {
 		t.Fatalf("诊断请求 failure 应带 model=fast, got %q", userContent)
+	}
+}
+
+// TestRequestIDPassthroughAndTrajectory（P0-4b）：
+//
+//	① Options.RequestID 空 → Run 自生成（= 现状行为，向后兼容）；
+//	② 指定 RequestID → out.RequestID 等于传入值，且写盘的每条轨迹 Entry 的 request_id 都是它。
+func TestRequestIDPassthroughAndTrajectory(t *testing.T) {
+	// ① 空 → 自生成
+	o1 := testOptions(t, nil)
+	out1, err := Run(context.Background(), o1, "记一下 rid 自生成")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out1.RequestID, "req-") {
+		t.Fatalf("空 RequestID 应自生成 req-*，实际 %q", out1.RequestID)
+	}
+
+	// ② 指定 → 透传 + 轨迹 Entry 一致
+	o2 := testOptions(t, nil)
+	o2.RequestID = "client-req-xyz"
+	out2, err := Run(context.Background(), o2, "记一下 rid 指定")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2.RequestID != "client-req-xyz" {
+		t.Fatalf("指定 RequestID 应透传为 out.RequestID，实际 %q", out2.RequestID)
+	}
+
+	entries, _ := filepath.Glob(filepath.Join(o2.Cfg.Global.LogDir, "trajectory-*.jsonl"))
+	if len(entries) == 0 {
+		t.Fatal("未找到轨迹文件")
+	}
+	data, err := os.ReadFile(entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bad []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var e map[string]any
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("轨迹行不可解析: %v: %s", err, line)
+		}
+		if rid, _ := e["request_id"].(string); rid != "client-req-xyz" {
+			bad = append(bad, fmt.Sprintf("kind=%v rid=%q", e["kind"], rid))
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("轨迹里 %d 条 Entry 的 request_id != client-req-xyz: %v", len(bad), bad)
 	}
 }
