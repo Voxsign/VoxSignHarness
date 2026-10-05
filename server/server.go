@@ -50,6 +50,8 @@ const (
 	stNeedConfirm = "need_confirm"    // 强确认（红条）
 	stDone        = "done"
 	stCanceled    = "canceled"
+	stRevoked     = "revoked" // 架构 v1 §6.2：撤回已完成任务（已标记，副作用清理走既有 rollback）
+	stPending     = "pending" // 预留：排队未开始（未来调度器用）
 	stInterrupted = "interrupted" // M4-1 ③：重启恢复的未完成任务，不自动续跑
 )
 
@@ -128,6 +130,9 @@ type taskState struct {
 	Reversible bool   `json:"reversible,omitempty"`
 	BackupPath string `json:"backup_path,omitempty"`
 	TargetPath string `json:"target_path,omitempty"`
+
+	// 架构 v1 §6 插队：priority 0-255（默认 50），同优先级按提交时间。
+	Priority int `json:"priority,omitempty"`
 
 	startedAt time.Time
 
@@ -214,6 +219,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/task/", s.auth(s.handleTaskGet))
 	mux.HandleFunc("/v1/confirm", s.auth(s.handleConfirm))
 	mux.HandleFunc("/v1/cancel", s.auth(s.handleCancel))
+	// 架构 v1 §6 控制面：打断 / 撤回（不排队、立即生效；本地模式本机豁免、云端需会话 JWT）。
+	mux.HandleFunc("/v1/interrupt", s.auth(s.handleInterrupt))
+	mux.HandleFunc("/v1/withdraw", s.auth(s.handleWithdraw))
 	// health 免鉴权（云端负载均衡/健康检查必须可匿名探测）。
 	mux.HandleFunc("/v1/health", s.public(s.handleHealth))
 	// ASR 校准（iOS 录音 → 平台 model-center 千问）：契约见 docs/ASR接口契约-20261004.md。
@@ -773,6 +781,139 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// ---------- 控制面：打断 / 撤回（架构 v1 §6） ----------
+
+type interruptReq struct {
+	TaskID string `json:"task_id,omitempty"` // 缺省=全局急停所有活动任务
+	Force  bool   `json:"force,omitempty"`   // 预留：未来连 pending 排队任务一起清
+}
+
+// isActiveTask 判断任务是否"活动中"（可被打断）：执行中 / 等待确认 / 等待回答。
+func isActiveTask(status string) bool {
+	switch status {
+	case stRunning, stWaiting, stNeedConfirm, stNeedAsk:
+		return true
+	}
+	return false
+}
+
+// handleInterrupt 全局急停/指定打断：直接 cancel 活动任务的 context（取消传播链
+// 掐断远端），标记 canceled 并发事件。控制面命令不被任务执行阻塞。
+func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		return
+	}
+	var req interruptReq
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []string
+	for id, ts := range s.tasks {
+		if req.TaskID != "" && id != req.TaskID {
+			continue
+		}
+		if !isActiveTask(ts.Status) {
+			continue
+		}
+		if ts.cancel != nil {
+			ts.cancel()
+		}
+		s.markStatus(ts, stCanceled)
+		s.emitEvent(ts, "interrupted", map[string]any{
+			"by":       "interrupt",
+			"priority": ts.Priority,
+		})
+		s.persist(ts)
+		ids = append(ids, id)
+	}
+	if req.TaskID != "" && len(ids) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id 或无活动任务可打断"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "interrupted": ids})
+}
+
+type withdrawReq struct {
+	TaskID string `json:"task_id"`
+	Scope  string `json:"scope,omitempty"` // pending|running|done；缺省 running
+}
+
+// handleWithdraw 撤回（说错了）：按任务阶段分层处理（架构 v1 §6.2）。
+//   - pending：未开始/挂起中（need_ask/need_confirm/waiting）→ 取消，零副作用；
+//   - running：执行中 → 终止 + 丢弃输出（cancel 传播掐断远端）；
+//   - done：已完成 → 标记 revoked（副作用清理走既有 /v1/tasks/{id}/rollback）。
+func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		return
+	}
+	var req withdrawReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TaskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {task_id, scope}"})
+		return
+	}
+	if req.Scope == "" {
+		req.Scope = "running"
+	}
+	switch req.Scope {
+	case "pending", "running", "done":
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope 应为 pending|running|done"})
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts, ok := s.tasks[req.TaskID]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		return
+	}
+
+	switch req.Scope {
+	case "pending":
+		// 挂起类（未执行完/未开始）：直接取消。
+		if !isActiveTask(ts.Status) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务不在可撤回状态", "status": ts.Status})
+			return
+		}
+		if ts.cancel != nil {
+			ts.cancel()
+		}
+		s.markStatus(ts, stCanceled)
+		s.emitEvent(ts, "withdrawn", map[string]any{"scope": "pending"})
+		s.persist(ts)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "pending"})
+	case "running":
+		if !isActiveTask(ts.Status) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务不在执行中", "status": ts.Status})
+			return
+		}
+		if ts.cancel != nil {
+			ts.cancel()
+		}
+		s.markStatus(ts, stCanceled)
+		s.emitEvent(ts, "withdrawn", map[string]any{"scope": "running", "dropped": true})
+		s.persist(ts)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "running"})
+	case "done":
+		if ts.Status != stDone {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务未完成，无法按 done 撤回", "status": ts.Status})
+			return
+		}
+		s.markStatus(ts, stRevoked)
+		s.emitEvent(ts, "withdrawn", map[string]any{
+			"scope":      "done",
+			"reversible": ts.Reversible,
+			"note":       "副作用清理请走 /v1/tasks/{id}/rollback",
+		})
+		s.persist(ts)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "done", "revoked": true})
+	}
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -790,11 +931,26 @@ type tasksPostReq struct {
 	RequestID string `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Mode      string `json:"mode,omitempty"`       // voice|text；voice 确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 	Document  string `json:"document,omitempty"`   // 需求文档全文（实现类任务；execImplement 证据门/LLM 生成共用）
+	Priority  int    `json:"priority,omitempty"`   // 架构 v1 §6：0-255 插队优先级，默认 50
+}
+
+// clampPriority 把 priority 收拢到 [0,255]；非法/缺省 → 50（架构 v1 §6）。
+func clampPriority(p int) int {
+	if p == 0 {
+		return 50
+	}
+	if p < 0 {
+		return 0
+	}
+	if p > 255 {
+		return 255
+	}
+	return p
 }
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string) *taskState {
+func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, priority int) *taskState {
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
@@ -803,6 +959,7 @@ func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string) *t
 		Document:  document,
 		Status:    stRunning,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
+		Priority:  clampPriority(priority),
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
 	}
@@ -1078,7 +1235,7 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document)
+	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document, req.Priority)
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
