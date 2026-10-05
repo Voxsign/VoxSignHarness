@@ -37,6 +37,7 @@ import (
 	"voicesign-harness/contract"
 	"voicesign-harness/pipeline"
 	"voicesign-harness/tools"
+	"voicesign-harness/trajectory"
 )
 
 // version 与 main.go 同步（M3 INTERACT-v1 端点集）。
@@ -250,8 +251,17 @@ func logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		log.Printf("req %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+		log.Printf("req rid=%s %s %s %d %s", requestIDFromReq(r), r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// requestIDFromReq 取客户端透传的 request_id（X-Request-Id 头）；缺省返回 "-"。
+// P0-4a/b：入口日志 ↔ 轨迹/selfheal/ASR 日志用同一 rid 贯串通链。
+func requestIDFromReq(r *http.Request) string {
+	if id := strings.TrimSpace(r.Header.Get("X-Request-Id")); id != "" {
+		return id
+	}
+	return "-"
 }
 
 // statusRecorder 记录响应状态码，供访问日志输出。
@@ -333,7 +343,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": code, "error": msg})
 		return
 	}
-	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）resp=%s", asrURL, status, truncate(string(data), 300))
+	log.Printf("ASR: rid=%s 平台 %s → HTTP %d（text_len 见响应）resp=%s", requestIDFromReq(r), asrURL, status, truncate(string(data), 300))
 	if status != http.StatusOK {
 		var perr map[string]any
 		_ = json.Unmarshal(data, &perr)
@@ -363,7 +373,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
 		return
 	}
-	log.Printf("ASR: 校准成功 model=%s duration_ms=%d text_len=%d", pr.Model, pr.DurMs, len(pr.Text))
+	log.Printf("ASR: rid=%s 校准成功 model=%s duration_ms=%d text_len=%d", requestIDFromReq(r), pr.Model, pr.DurMs, len(pr.Text))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model,
 		"hotwords_used": len(hotwords)})
@@ -425,7 +435,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Start() error {
 	mux := s.Handler()
 	addr := s.cfg.ServerBind()
-	fmt.Printf("vhs server listening on %s (token_set=%v)\n", addr, s.cfg.Server.Token != "")
+	fmt.Printf("vhs server listening on %s (token_set=%v) 实际ASR端点=%s\n", addr, s.cfg.Server.Token != "", asrEndpoint())
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -575,7 +585,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go func() {
+	safeGo("handleRun:"+ts.ID, func() {
 		out, err := pipeline.Run(ctx, &o, req.Text)
 		s.mu.Lock()
 		ts.Outcome = &out
@@ -588,7 +598,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			ts.Status = stDone
 		}
 		s.mu.Unlock()
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID})
 }
@@ -598,12 +608,15 @@ type voiceReq struct {
 	Text string `json:"text"`
 }
 
-// asrEndpoint 返回线 B 地址（可配；默认本机 8123）。
+// asrEndpoint 返回线 B 地址（可配 VHS_ASR_ENDPOINT；默认本机 8787）。
+// P0-3：以实际承担 ASR 个性化服务（线B）的 vhs-asr 监听端口为准。
+// 查证结论：vhs-asr（cmd/vhs-asr）默认监听 127.0.0.1:8787 并暴露 /v1/process；
+// vhs-voice（:8950）是语音适配层（转发主 harness :8941），非线B。旧默认 8123 为配置漂移。
 func asrEndpoint() string {
 	if v := os.Getenv("VHS_ASR_ENDPOINT"); v != "" {
 		return v
 	}
-	return "http://127.0.0.1:8123"
+	return "http://127.0.0.1:8787"
 }
 
 // handleVoice：**线 A 接语音的入口**。
@@ -624,7 +637,9 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}（ASR 识别文本）"})
 		return
 	}
-	intent, err := s.callASRProcess(r.Context(), req.Text)
+	// P0-4b：真实 ASR 会话 id 桥接——客户端经 X-Session-Id 透传时用之，缺省仍 "voice"（不破坏既有 schema）。
+	sid := r.Header.Get("X-Session-Id")
+	intent, err := s.callASRProcess(r.Context(), req.Text, sid)
 	if err != nil {
 		// ② **不静默降级**：明确 503 + degraded，且**不创建任何任务**
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -669,7 +684,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 			return false, errors.New("任务被取消")
 		}
 	}
-	go func() {
+	safeGo("voice:"+ts.ID, func() {
 		out, err := pipeline.Run(ctx, &o, req.Text)
 		s.mu.Lock()
 		ts.Outcome = &out
@@ -682,13 +697,17 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 			ts.Status = stDone
 		}
 		s.mu.Unlock()
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 	writeJSON(w, http.StatusAccepted, map[string]any{"task_id": ts.ID, "intent": intent})
 }
 
 // callASRProcess 调线 B 的 POST /v1/process（**只走 HTTP**）。
-func (s *Server) callASRProcess(ctx context.Context, text string) (map[string]any, error) {
-	body, _ := json.Marshal(map[string]string{"text": text, "session_id": "voice"})
+// sessionID 为空时缺省 "voice"（P0-4b：可桥接真实会话 id）。
+func (s *Server) callASRProcess(ctx context.Context, text, sessionID string) (map[string]any, error) {
+	if sessionID == "" {
+		sessionID = "voice"
+	}
+	body, _ := json.Marshal(map[string]string{"text": text, "session_id": sessionID})
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, strings.TrimRight(asrEndpoint(), "/")+"/v1/process", bytes.NewReader(body))
@@ -1026,6 +1045,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	ctx, cancel := context.WithTimeout(ctx, taskMaxDeadline)
 	o := *s.tmpl
 	o.Document = document
+	o.RequestID = ts.RequestID // P0-4b：入口 request_id 贯通到 pipeline 轨迹（空则 pipeline 自生成）
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
 		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
@@ -1054,7 +1074,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	if spaceHint != "" {
 		fullText = "在 " + spaceHint + " " + text
 	}
-	go func() {
+	safeGo("pipeline:"+ts.ID, func() {
 		defer cancel() // 任务结束（含超时/取消）时释放 deadline 定时器
 		out, err := pipeline.Run(ctx, &o, fullText)
 		s.mu.Lock()
@@ -1124,7 +1144,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			})
 			s.persist(ts)
 		}
-	}()
+	}, func(r any) { s.onTaskPanic(ts, &o, r) })
 }
 
 // maxAskRounds 是同一任务允许的最大澄清轮次（缺口 G8 修复）。
@@ -1663,6 +1683,32 @@ func (s *Server) markStatus(ts *taskState, status string) {
 		"role": ts.Role, "phase": status, "step": stepName(status),
 	})
 	s.persist(ts)
+}
+
+// onTaskPanic 是后台任务 goroutine 被 safeGo recover 后的统一收尾（P0-2）：
+//  1. 把任务标记 canceled（panic 视为异常终止，绝不留 stRunning 假活）；
+//  2. 把 panic 写为轨迹 error kind（best-effort，供事后重放/归因）。
+//
+// 此时调用方 goroutine 的 `defer mu.Unlock()` 已在 unwind 阶段先行执行完毕（body defer 内层先跑，
+// safeGo 的 recover defer 外层后跑），故这里可安全重新加锁。
+func (s *Server) onTaskPanic(ts *taskState, o *pipeline.Options, r any) {
+	if ts != nil {
+		s.mu.Lock()
+		ts.Err = fmt.Sprintf("panic: %v", r)
+		s.markStatus(ts, stCanceled)
+		s.mu.Unlock()
+	}
+	rid := ""
+	if ts != nil {
+		rid = ts.ID
+	}
+	if o != nil && o.Trace != nil {
+		_ = o.Trace.Write(trajectory.Entry{
+			RequestID: rid,
+			Kind:      trajectory.KindError,
+			Content:   fmt.Sprintf("后台任务 goroutine panic: %v", r),
+		})
+	}
 }
 
 // ---------- rollback 辅助（可逆性/备份抽取） ----------
