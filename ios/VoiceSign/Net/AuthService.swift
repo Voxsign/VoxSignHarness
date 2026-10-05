@@ -74,12 +74,15 @@ final class AuthService: NSObject {
 
     private var session: ASWebAuthenticationSession?
 
-    /// 根据当前服务器地址选择回调：本地模拟（127.0.0.1/localhost）走 http://127.0.0.1，其余走正式域名。
+    /// 根据当前服务器地址选择回调：
+    /// - 正式域名（https://voxsign.ai 前缀）→ 正式回调 https://voxsign.ai/auth/callback；
+    /// - 其余（局域网 IP http://192.168.x.x / 本地模拟）→ 本地回调 http://127.0.0.1，
+    ///   与云端 harness 的 VHS_GOOGLE_REDIRECT_URI=http://127.0.0.1 匹配。
     func redirectURI(for base: String) -> String {
-        if base.contains("127.0.0.1") || base.contains("localhost") {
-            return GoogleOAuth.localRedirectURI
+        if base.hasPrefix("https://voxsign.ai") || base.hasPrefix("https://voicesign.ai") {
+            return GoogleOAuth.productionRedirectURI
         }
-        return GoogleOAuth.productionRedirectURI
+        return GoogleOAuth.localRedirectURI
     }
 
     /// 发起 Google 授权，返回 authorization code（已带 PKCE verifier 供后续换码）。
