@@ -42,6 +42,24 @@ enum VSColor {
     static let confirmRed = Color(red: 0.97, green: 0.90, blue: 0.90)
 }
 
+// MARK: - 品牌常量（V4 §0）
+
+/// V4 豆包式 UI 共享设计令牌：发件人标注。
+/// 定义权归 MessageViews 执行者；RootView 顶栏只引用 `VSBrand.agentLabel`，不得重复定义。
+enum VSBrand {
+    static let agentLabel = "VoxSign·metasystem"
+}
+
+/// V4 §3c：用户语音气泡时长文案纯函数。
+/// secs >= 60 → "共用时X分X秒"；否则 → "共用时X秒"。
+func voiceDurationCaption(_ secs: Int) -> String {
+    if secs >= 60 {
+        return "共用时\(secs / 60)分\(secs % 60)秒"
+    } else {
+        return "共用时\(secs)秒"
+    }
+}
+
 // MARK: - 徽章
 
 struct BadgeView: View {
@@ -70,6 +88,13 @@ struct BadgeView: View {
 
 struct UserBubbleView: View {
     let bubble: Bubble
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     var body: some View {
         HStack {
             Spacer()
@@ -81,6 +106,8 @@ struct UserBubbleView: View {
                             .opacity(0.9)
                     }
                     Text(bubble.text)
+                        // V4 §3d：消息气泡文本统一 16pt（豆包消息字号）。
+                        .font(.system(size: 16))
                         .foregroundColor(.white)
                         .padding(.horizontal, 12).padding(.vertical, 8)
                     // UI v3：语音消息时长（豆包同款 "3″" 小字）。
@@ -104,8 +131,26 @@ struct UserBubbleView: View {
                         }
                     }
                 }
+
+                // V4 §3c：气泡下方右对齐元信息——HH:mm；语音消息追加 "· 共用时X分X秒"。
+                metadataRow
             }
         }
+    }
+
+    /// V4 §3c：用户气泡下方元信息小字（11pt secondary，右对齐）。
+    private var metadataRow: some View {
+        HStack(spacing: 4) {
+            Spacer()
+            Text(Self.timeFormatter.string(from: bubble.timestamp))
+            if bubble.fromVoice, let secs = bubble.voiceSeconds, secs > 0 {
+                Text("· \(voiceDurationCaption(secs))")
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundColor(.secondary)
+        .padding(.trailing, 4)
+        .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -152,7 +197,15 @@ struct HarnessBubbleView: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
+                // V4 §3b：AI 气泡发件人标注（文本上方，11pt secondary）。
+                Text(VSBrand.agentLabel)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 6)
+                    .padding(.bottom, 2)
                 Text(bubble.text)
+                    // V4 §3d：消息气泡文本统一 16pt（豆包消息字号）。
+                    .font(.system(size: 16))
                     .foregroundColor(.black)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(VSColor.harnessBubble)
@@ -204,24 +257,32 @@ struct HarnessBubbleView: View {
 
 /// 声波动画（语音输入指示）。波形高度 = 实时录音振幅(meterLevel) + 轻微相位动画，
 /// 豆包式"按住有反应"：说话越响波形越高。
+/// 默认 3 根小条（顶部状态条用）；录音态满底波形传 barCount: 18 / barWidth: 5 / barMaxHeight: 64。
 struct WaveView: View {
     var meterLevel: Float = 0.5
+    var barCount: Int = 3
+    var color: Color = .white
+    var barWidth: CGFloat = 3
+    var barMaxHeight: CGFloat = 20
 
     var body: some View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let lvl = Double(meterLevel)
             HStack(spacing: 2) {
-                ForEach(0..<3) { i in
+                ForEach(0..<barCount, id: \.self) { i in
                     let phase = sin(t * 5 + Double(i) * 0.9)
-                    let h = 5 + max(0, phase) * 3 + lvl * 9
+                    // 高度 = 静息底 + 相位脉动 + 音量驱动；默认参数下与原 3 根行为一致（≈17pt）
+                    let h = min(barMaxHeight, barMaxHeight * 0.22
+                                + max(0, phase) * barMaxHeight * 0.14
+                                + lvl * barMaxHeight * 0.5)
                     Capsule()
-                        .fill(Color.white)
-                        .frame(width: 3, height: h)
+                        .fill(color)
+                        .frame(width: barWidth, height: h)
                 }
             }
         }
-        .frame(height: 20)
+        .frame(height: barMaxHeight)
     }
 }
 
@@ -291,62 +352,71 @@ struct ReceiptCardView: View {
     let onRollback: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // 状态行：✅ 已完成 主文案 + · X.X 秒 次要（elapsedSec > 0.01 时显示）。
-            HStack(spacing: 6) {
-                Text("✅ 已完成")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.black)
-                if receipt.elapsedSec > 0.01 {
-                    Text("· \(String(format: "%.1f", receipt.elapsedSec)) 秒")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            // V4 §3b：回执卡上方同款发件人小字（左对齐）。
+            Text(VSBrand.agentLabel)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .padding(.leading, 2)
+                .padding(.bottom, 4)
 
-            // 内容文本（后台人话回复）。
-            Text(receipt.result)
-                .font(.system(size: 14))
-                .foregroundColor(.black)
-
-            // 图片回执（闭环验收场景）：后台截图回执含 "/screenshots/<file>.png" → 直接渲染图片。
-            if let shotURL = ScreenshotURL.from(receipt.result, base: SettingsStore.shared.base) {
-                AsyncImage(url: shotURL) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFit()
-                            .frame(maxWidth: 240)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .shadow(color: VSColor.shadow, radius: 5, x: 0, y: 2)
-                    case .failure:
-                        Text("（截图加载失败）").font(.system(size: 12)).foregroundColor(.secondary)
-                    default:
-                        ProgressView().frame(width: 80, height: 80)
+            VStack(alignment: .leading, spacing: 8) {
+                // 状态行：✅ 已完成 主文案 + · X.X 秒 次要（elapsedSec > 0.01 时显示）。
+                HStack(spacing: 6) {
+                    Text("✅ 已完成")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.black)
+                    if receipt.elapsedSec > 0.01 {
+                        Text("· \(String(format: "%.1f", receipt.elapsedSec)) 秒")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
                     }
                 }
-            }
 
-            // 撤销按钮行（次要按钮，命中区 ≥44pt）。
-            if undo.show {
-                Button(action: onRollback) {
-                    Text("撤销")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                        .frame(minHeight: 44)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                // 内容文本（后台人话回复）。
+                Text(receipt.result)
+                    .font(.system(size: 14))
+                    .foregroundColor(.black)
+
+                // 图片回执（闭环验收场景）：后台截图回执含 "/screenshots/<file>.png" → 直接渲染图片。
+                if let shotURL = ScreenshotURL.from(receipt.result, base: SettingsStore.shared.base) {
+                    AsyncImage(url: shotURL) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFit()
+                                .frame(maxWidth: 240)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .shadow(color: VSColor.shadow, radius: 5, x: 0, y: 2)
+                        case .failure:
+                            Text("（截图加载失败）").font(.system(size: 12)).foregroundColor(.secondary)
+                        default:
+                            ProgressView().frame(width: 80, height: 80)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
+
+                // 撤销按钮行（次要按钮，命中区 ≥44pt）。
+                if undo.show {
+                    Button(action: onRollback) {
+                        Text("撤销")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                            .frame(minHeight: 44)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+            )
+            .shadow(color: VSColor.shadowSoft, radius: 4, x: 0, y: 2)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
-        )
-        .shadow(color: VSColor.shadowSoft, radius: 4, x: 0, y: 2)
     }
 }
 
