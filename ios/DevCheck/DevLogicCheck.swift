@@ -1,6 +1,6 @@
 //
 //  DevLogicCheck.swift — macOS 命令行断言（绕过模拟器沙箱，直接执行同一套纯逻辑）。
-//  运行：swiftc -o /tmp/vscheck DevLogicCheck.swift ../VoiceSign/Core/Models.swift ../VoiceSign/Core/VSLogic.swift ../VoiceSign/Core/SSEParser.swift && /tmp/vscheck
+//  运行：swiftc -o /tmp/vscheck DevLogicCheck.swift ../VoxSign/Core/Models.swift ../VoxSign/Core/VSLogic.swift ../VoxSign/Core/SSEParser.swift && /tmp/vscheck
 //  注：此文件不在 Xcode 目标内，仅用于开发期在本机直接跑逻辑断言。
 //
 
