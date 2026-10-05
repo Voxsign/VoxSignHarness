@@ -139,6 +139,9 @@ type taskState struct {
 
 	confirmCh chan bool
 	cancel    context.CancelFunc
+	// doneCh 在任务到达终态（done/failed/canceled）时关闭。C2 调度器 worker 占 sem 期间
+	// <-doneCh 等待任务真正结束再释放槽；默认直跑路径无人等待，零行为变化。
+	doneCh chan struct{}
 
 	// M6-1 SSE：事件记录 + 活跃订阅者。
 	eventSeq  int
@@ -194,6 +197,9 @@ type Server struct {
 	// activityVer 任务状态版本号（架构 v1 §5）：markStatus 每次迁移递增；
 	// 心跳循环据此发现状态变化并立即补发（防毫秒级状态闪烁漏报）。
 	activityVer int64
+
+	// sched C2 进程内调度器（VHS_USE_SCHEDULER=true 时创建；nil=旧直跑路径逐字节不变）。
+	sched *Scheduler
 }
 
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
@@ -201,12 +207,25 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 	// C0 受控串行：对【模板】Options 初始化一次共享串行闸。后续每任务 `o := *tmpl` 浅拷贝
 	// 会复制 o.mu 指针 → 所有任务共享同一把锁，跨任务串行生效（修复此前模板 mu=nil、每任务
 	// Run 内各建新锁导致闸失效的浅拷贝 bug）。详见 pipeline.Options.EnableSerialGate 注释。
-	if o != nil {
+	// 但 C2 调度器接管并发时（VHS_USE_SCHEDULER=true 且 VHS_MAX_CONCURRENT>1），不再锁死串行——
+	// 并发上限由调度器 sem 控制（多 Runner 并发=目标态）；默认直跑 / 调度器=1 仍保留串行闸兜底。
+	if o != nil && !(cfg.Server.UseScheduler && cfg.Server.MaxConcurrent > 1) {
 		o.EnableSerialGate()
 	}
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
 	s.asrBH = newBulkhead(2)
 	s.asrCB = &circuitBreaker{}
+	// C2：VHS_USE_SCHEDULER=true（灰度，默认 false）时创建进程内调度器接管任务排队；
+	// exec 闭包跑 runPipeline 并 <-doneCh 等任务真正结束，使 sem 绑住真实并发。
+	if cfg.Server.UseScheduler {
+		sc := NewScheduler(cfg.Server.MaxConcurrent, 64)
+		sc.exec = func(t *schedTask) {
+			s.runPipeline(t.ts, t.ctx, t.text, t.spaceHint, t.document)
+			<-t.ts.doneCh
+		}
+		s.sched = sc
+		sc.Start()
+	}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
 		s.devices = newDeviceRegistry(cfg.Global.LogDir)
@@ -1019,18 +1038,25 @@ func clampPriority(p int) int {
 
 // spawnTask 起一个任务（text 为完整原文；spaceHint 非空时前置"在 <space>"）。
 // requestID 非空时登记 byReq 用于重试去重。状态迁移后自动 persist。
-func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, priority int) *taskState {
+// 返回 (ts, accepted)：sched 队列满时 accepted=false（→ HTTP 429）并撤销注册；默认直跑恒 true。
+func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, priority int) (*taskState, bool) {
+	// 调度器接管时初始状态 pending（排队未开始）；默认直跑仍 running（逐字节不变）。
+	initStatus := stRunning
+	if s.sched != nil {
+		initStatus = stPending
+	}
 	ts := &taskState{
 		ID:        fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RequestID: requestID,
 		Text:      text,
 		Mode:      mode, // voice→确认自动放行（2026-10-04 用户拍板"拦截全去掉"）
 		Document:  document,
-		Status:    stRunning,
+		Status:    initStatus,
 		Role:      RolePlanner, // M5-3：初始在规划阶段
 		Priority:  clampPriority(priority),
 		startedAt: time.Now(),
 		confirmCh: make(chan bool, 1),
+		doneCh:    make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ts.cancel = cancel
@@ -1043,8 +1069,24 @@ func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string, pr
 	s.persist(ts)
 	s.mu.Unlock()
 
+	// C2 调度路径：入队（byReq 注册与入队同临界区外撤销，防同 id 重复入队）。
+	if s.sched != nil {
+		ok := s.sched.Enqueue(&schedTask{ts: ts, ctx: ctx, text: text, spaceHint: spaceHint, document: document})
+		if !ok {
+			s.mu.Lock()
+			delete(s.tasks, ts.ID)
+			if requestID != "" {
+				delete(s.byReq, requestID)
+			}
+			s.mu.Unlock()
+			cancel()
+			return ts, false
+		}
+		return ts, true
+	}
+
 	s.runPipeline(ts, ctx, text, spaceHint, document)
-	return ts
+	return ts, true
 }
 
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
@@ -1092,6 +1134,16 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	}
 	safeGo("pipeline:"+ts.ID, func() {
 		defer cancel() // 任务结束（含超时/取消）时释放 deadline 定时器
+		// C2：任务 goroutine 退出时关闭 doneCh（终态/挂起都算），供调度器 worker 释放槽。select 防双关（need_ask 续跑会再进此函数）。
+		defer func() {
+			if ts.doneCh != nil {
+				select {
+				case <-ts.doneCh:
+				default:
+					close(ts.doneCh)
+				}
+			}
+		}()
 		// C1：pipeline.Run 收进 Runner（ob=nil：SSE/CLI 细粒度事件仍走 o.ProgressObserver=bridgeFromBus，零行为变化）。
 		rn := NewRunner(ts, &o, nil)
 		out, err := rn.Run(ctx, fullText)
@@ -1321,7 +1373,12 @@ func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	ts := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document, req.Priority)
+	ts, accepted := s.spawnTask(req.Text, req.Space, req.RequestID, req.Mode, req.Document, req.Priority)
+	if !accepted {
+		// C2：调度器队列满 → 429 Too Many Requests。
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "task queue full, retry later"})
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"task_id": ts.ID, "status": ts.Status})
 }
 
