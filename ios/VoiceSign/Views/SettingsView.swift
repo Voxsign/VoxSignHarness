@@ -117,6 +117,17 @@ struct SettingsView: View {
                 Section {
                     Text("云道：默认模式，Google 登录即用。自建：添加自己的 Harness 服务器（IP 地址或机器码）。").font(.system(size: 11)).foregroundColor(.secondary)
                 }
+
+                // 版本号（每次更新递增，便于用户确认是否装到最新版）。
+                Section {
+                    HStack {
+                        Text("版本")
+                        Spacer()
+                        Text(appVersionLabel())
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             .navigationTitle("设置")
             .toolbar {
@@ -529,6 +540,14 @@ struct SettingsView: View {
     private func isLanIP(_ s: String) -> Bool {
         s.range(of: #"https?://(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)"#,
                 options: .regularExpression) != nil
+    }
+
+    /// 版本号：Info.plist CFBundleShortVersionString + CFBundleVersion。
+    /// 每次发布递增 build，用户可在设置页最底部确认是否已更新到最新版。
+    private func appVersionLabel() -> String {
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(ver) (build \(build))"
     }
 }
 

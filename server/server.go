@@ -1067,6 +1067,18 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		case ctx.Err() != nil:
 			s.markStatus(ts, stCanceled)
 		case out.Ask != "":
+			// 语音场景（iOS 按住说话，无键盘反问交互）：意图 UNKNOWN 时**不挂起反问**，
+			// 直接结束并回复提示，避免任务永久 need_ask → App 轮询无终态 → 用户"没反应"。
+			if ts.Mode == "" || ts.Mode == "voice" {
+				ts.Outcome = &out
+				s.markStatus(ts, stDone)
+				s.emitEvent(ts, "done", map[string]any{
+					"receipt":     "没听懂，请再说一遍：尽量直接说出要做什么，例如“帮我查天气”或“记一个想法”。",
+					"attribution": out.Attribution,
+				})
+				s.persist(ts)
+				return
+			}
 			// 缺口 G8 修复：澄清无法收敛时明确失败，而不是无限回问。
 			// 评审 S1：判定依据是**问题集合 + 轮次上限**，不是"与上一轮逐字相同"
 			// —— 后者在 Q1→Q2→Q1→Q2 交替时永远不命中。
