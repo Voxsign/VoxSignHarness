@@ -121,7 +121,7 @@ func main() {
 	srvObj.ClearTaught = hot.ClearTaught
 	srvObj.Blacklist = hot.Blacklist
 	srv := &http.Server{Addr: addr, Handler: srvObj.Handler()}
-	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）", addr, dataDir)
+	log.Printf("vhs-asr 监听 %s（数据目录 %s，契约 v1）线A默认端点=http://127.0.0.1:8787", addr, dataDir)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("服务退出: %v", err)
 	}

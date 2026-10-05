@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,76 @@ func TestServerRunAndTaskGet(t *testing.T) {
 		t.Fatal("应返回 Outcome 四行视图")
 	}
 	fmt.Printf("view=%+v\n", state.Outcome.View)
+}
+
+// TestTaskViewConcurrentReadWriteRace 是 -race 回归：
+// 任务后台 goroutine（runPipeline.func2，持 s.mu）写 ts.Outcome/Status/Role 的同时，
+// GET /v1/tasks/{id} 经 writeTaskView 读这些字段。修复前 writeTaskView 无锁读 → -race 必报
+// DATA RACE（实测 TestASRSimPhoneFuzzyNeverBlankOrStuck 即触发）；修复后在 s.mu 内快照 → 绿。
+func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	// 起任务（后台 goroutine 写 ts.Outcome/Status/Role，持 s.mu）
+	body, _ := json.Marshal(tasksPostReq{Text: "记一下并发竞态回归测试"})
+	resp, err := http.Post(ts.URL+"/v1/tasks", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+	_ = resp.Body.Close()
+	if ack.TaskID == "" {
+		t.Fatal("应返回 task_id")
+	}
+
+	// 并发轮询 GET（writeTaskView 读路径）——race 检测器捕捉任何与写并发的无锁读
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if r, err := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID); err == nil {
+					var v map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&v)
+					_ = r.Body.Close()
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+
+	// 等任务到终态
+	final := ""
+	for i := 0; i < 100; i++ {
+		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
+		var v struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&v)
+		_ = r.Body.Close()
+		if v.Status == stDone || v.Status == stCanceled {
+			final = v.Status
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(stop)
+	wg.Wait()
+	if final == "" {
+		t.Fatal("任务未到终态")
+	}
 }
 
 // muxV1 注册 INTERACT-v1 全部正式端点（测试用）。
@@ -812,5 +883,94 @@ func TestCORSNoOriginUnaffected(t *testing.T) {
 	}
 	if r.Header.Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("无 Origin 请求不应加 ACAO 头")
+	}
+}
+
+// TestSSEStageSequence（§7.4 S3）：NOTE 任务 SSE 序列应包含一条细粒度 stage 事件
+// （kind:"internal"，stage:"intent"）——pipeline 意图分类发射点经 bridgeFromBus 桥进 SSE。
+func TestSSEStageSequence(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 细粒度桥"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events", "secret")
+	events := readSSE(t, r)
+
+	var found bool
+	for _, ev := range events {
+		if kind, _ := ev["kind"].(string); kind == "internal" {
+			if stage, _ := ev["stage"].(string); stage == "intent" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("SSE 应含 kind=internal/stage=intent 细粒度事件, got %+v", events)
+	}
+}
+
+// TestSSEReplayAfter（§7.4）:?after= 重放能覆盖桥接进 ts.events 的新 stage 事件。
+func TestSSEReplayAfter(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 重放覆盖"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	time.Sleep(300 * time.Millisecond) // 等任务完成，事件全落 ts.events
+
+	// 重放：after=0（从最早起）应能看到 internal stage 事件
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=0", "secret")
+	events := readSSE(t, r)
+	var found bool
+	for _, ev := range events {
+		if kind, _ := ev["kind"].(string); kind == "internal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("after=0 重放应覆盖 internal stage 事件, got %+v", events)
+	}
+}
+
+// TestSSEObserverUnthrottled（§7.4）：观察连接不被执行限流——任务在跑时新 SSE 连接照样能建立并读到事件。
+func TestSSEObserverUnthrottled(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 观察不被限流"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	// 任务仍在跑时立即建立 SSE 连接（不等终态），应能成功建立并读到 ≥1 事件
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events", "secret")
+	events := readSSE(t, r)
+	if len(events) < 1 {
+		t.Fatalf("执行限流不应作用于观察：新 SSE 连接应能建立并读到事件, got %d", len(events))
 	}
 }

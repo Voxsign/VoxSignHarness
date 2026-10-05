@@ -26,6 +26,15 @@ const (
 	KindReceipts    = "receipts"      // 动作回执
 	KindFinal       = "final"         // 最终答复
 	KindError       = "error"         // 错误
+
+	// 13 阶段中间判定事件（P0-1 登记：此前 pipeline 写入但未登记，被 Validate 静默丢弃）。
+	// 这些 kind 在 pipeline.go 编排链路上逐阶段落盘，是 §10 可观测性的关键因果证据。
+	KindRefer       = "refer"       // 阶段⑤ 指代消解后意图（歧义/回问因果）
+	KindSpaceCheck  = "space_check" // 阶段⑥ 空间门禁判定（越界拦截因果）
+	KindRisk        = "risk"        // 阶段⑦ 风险分级决策
+	KindConfirm     = "confirm"     // 阶段⑧ 确认放行结果（level/approved）
+	KindVerify      = "verify"      // 阶段⑩ 独立校验结论
+	KindAttribution = "attribution" // 归因回写（discuss 结论）
 )
 
 // Entry 是一条轨迹事件。Content 与结构化字段（Intent/Actions/Receipts）按 kind 二选一或并存。

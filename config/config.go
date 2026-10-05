@@ -64,6 +64,12 @@ type CacheCfg struct {
 type ServerCfg struct {
 	Token string `json:"token,omitempty"` // 空 = 仅 127.0.0.1 本机访问免 token；非本机绑定必须配 token（启动告警）
 	Bind  string `json:"bind,omitempty"`  // 空 = 取 Global.Addr（默认 127.0.0.1:8765）
+	// UseScheduler env VHS_USE_SCHEDULER（灰度，默认 false）：true=C2 进程内调度器接管任务排队；
+	// false=旧直跑路径逐字节不变（C0 EnableSerialGate 仍生效兜底）。
+	UseScheduler bool `json:"use_scheduler,omitempty"`
+	// MaxConcurrent env VHS_MAX_CONCURRENT（默认 1）：调度器并发上限（sem 容量）。>1 时
+	// 多 Runner 并发（C1+ 目标态），不再被 C0 EnableSerialGate 锁死；=1 时调度器仍串行排队。
+	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
 
 // CloudCfg 云端模式参数（VHS_MODE=cloud 时启用）。
@@ -304,6 +310,8 @@ func Load(configPath string) (Config, error) {
 	envFloat(&cfg.Input.IntentConf, "VHS_INTENT_CONF")
 	envString(&cfg.Input.LowConfAction, "VHS_LOW_CONF_ACTION")
 	envString(&cfg.Server.Token, "VHS_TOKEN")
+	envBool(&cfg.Server.UseScheduler, "VHS_USE_SCHEDULER")
+	envInt(&cfg.Server.MaxConcurrent, "VHS_MAX_CONCURRENT")
 	// 云端模式：VHS_MODE=cloud 启用谷歌登录/租户/配额。
 	if os.Getenv("VHS_MODE") == "cloud" {
 		cfg.Global.CloudMode = true

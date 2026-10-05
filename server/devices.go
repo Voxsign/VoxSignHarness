@@ -118,8 +118,25 @@ func (r *deviceRegistry) findByToken(tok string) *DeviceRecord {
 
 // deviceToken 设备接口鉴权：Bearer/X-Token == 服务端 VHS_TOKEN。
 // （云道模式下 register/heartbeat 由 Harness 端持有 VHS_TOKEN 调用，不要求会话 JWT。）
+//
+// 防护顺序（2026-10-05 收尾修复，docs/测试结果报告-云端服务器端功能-20261005.md 问题 2/3）：
+// 先判 s.devices == nil（本地模式，server.New 仅云端模式创建注册表）→ 501。
+// 设备功能按设计仅云端可用；本地模式的问题是"功能未启用"而非"配置错误"，
+// 故先于 token 检查判定，且绝不触碰 s.devices（否则 devices.go 注册处理处 nil deref panic）。
+// 再判 s.cfg.Server.Token == ""（云端模式漏配 VHS_TOKEN）→ 503。
+// 属服务端配置错误——客户端无从提供有效凭证，故不用 401（401 暗示"带正确 token 再来"，
+// 此处根本没有 token 可带）；硬保护堵住"两端凭证都为空即放行 register"的生产风险。
+// 最后正常比较：凭证不匹配 → 401。
 func (s *Server) deviceToken(next http.HandlerFunc) http.HandlerFunc {
 	return s.cors(func(w http.ResponseWriter, r *http.Request) {
+		if s.devices == nil {
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "设备注册表仅云端模式可用（本地模式不支持设备注册）"})
+			return
+		}
+		if s.cfg.Server.Token == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "服务端未配置 VHS_TOKEN，设备接口鉴权不可用（服务端配置错误）"})
+			return
+		}
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if tok == "" {
 			tok = r.Header.Get("X-Token")
@@ -210,7 +227,13 @@ func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) 
 
 // POST /v1/devices/lookup {machine_code} → {name, base, online, state, pending, token}。
 // 免鉴权：机器码即凭证。未注册/离线仍返回（iOS 探测直连后决定同网直连或云道转发）。
+// 注意：本路由走 public（不经 deviceToken 中间件），本地模式 s.devices 为 nil，
+// 入口必须自行防护，否则 nil deref panic（与 register/heartbeat 同根因）。
 func (s *Server) handleDevicesLookup(w http.ResponseWriter, r *http.Request) {
+	if s.devices == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "设备注册表仅云端模式可用（本地模式不支持设备查询）"})
+		return
+	}
 	var in struct {
 		MachineCode string `json:"machine_code"`
 	}
