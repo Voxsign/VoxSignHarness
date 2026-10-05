@@ -560,6 +560,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// 克隆模板 Options，注入本任务的 ConfirmFn（桥接到手机 /v1/confirm）。
 	o := *s.tmpl
+	// P0-4b：旧入口 /v1/run 也透传客户端 X-Request-Id（无则空→pipeline 自生成，向后兼容）。
+	if rid := strings.TrimSpace(r.Header.Get("X-Request-Id")); rid != "" {
+		o.RequestID = rid
+	}
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 网关确认自动放行，不挂起等待
 		//（否则 iOS 无确认交互 → 任务永久 waiting，用户实测"卡住"）。
@@ -668,6 +672,10 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	s.tasks[ts.ID] = ts
 	s.mu.Unlock()
 	o := *s.tmpl
+	// P0-4b：旧入口 /v1/voice 也透传客户端 X-Request-Id（无则空→pipeline 自生成，向后兼容）。
+	if rid := strings.TrimSpace(r.Header.Get("X-Request-Id")); rid != "" {
+		o.RequestID = rid
+	}
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		s.mu.Lock()
 		ts.Status = stWaiting

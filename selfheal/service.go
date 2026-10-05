@@ -22,9 +22,10 @@ type ToolRunner func(tool string, args map[string]any) contract.Receipt
 
 // Attempt 是一次失败的工具执行（诊断 + 安全重放的输入，带原始 args 以便重放）。
 type Attempt struct {
-	Tool    string
-	Args    map[string]any
-	Receipt contract.Receipt
+	Tool      string
+	Args      map[string]any
+	Receipt   contract.Receipt
+	RequestID string // P0-4b 贯通：主链 request_id，带入诊断 trace（日志/轨迹贯通用）
 }
 
 // Service 是三环自愈层的运行时实例：知识库 + 可选问题定位模型 + （可选）工具重放器。
@@ -152,6 +153,7 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 		errText = att.Receipt.Stderr
 	}
 	tr := NewTrace(att.Tool, "", att.Args, errText)
+	tr.RequestID = att.RequestID // P0-4b：诊断 trace 带主链 request_id（日志/轨迹贯通）
 	d := s.Diagnose(ctx, task, intent, []Trace{tr})
 	if d == nil {
 		return nil, nil
