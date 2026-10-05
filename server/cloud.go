@@ -168,7 +168,7 @@ func (c *jwksCache) get(kid string) (*rsa.PublicKey, error) {
 func fetchJWKS() (*jwksDoc, error) {
 	req, _ := http.NewRequest(http.MethodGet, googleCertsURL, nil)
 	req.Header.Set("Accept", "application/json")
-	cli := &http.Client{Timeout: 10 * time.Second}
+	cli := robustClient(tFast)
 	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, err
@@ -270,7 +270,7 @@ func (c *cloudAuth) exchangeGoogleCode(code, verifier string) (*googleIDToken, e
 	}
 	req, _ := http.NewRequest(http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	cli := &http.Client{Timeout: 15 * time.Second}
+	cli := robustClient(tMid)
 	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, err
