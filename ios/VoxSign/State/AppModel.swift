@@ -141,7 +141,7 @@ final class AppModel: ObservableObject {
 
     init() {
         // v2.4 多会话：确保至少一个会话，并把当前对话流 rows 还原成该会话的历史消息。
-        // UI v3（豆包式空态）：新会话只有一行灰字空态（"说点什么，或按住下方按钮说话"）。
+        // UI v3（豆包式空态）：新会话只有一行灰字空态（"按住🎤说话，或点⌨打字"）。
         SessionStore.shared.ensureInitialSession()
         currentSessionID = SessionStore.shared.currentSessionID
         rows = Self.messagesToRows(SessionStore.shared.loadMessages(for: currentSessionID))

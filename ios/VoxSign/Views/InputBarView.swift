@@ -1,15 +1,16 @@
 //
 //  InputBarView.swift
-//  VoxSign
-//
-//  豆包式底部输入条（聊天面视图 T3 改造）：
-//  - 三件套：[＋ 添加资料] | [输入框] | [🎤 语音 / ⬆ 发送]
-//  - 输入框常显（打字即用，无键盘/语音切换）；去掉云电脑/项目/技能等默认项入口
-//  - 右侧按钮双态：空文本=麦克风（按住说话热区）；有文本=蓝色发送箭头
-//  - 按住说话 → 输入条整体变为红色「松开 发送」条（白字红底，豆包同款）；
-//    上滑 -80pt →「松开 取消」（可滑回继续录音）；松手发送
-//  - 5 态语音状态条（正在听 / 没听到声音 / 取消 / 校准 / 失败）保留在输入区上方
-//  - AI 消息操作行不朗读/喇叭按钮（收进 MessageViews 的「…」菜单）
+//  V4 方案B（用户最终确认稿 2026-10-05）：豆包式底部输入条
+//  - 默认态（语音模式）：[圆形＋] | [🎤 按住说话 深色胶囊 flex:1, 56pt] | [圆形⌨]
+//  - 点 ⌨ → 文字模式：输入框 + 发送箭头（有文本时出现）；再点 ⌨ 切回语音
+//  - 按住大按钮 → 满底波形界面：深色 #1a1a1a 矩形（无弧线/无圆角、向下延展贴屏幕底沿）
+//    ① 顶部「正在听…」② 中部 20 根 #ff3b30 竖形声波条（随 meterLevel 起伏+相位呼吸）
+//    ③ 底部加粗「松手发送 · 上移取消」
+//  - 上滑 -80pt → 取消态（底部换「松开 取消」，可滑回继续录音）；松手发送
+//  - 录音期间输入条淡出但保留在层级中（mic 手势宿主不移除/不禁用 hit-testing）
+//  - 输入区上方状态条仅保留 校准中 / 空录音重说 / 识别失败 / 语音不可用 四态
+//  - 【卡死修复保护项（提交 5f54837）不得回退】holdGesture 双宿主 / holdInitiated 防重入 /
+//    极轻点竞态兜底 / isRecording 置 true 无按压看门狗
 //
 
 import SwiftUI
@@ -20,8 +21,11 @@ struct InputBarView: View {
     @EnvironmentObject var speech: SpeechRecognizer
     #endif
 
-    // 附件面板（＋ 添加资料 → Sheet）
+    // 附件面板（＋ → Sheet）
     @State private var showAttachPanel: Bool = false
+
+    // V4 方案B：文字输入模式（默认 false=语音大按钮模式；点 ⌨ 切换）
+    @State private var useTextInput: Bool = false
 
     // v2.1 I14：3s 无识别提示（不显示逐字期间的补偿反馈）
     @State private var transcriptSnap: String = ""
@@ -38,14 +42,14 @@ struct InputBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             #if canImport(Speech)
-            // UI v3 豆包式浅色语音状态条（5 态，按住/松手期间显示在输入区上方）。
+            // 语音状态条（校准中/空录音/识别失败/不可用 四态，按住/松手期间显示在输入区上方）。
             voiceStatusSection
             #endif
 
             inputRow
         }
         .background(.ultraThinMaterial)
-        // UI v3：输入条顶部 0.5pt 极淡描边（豆包式）。
+        // 输入条顶部 0.5pt 极淡描边（豆包式）。
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(Color.black.opacity(0.08))
@@ -57,34 +61,22 @@ struct InputBarView: View {
         }
     }
 
-    // MARK: - 输入行（三件套 / 录音态红色条）
+    // MARK: - 输入行（方案B：语音大按钮 / 文字模式 / 录音态满底波形）
 
     private var inputRow: some View {
-        HStack(spacing: 10) {
-            // 录音中：整行被红色「松开 发送」条覆盖。
-            // 【卡死修复-双宿主】红条自身即录音态手势宿主（见 redHoldBar 的 .gesture(holdGesture)），
-            // 松手/上滑/滑回无论落在红条何处都能触发 onEnded 收尾，isRecording 必然复位。
-            if speechRecording {
-                redHoldBar
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
-            }
+        // ZStack 叠层：录音态时深色波形面板盖在整行之上；普通输入行不随录音移除——
+        // 【卡死修复】大按钮 voiceMainButton 必须留在层级中（opacity 0 淡出）且不加
+        // allowsHitTesting(false)：已开始的 DragGesture 依赖该视图存活持续收事件，
+        // onEnded 必然触发 → stopHold/cancelHold 执行 → isRecording 复位，绝不冻结。
+        ZStack {
+            normalInputRow
+                .opacity(speechRecording ? 0.0 : 1.0)
 
-            // 录音态下三件套淡出但保留在层级中（不移除）。
-            // 【卡死修复】不再对整个三件套 HStack 禁用 hit-testing——否则手势宿主（麦克风 rightButton）
-            // 被一并禁用，正在进行的 DragGesture 收不到事件，onEnded 永不触发 → stopHold/cancelHold
-            // 不执行 → isRecording 永久 true → UI 冻结在录音态。改为只单独禁用 ＋添加资料 与输入框，
-            // 麦克风 rightButton 始终可命中（录音期间正在进行的拖拽持续收事件）。
-            HStack(spacing: 10) {
-                addAttachButton
-                    .allowsHitTesting(!speechRecording)
-                textField
-                    .allowsHitTesting(!speechRecording)
-                rightButton
+            if speechRecording {
+                recordingHoldView
+                    .transition(.opacity)
             }
-            .opacity(speechRecording ? 0.0 : 1.0)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .animation(.easeOut(duration: 0.12), value: speechRecording)
         #if canImport(Speech)
         // 【加固3-看门狗】isRecording 变 true 但本轮无手指按压（如首次授权弹窗后 start() 补启动，
         // 或任何竞态残留）→ 立即 cancelHold 复位，绝不冻结。正常按压时 holdInitiated 在
@@ -93,87 +85,215 @@ struct InputBarView: View {
             if recording && !holdInitiated { speech.cancelHold() }
         }
         #endif
+        .animation(.easeOut(duration: 0.12), value: speechRecording)
     }
 
-    /// ＋ 添加资料（紧凑豆包式），弹出附件面板。
+    /// 默认输入行（语音大按钮模式 / 文字模式）。录音时整行 opacity 0 但仍在层级中。
+    private var normalInputRow: some View {
+        HStack(spacing: 10) {
+            addAttachButton
+                .allowsHitTesting(!speechRecording)
+            if useTextInput {
+                textField
+                    .allowsHitTesting(!speechRecording)
+                if isTyping {
+                    sendButton
+                        .allowsHitTesting(!speechRecording)
+                } else {
+                    keyboardToggleButton
+                        .allowsHitTesting(!speechRecording)
+                }
+            } else {
+                // 语音大按钮：永不禁用 hit-testing（手势宿主，录音中透明命中维持拖拽连续）
+                voiceMainButton
+                keyboardToggleButton
+                    .allowsHitTesting(!speechRecording)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
+    /// 左：圆形 ＋ 按钮（30×30，浅灰圆底，加号 16pt secondary），弹出附件面板。
     private var addAttachButton: some View {
         Button {
             showAttachPanel = true
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 18))
-                Text("添加资料")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .foregroundColor(.secondary)
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color.black.opacity(0.05)))
         }
         .accessibilityIdentifier("vhs.attach")
     }
 
-    /// 输入框：常显，占位符「发消息或语音指令…」。
+    /// 输入框（文字模式）：占位符「发消息或语音指令…」。
     private var textField: some View {
         TextField("发消息或语音指令…", text: $model.inputText, axis: .vertical)
             .lineLimit(...4)
             .font(.system(size: 15))
-            // 豆包尺寸对齐：padding(.vertical, 9) → 单行 ≈15pt 字 + 上下各 9pt ≈ 33pt 文本框内高，
-            // 叠加 1.5pt 视觉行高后单行整体约 36pt（落在规格 36–40pt 区间）。
             .padding(.horizontal, 12).padding(.vertical, 9)
             .background(Color(.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .accessibilityIdentifier("vhs.input")
     }
 
-    /// 右侧双态按钮：空文本=麦克风（按住说话热区）；有文本=蓝色发送箭头。
-    @ViewBuilder
-    private var rightButton: some View {
-        if isTyping {
-            Button {
-                model.send()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundColor(model.decision != nil ? .gray : VSColor.blue)
-            }
-            .accessibilityIdentifier("vhs.send")
-            .disabled(model.decision != nil)
-        } else {
-            // 麦克风：按住说话热区（手势宿主，录音期间保持在层级中以维持拖拽连续）。
-            // 豆包尺寸对齐：34×34 热区，19pt 图标（原 40×40 / 20）。
-            Image(systemName: "mic.fill")
-                .font(.system(size: 19))
-                .foregroundColor(.secondary)
-                .frame(width: 34, height: 34)
-                .contentShape(Circle())
-                .accessibilityIdentifier("vhs.mic")
-                .gesture(holdGesture)
-        }
+    /// 中：超大「🎤 按住说话」深色胶囊主按钮（#1a1a1a、高 56pt、胶囊圆角=高度一半、占满剩余宽度）。
+    /// 【卡死修复-手势宿主】录音中淡出但不禁用 hit-testing——拖拽起始于此、录音期间持续收事件。
+    private var voiceMainButton: some View {
+        Text("🎤 按住说话")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .background(Color(red: 0.102, green: 0.102, blue: 0.102)) // #1a1a1a
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+            .accessibilityIdentifier("vhs.mic")
+            .gesture(holdGesture)
     }
 
-    /// 豆包同款红色「松开 发送」条：白字红底，整行覆盖；上滑取消时变灰「松开 取消」。
-    private var redHoldBar: some View {
-        HStack {
-            Spacer()
-            Text(cancelling ? "松开 取消" : "松开 发送")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.white)
-            Spacer()
+    /// 右：圆形 ⌨ 按钮（30×30，浅灰圆底，键盘图标 16pt secondary），切换文字输入模式。
+    private var keyboardToggleButton: some View {
+        Button {
+            useTextInput.toggle()
+        } label: {
+            Image(systemName: "keyboard")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color.black.opacity(0.05)))
         }
-        .frame(height: 40)
+        .accessibilityIdentifier("vhs.keyboard")
+    }
+
+    /// 发送箭头（文字模式有文本时）。
+    private var sendButton: some View {
+        Button {
+            model.send()
+        } label: {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 30))
+                .foregroundColor(model.decision != nil ? .gray : VSColor.blue)
+        }
+        .accessibilityIdentifier("vhs.send")
+        .disabled(model.decision != nil)
+    }
+
+    // MARK: - 按住态：满底波形界面（方案B 用户确认稿）
+
+    /// 几何（硬性）：矩形填满宽度、四角无圆角无弧线；背景 .ignoresSafeArea(edges:.bottom)
+    /// 向下延展贴屏幕底沿（沉到 home indicator 之下）；总高 160pt；条组高 70pt；
+    /// 条组下方留 ~22pt 再放底部文案；底色 #1a1a1a，红条/红字突出。
+    /// 结构：① 顶部小字「正在听…」② 中部 20 根 #ff3b30 竖形声波条 ③ 底部加粗「松手发送 · 上移取消」。
+    /// 【卡死修复-双宿主】整块波形区域即录音态手势宿主（.gesture(holdGesture)）：
+    /// 松手/上滑/滑回落在任意处都触发 onEnded（cancelling→cancelHold 否则 stopHold），isRecording 必然复位。
+    private var recordingHoldView: some View {
+        VStack(spacing: 0) {
+            Text(holdTopText)
+                .font(.system(size: 13))
+                .foregroundColor(Color.white.opacity(0.75))
+                .padding(.top, 10)
+
+            #if canImport(Speech)
+            HoldWaveBars(meterLevel: speech.meterLevel)
+                .frame(height: 70)
+                .padding(.top, 8)
+            #else
+            HoldWaveBars(meterLevel: 0)
+                .frame(height: 70)
+                .padding(.top, 8)
+            #endif
+
+            Text(holdBarText)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(HoldWaveBars.barRed)
+                .padding(.top, 22)          // 条组下方留 ~22pt 再放底部文案
+                .padding(.bottom, 14)
+        }
         .frame(maxWidth: .infinity)
-        .background(cancelling
-                    ? Color(red: 0.55, green: 0.56, blue: 0.58)
-                    : Color(red: 0.96, green: 0.26, blue: 0.26))
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .shadow(color: (cancelling ? Color.gray : Color.red).opacity(0.3), radius: 6, x: 0, y: 2)
+        .frame(height: 160)
+        // 深色矩形：无圆角/无弧线，四角都是直角
+        .background(HoldWaveBars.panelDark)
+        // 向下延展：背景沉到 home indicator 之下，整体贴底不留空隙
+        .ignoresSafeArea(edges: .bottom)
         .animation(.easeOut(duration: 0.12), value: cancelling)
-        // 【卡死修复-双宿主】录音态下整条红条都是手势宿主：松手/上滑/滑回落在红条任意处都触发
-        // onEnded（cancelling→cancelHold 否则 stopHold）；录音中重新按压红条任意处也可接管手势。
+        // 【卡死修复-双宿主】手势宿主：录音中重新按压波形区域任意处也可接管手势；
         // -80pt 阈值与可滑回逻辑由 holdGesture.onChanged/onEnded 内部语义保证，此处不变。
         .gesture(holdGesture)
+        // noSpeechDetected 计数定时器（原样迁移）。录音中每秒对比 transcript 快照累计静默秒数；非录音清零。
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            #if canImport(Speech)
+            if speech.isRecording {
+                if speech.transcript != transcriptSnap {
+                    transcriptSnap = speech.transcript
+                    silentSeconds = 0
+                } else {
+                    silentSeconds += 1
+                }
+                noSpeechDetected = silentSeconds >= 3
+            } else {
+                noSpeechDetected = false
+                silentSeconds = 0
+                transcriptSnap = ""
+            }
+            #endif
+        }
     }
 
-    // MARK: - 语音状态（5 态）段
+    /// 顶部文案：无语音（≥3s）→ “没听到声音，请说话”；否则 → “正在听…”。
+    private var holdTopText: String {
+        if noSpeechDetected { return "没听到声音，请说话" }
+        return "正在听…"
+    }
+
+    /// 底部整行文案：取消 → “松开 取消”；否则 → “松手发送 · 上移取消”。
+    private var holdBarText: String {
+        cancelling ? "松开 取消" : "松手发送 · 上移取消"
+    }
+
+    // MARK: - 按住态竖形声波条组（方案B 新建于本文件内，不动 MessageViews 的 WaveView）
+
+    /// 20 根细竖条（宽 5pt、圆角 2pt、#ff3b30），参差基准高度形成自然声波轮廓。
+    /// TimelineView(.animation) 每帧重算：
+    ///   条高[i] = 基准[i] × (0.35 + 0.65 × 当帧系数[i])
+    ///   当帧系数[i] = meterLevel(0~1)×0.7 + 每根独立相位呼吸 sin(t×4 + i×0.55)×0.3
+    /// 低电平时系数 ≈ 0~0.3 → 条高保持基准的 35%~55% 轻微呼吸（不至于静止）；
+    /// 说话时 meterLevel→1 → 条高冲到接近基准（上限对齐条组 70pt）。
+    private struct HoldWaveBars: View {
+        var meterLevel: Float
+
+        /// #ff3b30 波形红（条与底部文案共用）。
+        static let barRed = Color(red: 0.996, green: 0.231, blue: 0.188)
+        /// #1a1a1a 深色面板底（与主胶囊一致）。
+        static let panelDark = Color(red: 0.102, green: 0.102, blue: 0.102)
+
+        /// 20 个参差基准高度（pt）：中间高两侧低的自然声波轮廓，峰值 64pt 对齐条组 70pt。
+        private static let baselines: [CGFloat] = [
+            14, 26, 40, 54, 36, 58, 44, 64, 30, 48,
+            48, 30, 64, 44, 58, 36, 54, 40, 26, 14
+        ]
+
+        var body: some View {
+            TimelineView(.animation) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                let lvl = Double(meterLevel)
+                HStack(alignment: .center, spacing: 3) {
+                    ForEach(Array(Self.baselines.enumerated()), id: \.offset) { i, base in
+                        // 每根条独立相位：sin(t×速率 + i×相位差) → [0,1] 呼吸值
+                        let breath = 0.5 + 0.5 * sin(t * 4.0 + Double(i) * 0.55)
+                        let coeff = min(1.0, lvl * 0.7 + breath * 0.3)
+                        let h = base * (0.35 + 0.65 * coeff)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Self.barRed)
+                            .frame(width: 5, height: h)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 语音状态（4 态）段
 
     @ViewBuilder
     private var voiceStatusSection: some View {
@@ -183,14 +303,6 @@ struct InputBarView: View {
             voiceStatusBar(kind: .silent, primary: "没录到声音，请重说", secondary: "录音是空的，这次没有发送")
         } else if speech.asrFailed {
             voiceStatusBar(kind: .failed, primary: "识别失败，请再按一次", secondary: "没有听清，这次没有发送")
-        } else if speech.isRecording {
-            if cancelling {
-                voiceStatusBar(kind: .cancelling, primary: "松开手指，取消发送", secondary: "手指移回下方可继续录音")
-            } else if noSpeechDetected {
-                voiceStatusBar(kind: .silent, primary: "没听到声音，请说话", secondary: "再靠近一点，或松开手指取消")
-            } else {
-                voiceStatusBar(kind: .listening, primary: "正在听…", secondary: "松手发送，上移取消")
-            }
         } else if speech.unavailable {
             Text("语音不可用：请在 系统设置→VoxSign 中允许 麦克风 与 语音识别")
                 .font(.system(size: 12))
@@ -211,7 +323,7 @@ struct InputBarView: View {
         #endif
     }
 
-    // MARK: - 豆包式浅色语音状态条（5 态）
+    // MARK: - 豆包式浅色语音状态条
 
     private enum VoiceStatusKind {
         case listening, silent, cancelling, calibrating, failed
@@ -291,7 +403,7 @@ struct InputBarView: View {
         }
     }
 
-    // MARK: - 按住说话手势（按下录音 / 上滑取消可滑回 / 松手发送）
+    // MARK: - 按住说话手势（按下录音 / 上滑取消可滑回 / 松手发送）——语义原样迁移
 
     #if canImport(Speech)
     /// 麦克风按钮手势——按下录音；dy < -80pt 进取消态（可滑回继续）；松手按态发送。

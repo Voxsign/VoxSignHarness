@@ -12,10 +12,9 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // T3 豆包式简化：不再显示角色条（Planner/Executor/Verifier 收敛进执行卡内部状态）。
-            // 顶栏（极简）：[会话历史小图标] [5pt 状态点] [VoxSign] … [ellipsis Menu]
+            // T4 豆包式顶栏：[会话入口(低调圆角)] | Spacer | 中央(状态点+标题 / 副信息小字) | Spacer | […菜单(低调圆角)]
             HStack(spacing: 6) {
-                // 左上：会话历史入口（只占 34pt 触控区，不占视觉）
+                // 左上：会话历史入口（34pt 触控区 + 低调圆角背景）
                 Button {
                     model.showSessions = true
                 } label: {
@@ -24,16 +23,26 @@ struct RootView: View {
                         .foregroundColor(.black)
                         .frame(width: 34, height: 34)
                         .contentShape(Rectangle())
+                        .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
                 }
                 .accessibilityIdentifier("vhs.sessions")
 
-                // 5pt 连接/ harness 状态点（蓝=正常 · 红=离线 · 灰=重连/未知 · 橙=决策）
-                ConnectionDotView(conn: ConnectivityService.shared.state,
-                                  harness: model.harnessState)
+                Spacer()
 
-                Text("VoxSign")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(.black)
+                // 中央：标题行（5pt 状态点 + VoxSign）+ 副信息小字
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        // 5pt 连接/ harness 状态点（蓝=正常 · 红=离线 · 灰=重连/未知 · 橙=决策）
+                        ConnectionDotView(conn: ConnectivityService.shared.state,
+                                          harness: model.harnessState)
+                        Text("VoxSign")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.black)
+                    }
+                    Text(VSBrand.agentLabel)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
 
                 Spacer()
 
@@ -55,11 +64,12 @@ struct RootView: View {
                         .foregroundColor(.black)
                         .frame(width: 34, height: 34)
                         .contentShape(Rectangle())
+                        .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
                 }
                 .accessibilityIdentifier("vhs.more")
-                .padding(.trailing, 10)
             }
             .padding(.leading, 6)
+            .padding(.trailing, 10)
             .background(.ultraThinMaterial)
 
             // 红色打断系统条（可关闭）
@@ -75,14 +85,37 @@ struct RootView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        // UI v3 豆包式空态：新会话只有一行极淡灰字（无欢迎屏、无示例卡片堆）。
+                        // T4 豆包式空态：居中图标 + 文案（无欢迎屏、无示例卡片）。
                         if model.rows.isEmpty {
-                            Text("说点什么，或按住下方按钮说话")
-                                .font(.system(size: 14))
-                                .foregroundColor(Color(red: 0.682, green: 0.682, blue: 0.698)) // #AEAEB2
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 80)
+                            VStack(spacing: 14) {
+                                ZStack {
+                                    Circle()
+                                        .fill(VSColor.blue.opacity(0.10))
+                                        .frame(width: 64, height: 64)
+                                    Image(systemName: "waveform.and.mic")
+                                        .font(.system(size: 26, weight: .medium))
+                                        .foregroundColor(VSColor.blue)
+                                }
+                                Text("按住🎤说话，或点⌨打字")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Color(red: 0.682, green: 0.682, blue: 0.698)) // #AEAEB2
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 120)
                         }
+
+                        // T4 §3a：列表顶部居中时间戳（首条 user/harness 气泡的 HH:mm），下方留 4pt。
+                        if let topTime = topMessageTimeText {
+                            HStack {
+                                Spacer()
+                                Text(topTime)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .padding(.bottom, 4)
+                        }
+
                         ForEach(model.rows) { row in
                             rowView(row)
                         }
@@ -114,6 +147,25 @@ struct RootView: View {
         .sheet(isPresented: $model.showSessions) {
             SessionListView()
         }
+    }
+
+    /// T4 §3a：从 rows.first 起跳过 typing/execCard/receipt，取第一条 user/harness 气泡的时间，格式 HH:mm。
+    private static let topTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private var topMessageTimeText: String? {
+        for row in model.rows {
+            switch row {
+            case .user(let b), .harness(let b):
+                return Self.topTimeFormatter.string(from: b.timestamp)
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     @ViewBuilder
