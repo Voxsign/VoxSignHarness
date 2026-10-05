@@ -46,3 +46,8 @@ coverage.out
 # Xcode 本机用户态（不提交）
 ios/**/xcuserdata/
 ios/**/project.xcworkspace/
+
+# ===== 本地产物（可重建，不入库）=====
+/bin/
+*.ipa
+ios/build/
