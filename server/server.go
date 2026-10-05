@@ -230,9 +230,10 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 	}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
+		// 设备注册表仅云端模式创建（设备注册是云端能力；本地模式设备端点由 deviceToken
+		// 守卫返回 501「功能未启用」，业务端点的设备 token 放行在 s.devices==nil 时跳过）。
+		s.devices = newDeviceRegistry(cfg.Global.LogDir)
 	}
-	// 设备注册表在本地/云端都要可用：本地 Mac 既要注册机器码，也要用设备 token 放行业务端点。
-	s.devices = newDeviceRegistry(cfg.Global.LogDir)
 	s.relay = newRelayHub()
 	s.restore()
 	return s

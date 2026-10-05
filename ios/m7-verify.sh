@@ -8,7 +8,7 @@ set -euo pipefail
 
 DEVICE_ID="00008120-001428820AB8201E"
 TEAM="P5W752L332"
-SCHEME="VoiceSign"
+SCHEME="VoxSign"
 DD="/tmp/vhs-m7-dd"
 
 cd "$(dirname "$0")"
