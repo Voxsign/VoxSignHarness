@@ -29,6 +29,9 @@ struct InputBarView: View {
     @State private var noSpeechDetected: Bool = false
     // UI v3：上滑取消态（-80pt 阈值，可滑回继续录音——豆包同款手感）
     @State private var cancelling: Bool = false
+    // 【加固1】本轮按压是否由本视图手势发起：快速连按/双宿主重复按压时据此挡住二次 start，
+    // 堵住 SpeechRecognizer 异步重入窗口被 start() 内 defer 架空的竞态（R2）。
+    @State private var holdInitiated: Bool = false
 
     private var isTyping: Bool { !model.inputText.isEmpty }
 
@@ -58,23 +61,38 @@ struct InputBarView: View {
 
     private var inputRow: some View {
         HStack(spacing: 10) {
-            // 录音中：整行被红色「松开 发送」条覆盖（手势宿主仍为下方按钮，保证拖拽连续）。
+            // 录音中：整行被红色「松开 发送」条覆盖。
+            // 【卡死修复-双宿主】红条自身即录音态手势宿主（见 redHoldBar 的 .gesture(holdGesture)），
+            // 松手/上滑/滑回无论落在红条何处都能触发 onEnded 收尾，isRecording 必然复位。
             if speechRecording {
                 redHoldBar
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
-            // 录音态下三件套淡出但保留在层级中（右侧按钮=手势宿主，按住拖拽不中断）。
+            // 录音态下三件套淡出但保留在层级中（不移除）。
+            // 【卡死修复】不再对整个三件套 HStack 禁用 hit-testing——否则手势宿主（麦克风 rightButton）
+            // 被一并禁用，正在进行的 DragGesture 收不到事件，onEnded 永不触发 → stopHold/cancelHold
+            // 不执行 → isRecording 永久 true → UI 冻结在录音态。改为只单独禁用 ＋添加资料 与输入框，
+            // 麦克风 rightButton 始终可命中（录音期间正在进行的拖拽持续收事件）。
             HStack(spacing: 10) {
                 addAttachButton
+                    .allowsHitTesting(!speechRecording)
                 textField
+                    .allowsHitTesting(!speechRecording)
                 rightButton
             }
             .opacity(speechRecording ? 0.0 : 1.0)
-            .allowsHitTesting(!speechRecording)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .animation(.easeOut(duration: 0.12), value: speechRecording)
+        #if canImport(Speech)
+        // 【加固3-看门狗】isRecording 变 true 但本轮无手指按压（如首次授权弹窗后 start() 补启动，
+        // 或任何竞态残留）→ 立即 cancelHold 复位，绝不冻结。正常按压时 holdInitiated 在
+        // onChanged 同步置位、先于异步置位 → 不会误取消；cancelHold 内 isRecording=false 不循环触发。
+        .onChange(of: speech.isRecording) { recording in
+            if recording && !holdInitiated { speech.cancelHold() }
+        }
+        #endif
     }
 
     /// ＋ 添加资料（紧凑豆包式），弹出附件面板。
@@ -98,7 +116,9 @@ struct InputBarView: View {
         TextField("发消息或语音指令…", text: $model.inputText, axis: .vertical)
             .lineLimit(...4)
             .font(.system(size: 15))
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            // 豆包尺寸对齐：padding(.vertical, 9) → 单行 ≈15pt 字 + 上下各 9pt ≈ 33pt 文本框内高，
+            // 叠加 1.5pt 视觉行高后单行整体约 36pt（落在规格 36–40pt 区间）。
+            .padding(.horizontal, 12).padding(.vertical, 9)
             .background(Color(.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .accessibilityIdentifier("vhs.input")
@@ -119,10 +139,11 @@ struct InputBarView: View {
             .disabled(model.decision != nil)
         } else {
             // 麦克风：按住说话热区（手势宿主，录音期间保持在层级中以维持拖拽连续）。
+            // 豆包尺寸对齐：34×34 热区，19pt 图标（原 40×40 / 20）。
             Image(systemName: "mic.fill")
-                .font(.system(size: 20))
+                .font(.system(size: 19))
                 .foregroundColor(.secondary)
-                .frame(width: 40, height: 40)
+                .frame(width: 34, height: 34)
                 .contentShape(Circle())
                 .accessibilityIdentifier("vhs.mic")
                 .gesture(holdGesture)
@@ -146,6 +167,10 @@ struct InputBarView: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .shadow(color: (cancelling ? Color.gray : Color.red).opacity(0.3), radius: 6, x: 0, y: 2)
         .animation(.easeOut(duration: 0.12), value: cancelling)
+        // 【卡死修复-双宿主】录音态下整条红条都是手势宿主：松手/上滑/滑回落在红条任意处都触发
+        // onEnded（cancelling→cancelHold 否则 stopHold）；录音中重新按压红条任意处也可接管手势。
+        // -80pt 阈值与可滑回逻辑由 holdGesture.onChanged/onEnded 内部语义保证，此处不变。
+        .gesture(holdGesture)
     }
 
     // MARK: - 语音状态（5 态）段
@@ -164,7 +189,7 @@ struct InputBarView: View {
             } else if noSpeechDetected {
                 voiceStatusBar(kind: .silent, primary: "没听到声音，请说话", secondary: "再靠近一点，或松开手指取消")
             } else {
-                voiceStatusBar(kind: .listening, primary: "正在听…", secondary: "松开 发送 · 上滑取消")
+                voiceStatusBar(kind: .listening, primary: "正在听…", secondary: "松手发送，上移取消")
             }
         } else if speech.unavailable {
             Text("语音不可用：请在 系统设置→VoxSign 中允许 麦克风 与 语音识别")
@@ -273,7 +298,9 @@ struct InputBarView: View {
     private var holdGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
-                if !speech.isRecording {
+                // 【加固1】仅在本轮尚无发起者时 start 一次；录音中或已发起过不重复 start（R2）。
+                if !speech.isRecording && !holdInitiated {
+                    holdInitiated = true
                     cancelling = false
                     speech.startHold()
                 }
@@ -282,11 +309,22 @@ struct InputBarView: View {
                 if c != cancelling { cancelling = c }
             }
             .onEnded { v in
+                // 【加固1/2】先记下本轮是否发起者，再复位标记。
+                let wasInitiator = holdInitiated
+                holdInitiated = false
                 if speech.isRecording {
                     if cancelling || v.translation.height < -80 {
                         speech.cancelHold()   // 上滑取消：不发送
                     } else {
                         speech.stopHold()     // 松手：识别完自动发送
+                    }
+                } else if wasInitiator {
+                    // 【加固2-R1 极轻点竞态兜底】isRecording 是 start() 里 DispatchQueue.main.async
+                    // 下一拍才置 true；手指先松时按旧逻辑什么都不做 → 随后置位 → 无手指却卡录音态。
+                    // 主队列 FIFO 保证此块排在置位块之后执行：若已置位则立即收尾（此时 installTap
+                    // 已同步完成，stopHold 安全）。
+                    DispatchQueue.main.async {
+                        if self.speech.isRecording { self.speech.stopHold() }
                     }
                 }
                 cancelling = false
