@@ -1428,7 +1428,12 @@ func (s *Server) handleCancelSub(w http.ResponseWriter, r *http.Request, ts *tas
 }
 
 // writeTaskView 按 INTERACT-v1 形状渲染（receipt=四行，attribution=六格）。
+//
+// race 修复：ts 各字段由 runPipeline 后台 goroutine 持 s.mu 写（Outcome/Status/Role…），
+// 本函数是 GET /v1/tasks/{id} 轮询读端。快照必须在同一把 s.mu 内完成，再锁外写 HTTP，
+// 否则读 ts.Outcome/ts.Status 与后台写并发 → DATA RACE（-race 门）。
 func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
+	s.mu.Lock()
 	body := map[string]any{"task_id": ts.ID, "status": ts.Status, "role": ts.Role}
 	if ts.Question != "" {
 		body["question"] = ts.Question
@@ -1446,6 +1451,7 @@ func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
 			body["reversible"] = true
 		}
 	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, body)
 }
 
