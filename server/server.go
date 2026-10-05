@@ -1720,7 +1720,12 @@ func (s *Server) onTaskPanic(ts *taskState, o *pipeline.Options, r any) {
 	}
 	rid := ""
 	if ts != nil {
-		rid = ts.ID
+		// S0/P0-4b：panic 轨迹的 request_id 与 pipeline 同一来源（ts.RequestID）；空则 ts.ID 兜底，
+		// 使 panic 记录能 join 进请求链（入口→轨迹→日志）。
+		rid = ts.RequestID
+		if rid == "" {
+			rid = ts.ID
+		}
 	}
 	if o != nil && o.Trace != nil {
 		_ = o.Trace.Write(trajectory.Entry{
