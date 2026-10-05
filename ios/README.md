@@ -1,4 +1,4 @@
-# VoxSign · iOS 原生壳（VoiceSign App，SwiftUI）
+# VoxSign · iOS 原生壳（VoxSign App，SwiftUI）
 
 M6-2 交付：把 M5 web 壳（`web/`）迁为**真 iOS App**（Xcode SwiftUI 工程），保留全部九元素，
 对接真实 server（INTERACT-v1 REST 端点集 + SSE 事件流）。**零第三方依赖**（纯 Foundation / URLSession / SwiftUI / Speech）。
@@ -12,9 +12,9 @@ M6-2 交付：把 M5 web 壳（`web/`）迁为**真 iOS App**（Xcode SwiftUI �
 
 | 文件 | 作用 |
 |---|---|
-| `VoiceSign.xcodeproj/project.pbxproj` | Xcode 工程（用 Xcode 15+ 文件系统同步分组，免逐文件枚举；含 app + tests 两 target） |
-| `VoiceSign.xcodeproj/xcshareddata/xcschemes/VoiceSign.xcscheme` | 共享 scheme（build/test/run） |
-| `App/VoiceSignApp.swift` | App 入口（@main，注入 AppModel/Settings/Speech） |
+| `VoxSign.xcodeproj/project.pbxproj` | Xcode 工程（用 Xcode 15+ 文件系统同步分组，免逐文件枚举；含 app + tests 两 target） |
+| `VoxSign.xcodeproj/xcshareddata/xcschemes/VoxSign.xcscheme` | 共享 scheme（build/test/run） |
+| `App/VoxSignApp.swift` | App 入口（@main，注入 AppModel/Settings/Speech） |
 | `App/Info.plist` | 麦克风/语音识别权限说明 + 局域网 HTTP ATS 放开 |
 | `Core/Models.swift` | 值类型：TaskView/Receipt/UndoInfo/Badge/DecisionPoint/SystemBarInfo/RoleInfo |
 | `Core/VSLogic.swift` | **纯逻辑层**（1:1 移植 web/logic.js）：状态机、回执四行、撤销裁决、轻标签、决策点路由、角色映射、打断状态机、打断词 |
@@ -25,8 +25,8 @@ M6-2 交付：把 M5 web 壳（`web/`）迁为**真 iOS App**（Xcode SwiftUI �
 | `Speech/SpeechRecognizer.swift` | SFSpeechRecognizer + AVAudioEngine 基础实现（失败/未授权回退键盘） |
 | `State/AppModel.swift` | 编排层（对应 web/app.js）：消息流、提交→SSE 流转、应答/撤销/打断、角色同步 |
 | `Views/*.swift` | RootView / MessageViews（气泡·徽章·三点·执行卡·回执卡）/ DecisionZoneView / InputBarView / SystemAndRoleBar / SettingsView |
-| `VoiceSignTests/VSLogicTests.swift` | XCTest：逻辑层（对齐 web/test.js 44 用例） |
-| `VoiceSignTests/SSEParserTests.swift` | XCTest：SSE 分帧/seq/重连/打断三语义 |
+| `VoxSignTests/VSLogicTests.swift` | XCTest：逻辑层（对齐 web/test.js 44 用例） |
+| `VoxSignTests/SSEParserTests.swift` | XCTest：SSE 分帧/seq/重连/打断三语义 |
 | `DevCheck/DevLogicCheck.swift` | **开发期** macOS 命令行断言（不在 Xcode target 内，沙箱跑不了模拟器时本机直跑逻辑） |
 
 ---
@@ -53,18 +53,18 @@ M6-2 交付：把 M5 web 壳（`web/`）迁为**真 iOS App**（Xcode SwiftUI �
 
 ```bash
 cd voicesign-harness/ios
-xcodebuild -project VoiceSign.xcodeproj -scheme VoiceSign \
+xcodebuild -project VoxSign.xcodeproj -scheme VoxSign \
   -destination 'generic/platform=iOS Simulator' -configuration Debug \
   CODE_SIGNING_ALLOWED=NO build
-# => ** BUILD SUCCEEDED **  产物：VoiceSign.app（arm64）
+# => ** BUILD SUCCEEDED **  产物：VoxSign.app（arm64）
 ```
 
 测试目标编译：
 
 ```bash
-xcodebuild -project VoiceSign.xcodeproj -scheme VoiceSign \
+xcodebuild -project VoxSign.xcodeproj -scheme VoxSign \
   -destination 'id=<simulator-id>' -configuration Debug CODE_SIGNING_ALLOWED=NO build-for-testing
-# => ** TEST BUILD SUCCEEDED **（VoiceSignTests.xctest 打包成功）
+# => ** TEST BUILD SUCCEEDED **（VoxSignTests.xctest 打包成功）
 ```
 
 ### 单元测试（如实标注缺口）
@@ -75,7 +75,7 @@ xcodebuild -project VoiceSign.xcodeproj -scheme VoiceSign \
   在非沙箱的普通终端 / Xcode 里直接跑即可：
 
   ```bash
-  xcodebuild test -project VoiceSign.xcodeproj -scheme VoiceSign \
+  xcodebuild test -project VoxSign.xcodeproj -scheme VoxSign \
     -destination 'platform=iOS Simulator,name=<某个 iPhone>'
   # 或直接 Xcode 打开 ⌘U
   ```
@@ -87,7 +87,7 @@ xcodebuild -project VoiceSign.xcodeproj -scheme VoiceSign \
   ```bash
   cd voicesign-harness/ios/DevCheck
   swiftc -o /tmp/vscheck DevLogicCheck.swift \
-    ../VoiceSign/Core/Models.swift ../VoiceSign/Core/VSLogic.swift ../VoiceSign/Core/SSEParser.swift
+    ../VoxSign/Core/Models.swift ../VoxSign/Core/VSLogic.swift ../VoxSign/Core/SSEParser.swift
   /tmp/vscheck
   # => 结果: 61 通过, 0 失败
   ```
@@ -99,7 +99,7 @@ xcodebuild -project VoiceSign.xcodeproj -scheme VoiceSign \
 
 ## 四、真机运行指引
 
-1. **打开工程**：Xcode → Open Project → 选 `voicesign-harness/ios/VoiceSign.xcodeproj`。首次会自动识别 scheme `VoiceSign`。
+1. **打开工程**：Xcode → Open Project → 选 `voicesign-harness/ios/VoxSign.xcodeproj`。首次会自动识别 scheme `VoxSign`。
 2. **起 server（Mac 上）**：按《手机端真机测试指引-M3.md》
    ```bash
    VHS_ADDR=0.0.0.0:8765 VHS_TOKEN=你的token ./vhs serve
