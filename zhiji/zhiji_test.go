@@ -388,6 +388,10 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 	_ = z.Registry.Register(ModelProfile{ID: "cheap"})
 	_ = z.Registry.Register(ModelProfile{ID: "mid"})
 	_ = z.Registry.Register(ModelProfile{ID: "premium"})
+	// 目标常驻：决策注入前先写入 goal（架构 §07：目标+规则由引导流程显式写入，非 OnInput 自动产生）。
+	if _, err := z.Contract.UpdateSelfModel(context.Background(), SelfItem{Layer: LayerGoal, Text: "沙特客户资质流程合规交付"}); err != nil {
+		t.Fatal(err)
+	}
 
 	// 输入 → 决策注入 → 任务结束 → 路由
 	z.OnInput("用户询问沙特资质流程", 5)

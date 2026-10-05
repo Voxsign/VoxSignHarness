@@ -130,6 +130,9 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	if item.Version == 0 {
 		item.Version = 1
 	}
+	if item.Status == "" {
+		item.Status = StatusActive
+	}
 	s.selfModel = append(s.selfModel, item)
 	return item, nil
 }
@@ -197,6 +200,9 @@ func (s *Store) TouchSTM(item MemoryItem, window int) {
 	if item.ID == "" {
 		item.ID = fmt.Sprintf("mem-%d", s.nextID)
 		s.nextID++
+	}
+	if item.Status == "" {
+		item.Status = StatusActive
 	}
 	item.LastSeen = time.Now()
 	s.stm = append(s.stm, item)
