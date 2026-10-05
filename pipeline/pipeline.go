@@ -140,6 +140,9 @@ type Options struct {
 
 	// ConvID 会话标识（同 logDir 下多轮 run 共享；缺省 "default"）。
 	ConvID string
+	// RequestID 外部指定的请求 ID（P0-4b）。空则 Run 内自生成（= 现状行为，向后兼容）；
+	// 非空则整链（轨迹/selfheal/日志）统一用它，使入口 request_id 与轨迹 Entry id 一致。
+	RequestID string
 	// ASRDataDir ASR 数据目录（反馈/黑名单/词典记忆，跨会话全局生效）。
 	ASRDataDir string
 	// RoundEvidence 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）。
@@ -199,7 +202,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		o.guard = risk.NewGuard()
 	}
 
-	out := Outcome{RequestID: newRequestID()}
+	// P0-4b：外部指定 request_id（入口/byReq 透传）优先；空则自生成（= 现状行为）。
+	rid := strings.TrimSpace(o.RequestID)
+	if rid == "" {
+		rid = newRequestID()
+	}
+	out := Outcome{RequestID: rid}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "空指令，没听清，请再说一遍"
 		out.View = contract.ReceiptView{
@@ -263,7 +271,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			}
 		}
 	}
-	emit(trajectory.Entry{Kind: "refer", Intent: &intent})
+	emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
 
 	// 回问出口：分类器/指代任一层要回问 → 不执行。
 	// M3 #37：回问是真实的"模型/人需要更多上下文"点，这里注入 ground 认知切片。
@@ -301,7 +309,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		// 契约逐 cap 的 risk 分级在 risk.Evaluate 阶段消费，不在此重复交集。
 	})
 	b, _ := json.Marshal(verdict)
-	emit(trajectory.Entry{Kind: "space_check", Content: string(b)})
+	emit(trajectory.Entry{Kind: trajectory.KindSpaceCheck, Content: string(b)})
 	out.Intent = intent
 	out.Verdict = verdict
 
@@ -328,7 +336,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	intent.Confirm = decision.Level
 	out.Decision = decision
 	db, _ := json.Marshal(decision)
-	emit(trajectory.Entry{Kind: "risk", Content: string(db)})
+	emit(trajectory.Entry{Kind: trajectory.KindRisk, Content: string(db)})
 
 	// ⑧ confirm（按 Decision 分派；四元缓存命中=不再问）
 	// 安全不变量（SPEC #40/#29）：human=不可逆，永远走 ConfirmFn，
@@ -372,7 +380,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	humanWait := decision.Level != contract.ConfirmAuto
 	waitMs += time.Since(wait0)
 	out.Confirmed = approved
-	emit(trajectory.Entry{Kind: "confirm", Content: fmt.Sprintf("level=%s approved=%v", decision.Level, approved)})
+	emit(trajectory.Entry{Kind: trajectory.KindConfirm, Content: fmt.Sprintf("level=%s approved=%v", decision.Level, approved)})
 	o.recordDecision(out.RequestID, intent, decision, approved)
 	if o.Cache != nil && approved && cacheable {
 		// human 级绝不写缓存（不可逆永远人工）。
@@ -422,14 +430,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: "M2 未为该意图定义独立校验"}
 	}
 	vb, _ := json.Marshal(out.Verify)
-	emit(trajectory.Entry{Kind: "verify", Content: string(vb)})
+	emit(trajectory.Entry{Kind: trajectory.KindVerify, Content: string(vb)})
 
 	// ⑩-bis verify fail → 带 tool:"verify" 进诊断层（不自动重跑 verify，结论供归因）。
 	if out.Verify.Status == verify.StatusFail {
 		if svc := o.selfheal(); svc != nil {
-			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Trace{
-				selfheal.NewTrace("verify", "", map[string]any{"evidence": out.Verify.Evidence}, out.Verify.Detail),
-			})
+			tr := selfheal.NewTrace("verify", "", map[string]any{"evidence": out.Verify.Evidence}, out.Verify.Detail)
+			tr.RequestID = out.RequestID // P0-4a：诊断轨迹/日志带 request_id
+			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Trace{tr})
 		}
 	}
 
@@ -3287,8 +3295,14 @@ func strconvItoa(n int) string {
 // ---------- 轨迹/discuss 薄封装（nil-safe） ----------
 
 func (o *Options) write(e trajectory.Entry) {
-	if o.Trace != nil {
-		_ = o.Trace.Write(e) // #44：轨迹写失败不阻断只读任务
+	if o.Trace == nil {
+		return
+	}
+	// #44：轨迹写失败不阻断只读任务。
+	// P0-1b：不再 `_ =` 静默吞错——未登记 kind / 序列化 / 写盘错误一律打 warning。
+	// 否则判据会"因为 kind 名不存在而空过"，比一般假绿更隐蔽（kinds.go 动因）。
+	if err := o.Trace.Write(e); err != nil {
+		log.Printf("[trajectory] write 被丢弃（kind=%q request_id=%s）: %v", e.Kind, e.RequestID, err)
 	}
 }
 
@@ -3303,7 +3317,7 @@ func (o *Options) attribution(rid, cls, detail, evidence, suggestion string) con
 func (o *Options) writeAttribution(a contract.Attribution) {
 	// 用 Content 携带完整归因 JSON（trajectory.Entry 无 Attrib 字段，按 #44 用 content 落）
 	b, _ := json.Marshal(a)
-	o.write(trajectory.Entry{RequestID: a.RequestID, Kind: "attribution", Content: string(b)})
+	o.write(trajectory.Entry{RequestID: a.RequestID, Kind: trajectory.KindAttribution, Content: string(b)})
 	o.appendDiscussLog(a)
 }
 
@@ -3338,7 +3352,15 @@ func (o *Options) confirm(ctx context.Context, taskID, question string) bool {
 	}
 	type res struct{ ok bool }
 	ch := make(chan res, 1)
+	// P0-2：ConfirmFn 内 panic 不得 crash 进程（否则一次人工确认回调拖垮整个 harness）。
+	// recover 后回退 ok=false（与 err 路径同义=拒绝放行），父 select 照常收到终态。
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[pipeline.confirm] ConfirmFn panic (task=%s): %v", taskID, r)
+				ch <- res{ok: false}
+			}
+		}()
 		ok, err := o.ConfirmFn(taskID, question)
 		if err != nil {
 			ok = false
