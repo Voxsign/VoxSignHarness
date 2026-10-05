@@ -390,6 +390,10 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 	_ = z.Registry.Register(ModelProfile{ID: "premium"})
 
 	// 输入 → 决策注入 → 任务结束 → 路由
+	// 基线=目标/规则层常驻自我模型（Baseline()），新 store 为空，先经契约写入一条种子目标。
+	if _, err := z.Contract.UpdateSelfModel(context.Background(), SelfItem{Layer: LayerGoal, Text: "主目标：沙特市场落地", Confidence: 0.9}); err != nil {
+		t.Fatal(err)
+	}
 	z.OnInput("用户询问沙特资质流程", 5)
 	base, err := z.BeforeDecision(context.Background(), "沙特 资质")
 	if err != nil {

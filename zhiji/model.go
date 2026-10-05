@@ -40,14 +40,15 @@ const (
 
 // SelfItem 一条自我模型条目（架构 §12 字段级）。
 type SelfItem struct {
-	ID              string    `json:"id"`
-	Layer           Layer     `json:"layer"`
-	Text            string    `json:"text"`
-	Version         int       `json:"version"`
-	SupersededBy    string    `json:"superseded_by,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	SourceTrajectory string   `json:"source_trajectory,omitempty"` // 来源轨迹引用（可审计）
-	Confidence      float64   `json:"confidence"`                  // 0–1，外部信号分级
+	ID               string    `json:"id"`
+	Layer            Layer     `json:"layer"`
+	Text             string    `json:"text"`
+	Version          int       `json:"version"`
+	SupersededBy     string    `json:"superseded_by,omitempty"`
+	Status           Status    `json:"status"` // active|superseded|decayed（与 MemoryItem 同语系；新建条目默认 active）
+	UpdatedAt        time.Time `json:"updated_at"`
+	SourceTrajectory string    `json:"source_trajectory,omitempty"` // 来源轨迹引用（可审计）
+	Confidence       float64   `json:"confidence"`                  // 0–1，外部信号分级
 }
 
 // MemoryItem 一条记忆条目（STM 热区 / LTM 归档共用）。

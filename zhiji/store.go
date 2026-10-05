@@ -116,6 +116,9 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	}
 	item.UpdatedAt = time.Now()
 	item.Confidence = clamp01(item.Confidence)
+	if item.Status == "" {
+		item.Status = StatusActive // 新建条目默认 active；superseded 替换逻辑见下（旧条目置 superseded，新条目保持 active）
+	}
 
 	// 查找同层同文本旧条目 → superseded
 	for i := range s.selfModel {
@@ -199,6 +202,9 @@ func (s *Store) TouchSTM(item MemoryItem, window int) {
 		s.nextID++
 	}
 	item.LastSeen = time.Now()
+	if item.Status == "" {
+		item.Status = StatusActive // STM 热区=激活态；否则 Search/写前验证/外化全部跳过它（写不进去=检索不到）
+	}
 	s.stm = append(s.stm, item)
 	// 滚动窗口：保留最近 window 条（架构 §6.3 浅扫=工作记忆滚动更新）
 	if window > 0 && len(s.stm) > window {

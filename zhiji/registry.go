@@ -82,13 +82,16 @@ func (r *Registry) Register(p ModelProfile) error {
 }
 
 // SetDefault 设置默认模型（路由兜底）。
+// 注意：save() 内部自取 RLock，此处必须先 Unlock 再 save——
+// RWMutex 不可重入，持写锁再读锁即自死锁（与 Register() 的先 Unlock 后 save 同款）。
 func (r *Registry) SetDefault(id string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, ok := r.profiles[id]; !ok {
+		r.mu.Unlock()
 		return ErrNotFound
 	}
 	r.defaultID = id
+	r.mu.Unlock()
 	return r.save()
 }
 
