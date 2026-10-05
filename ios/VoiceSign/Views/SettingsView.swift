@@ -51,6 +51,13 @@ struct SettingsView: View {
 
     private enum AddStep { case method, ip, machine }
 
+    /// 机器码粘贴净化：从粘贴文本中提取 XXXX-XXXX-XXXX 形态的机器码（忽略大小写，统一大写），丢弃其余文字。
+    private static func extractedMachineCode(from text: String) -> String? {
+        let pattern = #"\b[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}\b"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(text[range]).uppercased()
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -100,7 +107,7 @@ struct SettingsView: View {
                         Slider(value: $tts.rate, in: 0.4...0.6, step: 0.05)
                         Text(String(format: "%.2f", tts.rate)).font(.system(size: 11)).foregroundColor(.secondary)
                     }
-                    Button("试听") { tts.speak("你好，我是 VoiceSign 语音助手。") }
+                    Button("试听") { tts.speak("你好，我是 VoxSign 语音助手。") }
                 }
 
                 // —— 后台能力 ——
@@ -371,6 +378,12 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.characters)
                     .autocapitalization(.allCharacters)
+                    // 粘贴净化：从粘贴文本提取机器码（XXXX-XXXX-XXXX），丢弃其余文字，统一大写。
+                    .onChange(of: mcCode) { newValue in
+                        if let code = Self.extractedMachineCode(from: newValue), code != newValue {
+                            mcCode = code
+                        }
+                    }
                 Text("输入 Harness 装机生成的机器码，云道自动定位该机器。")
                     .font(.system(size: 11)).foregroundColor(.secondary)
             }
@@ -469,19 +482,27 @@ struct SettingsView: View {
         }
     }
 
+    /// 云道转发地址：https://voxsign.ai/relay/<机器码>（云端按机器码路由到该机反向连接；
+    /// 端口只按服务分不按机器分，转发请求全部复用 443）。
+    private func relayBase(code: String) -> String {
+        let cloud = settings.cloudBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return "\(cloud)/relay/\(code)"
+    }
+
     /// 保存机器码方式：检测（直连 or 转发通道）通过才保存。
     private func saveMachine(_ info: MachineInfo) {
         mcBusy = true
         mcError = ""
         Task {
-            let ok = await APIClient.shared.healthCheck(base: mcRelay ? settings.cloudBase : info.base)
+            let saveBase = mcRelay ? relayBase(code: mcCode) : info.base
+            let ok = await APIClient.shared.healthCheck(base: saveBase)
             mcBusy = false
             guard ok else {
                 mcError = "无法连接（确认机器在线\(mcRelay ? "、云道转发可用" : "")）"
                 return
             }
             settings.addServer(name: info.name,
-                               base: info.base,
+                               base: saveBase,
                                token: info.token,
                                machineCode: mcCode,
                                viaRelay: mcRelay)

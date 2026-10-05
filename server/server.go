@@ -51,8 +51,8 @@ const (
 	stNeedConfirm = "need_confirm"    // 强确认（红条）
 	stDone        = "done"
 	stCanceled    = "canceled"
-	stRevoked     = "revoked" // 架构 v1 §6.2：撤回已完成任务（已标记，副作用清理走既有 rollback）
-	stPending     = "pending" // 预留：排队未开始（未来调度器用）
+	stRevoked     = "revoked"     // 架构 v1 §6.2：撤回已完成任务（已标记，副作用清理走既有 rollback）
+	stPending     = "pending"     // 预留：排队未开始（未来调度器用）
 	stInterrupted = "interrupted" // M4-1 ③：重启恢复的未完成任务，不自动续跑
 )
 
@@ -106,7 +106,7 @@ func stepName(status string) string {
 
 // taskState 是一次异步任务的完整状态（含 rollback 所需的可逆/备份信息）。
 type taskState struct {
-	Document string // 需求文档全文（实现类任务；续跑/回答时随 Options.Document 回传）
+	Document  string               // 需求文档全文（实现类任务；续跑/回答时随 Options.Document 回传）
 	ID        string               `json:"task_id"`
 	RequestID string               `json:"request_id,omitempty"` // M4-1 ① 重试去重键
 	Text      string               `json:"text,omitempty"`       // M4-1 ② need_ask 续跑原文
@@ -183,8 +183,10 @@ type Server struct {
 
 	// cloud 云端模式（VHS_MODE=cloud）：谷歌登录/租户/配额；nil=本地模式。
 	cloud *cloudAuth
-	// devices 设备注册表（云道机器码机制）；云端模式创建，本地模式 nil。
+	// devices 设备注册表（云道机器码机制）；本地/云端模式都创建。
 	devices *deviceRegistry
+	// relayHub 异网转发：机器码 → 活动 SSE 反向连接（端口按服务分、不按机器分）。
+	relay *relayHub
 
 	// 外部调用健壮性通道（架构 v1 §7）：每 Server 实例独立，避免跨租户/跨测试熔断污染。
 	asrBH *bulkhead
@@ -228,8 +230,10 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 	}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
-		s.devices = newDeviceRegistry(cfg.Global.LogDir)
 	}
+	// 设备注册表在本地/云端都要可用：本地 Mac 既要注册机器码，也要用设备 token 放行业务端点。
+	s.devices = newDeviceRegistry(cfg.Global.LogDir)
+	s.relay = newRelayHub()
 	s.restore()
 	return s
 }
@@ -263,6 +267,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/devices/lookup", s.public(s.handleDevicesLookup))
 	mux.HandleFunc("/v1/devices/register", s.deviceToken(s.handleDevicesRegister))
 	mux.HandleFunc("/v1/devices/heartbeat", s.deviceToken(s.handleDevicesHeartbeat))
+	// 异网转发（relay）：443 唯一入口，按机器码路由。自带设备 token 鉴权，不走 s.auth。
+	mux.HandleFunc("/v1/relay/connect", s.handleRelayConnect) // Mac agent 常驻 SSE 出站
+	mux.HandleFunc("/v1/relay/respond", s.handleRelayRespond) // Mac agent 回报响应
+	mux.HandleFunc("/v1/relay/", s.handleRelayForward)        // 客户端转发入口 /v1/relay/{code}/{path...}
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
@@ -311,6 +319,7 @@ func (r *statusRecorder) Flush() {
 // handleASR 接收 iOS 录音（multipart file=WAV），base64 后转发平台 model-center 的 /api/model/asr
 // （阿里千问 ASR，AIOPS_KEY 鉴权，与 chat 通道同一密钥环境变量）。契约见 docs/ASR接口契约-20261004.md。
 func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
+	asrStart := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
 	if err := r.ParseMultipartForm(15 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "音频解析失败：" + err.Error()})
@@ -398,7 +407,8 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
 		return
 	}
-	log.Printf("ASR: rid=%s 校准成功 model=%s duration_ms=%d text_len=%d", requestIDFromReq(r), pr.Model, pr.DurMs, len(pr.Text))
+	log.Printf("ASR: rid=%s 校准成功 model=%s duration_ms=%d text_len=%d wall_ms=%d",
+		requestIDFromReq(r), pr.Model, pr.DurMs, len(pr.Text), time.Since(asrStart).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model,
 		"hotwords_used": len(hotwords)})
@@ -494,6 +504,19 @@ func (s *Server) public(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return s.cors(func(w http.ResponseWriter, r *http.Request) {
+		// 设备凭证优先：Bearer <设备token> 命中本机 devices.json 注册表 → 注入机器身份放行。
+		// 覆盖 /v1/status、/v1/tasks、/v1/voice、/v1/me 等业务端点（iOS 拿机器码 lookup 到的 token 直连）。
+		// 原有鉴权（会话 JWT、静态 VHS_TOKEN）保持：未命中设备 token 才走下面的云/本机逻辑。
+		dTok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if dTok == "" {
+			dTok = r.Header.Get("X-Token")
+		}
+		if s.devices != nil && dTok != "" {
+			if rec := s.devices.findByToken(dTok); rec != nil {
+				next(w, r.WithContext(withMachine(r.Context(), rec.MachineCode)))
+				return
+			}
+		}
 		// 云端模式：校验会话 JWT 并注入租户；本地模式沿用 m7-token / 本机豁免。
 		if s.cloud != nil {
 			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -1145,8 +1168,13 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			}
 		}()
 		// C1：pipeline.Run 收进 Runner（ob=nil：SSE/CLI 细粒度事件仍走 o.ProgressObserver=bridgeFromBus，零行为变化）。
+		runStart := time.Now()
 		rn := NewRunner(ts, &o, nil)
 		out, err := rn.Run(ctx, fullText)
+		loopMs := time.Since(runStart).Milliseconds()
+		// 结构化计时日志（手机侧定位用，一行一条）：total_ms = 分类+LLM+工具全段。
+		log.Printf("[timing] task=%s total_ms=%d loop_ms=%d intent=%s text=%q",
+			ts.ID, loopMs, out.LoopMs, out.Intent.Intent, strings.TrimSpace(text))
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		ts.Outcome = &out
@@ -1160,10 +1188,19 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			// 语音场景（iOS 按住说话，无键盘反问交互）：意图 UNKNOWN 时**不挂起反问**，
 			// 直接结束并回复提示，避免任务永久 need_ask → App 轮询无终态 → 用户"没反应"。
 			if ts.Mode == "" || ts.Mode == "voice" {
+				heard := strings.TrimSpace(text)
+				if len(heard) > 40 {
+					heard = heard[:40] + "…"
+				}
+				receipt := "你说的是「" + heard + "」——我没太确定要做什么。" +
+					"可以直接说清楚对象，比如「查一下北京的天气」「记一个想法：…」「跑一下测试」。"
+				// 手机侧以轮询 GET /v1/tasks/{id} 的 receipt 为准，必须改 View.Result，光改 event 不生效。
+				out.View.Action = "（待澄清）"
+				out.View.Result = receipt
 				ts.Outcome = &out
 				s.markStatus(ts, stDone)
 				s.emitEvent(ts, "done", map[string]any{
-					"receipt":     "没听懂，请再说一遍：尽量直接说出要做什么，例如“帮我查天气”或“记一个想法”。",
+					"receipt":     contract.RenderReceipt(out.View),
 					"attribution": out.Attribution,
 				})
 				s.persist(ts)
