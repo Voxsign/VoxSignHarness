@@ -207,6 +207,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	if rid == "" {
 		rid = newRequestID()
 	}
+	o.RequestID = rid // 回写：本任务 Options 克隆内后续方法（selfheal/llmSummarize 日志）统一读到规范 rid
 	out := Outcome{RequestID: rid}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "空指令，没听清，请再说一遍"
@@ -1491,9 +1492,10 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 		log.Printf("[llmSummarize] providers nil")
 		return ""
 	}
+	rid := o.RequestID // P0-4b：日志带主链 request_id（Run 已回写 o.RequestID）
 	p, err := o.Providers.Get("fast")
 	if err != nil {
-		log.Printf("[llmSummarize] fast provider unavailable: %v", err)
+		log.Printf("[llmSummarize] rid=%s fast provider unavailable: %v", rid, err)
 		return ""
 	}
 	resp, err := p.Chat(ctx, provider.ChatRequest{
@@ -1505,11 +1507,11 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 		ResponseFormat: noJSON(),
 	})
 	if err != nil {
-		log.Printf("[llmSummarize] fast Chat err: %v", err)
+		log.Printf("[llmSummarize] rid=%s fast Chat err: %v", rid, err)
 		return ""
 	}
 	if strings.TrimSpace(resp.Content) == "" {
-		log.Printf("[llmSummarize] fast Chat empty content (finish_reason may be length; reasoning budget exhausted)")
+		log.Printf("[llmSummarize] rid=%s fast Chat empty content (finish_reason may be length; reasoning budget exhausted)", rid)
 		return ""
 	}
 	c := strings.TrimSpace(resp.Content)
@@ -1525,7 +1527,7 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 			}
 		}
 		if strings.HasPrefix(c, "{") {
-			log.Printf("[llmSummarize] returned unparsable JSON shell: %.160s", c)
+			log.Printf("[llmSummarize] rid=%s returned unparsable JSON shell: %.160s", rid, c)
 			return ""
 		}
 	}
@@ -2670,7 +2672,7 @@ func (o *Options) repairFailed(ctx context.Context, it contract.Intent, receipts
 		if r.OK {
 			continue
 		}
-		att := selfheal.Attempt{Tool: r.Tool, Args: o.argsForFailed(it, r.Tool), Receipt: r}
+		att := selfheal.Attempt{Tool: r.Tool, Args: o.argsForFailed(it, r.Tool), Receipt: r, RequestID: o.RequestID} // P0-4b：诊断 trace 带主链 request_id
 		if nr, _ := svc.SafeRetry(ctx, it.RawText, it.Intent, att); nr != nil {
 			repaired = append(repaired, *nr)
 		}
