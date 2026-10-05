@@ -1,0 +1,103 @@
+package observe
+
+import (
+	"testing"
+	"time"
+)
+
+func ev(trace, stage string) LineEvent {
+	return LineEvent{Time: time.Now(), TraceID: trace, Stage: stage, Status: "ok"}
+}
+
+// 多订阅者按 filter 扇出，各收各的匹配事件。
+func TestBus_PublishSubscribeFanout(t *testing.T) {
+	b := NewBus("m1", 64)
+	chA := b.Subscribe(Filter{TraceID: "tA"})
+	chB := b.Subscribe(Filter{TraceID: "tB"})
+
+	b.Publish(ev("tA", "stage-a1"))
+	b.Publish(ev("tB", "stage-b1"))
+	b.Publish(ev("tA", "stage-a2"))
+
+	// A 收 2 条 tA，B 收 1 条 tB（给足读取时间）
+	gotA := readN(t, chA, 2, time.Second)
+	gotB := readN(t, chB, 1, time.Second)
+	if len(gotA) != 2 || gotA[0].Stage != "stage-a1" || gotA[1].Stage != "stage-a2" {
+		t.Fatalf("A 应按序收 2 条 tA, got %+v", gotA)
+	}
+	if len(gotB) != 1 || gotB[0].Stage != "stage-b1" {
+		t.Fatalf("B 应收 1 条 tB, got %+v", gotB)
+	}
+	if gotA[0].MachineID != "m1" {
+		t.Fatalf("事件应盖 machineID=m1, got %q", gotA[0].MachineID)
+	}
+}
+
+// Replay 对同一 trace 不重不丢、按序。
+func TestBus_ReplayNoDupLoss(t *testing.T) {
+	b := NewBus("m1", 64)
+	for i := 0; i < 10; i++ {
+		b.Publish(ev("tx", string(rune('a'+i))))
+	}
+	got := b.Replay("tx")
+	if len(got) != 10 {
+		t.Fatalf("Replay 应 10 条, got %d", len(got))
+	}
+	if got[0].Stage != "a" || got[9].Stage != "j" {
+		t.Fatalf("Replay 顺序错乱: %s ... %s", got[0].Stage, got[9].Stage)
+	}
+}
+
+// 慢消费者（无人读 best-effort 通道）不得反向阻塞 Publish。
+func TestBus_NeverBlocksRunner(t *testing.T) {
+	b := NewBus("m1", 64)
+	ch := b.Subscribe(Filter{}) // 通配，但绝不读 → 缓冲(16)很快满
+	_ = ch
+
+	done := make(chan struct{})
+	start := make(chan struct{})
+	go func() {
+		close(start)
+		for i := 0; i < 1000; i++ {
+			b.Publish(ev("ts", "s"))
+		}
+		close(done)
+	}()
+	<-start
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Publish 被慢消费者阻塞（应满则丢、绝不阻塞）")
+	}
+}
+
+// 可靠订阅：消费者先慢后追，全部事件一条不丢。
+func TestBus_ReliableNoDrop(t *testing.T) {
+	b := NewBus("m1", 64)
+	ch := b.SubscribeReliable(Filter{TraceID: "tr"})
+
+	const n = 50
+	for i := 0; i < n; i++ {
+		b.Publish(ev("tr", "stage"))
+	}
+	// 全部收齐（给足时间让泵排空内存队列）
+	got := readN(t, ch, n, 3*time.Second)
+	if len(got) != n {
+		t.Fatalf("可靠订阅应收到全部 %d 条, got %d", n, len(got))
+	}
+}
+
+func readN(t *testing.T, ch <-chan LineEvent, n int, timeout time.Duration) []LineEvent {
+	t.Helper()
+	var out []LineEvent
+	deadline := time.After(timeout)
+	for len(out) < n {
+		select {
+		case ev := <-ch:
+			out = append(out, ev)
+		case <-deadline:
+			return out
+		}
+	}
+	return out
+}
