@@ -56,8 +56,8 @@ final class APIClient {
     static let shared = APIClient()
     var settings: SettingsStore = .shared
 
-    /// 机器码查询走真实云道接口；接口未上线前置 true 走演示路径（返回预设本机）。
-    static var machineLookupMock = true
+    /// 机器码查询走真实云道接口（POST /v1/devices/lookup，免鉴权）。
+    static var machineLookupMock = false
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -273,17 +273,29 @@ final class APIClient {
     // MARK: - 机器码绑定（自建）
 
     /// POST /v1/devices/lookup {machine_code} → 云道定位机器（身份 + 内网地址 + 在线状态）。
-    /// 云道接口未上线前（machineLookupMock=true）走演示路径：返回预设本机（同网直连示例）。
+    /// 固定打云道地址（cloudBase），不依赖自建模式当前选中的服务器。
     func lookupMachine(code: String) async throws -> MachineInfo {
         if Self.machineLookupMock {
             DiagLogger.shared.log("NET", "lookupMachine mock: code=\(code)")
             return MachineInfo(name: "办公室 Mac", base: "http://192.168.8.186:8897", online: true, token: "m7-token")
         }
-        let (c, data) = try await request("POST", "/v1/devices/lookup",
-                                          body: ["machine_code": code])
+        let clean = settings.cloudBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: clean + "/v1/devices/lookup") else {
+            throw APIError.transport("云道地址无效")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["machine_code": code])
+        DiagLogger.shared.log("NET", "lookupMachine \(url.absoluteString) code=\(code)")
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw APIError.transport("无 HTTP 响应")
+        }
         let j = decodeJSON(data)
-        guard (200...299).contains(c), let base = j["base"] as? String else {
-            throw APIError.http(c, String(decoding: data, as: UTF8.self))
+        guard (200...299).contains(http.statusCode), let base = j["base"] as? String else {
+            DiagLogger.shared.log("NET", "lookupMachine → \(http.statusCode) \(String(decoding: data, as: UTF8.self))")
+            throw APIError.http(http.statusCode, String(decoding: data, as: UTF8.self))
         }
         return MachineInfo(name: j["name"] as? String ?? "服务器",
                            base: base,
