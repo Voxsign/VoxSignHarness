@@ -43,9 +43,21 @@ struct RolesResponse: Equatable {
     let role: String?
 }
 
+/// 机器码查询返回：云道定位到的机器身份。
+struct MachineInfo: Equatable {
+    let name: String
+    let base: String
+    let online: Bool
+    /// 云道为该机器下发的访问凭证（token）。
+    let token: String
+}
+
 final class APIClient {
     static let shared = APIClient()
     var settings: SettingsStore = .shared
+
+    /// 机器码查询走真实云道接口；接口未上线前置 true 走演示路径（返回预设本机）。
+    static var machineLookupMock = true
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -256,5 +268,44 @@ final class APIClient {
         return RolesResponse(roles: rs,
                              taskId: j["task_id"] as? String,
                              role: j["role"] as? String)
+    }
+
+    // MARK: - 机器码绑定（自建）
+
+    /// POST /v1/devices/lookup {machine_code} → 云道定位机器（身份 + 内网地址 + 在线状态）。
+    /// 云道接口未上线前（machineLookupMock=true）走演示路径：返回预设本机（同网直连示例）。
+    func lookupMachine(code: String) async throws -> MachineInfo {
+        if Self.machineLookupMock {
+            DiagLogger.shared.log("NET", "lookupMachine mock: code=\(code)")
+            return MachineInfo(name: "办公室 Mac", base: "http://192.168.8.186:8897", online: true, token: "m7-token")
+        }
+        let (c, data) = try await request("POST", "/v1/devices/lookup",
+                                          body: ["machine_code": code])
+        let j = decodeJSON(data)
+        guard (200...299).contains(c), let base = j["base"] as? String else {
+            throw APIError.http(c, String(decoding: data, as: UTF8.self))
+        }
+        return MachineInfo(name: j["name"] as? String ?? "服务器",
+                           base: base,
+                           online: j["online"] as? Bool ?? false,
+                           token: j["token"] as? String ?? "")
+    }
+
+    /// 连通性探测（保存前检测 / 直连探测）——不依赖当前 settings.base，任意 base 可探。
+    func healthCheck(base: String) async -> Bool {
+        let clean = base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: clean + "/v1/health") else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 4
+        do {
+            let (_, resp) = try await session.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return false }
+            DiagLogger.shared.log("NET", "healthCheck \(url.absoluteString) → \(http.statusCode)")
+            return (200...299).contains(http.statusCode)
+        } catch {
+            DiagLogger.shared.log("NET", "healthCheck \(url.absoluteString) 失败：\(error.localizedDescription)")
+            return false
+        }
     }
 }

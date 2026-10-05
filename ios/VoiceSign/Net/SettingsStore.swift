@@ -2,22 +2,37 @@
 //  SettingsStore.swift
 //  VoiceSign
 //
-//  豆包式设置（T3）：多服务器管理——可保存多台"我的电脑/云服务器"，
-//  随时切换；当前活动服务器决定 base/token。等价豆包"连接哪台设备/云"。
+//  豆包式设置（T3）：双连接模式——
+//  - 云道（默认）：零配置，仅 Google 登录；base/token 指向 VoxSign 云端（与服务器列表无关）。
+//  - 自建：默认空列表，用户自己添加服务器（IP 地址 / 机器码 两种方式）；
+//    条目记录绑定方式与连接方式（直连 / 云端转发）。
 //  下游（APIClient/SSEClient）继续用 base/token 计算属性，无需改动。
 //
 
 import Foundation
 
-/// 一台可连接的 Harness 服务器（电脑或云）。
+/// 连接模式：云道（默认）/ 自建。
+enum ConnectionMode: String, Codable, CaseIterable {
+    case cloud        // 云道 · 默认：Google 登录即用，零配置
+    case selfHosted   // 自建：自己添加服务器
+}
+
+/// 一台可连接的 Harness 服务器（自建）。
 struct ServerConfig: Identifiable, Codable, Equatable {
     var id: String
     var name: String
     var base: String
     var token: String
+    /// 机器码绑定（非 nil = 通过机器码添加，地址由云道定位带入）。
+    var machineCode: String?
+    /// 云端转发（内网服务器经云道中转；nil = 直连）。
+    var viaRelay: Bool?
+
+    var isMachineBound: Bool { machineCode != nil }
+    var usesRelay: Bool { viaRelay ?? false }
 }
 
-/// Google 登录态（云端模式：租户 = Google sub）。
+/// Google 登录态（云道模式：租户 = Google sub）。
 struct GoogleAuthState: Codable, Equatable {
     var email: String
     var tenant: String
@@ -26,6 +41,9 @@ struct GoogleAuthState: Codable, Equatable {
     var quotaLimit: Int?
     var resetsAt: String?
     var trialUntil: String?
+    /// 会话 JWT（云道模式下作为 Bearer token；老版本数据可能缺失 → optional 兼容）。
+    var token: String?
+    /// 兼容保留（v2.1 曾记录服务器地址；云道模式不再依赖它）。
     var serverBase: String
 }
 
@@ -36,56 +54,66 @@ final class SettingsStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private let serversKey = "vhs-ios-servers"
     private let activeKey = "vhs-ios-active"
+    private let modeKey = "vhs-ios-mode"
 
-    /// 服务器列表（多台：局域网电脑 / 云 / 备机），持久化。
+    /// 连接模式（云道默认 / 自建），持久化。
+    @Published var mode: ConnectionMode = .cloud
+
+    /// 自建服务器列表（默认空，用户自己添加），持久化。
     /// 注：不挂 didSet（init 阶段赋值会触发 didSet 且此时 self 未完整初始化会编译报错），
     /// 持久化统一在变更方法里显式 persist()。
     @Published var servers: [ServerConfig] = []
-    /// 当前活动服务器 id，持久化。
+    /// 当前活动服务器 id（自建模式），持久化。
     @Published var activeServerID: String = ""
 
-    /// 当前活动服务器的 base（下游兼容用）。
-    var base: String { activeServer()?.base ?? "" }
-    /// 当前活动服务器的 token（下游兼容用）。
-    var token: String { activeServer()?.token ?? "" }
+    /// 云道地址（开发期指向本机云端模拟；正式域名上线后切换 https://voxsign.ai）。
+    var cloudBase: String { "http://192.168.8.186:8898" }
+
+    /// 当前生效的 base（下游兼容用）。
+    var base: String {
+        switch mode {
+        case .cloud: return cloudBase
+        case .selfHosted: return activeServer()?.base ?? ""
+        }
+    }
+    /// 当前生效的 token（下游兼容用）。
+    var token: String {
+        switch mode {
+        case .cloud: return googleAuth?.token ?? ""
+        case .selfHosted: return activeServer()?.token ?? ""
+        }
+    }
 
     init() {
+        if let raw = defaults.string(forKey: modeKey), let m = ConnectionMode(rawValue: raw) {
+            mode = m
+        }
         if let data = defaults.data(forKey: serversKey),
            let list = try? JSONDecoder().decode([ServerConfig].self, from: data),
            !list.isEmpty {
             servers = list
-        } else {
-            // 首次启动：预置三台（豆包式"可连多台"）——
-            // 186:8897 = 本机 Mac 本地后台（默认连接）；186:8898 = 本机云端模拟（Google 登录，token 登录后自动写入）；
-            // 201:8897 = 主服务器（备用）。
-            servers = [
-                ServerConfig(id: UUID().uuidString,
-                             name: "我的 Mac（本地）",
-                             base: "http://192.168.8.186:8897",
-                             token: "m7-token"),
-                ServerConfig(id: UUID().uuidString,
-                             name: "云端模拟（Google）",
-                             base: "http://192.168.8.186:8898",
-                             token: ""),
-                ServerConfig(id: UUID().uuidString,
-                             name: "主服务器",
-                             base: "http://192.168.8.201:8897",
-                             token: "m7-token")
-            ]
         }
+        // 自建默认空：不再预置任何服务器；老用户升级后保留原有列表。
         let saved = defaults.string(forKey: activeKey)
         if let saved, servers.contains(where: { $0.id == saved }) {
             activeServerID = saved
-        } else {
-            activeServerID = servers[0].id
         }
         loadAuth()
     }
 
-    // MARK: - 服务器管理
+    // MARK: - 模式
 
-    func addServer(name: String, base: String, token: String) {
-        let cfg = ServerConfig(id: UUID().uuidString, name: name, base: base, token: token)
+    func setMode(_ m: ConnectionMode) {
+        mode = m
+        defaults.set(m.rawValue, forKey: modeKey)
+    }
+
+    // MARK: - 自建服务器管理
+
+    func addServer(name: String, base: String, token: String,
+                   machineCode: String? = nil, viaRelay: Bool = false) {
+        let cfg = ServerConfig(id: UUID().uuidString, name: name, base: base, token: token,
+                               machineCode: machineCode, viaRelay: viaRelay)
         servers.append(cfg)
         activeServerID = cfg.id   // 新加的即切换过去（豆包式：添加即连接）
         persist()
@@ -116,15 +144,14 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
-    // MARK: - Google 登录态（云端模式）
+    // MARK: - Google 登录态（云道模式）
 
     private let authKey = "vhs-ios-google-auth"
 
-    /// 登录态：租户邮箱/档位/额度/试用期（持久化；token 存于对应服务器 token 字段）。
+    /// 登录态：租户邮箱/档位/额度/试用期 + 会话 JWT（持久化）。
     @Published var googleAuth: GoogleAuthState?
 
     func setGoogleLogin(_ result: GoogleLoginResult, base: String) {
-        updateActive(base: base, token: result.token)
         googleAuth = GoogleAuthState(email: result.email,
                                      tenant: result.tenant,
                                      tier: result.tier,
@@ -132,6 +159,7 @@ final class SettingsStore: ObservableObject {
                                      quotaLimit: result.quota?.limit,
                                      resetsAt: result.quota?.resetsAt,
                                      trialUntil: result.trialUntil,
+                                     token: result.token,
                                      serverBase: base)
         persistAuth()
     }
@@ -149,11 +177,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func logoutGoogle() {
-        if let idx = servers.firstIndex(where: { $0.id == activeServerID }) {
-            servers[idx].token = ""
-        }
         googleAuth = nil
-        persist()
         persistAuth()
     }
 
@@ -186,5 +210,6 @@ final class SettingsStore: ObservableObject {
             defaults.set(data, forKey: serversKey)
         }
         defaults.set(activeServerID, forKey: activeKey)
+        defaults.set(mode.rawValue, forKey: modeKey)
     }
 }
