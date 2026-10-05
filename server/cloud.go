@@ -647,6 +647,18 @@ func ctxTenant(ctx context.Context) string {
 	return v
 }
 
+// 设备凭证（机器码）身份注入：设备 token 命中本机注册表后，把机器码放进上下文。
+type machineCtxKey struct{}
+
+func withMachine(ctx context.Context, code string) context.Context {
+	return context.WithValue(ctx, machineCtxKey{}, code)
+}
+
+func ctxMachine(ctx context.Context) string {
+	v, _ := ctx.Value(machineCtxKey{}).(string)
+	return v
+}
+
 // truncate 日志脱敏用截断。
 func truncate(s string, n int) string {
 	if len(s) <= n {
