@@ -1092,7 +1092,9 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	}
 	safeGo("pipeline:"+ts.ID, func() {
 		defer cancel() // 任务结束（含超时/取消）时释放 deadline 定时器
-		out, err := pipeline.Run(ctx, &o, fullText)
+		// C1：pipeline.Run 收进 Runner（ob=nil：SSE/CLI 细粒度事件仍走 o.ProgressObserver=bridgeFromBus，零行为变化）。
+		rn := NewRunner(ts, &o, nil)
+		out, err := rn.Run(ctx, fullText)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		ts.Outcome = &out
