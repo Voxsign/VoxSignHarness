@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VoxSign 设置 · UI 设计方案</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231A73E8'/%3E%3Cpath d='M16 7l8 11h-4l-4-6-4 6H8z' fill='white'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#F2F2F7; --card:#FFFFFF; --sep:#E5E5EA;
+    --ink:#1C1C1E; --sub:#8E8E93; --accent:#1A73E8;
+    --green:#34C759; --red:#FF3B30; --radius:14px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+    background:#EDEFF2; color:var(--ink);
+    display:flex; justify-content:center; gap:48px; align-items:flex-start;
+    padding:32px 24px; min-height:100vh; flex-wrap:wrap;
+  }
+  /* ===== iPhone 框 ===== */
+  .device{
+    width:390px; background:var(--bg); border-radius:44px;
+    border:10px solid #0A0A0C; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.25);
+  }
+  .statusbar{display:flex;justify-content:space-between;padding:14px 26px 6px;font-size:13px;font-weight:600}
+  /* ===== 页面 ===== */
+  .nav{display:flex;justify-content:space-between;align-items:center;padding:12px 18px 8px}
+  .nav .title{font-size:17px;font-weight:700}
+  .nav .done{color:var(--accent);font-size:15px;font-weight:500}
+  /* 分段切换 */
+  .segmented{
+    margin:10px 16px; padding:3px; background:#E4E4EA; border-radius:10px;
+    display:grid; grid-template-columns:1fr 1fr;
+  }
+  .segmented button{
+    border:none;background:transparent;padding:8px 0;border-radius:8px;
+    font-size:14px;font-weight:600;color:var(--sub);cursor:pointer;
+    font-family:inherit;
+  }
+  .segmented button.active{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .view{padding:4px 16px 24px}
+  .hidden{display:none}
+  /* 卡片 */
+  .card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  .card h2{font-size:16px;font-weight:700;margin-bottom:4px}
+  .card .desc{font-size:13px;color:var(--sub);line-height:1.5}
+  .footnote{font-size:12px;color:var(--sub);text-align:center;margin-top:18px;line-height:1.5}
+  /* 云端：Google 登录 */
+  .cloud-hero{text-align:center;padding:30px 20px 26px}
+  .cloud-hero .mark{width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#4285F4,#EA4335 55%,#FBBC05 80%,#34A853);margin:0 auto 14px;display:flex;align-items:center;justify-content:center}
+  .cloud-hero .mark svg{width:34px;height:34px}
+  .cloud-hero h1{font-size:19px;font-weight:700;margin-bottom:4px}
+  .google-btn{
+    margin-top:18px;width:100%;padding:13px 0;border:none;border-radius:12px;
+    background:#fff;color:var(--ink);font-size:16px;font-weight:600;cursor:pointer;
+    box-shadow:0 1px 4px rgba(0,0,0,.18), inset 0 0 0 1px #DADCE0;
+    display:flex;align-items:center;justify-content:center;gap:10px;font-family:inherit;
+  }
+  .google-btn:active{background:#F1F3F4}
+  .google-btn .g{width:20px;height:20px}
+  .badge-row{display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap}
+  .badge{font-size:12px;color:var(--sub);background:#F2F2F7;border-radius:20px;padding:5px 12px}
+  /* 云端：已登录 */
+  .auth-head{display:flex;align-items:center;gap:12px}
+  .avatar{width:44px;height:44px;border-radius:22px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700}
+  .auth-head .email{font-size:15px;font-weight:600}
+  .auth-head .tier{font-size:13px;color:var(--green);font-weight:600}
+  .kv{display:grid;grid-template-columns:1fr auto;gap:10px 12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--sep)}
+  .kv .k{font-size:13px;color:var(--sub)}
+  .kv .v{font-size:13px;font-weight:600}
+  .actions{display:flex;gap:10px;margin-top:16px}
+  .actions button{flex:1;padding:11px 0;border-radius:10px;border:none;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn-refresh{background:#F2F2F7;color:var(--ink)}
+  .btn-logout{background:#FDECEA;color:var(--red)}
+  /* 本地：服务器 */
+  .local-title{font-size:13px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.4px;margin:8px 6px 6px}
+  .server{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid var(--sep);cursor:pointer}
+  .server:last-child{border-bottom:none}
+  .server .dot{width:8px;height:8px;border-radius:4px;background:var(--sep);flex:none}
+  .server.active .dot{background:var(--green)}
+  .server .sname{font-size:15px;font-weight:500;flex:1}
+  .server .surl{font-size:12px;color:var(--sub)}
+  .server .check{color:var(--accent);font-weight:600;font-size:14px}
+  .add-btn{
+    width:100%;margin-top:6px;padding:12px 0;border:none;border-radius:12px;
+    background:#fff;color:var(--accent);font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;
+    box-shadow:0 1px 3px rgba(0,0,0,.10);
+  }
+  /* 自建空状态 */
+  .empty{text-align:center;padding:26px 10px 18px}
+  .empty-mark{
+    width:52px;height:52px;border-radius:14px;background:#F2F2F7;color:var(--sub);
+    display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;margin:0 auto 12px;
+  }
+  .empty p{font-size:15px;font-weight:600;margin-bottom:4px}
+  .empty span{font-size:12.5px;color:var(--sub);line-height:1.5}
+  /* 添加方式底部弹层 */
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+  .sheet-card{background:#F2F2F7;width:100%;max-width:390px;border-radius:20px 20px 0 0;padding:14px 16px 30px}
+  .sheet-card h3{text-align:center;font-size:16px;font-weight:700;padding:6px 0 14px}
+  .sheet-card .method{
+    width:100%;display:flex;align-items:center;gap:14px;background:#fff;border:none;
+    border-radius:14px;padding:14px;margin-bottom:10px;cursor:pointer;text-align:left;font-family:inherit;
+  }
+  .sheet-card .method:active{background:#F7F7FA}
+  .m-icon{width:38px;height:38px;border-radius:10px;background:#E8F0FE;color:var(--accent);display:flex;align-items:center;justify-content:center;flex:none}
+  .m-icon svg{width:20px;height:20px}
+  .m-name{font-size:15px;font-weight:600;color:var(--ink)}
+  .m-desc{font-size:12.5px;color:var(--sub);display:block;margin-top:2px}
+  .sheet-card .cancel{
+    width:100%;background:#fff;border:none;border-radius:14px;padding:14px 0;
+    font-size:15px;font-weight:600;color:var(--ink);cursor:pointer;font-family:inherit;
+  }
+  /* IP 地址表单 */
+  .form-card{background:#fff;border-radius:14px;padding:6px 14px;margin-bottom:10px}
+  .form-card .field{border-bottom:1px solid var(--sep)}
+  .form-card .field:last-child{border-bottom:none}
+  .lan-hint{
+    display:flex;align-items:center;gap:8px;background:#FFF7E6;color:#B25E00;
+    font-size:12.5px;padding:9px 10px;border-radius:10px;margin:10px 0 2px;line-height:1.4;
+  }
+  .lan-hint svg{flex:none}
+  .relay-row{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 2px 10px;
+  }
+  .relay-title{font-size:14px;font-weight:600}
+  .relay-desc{font-size:11.5px;color:var(--sub);line-height:1.5;margin-top:2px}
+  .switch{position:relative;width:50px;height:30px;flex:none;cursor:pointer}
+  .switch input{display:none}
+  .slider{position:absolute;inset:0;background:#E9E9EA;border-radius:15px;transition:.2s}
+  .slider:before{content:'';position:absolute;width:26px;height:26px;left:2px;top:2px;background:#fff;border-radius:13px;box-shadow:0 1px 3px rgba(0,0,0,.22);transition:.2s}
+  .switch input:checked + .slider{background:var(--green)}
+  .switch input:checked + .slider:before{transform:translateX(20px)}
+  .save-btn{
+    width:100%;background:var(--accent);color:#fff;border:none;border-radius:14px;
+    padding:14px 0;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:10px;
+  }
+  .save-btn:disabled{opacity:.55}
+  .mc-note{font-size:12.5px;color:var(--sub);line-height:1.6;padding:10px 2px 6px}
+  /* 机器码绑定结果 */
+  .mc-result{background:#EAF6EC;border-radius:12px;padding:12px;margin-bottom:10px}
+  .mc-ok{font-size:14px;font-weight:700;color:#1D7A2E;margin-bottom:4px}
+  .mc-sub{font-size:12.5px;color:#2C5E33;line-height:1.5}
+  .mc-alt{color:#6B7A6E;margin-top:4px;border-top:1px dashed #C6E2CB;padding-top:6px}
+  /* 全局视图切换 */
+  .tabs{display:flex;gap:8px;justify-content:center;margin-bottom:22px;width:100%}
+  .tabs button{
+    border:none;border-radius:20px;padding:9px 26px;font-size:14px;font-weight:600;cursor:pointer;
+    background:#fff;color:var(--sub);font-family:inherit;box-shadow:0 1px 4px rgba(0,0,0,.08);
+  }
+  .tabs button.active{background:var(--accent);color:#fff}
+  /* 逻辑设计页 */
+  .logic{max-width:880px;background:#fff;border-radius:20px;padding:34px 40px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+  .lg-head h1{font-size:22px;font-weight:800;margin-bottom:10px}
+  .lg-principle{font-size:14px;color:var(--accent);font-weight:600;background:#E8F0FE;border-radius:10px;padding:10px 14px;line-height:1.6}
+  .logic section{margin-top:26px}
+  .logic h2{font-size:16px;font-weight:700;margin-bottom:12px;padding-left:10px;border-left:4px solid var(--accent)}
+  .lg-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .lg-card{background:#F7F8FA;border-radius:12px;padding:14px;border:1px solid #EEEFF2}
+  .lg-card p{font-size:13px;line-height:1.7;color:#3A3A3C;margin:10px 0 8px}
+  .lg-tag{display:inline-block;font-size:12px;font-weight:700;border-radius:6px;padding:3px 8px}
+  .lg-tag.green{background:#EAF6EC;color:#1D7A2E}
+  .lg-tag.blue{background:#E8F0FE;color:var(--accent)}
+  .lg-tag.gray{background:#F0F0F2;color:#6B6B70}
+  .lg-cost{font-size:12px;color:var(--sub);font-weight:600}
+  .lg-steps{padding-left:22px;display:grid;gap:9px;font-size:13.5px;line-height:1.7;color:#3A3A3C}
+  .lg-steps li::marker{color:var(--accent);font-weight:700}
+  .lg-steps code,.lg-table code{background:#F2F3F5;border-radius:5px;padding:1px 6px;font-size:12.5px;font-family:ui-monospace,Menlo,monospace}
+  .lg-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+  .lg-table th,.lg-table td{border:1px solid #E5E5EA;padding:9px 12px;text-align:left;line-height:1.6}
+  .lg-table th{background:#F7F8FA;font-weight:700}
+  .lg-flow{font-size:14px;font-weight:600;color:#3A3A3C;padding:6px 0}
+  .st{display:inline-block;border-radius:6px;padding:2px 9px;font-size:12.5px;margin:0 2px}
+  .st.ok{background:#EAF6EC;color:#1D7A2E}
+  .st.off{background:#F0F0F2;color:#6B6B70}
+  .st.err{background:#FDECEA;color:var(--red)}
+  .lg-note{font-size:12.5px;color:var(--sub);line-height:1.7;margin-top:10px}
+  @media (max-width:900px){.lg-cards{grid-template-columns:1fr}.logic{padding:24px 20px}}
+  .field{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid var(--sep)}
+  .field .flabel{font-size:14px;color:var(--sub);width:76px;flex:none}
+  .field input{
+    flex:1;border:none;background:transparent;font-size:14px;color:var(--ink);
+    font-family:inherit;outline:none;text-align:right;
+  }
+  /* ===== 设计说明栏 ===== */
+  .notes{width:340px;position:sticky;top:32px;background:#fff;border-radius:16px;padding:22px;box-shadow:0 10px 30px rgba(0,0,0,.08)}
+  .notes h3{font-size:16px;font-weight:700;margin-bottom:14px}
+  .notes ol{padding-left:20px;display:grid;gap:10px;font-size:13.5px;line-height:1.6;color:#3A3A3C}
+  .notes li::marker{color:var(--accent);font-weight:700}
+  .notes .tag{display:inline-block;background:#E8F0FE;color:var(--accent);border-radius:6px;padding:1px 7px;font-size:12px;font-weight:600;margin-right:4px}
+  @media (max-width:880px){ .notes{position:static;width:390px} }
+</style>
+</head>
+<body>
+
+<!-- 全局视图切换：UI 设计 / 逻辑设计 -->
+<div class="tabs">
+  <button id="tab-ui" class="active" onclick="switchPage('ui')">UI 设计</button>
+  <button id="tab-logic" onclick="switchPage('logic')">逻辑设计</button>
+</div>
+
+<div id="view-ui">
+
+<!-- ===== 视图：iPhone 原型 ===== -->
+<div class="device">
+  <div class="statusbar"><span>9:41</span><span>●●● 100%</span></div>
+
+  <div class="nav"><span class="title">设置</span><span class="done">完成</span></div>
+
+  <!-- 模式分段切换：云道默认 -->
+  <div class="segmented">
+    <button id="seg-cloud" class="active" onclick="switchMode('cloud')">云道 · 默认</button>
+    <button id="seg-local" onclick="switchMode('local')">自建</button>
+  </div>
+
+  <!-- ===== 云端视图：零配置，只有 Google 登录 ===== -->
+  <div id="view-cloud" class="view">
+
+    <!-- 未登录态 -->
+    <div id="cloud-logged-out" class="card cloud-hero">
+      <div class="mark">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 2a10 10 0 0 0-8.6 15.3L2 22l4.9-1.3A10 10 0 1 0 12 2z" fill="#fff"/></svg>
+      </div>
+      <h1>VoxSign 云端</h1>
+      <p class="desc">Google 一键登录，无需任何配置</p>
+      <button class="google-btn" onclick="demoLogin()">
+        <svg class="g" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        使用 Google 登录
+      </button>
+      <div class="badge-row">
+        <span class="badge">免费档 · 每日 30 次</span>
+        <span class="badge">15 天体验期</span>
+      </div>
+    </div>
+
+    <!-- 已登录态 -->
+    <div id="cloud-logged-in" class="card hidden">
+      <div class="auth-head">
+        <div class="avatar">Z</div>
+        <div>
+          <div class="email">zou@example.com</div>
+          <div class="tier">免费档 · 体验会员</div>
+        </div>
+      </div>
+      <div class="kv">
+        <span class="k">今日额度</span><span class="v">3 / 30</span>
+        <span class="k">体验期至</span><span class="v">2026-10-20</span>
+        <span class="k">租户</span><span class="v">已就绪</span>
+      </div>
+      <div class="actions">
+        <button class="btn-refresh" onclick="toast('已刷新登录态')">刷新登录态</button>
+        <button class="btn-logout" onclick="demoLogout()">退出登录</button>
+      </div>
+    </div>
+
+    <p class="footnote">云道模式由 VoxSign 官方托管<br>无服务器地址、无 Token，Google 登录即用</p>
+  </div>
+
+  <!-- ===== 自建视图：默认空，自己加服务器 ===== -->
+  <div id="view-local" class="view hidden">
+    <div class="local-title">服务器（自建，可多台切换）</div>
+    <div class="card">
+      <!-- 空状态：自建默认什么都没有 -->
+      <div class="empty">
+        <div class="empty-mark">＋</div>
+        <p>还没有自建服务器</p>
+        <span>自建默认无任何服务器，添加后即可连接</span>
+      </div>
+      <button class="add-btn" onclick="showAddSheet()">添加服务器</button>
+    </div>
+
+    <div class="local-title">说明</div>
+    <div class="card">
+      <p class="desc">自建服务器需要自行填写地址与 Token，适用于自托管 Harness 或局域网调试。</p>
+    </div>
+  </div>
+
+  <!-- ===== 添加服务器方式选择（底部弹层） ===== -->
+  <div id="add-sheet" class="sheet hidden">
+    <div class="sheet-card">
+
+      <!-- 方式选择 -->
+      <div id="method-list">
+        <h3>添加服务器</h3>
+        <button class="method" onclick="showIPForm()">
+          <span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h.01M12 13h.01M16 13h.01M8 16h.01M12 16h.01"/></svg></span>
+          <span class="m-name">IP 地址</span>
+          <span class="m-desc">输入服务器 IP + 端口 + Token</span>
+        </button>
+        <button class="method" onclick="showMachineForm()">
+          <span class="m-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="12" height="7" rx="1.5"/><rect x="6" y="13" width="12" height="7" rx="1.5"/><path d="M9 7.5h6M9 16.5h6"/></svg></span>
+          <span class="m-name">机器码</span>
+          <span class="m-desc">输入 Harness 装机生成的机器码，自动关联</span>
+        </button>
+        <button class="cancel" onclick="closeAddSheet()">取消</button>
+      </div>
+
+      <!-- IP 地址方式：表单 + 内网转发选项 -->
+      <div id="ip-form" class="hidden">
+        <h3>添加服务器 · IP 地址</h3>
+        <div class="form-card">
+          <div class="field"><span class="flabel">名称</span><input value="办公室 Mac"></div>
+          <div class="field"><span class="flabel">地址</span><input value="http://192.168.8.186:8897" oninput="detectLan(this.value)"></div>
+          <div class="field"><span class="flabel">Token</span><input value="m7-token"></div>
+          <!-- 内网地址提示 + 云端转发开关 -->
+          <div id="lan-hint" class="lan-hint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+            <span>检测到内网地址（192.168.x / 10.x / 172.16-31.x）</span>
+          </div>
+          <div class="relay-row">
+            <div>
+              <div class="relay-title">通过云端转发访问</div>
+              <div class="relay-desc">内网地址从外网不可直达，由云道中转<br>需内网端 Harness 开启转发</div>
+            </div>
+            <label class="switch"><input type="checkbox" checked><span class="slider"></span></label>
+          </div>
+        </div>
+        <button class="save-btn" id="ip-save" onclick="demoCheckSave()">保存并检测连接</button>
+        <button class="cancel" onclick="backToMethods()">返回</button>
+      </div>
+
+      <!-- 机器码方式：输入机器码 → 云道定位 → 绑定 -->
+      <div id="machine-form" class="hidden">
+        <h3>添加服务器 · 机器码</h3>
+        <div class="form-card">
+          <div class="field"><span class="flabel">机器码</span><input value="AB12-CD34-EF56" placeholder="12 位机器码"></div>
+          <p class="mc-note">输入 Harness 装机生成的机器码，云道自动定位该机器：同网直连，异网走按需转发。</p>
+        </div>
+        <button class="save-btn" id="mc-bind" onclick="demoBind()">查询并绑定</button>
+        <div id="mc-result" class="mc-result hidden">
+          <div class="mc-ok">已找到 · 办公室 Mac</div>
+          <div class="mc-sub">地址 192.168.8.186:8897 · <b>同网，直连</b>（零云端消耗）</div>
+          <div class="mc-sub mc-alt">若手机与机器异网：自动保存为「云道转发」，按需中转、用完即断</div>
+        </div>
+        <button class="cancel" onclick="backToMethods()">返回</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ===== 设计说明 ===== -->
+<aside class="notes">
+  <h3>设计要点</h3>
+  <ol>
+    <li><span class="tag">默认</span>打开设置页即「云道 · 默认」——大部分用户永远不需要离开这个页面。</li>
+    <li><span class="tag">极简</span>云道页只有 Google 登录一项，无服务器地址、无 Token 输入，登录态即服务状态。</li>
+    <li><span class="tag">隔离</span>云道登录态（JWT）独立存储，与自建服务器列表互不干扰。</li>
+    <li><span class="tag">自建</span>自建页默认空列表（什么都不预置），添加服务器两种方式：IP 地址 / 机器码。</li>
+    <li><span class="tag">机器码</span>Harness 装机生成的机器码校验关联，自动带入地址与 Token，无需手填。</li>
+    <li><span class="tag">检测</span>保存前必检连通性，不通不能保存；内网地址自动提示「通过云端转发访问」开关（外网手机经云道中转）。</li>
+    <li><span class="tag">状态</span>主页连接胶囊继续沿用：云道=账户状态，自建=服务器连通性。</li>
+    <li><span class="tag">实现</span>改动集中在 SettingsView + SettingsStore（新增 cloudMode 存储），不碰任务/识别逻辑。</li>
+  </ol>
+</aside>
+</div><!-- /view-ui -->
+
+<!-- ===== 视图：逻辑设计 ===== -->
+<div id="view-logic" class="logic hidden">
+
+  <header class="lg-head">
+    <h1>VoxSign 连接逻辑设计 · v3</h1>
+    <p class="lg-principle">云道只做「目录 + 应急转发」，不常驻中转 —— 日常使用 90% 场景直连，云端消耗趋近于零。</p>
+  </header>
+
+  <section>
+    <h2>1. 三种连接方式</h2>
+    <div class="lg-cards">
+      <div class="lg-card">
+        <div class="lg-tag green">同网直连</div>
+        <p>手机与 Harness 在同一局域网（同 Wi-Fi / 公司网 / VPN）。云道只在绑定时返回内网地址，之后<strong>手机直连内网 IP</strong>，完全不经云端。</p>
+        <span class="lg-cost">云端消耗：零</span>
+      </div>
+      <div class="lg-card">
+        <div class="lg-tag blue">异网 · 按需转发</div>
+        <p>手机在外网（蜂窝等），无法直达内网。仅在使用时由云道临时拉起转发通道，<strong>用完即断</strong>，空闲零占用。</p>
+        <span class="lg-cost">云端消耗：仅使用时</span>
+      </div>
+      <div class="lg-card">
+        <div class="lg-tag gray">组网 P2P（未来）</div>
+        <p>机器可选装轻量组网（Tailscale 类），手机装同一网络后<strong>外网也 P2P 直连</strong>，云道只做首次引导。</p>
+        <span class="lg-cost">云端消耗：零</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 机器码绑定时序（一次性的）</h2>
+    <ol class="lg-steps">
+      <li><b>装机生成</b>：Harness 首次启动自动生成 12 位机器码（如 AB12-CD34-EF56），保存本地，可随时查看。</li>
+      <li><b>注册</b>：Harness 启动时向云道注册：机器码 + 内网地址 + 状态；此后每 2 分钟心跳，地址变化即上报。</li>
+      <li><b>输码</b>：iOS 输入机器码 → 调云道 <code>POST /v1/devices/lookup</code>。</li>
+      <li><b>校验</b>：云道验证机器码 → 返回机器身份 + 内网地址 + 在线状态。无效/离线 → 提示无法绑定。</li>
+      <li><b>直连探测</b>：iOS 直接探测该内网地址的 /v1/health：通 → 保存为「直连」服务器；不通 → 保存为「云道转发」服务器。</li>
+      <li><b>检测门</b>：保存前必检连通（直连=探测内网；转发=探测转发通道），不通不能保存。</li>
+      <li><b>日常</b>：同网直连不经云道；异网仅在访问时临时建转发通道，用完即断。机器码只在绑定用一次，后续本地缓存。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>3. 连接矩阵</h2>
+    <table class="lg-table">
+      <colgroup><col style="width:26%"><col style="width:44%"><col style="width:30%"></colgroup>
+      <thead><tr><th>情形</th><th>连接方式</th><th>云端消耗</th></tr></thead>
+      <tbody>
+        <tr><td>同网（同 Wi-Fi / VPN）</td><td>手机直连内网 IP，不经云道</td><td>零</td></tr>
+        <tr><td>异网（蜂窝 / 外地）</td><td>按需转发通道，用完即断</td><td>仅使用时</td></tr>
+        <tr><td>组网（Tailscale 类，未来）</td><td>外网 P2P 直连，云道仅首次引导</td><td>零</td></tr>
+        <tr><td>机器离线</td><td>条目置灰「离线」，不可用</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 云道接口清单（新增）</h2>
+    <table class="lg-table">
+      <colgroup><col style="width:34%"><col style="width:66%"></colgroup>
+      <thead><tr><th>接口</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST /v1/devices/register</code></td><td>Harness 装机注册：机器码 + 内网地址 + 机器名</td></tr>
+        <tr><td><code>POST /v1/devices/heartbeat</code></td><td>Harness 每 2 分钟心跳，上报在线状态</td></tr>
+        <tr><td><code>POST /v1/devices/lookup</code></td><td>iOS 按机器码查询：返回身份 + 内网地址 + 在线状态</td></tr>
+        <tr><td><code>POST /v1/relay/open · /close</code></td><td>异网时按需建立 / 关闭转发通道（长连接隧道，用完即断）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. iOS 服务器条目状态机</h2>
+    <div class="lg-flow">绑定中 → <span class="st ok">在线 · 直连</span> / <span class="st ok">在线 · 转发</span> / <span class="st off">离线</span> / <span class="st err">无效机器码</span></div>
+    <p class="lg-note">每条自建服务器保存时记录：绑定方式（IP / 机器码）、连接方式（直连 / 转发）、最后检测时间；列表展示状态点（绿=在线直连，蓝=在线转发，灰=离线）。</p>
+  </section>
+
+  <section>
+    <h2>6. 实施顺序</h2>
+    <ol class="lg-steps">
+      <li><b>iOS 全面更新</b>：云道/自建两模式 UI；机器码表单 + lookup 绑定流程 + 直连探测；服务器条目状态化。</li>
+      <li><b>云道接口</b>：devices 注册 / 心跳 / lookup；relay 按需转发通道。</li>
+      <li><b>Harness 端</b>：机器码生成 + 注册 + 心跳上报（装机即自动完成）。</li>
+    </ol>
+    <p class="lg-note">云道接口与 Harness 端上线前，iOS 机器码方式以「模拟查询」兜底：输码后按预设演示路径走通 UI，接口就绪后无缝切换。</p>
+  </section>
+
+</div>
+
+<script>
+  function switchPage(p){
+    document.getElementById('tab-ui').classList.toggle('active', p==='ui');
+    document.getElementById('tab-logic').classList.toggle('active', p==='logic');
+    document.getElementById('view-ui').classList.toggle('hidden', p!=='ui');
+    document.getElementById('view-logic').classList.toggle('hidden', p!=='logic');
+  }
+  function switchMode(m){
+    document.getElementById('seg-cloud').classList.toggle('active', m==='cloud');
+    document.getElementById('seg-local').classList.toggle('active', m==='local');
+    document.getElementById('view-cloud').classList.toggle('hidden', m!=='cloud');
+    document.getElementById('view-local').classList.toggle('hidden', m!=='local');
+    if(m!=='local') closeAddSheet();
+  }
+  function showAddSheet(){document.getElementById('add-sheet').classList.remove('hidden')}
+  function closeAddSheet(){document.getElementById('add-sheet').classList.add('hidden')}
+  function showIPForm(){
+    document.getElementById('method-list').classList.add('hidden');
+    document.getElementById('ip-form').classList.remove('hidden');
+  }
+  function backToMethods(){
+    document.getElementById('ip-form').classList.add('hidden');
+    document.getElementById('machine-form').classList.add('hidden');
+    document.getElementById('method-list').classList.remove('hidden');
+  }
+  function showMachineForm(){
+    document.getElementById('method-list').classList.add('hidden');
+    document.getElementById('machine-form').classList.remove('hidden');
+  }
+  function demoCheckSave(){
+    var b=document.getElementById('ip-save');
+    b.textContent='正在检测连接…';b.disabled=true;
+    setTimeout(function(){
+      b.textContent='保存并检测连接';b.disabled=false;
+      toast('连接成功，已保存');
+    },1400);
+  }
+  function demoBind(){
+    var b=document.getElementById('mc-bind');
+    b.textContent='正在查询机器码…';b.disabled=true;
+    setTimeout(function(){
+      b.textContent='查询并绑定';b.disabled=false;
+      document.getElementById('mc-result').classList.remove('hidden');
+    },1400);
+  }
+  function detectLan(v){
+    var h=document.getElementById('lan-hint');
+    var m=v.match(/https?:\/\/(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/);
+    h.style.display=m?'flex':'none';
+  }
+  function demoLogin(){
+    document.getElementById('cloud-logged-out').classList.add('hidden');
+    document.getElementById('cloud-logged-in').classList.remove('hidden');
+  }
+  function demoLogout(){
+    document.getElementById('cloud-logged-in').classList.add('hidden');
+    document.getElementById('cloud-logged-out').classList.remove('hidden');
+  }
+  let toastEl=null;
+  function toast(msg){
+    if(!toastEl){toastEl=document.createElement('div');toastEl.style.cssText='position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:rgba(28,28,30,.92);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:99';document.body.appendChild(toastEl);}
+    toastEl.textContent=msg;toastEl.style.opacity='1';
+    clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.style.opacity='0',1600);
+  }
+</script>
+</body>
+</html>
