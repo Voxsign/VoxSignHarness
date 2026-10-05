@@ -310,7 +310,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"model":        "qwen-audio-asr",
-		"audio_base64": base64.StdEncoding.EncodeToString(audio),
+		"audio_base64": base64.StdEncoding.EncodeToString(trimWAVSilence(audio)),
 		"mime":         "audio/wav",
 		"language":     "zh",
 		"hotwords":     hotwords,
