@@ -3,6 +3,7 @@ package zhiji
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -458,5 +459,127 @@ func TestStorePersistRoundTrip(t *testing.T) {
 	}
 	if len(s2.SelfModel(LayerRule)) != 1 {
 		t.Fatal("重载后自我模型应存在")
+	}
+}
+
+// ---- v1.1 新架构：graph / rawlog / systemone / budget search ----
+
+func TestGraphAddNeighbors(t *testing.T) {
+	g := NewGraph()
+	g.Add(Edge{From: "mem-1", To: "mem-2", Rel: EdgeRelEntity, Weight: 0.8})
+	g.Add(Edge{From: "mem-1", To: "mem-3", Rel: EdgeRelTemporal, Weight: 0.5})
+	// 同 (From,To,Rel) 重复 → 加权更新不重复追加
+	g.Add(Edge{From: "mem-1", To: "mem-2", Rel: EdgeRelEntity, Weight: 0.9})
+	if len(g.Edges) != 2 {
+		t.Fatalf("去重后应 2 条边，got %d", len(g.Edges))
+	}
+	// 找 mem-1 的 entity 邻居
+	nb := g.Neighbors("mem-1", EdgeRelEntity)
+	if len(nb) != 1 || nb[0].To != "mem-2" {
+		t.Fatalf("应命中 1 条 entity 边，got %+v", nb)
+	}
+	// 不过滤 rel 时双向都算
+	if all := g.Neighbors("mem-1"); len(all) != 2 {
+		t.Fatalf("不过滤应命中 2 条边，got %+v", all)
+	}
+}
+
+func TestGraphEmptyBudgetSearchSuperset(t *testing.T) {
+	s := newTestStore(t)
+	_, _ = s.WriteMemory(MemoryItem{Text: "沙特运营商资质办理流程", Layer: LayerMechanism, Domain: DomainAgent, Importance: 8})
+	_, _ = s.WriteMemory(MemoryItem{Text: "普通闲聊记录", Layer: LayerBehavior, Domain: DomainSession, Importance: 1})
+	// 空图 → BudgetSearch 退化为 Search 超集
+	got, trace := s.BudgetSearch("沙特 运营商", RetrieveBudget{MaxItems: 24, MaxHops: 3, Deadline: 2 * time.Second, MinScore: 0.1}, time.Now())
+	baseline := s.Search("沙特 运营商", 24, time.Now())
+	if len(got) < len(baseline) {
+		t.Fatalf("空图 BudgetSearch 应是 Search 超集：budget=%d search=%d trace=%+v", len(got), len(baseline), trace)
+	}
+	if len(got) > 0 && got[0].Text != baseline[0].Text {
+		t.Fatalf("top1 应一致：budget=%q search=%q", got[0].Text, baseline[0].Text)
+	}
+	if trace.StopReason != "budget" {
+		t.Fatalf("空图退化路径 StopReason 应为 budget，got %q", trace.StopReason)
+	}
+}
+
+func TestRawLogAppendOnly(t *testing.T) {
+	dir := tmpDir(t)
+	path := filepath.Join(dir, "raw.jsonl")
+	l := NewRawLog(path)
+	if err := l.Append(RawObs{Text: "第一条观察", Provenance: Provenance{Origin: "user_input"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(RawObs{Text: "第二条观察"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := l.Len(); n != 2 {
+		t.Fatalf("应有 2 条 raw，got %d", n)
+	}
+	// 重新打开 → nextRaw 接续，旧行不丢
+	l2 := NewRawLog(path)
+	if err := l2.Append(RawObs{Text: "第三条"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := l2.Len(); n != 3 {
+		t.Fatalf("追加后应 3 条，got %d", n)
+	}
+}
+
+func TestDefaultSystemOneClassify(t *testing.T) {
+	d := &DefaultSystemOne{}
+	// preference
+	m := d.Classify(MemoryItem{Text: "我喜欢本地语言回复"})
+	if m[MemKindPreference] < 0.8 {
+		t.Fatalf("preference 应 0.8，got %+v", m)
+	}
+	// procedural
+	m = d.Classify(MemoryItem{Text: "怎么办理运营商资质"})
+	if m[MemKindProcedural] < 0.8 {
+		t.Fatalf("procedural 应 0.8，got %+v", m)
+	}
+	// episodic
+	m = d.Classify(MemoryItem{Text: "昨天签了合同"})
+	if m[MemKindEpisodic] < 0.7 {
+		t.Fatalf("episodic 应 0.7，got %+v", m)
+	}
+	// semantic 兜底
+	m = d.Classify(MemoryItem{Text: "沙特是中东国家"})
+	if m[MemKindSemantic] < 0.6 {
+		t.Fatalf("semantic 兜底应 0.6，got %+v", m)
+	}
+	// 路由：时间词 + 因果词 → 双视图同时激活
+	views, hops := d.Route("为什么昨天签约失败")
+	if hops != 3 {
+		t.Fatalf("hops 应 3，got %d", hops)
+	}
+	if views[EdgeRelCausal] < 0.7 || views[EdgeRelTemporal] < 0.7 {
+		t.Fatalf("应同时命中 causal+temporal，got %+v", views)
+	}
+	// 默认无信号 → semantic 视图
+	views, _ = d.Route("沙特")
+	if views[EdgeRelSemantic] < 0.6 {
+		t.Fatalf("无信号应走 semantic 兜底，got %+v", views)
+	}
+}
+
+func TestBudgetSearchStopReason(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < 5; i++ {
+		_, _ = s.WriteMemory(MemoryItem{Text: "沙特客户偏好本地语言回复", Layer: LayerBehavior, Domain: DomainAgent, Importance: 6})
+	}
+	// 空图 → 退化路径
+	_, trace := s.BudgetSearch("沙特 偏好", RetrieveBudget{MaxItems: 24, MaxHops: 3, Deadline: 2 * time.Second, MinScore: 0.1}, time.Now())
+	if trace.StopReason != "budget" {
+		t.Fatalf("空图退化路径 StopReason 应为 budget，got %q", trace.StopReason)
+	}
+	// Noul/Choice 有界校验
+	if !AskNoul(0.5) || AskNoul(-0.1) || AskNoul(1.5) {
+		t.Fatal("AskNoul 边界校验错误")
+	}
+	if !AskChoice(map[EdgeRel]float64{EdgeRelSemantic: 1.0}) {
+		t.Fatal("归一分布应通过 AskChoice")
+	}
+	if AskChoice(map[EdgeRel]float64{EdgeRelSemantic: 0.5}) {
+		t.Fatal("未归一分布应被 AskChoice 拒绝")
 	}
 }
