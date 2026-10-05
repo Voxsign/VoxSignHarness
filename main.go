@@ -20,6 +20,7 @@ import (
 	"voicesign-harness/contract"
 	"voicesign-harness/ground"
 	"voicesign-harness/memory"
+	"voicesign-harness/observe"
 	"voicesign-harness/pipeline"
 	"voicesign-harness/provider"
 	"voicesign-harness/refer"
@@ -150,6 +151,8 @@ func cliConfirm(taskID, question string) (bool, error) {
 
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	quiet := fs.Bool("quiet", false, "零执行期滚动输出，退回一次性四行回执（别名 -q）")
+	fs.BoolVar(quiet, "q", false, "同 --quiet")
 	fs.Parse(args)
 	text := strings.Join(fs.Args(), " ")
 	if strings.TrimSpace(text) == "" {
@@ -158,7 +161,9 @@ func cmdRun(args []string) {
 	}
 	cfg := loadCfg()
 	opts := buildOptions(cfg, cliConfirm)
+	renderer := observe.NewCliRenderer(os.Stdout, *quiet) // S2：非 quiet 时滚动进度，-q 静默
 	out, err := pipeline.Run(context.Background(), opts, text)
+	renderer.Finish() // 清滚动行，不污染后续四行回执
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "管线执行失败:", err)
 		os.Exit(1)
