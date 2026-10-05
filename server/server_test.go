@@ -885,3 +885,92 @@ func TestCORSNoOriginUnaffected(t *testing.T) {
 		t.Fatal("无 Origin 请求不应加 ACAO 头")
 	}
 }
+
+// TestSSEStageSequence（§7.4 S3）：NOTE 任务 SSE 序列应包含一条细粒度 stage 事件
+// （kind:"internal"，stage:"intent"）——pipeline 意图分类发射点经 bridgeFromBus 桥进 SSE。
+func TestSSEStageSequence(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 细粒度桥"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events", "secret")
+	events := readSSE(t, r)
+
+	var found bool
+	for _, ev := range events {
+		if kind, _ := ev["kind"].(string); kind == "internal" {
+			if stage, _ := ev["stage"].(string); stage == "intent" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("SSE 应含 kind=internal/stage=intent 细粒度事件, got %+v", events)
+	}
+}
+
+// TestSSEReplayAfter（§7.4）:?after= 重放能覆盖桥接进 ts.events 的新 stage 事件。
+func TestSSEReplayAfter(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 重放覆盖"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	time.Sleep(300 * time.Millisecond) // 等任务完成，事件全落 ts.events
+
+	// 重放：after=0（从最早起）应能看到 internal stage 事件
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=0", "secret")
+	events := readSSE(t, r)
+	var found bool
+	for _, ev := range events {
+		if kind, _ := ev["kind"].(string); kind == "internal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("after=0 重放应覆盖 internal stage 事件, got %+v", events)
+	}
+}
+
+// TestSSEObserverUnthrottled（§7.4）：观察连接不被执行限流——任务在跑时新 SSE 连接照样能建立并读到事件。
+func TestSSEObserverUnthrottled(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	cfg.Server.Token = "secret"
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	resp := postJSON(t, ts.URL+"/v1/tasks", "secret", map[string]string{"text": "记一下 SSE 观察不被限流"})
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+
+	// 任务仍在跑时立即建立 SSE 连接（不等终态），应能成功建立并读到 ≥1 事件
+	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events", "secret")
+	events := readSSE(t, r)
+	if len(events) < 1 {
+		t.Fatalf("执行限流不应作用于观察：新 SSE 连接应能建立并读到事件, got %d", len(events))
+	}
+}

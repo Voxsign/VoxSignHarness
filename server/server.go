@@ -1060,6 +1060,8 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	o := *s.tmpl
 	o.Document = document
 	o.RequestID = ts.RequestID // P0-4b：入口 request_id 贯通到 pipeline 轨迹（空则 pipeline 自生成）
+	// §7.4 S3：pipeline 细粒度进度事件桥进 SSE（kind:"internal"，区别于 markStatus 的 transition）。
+	o.ProgressObserver = func(stage, detail string) { s.bridgeFromBus(ts, stage, detail) }
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
 		// 2026-10-04 用户拍板"所有拦截去掉"：voice 模式确认自动放行（不挂起等待，
 		// 否则 iOS 无确认交互 → 任务永久 need_confirm，用户实测"卡住"）。确认题记日志供审计。
@@ -1692,6 +1694,24 @@ func (s *Server) emitEvent(ts *taskState, typ string, data map[string]any) {
 		default:
 		}
 	}
+}
+
+// bridgeFromBus 把 pipeline 的细粒度进度事件桥进 SSE（设计 §7.4）。
+//
+//	kind:"internal" = 细粒度内部阶段（pipeline ProgressObserver 回调）；
+//	区别于 markStatus 发的 kind:"transition" 粗粒度状态迁移（phase）。
+//
+// 复用 ts.eventSeq++ 编号（桥层不另编号），事件 append 进 ts.events → ?after= 重放自动覆盖。
+// 由 pipeline goroutine 回调，须自己持 s.mu（emitEvent 读写 ts.eventSeq/events/listeners）。
+func (s *Server) bridgeFromBus(ts *taskState, stage, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emitEvent(ts, "stage", map[string]any{
+		"kind":   "internal",
+		"stage":  stage,
+		"detail": detail,
+		"trace":  ts.RequestID,
+	})
 }
 
 // markStatus 改状态并落盘（调用方已持 mu 或立即释放）。
