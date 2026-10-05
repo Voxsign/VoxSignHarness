@@ -179,8 +179,10 @@ type Server struct {
 
 	// cloud 云端模式（VHS_MODE=cloud）：谷歌登录/租户/配额；nil=本地模式。
 	cloud *cloudAuth
-	// devices 设备注册表（云道机器码机制）；云端模式创建，本地模式 nil。
+	// devices 设备注册表（云道机器码机制）；本地/云端模式都创建。
 	devices *deviceRegistry
+	// relayHub 异网转发：机器码 → 活动 SSE 反向连接（端口按服务分、不按机器分）。
+	relay *relayHub
 
 	// 外部调用健壮性通道（架构 v1 §7）：每 Server 实例独立，避免跨租户/跨测试熔断污染。
 	asrBH *bulkhead
@@ -205,6 +207,7 @@ func New(cfg *config.Config, o *pipeline.Options) *Server {
 	}
 	// 设备注册表在本地/云端都要可用：本地 Mac 既要注册机器码，也要用设备 token 放行业务端点。
 	s.devices = newDeviceRegistry(cfg.Global.LogDir)
+	s.relay = newRelayHub()
 	s.restore()
 	return s
 }
@@ -238,6 +241,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/devices/lookup", s.public(s.handleDevicesLookup))
 	mux.HandleFunc("/v1/devices/register", s.deviceToken(s.handleDevicesRegister))
 	mux.HandleFunc("/v1/devices/heartbeat", s.deviceToken(s.handleDevicesHeartbeat))
+	// 异网转发（relay）：443 唯一入口，按机器码路由。自带设备 token 鉴权，不走 s.auth。
+	mux.HandleFunc("/v1/relay/connect", s.handleRelayConnect)        // Mac agent 常驻 SSE 出站
+	mux.HandleFunc("/v1/relay/respond", s.handleRelayRespond)        // Mac agent 回报响应
+	mux.HandleFunc("/v1/relay/", s.handleRelayForward)              // 客户端转发入口 /v1/relay/{code}/{path...}
 	// 截图静态服务（图片回执）：/screenshots/<file> → <log_dir>/screenshots/<file>。
 	// 仅提供 .png；path.Base 防目录穿越（只取文件名），auth 保护。
 	mux.HandleFunc("/screenshots/", s.auth(s.handleScreenshot))
