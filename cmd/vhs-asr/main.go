@@ -86,7 +86,7 @@ func main() {
 
 	pipe := asr.NewPipeline(asr.NewEngine(), dict, tracer)
 	// 服务侧组装缓存（K9）：L2 = /api/services（只读），K7 定期刷新。
-	servicesURL := envOr("VHS_SERVICES_URL", "https://aiops.peterzou.com/api/services")
+	servicesURL := envOr("VHS_SERVICES_URL", "https://aiops.voxsign.ai/api/services")
 	hot := hotcache.New(filepath.Join(dataDir, "services-cache.json"), time.Hour,
 		hotcache.HTTPFetcher(servicesURL, os.Getenv("AIOPS_KEY"), 10*time.Second))
 	// 「这个改错了」黑名单（§5.1 第 5 件 / A10）：启动即加载，改了即落盘。
