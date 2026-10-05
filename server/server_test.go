@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,76 @@ func TestServerRunAndTaskGet(t *testing.T) {
 		t.Fatal("应返回 Outcome 四行视图")
 	}
 	fmt.Printf("view=%+v\n", state.Outcome.View)
+}
+
+// TestTaskViewConcurrentReadWriteRace 是 -race 回归：
+// 任务后台 goroutine（runPipeline.func2，持 s.mu）写 ts.Outcome/Status/Role 的同时，
+// GET /v1/tasks/{id} 经 writeTaskView 读这些字段。修复前 writeTaskView 无锁读 → -race 必报
+// DATA RACE（实测 TestASRSimPhoneFuzzyNeverBlankOrStuck 即触发）；修复后在 s.mu 内快照 → 绿。
+func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Global.LogDir = dir
+	srv := New(&cfg, testOpts(t, dir))
+	ts := muxV1(srv)
+	defer ts.Close()
+
+	// 起任务（后台 goroutine 写 ts.Outcome/Status/Role，持 s.mu）
+	body, _ := json.Marshal(tasksPostReq{Text: "记一下并发竞态回归测试"})
+	resp, err := http.Post(ts.URL+"/v1/tasks", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ack struct {
+		TaskID string `json:"task_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&ack)
+	_ = resp.Body.Close()
+	if ack.TaskID == "" {
+		t.Fatal("应返回 task_id")
+	}
+
+	// 并发轮询 GET（writeTaskView 读路径）——race 检测器捕捉任何与写并发的无锁读
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if r, err := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID); err == nil {
+					var v map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&v)
+					_ = r.Body.Close()
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+
+	// 等任务到终态
+	final := ""
+	for i := 0; i < 100; i++ {
+		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
+		var v struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&v)
+		_ = r.Body.Close()
+		if v.Status == stDone || v.Status == stCanceled {
+			final = v.Status
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(stop)
+	wg.Wait()
+	if final == "" {
+		t.Fatal("任务未到终态")
+	}
 }
 
 // muxV1 注册 INTERACT-v1 全部正式端点（测试用）。
