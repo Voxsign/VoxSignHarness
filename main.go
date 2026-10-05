@@ -173,8 +173,10 @@ func cmdServe() {
 		// serve 模式下人工确认走手机 /v1/confirm，此处直接拒绝（不阻塞）。
 		return false, nil
 	})
-	startDeviceRegistration(cfg) // VHS_DEVICE_SERVER 非空时自动注册 + 心跳
-	if err := server.New(cfg, opts).Start(); err != nil {
+	srv := server.New(cfg, opts)
+	// VHS_DEVICE_SERVER 非空时自动注册 + 自适应心跳（状态感知来自任务表，架构 v1 §5）。
+	startDeviceRegistration(cfg, srv.ActivityState)
+	if err := srv.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "server 退出:", err)
 		os.Exit(1)
 	}

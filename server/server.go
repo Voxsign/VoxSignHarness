@@ -189,6 +189,10 @@ type Server struct {
 	mu    sync.Mutex
 	tasks map[string]*taskState
 	byReq map[string]string // request_id → task_id（M4-1 ①）
+
+	// activityVer 任务状态版本号（架构 v1 §5）：markStatus 每次迁移递增；
+	// 心跳循环据此发现状态变化并立即补发（防毫秒级状态闪烁漏报）。
+	activityVer int64
 }
 
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
@@ -914,6 +918,30 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ActivityState 返回 Harness 心跳状态（架构 v1 §5）：decision（有待决策/回问，最高）
+// > busy（有执行中）> idle（无活动）。pending=活动任务数。version=状态版本号
+// （心跳循环用于检测变化立即补发，防毫秒级状态闪烁漏报）。
+func (s *Server) ActivityState() (state string, pending int, version int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	decision, busy := 0, 0
+	for _, ts := range s.tasks {
+		switch ts.Status {
+		case stNeedConfirm, stWaiting, stNeedAsk:
+			decision++
+		case stRunning:
+			busy++
+		}
+	}
+	if decision > 0 {
+		return "decision", decision, s.activityVer
+	}
+	if busy > 0 {
+		return "busy", busy, s.activityVer
+	}
+	return "idle", 0, s.activityVer
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":        true,
@@ -1608,6 +1636,7 @@ func (s *Server) emitEvent(ts *taskState, typ string, data map[string]any) {
 
 // markStatus 改状态并落盘（调用方已持 mu 或立即释放）。
 func (s *Server) markStatus(ts *taskState, status string) {
+	s.activityVer++ // 状态迁移 → 版本递增（心跳循环据此立即补发，架构 v1 §5）
 	ts.Status = status
 	ts.Role = roleForStatus(status) // M5-3
 	s.emitEvent(ts, "stage", map[string]any{

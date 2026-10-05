@@ -24,6 +24,37 @@ import (
 // 去掉易混淆字符（0/O/1/I/L）。
 const machineCodeChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
+// 自适应心跳（架构 v1 §5）：忙快闲慢——decision 5s / busy 15s / idle 2min / standby 5min。
+const (
+	hbDecision = 5 * time.Second
+	hbBusy     = 15 * time.Second
+	hbIdle     = 2 * time.Minute
+	hbStandby  = 5 * time.Minute
+
+	// standbyAfterIdle：idle 持续这么久（无任何任务活动）降为 standby（最省心跳）。
+	standbyAfterIdle = 5 * time.Minute
+)
+
+// heartbeatStateFn 读取当前心跳状态（由 server 任务表驱动）；version 是状态版本号，
+// 变化即补发（防毫秒级状态闪烁漏报）。
+type heartbeatStateFn func() (state string, pending int, version int64)
+
+// hbSampleInterval 状态采样间隔：1s 内发现状态切换并立即补发（事件驱动 + 周期双轨）。
+const hbSampleInterval = 1 * time.Second
+
+func heartbeatPeriod(state string) time.Duration {
+	switch state {
+	case "decision":
+		return hbDecision
+	case "busy":
+		return hbBusy
+	case "standby":
+		return hbStandby
+	default:
+		return hbIdle
+	}
+}
+
 func machineCodePath(logDir string) string { return filepath.Join(logDir, "machine.json") }
 
 // loadMachineCode 读取或生成机器码（幂等，首次生成后持久化）。
@@ -73,9 +104,10 @@ func lanIP() string {
 	return "127.0.0.1"
 }
 
-// startDeviceRegistration serve 启动时调用：VHS_DEVICE_SERVER 非空 → 注册 + 心跳。
-// 注册（幂等）→ 每 2 分钟心跳；心跳 404（云道数据丢失）则重新注册。
-func startDeviceRegistration(cfg *config.Config) {
+// startDeviceRegistration serve 启动时调用：VHS_DEVICE_SERVER 非空 → 注册 + 自适应心跳。
+// stateFn 提供任务表状态（decision/busy/idle），心跳按状态切换周期，切换瞬间立即补发；
+// 心跳 404（云道数据丢失）则重新注册。payload 携带 state/pending/uptime/v（架构 v1 §5.2）。
+func startDeviceRegistration(cfg *config.Config, stateFn heartbeatStateFn) {
 	server := strings.TrimRight(os.Getenv("VHS_DEVICE_SERVER"), "/")
 	if server == "" {
 		return
@@ -88,6 +120,7 @@ func startDeviceRegistration(cfg *config.Config) {
 	}
 	base := fmt.Sprintf("http://%s:%s", lanIP(), port)
 	token := cfg.Server.Token
+	startedAt := time.Now()
 
 	call := func(path string, payload string) bool {
 		req, rerr := http.NewRequest(http.MethodPost, server+path, strings.NewReader(payload))
@@ -113,15 +146,44 @@ func startDeviceRegistration(cfg *config.Config) {
 		}
 	}
 
+	heartbeat := func(state string, pending int) {
+		payload := fmt.Sprintf(`{"machine_code":%q,"state":%q,"pending":%d,"uptime_s":%d,"v":"0.2.1"}`,
+			code, state, pending, int(time.Since(startedAt).Seconds()))
+		if !call("/v1/devices/heartbeat", payload) {
+			register() // 云道可能重启丢数据，重注册幂等
+		}
+	}
+
+	// effectiveState 读任务表状态；idle 持续超过 standbyAfterIdle → 降 standby。
+	var lastActivity time.Time
+	effectiveState := func() (string, int, int64) {
+		state, pending, ver := stateFn()
+		if state != "idle" {
+			lastActivity = time.Now()
+		}
+		if state == "idle" && !lastActivity.IsZero() &&
+			time.Since(lastActivity) > standbyAfterIdle {
+			return "standby", 0, ver
+		}
+		return state, pending, ver
+	}
+
 	go func() {
 		register()
-		tick := time.NewTicker(2 * time.Minute)
-		defer tick.Stop()
-		for range tick.C {
-			payload := fmt.Sprintf(`{"machine_code":%q}`, code)
-			if !call("/v1/devices/heartbeat", payload) {
-				register() // 云道可能重启丢数据，重注册幂等
+		prevState, prevVer, lastSent := "", int64(-1), time.Time{}
+		for {
+			state, pending, ver := effectiveState()
+			now := time.Now()
+			// 事件驱动：状态或版本变化 → 立即补发（不等周期）。
+			if state != prevState || ver != prevVer {
+				heartbeat(state, pending)
+				prevState, prevVer, lastSent = state, ver, now
+			} else if now.Sub(lastSent) >= heartbeatPeriod(state) {
+				// 周期心跳：按当前状态频率（忙快闲慢）。
+				heartbeat(state, pending)
+				lastSent = now
 			}
+			time.Sleep(hbSampleInterval)
 		}
 	}()
 }
