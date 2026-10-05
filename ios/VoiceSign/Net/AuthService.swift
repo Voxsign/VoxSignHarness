@@ -21,9 +21,9 @@ import UIKit
 
 /// Google OAuth 参数（iOS 类型 client；公开安全，可内嵌）。
 enum GoogleOAuth {
-    /// Google Cloud Console 创建（iOS 类型，Bundle ID net.voxsign.ios）。
+    /// Google Cloud Console 创建（iOS 类型，Bundle ID ai.voxsign.ios）。
     static var clientID: String {
-        "914563065668-urvk0ku7fofste2h1glhqlh5r3acl3u9.apps.googleusercontent.com"
+        "914563065668-50u3b19qin911rqg1p2msrg661n8v4pp.apps.googleusercontent.com"
     }
     /// iOS 类型 client 的授权回调：反向域名 scheme。
     /// 注意：Console 注册的是**不含** `.apps.googleusercontent.com` 后缀的部分（已验证：带后缀 → redirect_uri_mismatch）。

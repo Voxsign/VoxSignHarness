@@ -117,6 +117,8 @@ final class SpeechRecognizer: ObservableObject {
             asrFailed = true
             return
         }
+        print("[ASR] WAV bytes=\(audioData.count) at \(url.lastPathComponent)")
+        DiagLogger.shared.log("ASR", "WAV bytes=\(audioData.count)")
         uploadAudio(audioData) { [weak self] text, ok in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -244,7 +246,15 @@ final class SpeechRecognizer: ObservableObject {
                                          commonFormat: .pcmFormatFloat32, interleaved: false)
             audioURL = fileURL
             node.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-                if let af = self?.audioFile { try? af.write(from: buffer) }
+                guard let self = self else { return }
+                guard let af = self.audioFile else { return }
+                do {
+                    try af.write(from: buffer)
+                } catch {
+                    // 格式不匹配/写入失败会导致 WAV data chunk 为空（平台 422 asr_audio_empty）。
+                    print("[ASR] tap write FAIL: \(error.localizedDescription)")
+                    DiagLogger.shared.log("ASR", "tap write FAIL: \(error.localizedDescription)")
+                }
             }
             engine.prepare()
             try engine.start()

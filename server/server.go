@@ -265,6 +265,14 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Flush 实现 http.Flusher：SSE（/v1/tasks/{id}/events）依赖 Flush 逐条推流，
+// 仅内嵌 ResponseWriter 接口不会提升 Flush，必须显式转发，否则断言失败返回 500。
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // handleASR 接收 iOS 录音（multipart file=WAV），base64 后转发平台 model-center 的 /api/model/asr
 // （阿里千问 ASR，AIOPS_KEY 鉴权，与 chat 通道同一密钥环境变量）。契约见 docs/ASR接口契约-20261004.md。
 func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +333,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": code, "error": msg})
 		return
 	}
-	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）", asrURL, status)
+	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）resp=%s", asrURL, status, truncate(string(data), 300))
 	if status != http.StatusOK {
 		var perr map[string]any
 		_ = json.Unmarshal(data, &perr)

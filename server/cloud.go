@@ -244,7 +244,7 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 		return nil, fmt.Errorf("iss 非法: %s", tok.Iss)
 	}
 	if !c.acceptsAud(tok.Aud) {
-		return nil, fmt.Errorf("aud 非法（非本应用签发的 token）")
+		return nil, fmt.Errorf("aud 非法（非本应用签发的 token）: aud=%s", tok.Aud)
 	}
 	if tok.Exp < now {
 		return nil, fmt.Errorf("id_token 已过期")
