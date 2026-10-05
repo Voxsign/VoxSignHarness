@@ -254,6 +254,83 @@ func TestReflectorSetInterval(t *testing.T) {
 	}
 }
 
+// ---- registry.go ----
+
+func TestRegistryCompressionPolicy(t *testing.T) {
+	r, err := NewRegistry(tmpDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(ModelProfile{ID: "deepseek-chat", NominalWindow: 64000, EffectiveWindow: 32000, InstructionFollow: 0.8, PriceClass: "cheap"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(ModelProfile{ID: "gpt-5", NominalWindow: 400000, EffectiveWindow: 300000, InstructionFollow: 0.95, PriceClass: "premium", Density: DensityAggressive}); err != nil {
+		t.Fatal(err)
+	}
+	// 弱模型默认保守压缩
+	p, err := r.CompressionPolicy("deepseek-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p != DensityConservative {
+		t.Fatalf("弱模型应保守压缩，got %v", p)
+	}
+	// 强模型显式激进压缩
+	p, _ = r.CompressionPolicy("gpt-5")
+	if p != DensityAggressive {
+		t.Fatalf("强模型应激进压缩，got %v", p)
+	}
+	if _, err := r.CompressionPolicy("unknown"); err != ErrNotFound {
+		t.Fatalf("未知模型应 ErrNotFound，got %v", err)
+	}
+}
+
+// ---- router.go ----
+
+func TestRouterRuleTableAndShadow(t *testing.T) {
+	dir := tmpDir(t)
+	reg, _ := NewRegistry(dir)
+	_ = reg.Register(ModelProfile{ID: "cheap"})
+	_ = reg.Register(ModelProfile{ID: "mid"})
+	_ = reg.Register(ModelProfile{ID: "premium"})
+	_ = reg.SetDefault("mid")
+	rt, err := NewRouter(reg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 线上模式：低复杂度 → cheap
+	d, err := rt.Decide(TaskProfile{Complexity: 0.1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ModelID != "cheap" || d.Shadow {
+		t.Fatalf("低复杂度应路由 cheap，got %+v", d)
+	}
+	// 高复杂度 → premium
+	d, _ = rt.Decide(TaskProfile{Complexity: 0.9})
+	if d.ModelID != "premium" {
+		t.Fatalf("高复杂度应路由 premium，got %+v", d)
+	}
+
+	// 影子模式：推荐 premium，但生产仍走默认 mid
+	rt.SetShadow(true)
+	d, _ = rt.Decide(TaskProfile{Complexity: 0.9})
+	if d.ModelID != "premium" || d.Production != "mid" || !d.Shadow {
+		t.Fatalf("影子模式应推荐 premium 生产 mid，got %+v", d)
+	}
+	if len(rt.ShadowLog()) != 1 {
+		t.Fatal("影子决策应记录 1 条")
+	}
+	if err := rt.FlushShadow(); err != nil {
+		t.Fatal(err)
+	}
+	// 落盘后清空
+	if len(rt.ShadowLog()) != 0 {
+		t.Fatal("FlushShadow 后影子日志应清空")
+	}
+}
+
 // ---- 持久化 ----
 
 func TestStorePersistRoundTrip(t *testing.T) {
