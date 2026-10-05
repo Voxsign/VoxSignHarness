@@ -315,7 +315,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 		"language":     "zh",
 		"hotwords":     hotwords,
 	})
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()
 	// 架构 v1 §7：ASR 平台调用走健壮通道——有界并发(2) + 熔断 + 分级超时(tMid)。
 	// ASR 转发为 POST，非幂等（重复调用消耗平台资源），不自动重试，仅熔断累计。

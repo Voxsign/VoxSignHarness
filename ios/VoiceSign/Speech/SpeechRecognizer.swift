@@ -161,7 +161,7 @@ final class SpeechRecognizer: ObservableObject {
         }
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
-        req.timeoutInterval = 20
+        req.timeoutInterval = 45
         let tok = SettingsStore.shared.token
         if !tok.isEmpty {
             req.setValue("Bearer " + tok, forHTTPHeaderField: "Authorization")
