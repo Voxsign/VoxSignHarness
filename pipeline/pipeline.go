@@ -181,6 +181,21 @@ type Outcome struct {
 // discussLogName 是 discuss-log 文件名（<log_dir>/discuss.jsonl）。
 const discussLogName = "discuss.jsonl"
 
+// EnableSerialGate 初始化共享串行闸（C0 受控串行过渡态）。
+//
+// 必须在**克隆 Options 之前对模板调用一次**：server 侧每任务 `o := *tmpl` 是浅拷贝，
+// o.mu 是指针，会被一起复制 → 所有任务克隆共享同一把锁，跨任务串行生效。
+// 若不先调本方法，模板 o.mu 为 nil，Run 内懒建会给每个任务**各造一把新锁** → 串行闸形同虚设。
+//
+// C0 定位（用户拍板 2026-10-05）：这是**受控串行过渡态**，不是永久设计。最终目标是单进程内
+// 多 Runner（子代理）按虚拟用户/会话并发——绝不引向任务级多进程；safeGo 是任务级崩溃隔离手段。
+// 锁持有期 = 整个 Run 全程（Run 开头 Lock、defer Unlock），C0 下任务全串行，勿并发假设。
+func (o *Options) EnableSerialGate() {
+	if o != nil && o.mu == nil {
+		o.mu = &sync.Mutex{}
+	}
+}
+
 // Run 执行完整 13 阶段编排循环。ctx 取消会中止等待人工确认，但已落盘轨迹不回滚。
 func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// ⭐ 必填检查（Lead 2026-10-03 真跑实证：o==nil / 空 Options ⇒ **panic**，不是返回错误）。
