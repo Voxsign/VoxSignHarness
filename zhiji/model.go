@@ -69,6 +69,7 @@ type Provenance struct {
 	Model       string   `json:"model,omitempty"`
 	Confidence  float64  `json:"confidence,omitempty"`    // 0–1
 	DerivedFrom []string `json:"derived_from,omitempty"`  // 上游观察/条目 ID
+
 }
 
 // MemoryItem 一条记忆条目（STM 热区 / LTM 归档共用）。
