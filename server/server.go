@@ -177,6 +177,10 @@ type Server struct {
 	// devices 设备注册表（云道机器码机制）；云端模式创建，本地模式 nil。
 	devices *deviceRegistry
 
+	// 外部调用健壮性通道（架构 v1 §7）：每 Server 实例独立，避免跨租户/跨测试熔断污染。
+	asrBH *bulkhead
+	asrCB *circuitBreaker
+
 	mu    sync.Mutex
 	tasks map[string]*taskState
 	byReq map[string]string // request_id → task_id（M4-1 ①）
@@ -185,6 +189,8 @@ type Server struct {
 // New 构造 Server 并从 <log_dir>/tasks 恢复历史任务（M4-1 ③）。
 func New(cfg *config.Config, o *pipeline.Options) *Server {
 	s := &Server{cfg: cfg, tmpl: o, boot: time.Now(), tasks: map[string]*taskState{}, byReq: map[string]string{}}
+	s.asrBH = newBulkhead(2)
+	s.asrCB = &circuitBreaker{}
 	if cfg.Global.CloudMode {
 		s.cloud = newCloudAuth(cfg)
 		s.devices = newDeviceRegistry(cfg.Global.LogDir)
@@ -291,24 +297,24 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, asrURL, bytes.NewReader(payload))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"ok": "false", "code": "asr_internal", "error": err.Error()})
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	// 架构 v1 §7：ASR 平台调用走健壮通道——有界并发(2) + 熔断 + 分级超时(tMid)。
+	// ASR 转发为 POST，非幂等（重复调用消耗平台资源），不自动重试，仅熔断累计。
+	status, data, rerr := robustJSONHdr(ctx, s.asrBH, s.asrCB,
+		http.MethodPost, asrURL, payload, tMid, false,
+		map[string]string{"Authorization": "Bearer " + key})
+	if rerr != nil {
+		code := "asr_channel_not_ready"
+		msg := "平台 model-center 不可达：" + rerr.Error()
+		if err == ctx.Err() || ctx.Err() != nil {
+			code = "asr_timeout"
+			msg = "平台 model-center 超时（" + tMid.String() + "）"
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{
-			"ok": "false", "code": "asr_channel_not_ready",
-			"error": "平台 model-center 不可达：" + err.Error()})
+			"ok": "false", "code": code, "error": msg})
 		return
 	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）", asrURL, resp.StatusCode)
-	if resp.StatusCode != http.StatusOK {
+	log.Printf("ASR: 平台 %s → HTTP %d（text_len 见响应）", asrURL, status)
+	if status != http.StatusOK {
 		var perr map[string]any
 		_ = json.Unmarshal(data, &perr)
 		code, _ := perr["code"].(string)
@@ -318,7 +324,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 		}
 		msg, _ := perr["error"].(string)
 		if msg == "" {
-			msg = "平台 model-center 的 /api/model/asr 返回 HTTP " + resp.Status
+			msg = "平台 model-center 的 /api/model/asr 返回 HTTP " + http.StatusText(status)
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"ok": "false", "code": code, "error": msg})
 		return
@@ -816,7 +822,15 @@ func (s *Server) spawnTask(text, spaceHint, requestID, mode, document string) *t
 }
 
 // runPipeline 在给定 ts 上跑一次 pipeline（首次提交或 need_ask 续跑共用）。
+// taskMaxDeadline 任务总 deadline 硬上限（架构 v1 §7.1 任务层）：超过强制中断，
+// 防"以为 1 秒实际 1 小时"的外部调用拖死任务与主进程。
+const taskMaxDeadline = 10 * time.Minute
+
 func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint, document string) {
+	// 任务层硬上限：外部调用再卡也不会超过 taskMaxDeadline。
+	// 注意：任务在 goroutine 中异步执行，cancel 必须由 goroutine 持有并在其返回时释放，
+	// 不能在函数体同步返回时触发（否则任务会被立即取消）。
+	ctx, cancel := context.WithTimeout(ctx, taskMaxDeadline)
 	o := *s.tmpl
 	o.Document = document
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
@@ -848,6 +862,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 		fullText = "在 " + spaceHint + " " + text
 	}
 	go func() {
+		defer cancel() // 任务结束（含超时/取消）时释放 deadline 定时器
 		out, err := pipeline.Run(ctx, &o, fullText)
 		s.mu.Lock()
 		defer s.mu.Unlock()
