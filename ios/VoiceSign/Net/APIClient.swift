@@ -179,7 +179,29 @@ final class APIClient {
 
     // MARK: - Google 登录（云端模式）
 
-    /// POST /v1/auth/google {code, code_verifier} → 会话 JWT + 租户/档位/配额。
+    /// POST /v1/auth/google {id_token} → 会话 JWT + 租户/档位/配额（iOS 类型 client 链路：
+    /// iOS 已用 PKCE 换好 Google id_token，云端 harness JWKS 验签后签发会话 JWT）。
+    func loginGoogleIDToken(_ idToken: String) async throws -> GoogleLoginResult {
+        let (code2, data) = try await request("POST", "/v1/auth/google",
+                                              body: ["id_token": idToken])
+        let j = decodeJSON(data)
+        guard (200...299).contains(code2), let token = j["token"] as? String else {
+            throw APIError.http(code2, String(decoding: data, as: UTF8.self))
+        }
+        let quota = (j["quota"] as? [String: Any]).map { q in
+            GoogleLoginResult.GoogleQuota(used: q["used"] as? Int,
+                                         limit: q["limit"] as? Int,
+                                         resetsAt: q["resets_at"] as? String)
+        }
+        return GoogleLoginResult(token: token,
+                                 tenant: j["tenant"] as? String ?? "",
+                                 email: j["email"] as? String ?? "",
+                                 tier: j["tier"] as? String ?? "",
+                                 trialUntil: j["trial_until"] as? String,
+                                 quota: quota)
+    }
+
+    /// POST /v1/auth/google {code, code_verifier}（保留：Web client 本地模拟链路用）。
     func loginGoogle(code: String, verifier: String) async throws -> GoogleLoginResult {
         let (code2, data) = try await request("POST", "/v1/auth/google",
                                               body: ["code": code, "code_verifier": verifier])

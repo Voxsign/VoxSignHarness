@@ -191,7 +191,8 @@ struct SettingsView: View {
             defer { googleBusy = false }
             do {
                 let (code, verifier) = try await AuthService.shared.authorize(base: settings.base)
-                let result = try await APIClient.shared.loginGoogle(code: code, verifier: verifier)
+                let idToken = try await AuthService.shared.exchangeIDToken(code: code, verifier: verifier)
+                let result = try await APIClient.shared.loginGoogleIDToken(idToken)
                 settings.setGoogleLogin(result, base: settings.base)
                 conn.probe()
             } catch {
