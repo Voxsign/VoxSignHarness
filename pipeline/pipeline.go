@@ -143,6 +143,10 @@ type Options struct {
 	// RequestID 外部指定的请求 ID（P0-4b）。空则 Run 内自生成（= 现状行为，向后兼容）；
 	// 非空则整链（轨迹/selfheal/日志）统一用它，使入口 request_id 与轨迹 Entry id 一致。
 	RequestID string
+	// ProgressObserver 可选的细粒度进度观察者（nil=静默，零行为变化）。
+	// 设计 §7.4/§11 最小闭环：pipeline 在关键阶段（意图分类）回调 stage/detail，
+	// server 桥接进 SSE（kind:"internal"）、CLI 也可消费。nil 时与现状逐字节一致。
+	ProgressObserver func(stage, detail string)
 	// ASRDataDir ASR 数据目录（反馈/黑名单/词典记忆，跨会话全局生效）。
 	ASRDataDir string
 	// RoundEvidence 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）。
@@ -267,6 +271,11 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// M7 ① 意图分类 LLM 回退：规则低置信/UNKNOWN 且像自然语言问句时 → fast provider 补分类。
 	intent = o.llmIntentFallback(ctx, intent, corrected)
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
+
+	// §11 最小闭环：意图分类完成 → 发细粒度进度事件（SSE/CLI 端到端可见）。nil 观察者静默，行为不变。
+	if o.ProgressObserver != nil {
+		o.ProgressObserver("intent", "意图="+intent.Intent)
+	}
 
 	// ⑤ refer 消解（不覆盖分类器已显式填好的字段）；M4-5：同时拿 refer 目标候选。
 	// M7 修复（Codex/gpt-6-luna 外部诊断 2026-10-02）：按意图门控——
