@@ -119,7 +119,7 @@ struct InputBarView: View {
         let (bg, fg) = statusColors(kind)
         HStack(spacing: 8) {
             if kind == .listening {
-                WaveView().colorScheme(.light)
+                WaveView(meterLevel: speech.meterLevel).colorScheme(.light)
             } else {
                 Image(systemName: icon(kind))
                     .font(.system(size: 13, weight: .semibold))

@@ -27,6 +27,8 @@ final class SpeechRecognizer: ObservableObject {
     @Published var asrFailed: Bool = false
     /// 松手后 WAV 为空（没录到声音）→ 提示重说（与 asrFailed 分开，给用户明确原因）。
     @Published var emptyRecording: Bool = false
+    /// 按住录音时的实时振幅（0~1），驱动声波条动画（豆包式"按住有反应"）。
+    @Published var meterLevel: Float = 0
 
     /// UI v3：按住录音累计秒数（语音气泡时长显示，如 "3″"）。startHold 清零，stopHold/cancelHold 定格。
     private(set) var lastHoldSeconds: Int = 0
@@ -296,6 +298,29 @@ final class SpeechRecognizer: ObservableObject {
                         }
                     }
                 }
+                // 按住时的实时振幅反馈：从原始 buffer 算峰值（硬件格式通常 float32），
+                // 低通平滑后驱动 UI 声波条（豆包式"按住有反应"）。
+                if let ch = buffer.floatChannelData, buffer.format.commonFormat == .pcmFormatFloat32 {
+                    var peak: Float = 0
+                    let n = Int(buffer.frameLength)
+                    let stride = buffer.stride
+                    for i in 0..<n {
+                        let v = abs(ch[0][i * stride])
+                        if v > peak { peak = v }
+                    }
+                    // 用双声道峰值
+                    if buffer.format.channelCount > 1, let ch1 = buffer.floatChannelData?[1] {
+                        for i in 0..<n {
+                            let v = abs(ch1[i * stride])
+                            if v > peak { peak = v }
+                        }
+                    }
+                    let lvl = min(1, peak * 2.5)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        self.meterLevel = self.meterLevel * 0.65 + lvl * 0.35
+                    }
+                }
             }
             engine.prepare()
             try engine.start()
@@ -321,6 +346,7 @@ final class SpeechRecognizer: ObservableObject {
         if engine.isRunning { engine.stop() }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         isRecording = false
+        meterLevel = 0
     }
 
     // MARK: - 日志辅助
