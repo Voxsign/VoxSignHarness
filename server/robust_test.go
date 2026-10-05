@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,7 +166,7 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 	srv := New(&cfg, testOpts(t, dir))
 
 	o := testOpts(t, dir) // 自带 Trace（落盘 dir，供事后断言 panic 记录）
-	ts := &taskState{ID: "task-panic", Status: stRunning, confirmCh: make(chan bool, 1)}
+	ts := &taskState{ID: "task-panic", RequestID: "req-panic-xyz", Status: stRunning, confirmCh: make(chan bool, 1)}
 	srv.mu.Lock()
 	srv.tasks[ts.ID] = ts
 	srv.mu.Unlock()
@@ -203,6 +205,28 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "boom-in-pipeline") {
 		t.Fatalf("轨迹里应留下 panic 记录, 实际:\n%s", data)
+	}
+
+	// ④ S0/P0-4b：panic 轨迹的 request_id 必须与 ts.RequestID 同源（join 请求链），而非退化成 ts.ID
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var e map[string]any
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		if strings.Contains(fmt.Sprint(e["content"]), "boom-in-pipeline") {
+			found = true
+			if rid, _ := e["request_id"].(string); rid != "req-panic-xyz" {
+				t.Fatalf("panic 轨迹 request_id 应 == ts.RequestID(req-panic-xyz)，实际 %q", rid)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("未在轨迹里定位到 panic 记录行")
 	}
 }
 
