@@ -115,21 +115,26 @@ struct HarnessBubbleView: View {
     }
 }
 
-/// 声波动画（语音输入指示）。用 TimelineView 驱动，避免依赖 @State 宏。
+/// 声波动画（语音输入指示）。波形高度 = 实时录音振幅(meterLevel) + 轻微相位动画，
+/// 豆包式"按住有反应"：说话越响波形越高。
 struct WaveView: View {
+    var meterLevel: Float = 0.5
+
     var body: some View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
+            let lvl = Double(meterLevel)
             HStack(spacing: 2) {
                 ForEach(0..<3) { i in
                     let phase = sin(t * 5 + Double(i) * 0.9)
+                    let h = 5 + max(0, phase) * 3 + lvl * 9
                     Capsule()
                         .fill(Color.white)
-                        .frame(width: 3, height: 5 + max(0, phase) * 6)
+                        .frame(width: 3, height: h)
                 }
             }
         }
-        .frame(height: 14)
+        .frame(height: 20)
     }
 }
 
