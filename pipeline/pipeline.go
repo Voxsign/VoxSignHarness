@@ -299,8 +299,20 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// QUERY    (>=0.8) "  /  "is   lang word,  edcoreference resolution, 
 	//  then refer   asempty write Ask"   "  "refer is   "-> need_ask(    ). 
 	var referOpts []refer.Option
-	// hasRecent: curbefore  callusenoonunder   ,   false(  connectlinebyon  refer module chainonstartusetimeagain  true). 
-	if o.Refer != nil && shouldResolveRefer(&intent, false) {
+	// F2: wake the dead code path — load recent entities from the session slot
+	// <logDir>/context_slots/<convID>.jsonl, inject them into the resolver, and use
+	// that to decide hasRecent. Previously hasRecent was hardcoded false, so
+	// writeRecentEntities/loadRecentEntities were never called and cross-turn memory was always empty.
+	convID := strings.TrimSpace(o.ConvID)
+	if convID == "" {
+		convID = "default"
+	}
+	recentEnts := loadRecentEntities(o.logDir(), convID)
+	if o.Refer != nil {
+		o.Refer.Recent = recentEnts
+	}
+	hasRecent := len(recentEnts) > 0
+	if o.Refer != nil && shouldResolveRefer(&intent, hasRecent) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
 			prevAsk := intent.Ask
@@ -448,6 +460,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+	// F2: on a successful turn, append the conversation's core entities to the session slot
+	// (waking the writeRecentEntities dead code) so the next turn can resolve anaphora like
+	// "刚才那个/橙子那个" back to this turn's artifact. Only written when no receipt failed.
+	if !hasFailure(receipts) {
+		writeRecentEntities(o.logDir(), convID, extractRecentEntities(text))
+	}
 
 	// ⑨-bis error   (  ): has  back  ->  disconnect + read-onlysafesafetyheavy (limit 2  ). 
 	//  disconnect    /      disconnect; heavy become  newback  and  out.Receipts,  disconnectclose provideattribution. 
@@ -1372,6 +1390,13 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 	//  id lang(4-30 char,   bodyname/ hastable )
 	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
 	for _, m := range re3.FindAllStringSubmatch(text, -1) {
+		add(m[1], "project")
+	}
+	// F2: "项目叫橙子 / 叫<X> / 名为<X>" — a 2-12 char short name after a Chinese naming verb
+	// becomes a project entity; otherwise "记一个想法：项目叫橙子" extracts nothing and the next
+	// turn's "查一下那个" has no candidate to point at.
+	re4 := regexp.MustCompile(`(?:叫做|名为|叫)([一-龥A-Za-z0-9]{2,12})`)
+	for _, m := range re4.FindAllStringSubmatch(text, -1) {
 		add(m[1], "project")
 	}
 	return out

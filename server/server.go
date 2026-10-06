@@ -1126,6 +1126,12 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 	o := *s.tmpl
 	o.Document = document
 	o.RequestID = ts.RequestID // P0-4b: in  request_id   to pipeline trace(emptythen pipeline  occurbecome)
+	// F2: pin a stable session key so consecutive tasks on the same device share
+	// context_slots/<convID>.jsonl (cross-turn anaphora / recent entities). Real
+	// tenant+device routing is left for the cloud wiring.
+	if strings.TrimSpace(o.ConvID) == "" {
+		o.ConvID = "local-device"
+	}
 	// §7.4 S3: pipeline      event   SSE(kind:"internal",  diffat markStatus   transition). 
 	o.ProgressObserver = func(stage, detail string) { s.bridgeFromBus(ts, stage, detail) }
 	o.ConfirmFn = func(taskID, question string) (bool, error) {
