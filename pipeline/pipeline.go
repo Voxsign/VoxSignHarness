@@ -633,6 +633,12 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			"log_dir": logDir,
 		}
 		return []contract.Receipt{o.run("file", args)}
+	case contract.IntentReminder:
+		// Reminder/alarm is not implemented (no cron/scheduler anywhere in the repo).
+		// Report an explicit "not executed" failure — never fall through to NOTE's
+		// append to notes.md (previously "记个提醒…" was silently misrouted to a note).
+		return []contract.Receipt{{Tool: "reminder", OK: false,
+			Err: "提醒/闹钟功能当前未实现（本机无 cron/scheduler），未执行；如需备忘我可以帮你记到笔记里"}}
 	case contract.IntentQuery, contract.IntentAsk:
 		//      seg(2026-10-04): langaudio  note       first  . 
 		//  base inalreadynote   (e.g."  control  ")-> call     ,  againback"no   control". 
