@@ -130,11 +130,11 @@ func (r *deviceRegistry) findByToken(tok string) *DeviceRecord {
 func (s *Server) deviceToken(next http.HandlerFunc) http.HandlerFunc {
 	return s.cors(func(w http.ResponseWriter, r *http.Request) {
 		if s.devices == nil {
-			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "设备注册表仅云端模式可用（本地模式不支持设备注册）"})
+			writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "device registry available only in cloud mode (local mode does not support device registration)"})
 			return
 		}
 		if s.cfg.Server.Token == "" {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "服务端未配置 VHS_TOKEN，设备接口鉴权不可用（服务端配置错误）"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VHS_TOKEN not configured on server; device endpoint auth unavailable (server misconfiguration)"})
 			return
 		}
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -159,12 +159,12 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		Token       string `json:"token"` //   :  formrefer    token(  /Mac  sidewritesame  token);      send
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse request body"})
 		return
 	}
 	in.MachineCode = strings.TrimSpace(in.MachineCode)
 	if in.MachineCode == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "machine_code 不能为空"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "machine_code must not be empty"})
 		return
 	}
 	in.Token = strings.TrimSpace(in.Token)
@@ -205,14 +205,14 @@ func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) 
 		Pending     int    `json:"pending"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse request body"})
 		return
 	}
 	s.devices.mu.Lock()
 	defer s.devices.mu.Unlock()
 	rec, ok := s.devices.devices[strings.TrimSpace(in.MachineCode)]
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "机器码未注册"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "machine code not registered"})
 		return
 	}
 	rec.Online = true
@@ -231,21 +231,21 @@ func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) 
 // in     preventprotect,  then nil deref panic(and register/heartbeat samerootbecause). 
 func (s *Server) handleDevicesLookup(w http.ResponseWriter, r *http.Request) {
 	if s.devices == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "设备注册表仅云端模式可用（本地模式不支持设备查询）"})
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "device registry available only in cloud mode (local mode does not support device lookup)"})
 		return
 	}
 	var in struct {
 		MachineCode string `json:"machine_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse request body"})
 		return
 	}
 	s.devices.mu.Lock()
 	defer s.devices.mu.Unlock()
 	rec, ok := s.devices.devices[strings.TrimSpace(in.MachineCode)]
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "机器码无效或未注册"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "machine code invalid or not registered"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

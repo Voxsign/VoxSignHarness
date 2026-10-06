@@ -75,12 +75,12 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	tok := bearerToken(r)
 	rec := s.devices.findByToken(tok)
 	if code == "" || rec == nil || rec.MachineCode != code {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "relay 鉴权失败：token 与机器码不匹配"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "relay auth failed: token does not match machine code"})
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "不支持流式"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
 		return
 	}
 	conn := &relayConn{machine: code, tenant: rec.Tenant, send: make(chan []byte, 16)}
@@ -90,7 +90,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	s.relay.conns[code] = conn
 	s.relay.mu.Unlock()
-	log.Printf("[relay] agent 连接 machine=%s tenant=%s", code, rec.Tenant)
+	log.Printf("[relay] agent connected machine=%s tenant=%s", code, rec.Tenant)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -105,7 +105,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 			delete(s.relay.conns, code)
 		}
 		s.relay.mu.Unlock()
-		log.Printf("[relay] agent 断开 machine=%s", code)
+		log.Printf("[relay] agent disconnected machine=%s", code)
 	}()
 
 	ping := time.NewTicker(25 * time.Second)
@@ -139,7 +139,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRelayRespond(w http.ResponseWriter, r *http.Request) {
 	tok := bearerToken(r)
 	if rec := s.devices.findByToken(tok); rec == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "relay respond 鉴权失败"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "relay respond auth failed"})
 		return
 	}
 	var in struct {
@@ -149,7 +149,7 @@ func (s *Server) handleRelayRespond(w http.ResponseWriter, r *http.Request) {
 		Body      string `json:"body"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse request body"})
 		return
 	}
 	s.relay.mu.Lock()
@@ -159,7 +159,7 @@ func (s *Server) handleRelayRespond(w http.ResponseWriter, r *http.Request) {
 	}
 	s.relay.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "request_id 无等待者（超时或已清理）"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no waiter for request_id (timed out or cleaned up)"})
 		return
 	}
 	st := in.Status
@@ -182,19 +182,19 @@ func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 	tok := bearerToken(r)
 	rec := s.devices.findByToken(tok)
 	if rec == nil || rec.MachineCode != code {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token 与机器码不匹配"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token does not match machine code"})
 		return
 	}
 	//   user:  require   JWT  usertime,   and     user  . 
 	if caller := ctxTenant(r.Context()); caller != "" && rec.Tenant != "" && caller != rec.Tenant {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "跨租户访问被拒绝"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-tenant access denied"})
 		return
 	}
 	s.relay.mu.Lock()
 	conn, ok := s.relay.conns[code]
 	s.relay.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "机器未在线（无活动反向连接）"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "machine offline (no active reverse connection)"})
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 15<<20))
@@ -219,7 +219,7 @@ func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 	select {
 	case conn.send <- env:
 	default:
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent 忙或缓冲满"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent busy or buffer full"})
 		return
 	}
 	select {
@@ -234,7 +234,7 @@ func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(resp.Status)
 		io.Copy(w, bytes.NewBufferString(resp.Body))
 	case <-time.After(30 * time.Second):
-		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "agent 30s 未响应"})
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{"error": "agent did not respond within 30s"})
 	case <-r.Context().Done():
 	}
 }
