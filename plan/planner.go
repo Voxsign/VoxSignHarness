@@ -14,10 +14,10 @@ import (
 )
 
 // ErrNotImplemented keep give   now path(curbeforerule  already now,  againreturnback ). 
-var ErrNotImplemented = errors.New("plan: 未实现")
+var ErrNotImplemented = errors.New("plan: not implemented")
 
 // ErrUnachievable tableshow out   boundaryand rule numuse  --   e.g.  "  to". 
-var ErrUnachievable = errors.New("plan: 超出能力边界，做不到")
+var ErrUnachievable = errors.New("plan: beyond capability boundary, cannot do")
 
 // Step is  in   :     tolistin     , and num  . 
 type Step struct {
@@ -122,14 +122,14 @@ func readonlyProbeSteps() []Step {
 		{
 			Tool: "search", Caps: []string{"text"},
 			Params: map[string]string{"pattern": ".", "path": "."},
-			Action: "查看相关文件与上下文（只读探查）", Output: "匹配结果（供判断）",
-			Why: "收集信息以便判断该目标是否可做（只读探查）",
+			Action: "inspect related files and context (read-only probe)", Output: "matches (for judgment)",
+			Why: "gather info to judge whether the goal is doable (read-only probe)",
 		},
 		{
 			Tool: "git", Caps: []string{"status"},
 			Params: map[string]string{"args": "status"},
-			Action: "查看工作区状态（只读探查）", Output: "git status 输出",
-			Why: "收集当前仓库状态供后续判断（只读探查）",
+			Action: "inspect workspace state (read-only probe)", Output: "git status output",
+			Why: "gather current repo state for later judgment (read-only probe)",
 		},
 	}
 }
@@ -156,8 +156,8 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 		cons, wm := observe(goal, m, nil, nil)
 		return Plan{
 			Goal: goal, Source: "rule", Refused: true,
-			Missing:    []string{"人：目标含指代或需要上下文，但工作记忆为空，请明确是哪个对象"},
-			Reason:     "工作记忆为空：无法消解指代，不脑补",
+			Missing:    []string{"person: goal contains anaphora or needs context, but working memory is empty; please specify the object"},
+			Reason:     "working memory empty: cannot resolve anaphora, no guessing",
 			Considered: cons, WM: wm,
 		}, nil
 	}
@@ -166,16 +166,16 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 		if strings.Contains(goal, c.Element) {
 			cons, wm := observe(goal, m, nil, nil)
 			return Plan{Goal: goal, Source: "rule", Refused: true,
-				Missing: []string{"人：该动作命中约束「" + c.Element + "」（source=" + c.Source + "），须人工裁决"},
-				Reason:  "约束板否决", Considered: cons, WM: wm}, nil
+				Missing: []string{"person: this action hits constraint \"" + c.Element + "\" (source=" + c.Source + "); requires human ruling"},
+				Reason:  "constraint board veto", Considered: cons, WM: wm}, nil
 		}
 	}
 	//  decide  empty ⇒ firstclarification(  ). 
 	if len(w.OpenItems) > 0 {
 		cons, wm := observe(goal, m, nil, nil)
 		return Plan{Goal: goal, Source: "rule", Refused: true,
-			Missing:    []string{"人：待决项未解决 —— " + w.OpenItems[0].Element},
-			Reason:     "待决板非空，先问再动",
+			Missing:    []string{"person: open item unresolved -- " + w.OpenItems[0].Element},
+			Reason:     "open-items board non-empty; ask first before acting",
 			Considered: cons, WM: wm}, nil
 	}
 	// needrequireunderlimit = objtgt ** form to**  bodynum(  all   ⇒ 1); 
@@ -192,16 +192,16 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 	var steps []Step
 	for range w.BoundedWorkingSet() {
 		steps = append(steps,
-			Step{Tool: "file", Caps: []string{"read"}, Params: map[string]string{"path": "<实体>"}, Action: "读取实体当前内容", Output: "内容"},
-			Step{Tool: "file", Caps: []string{"write"}, DependsOn: []int{len(steps) - 1}, Params: map[string]string{"path": "<实体>", "content": "<修改后>"}, Action: "写入修改", Output: "修改后的文件"},
+			Step{Tool: "file", Caps: []string{"read"}, Params: map[string]string{"path": "<实体>"}, Action: "read current entity content", Output: "content"},
+			Step{Tool: "file", Caps: []string{"write"}, DependsOn: []int{len(steps) - 1}, Params: map[string]string{"path": "<实体>", "content": "<修改后>"}, Action: "write modification", Output: "modified file"},
 		)
 	}
 	steps = append(steps, Step{Tool: "git", Caps: []string{"commit"}, DependsOn: []int{len(steps) - 1},
-		Params: map[string]string{"args": "commit", "message": "<说明>"}, Action: "提交改动", Output: "commit hash"})
+		Params: map[string]string{"args": "commit", "message": "<说明>"}, Action: "commit changes", Output: "commit hash"})
 	if missing := missingTools(m, steps); len(missing) > 0 {
 		cons, wm := observe(goal, m, steps, nil)
 		return Plan{Goal: goal, Source: "rule", Refused: true,
-			Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Considered: cons, WM: wm}, nil
+			Missing: []string{"gateway: " + strings.Join(missing, ",") + " not in capability manifest"}, Considered: cons, WM: wm}, nil
 	}
 	cons, wm := observe(goal, m, steps, nil)
 	ct := w.CapacityFor()
@@ -211,7 +211,7 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 	plan.WM.DropTrace = append([]string(nil), w.DropTrace...)
 	if plan.WM.Drop > 0 {
 		plan.Degraded = true
-		plan.DegradedReason = "工作记忆容量不足，已丢弃 " + strings.Join(w.DropTrace, ",") + "（留痕，非静默）"
+		plan.DegradedReason = "working memory full, dropped " + strings.Join(w.DropTrace, ",") + " (traced, not silent)"
 	}
 	return plan, nil
 }
@@ -264,15 +264,15 @@ func observe(goal string, m Manifest, steps []Step, gaps []string) ([]Considered
 func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	g := strings.ToLower(strings.TrimSpace(goal))
 	if g == "" {
-		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: []string{"无外部依赖：目标为空"},
-			Reason: "目标为空，不做任何假设"}, nil
+		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: []string{"no external dependency: goal is empty"},
+			Reason: "goal is empty, no assumptions made"}, nil
 	}
 	// authorization_gap(F3): needrequire edconfirm + beprotect   ⇒ rejectandrefer . 
 	if containsAny(g, bypassWords...) {
 		if caps := protectedCapsIn(g); len(caps) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
-				Missing: []string{"人：被保护动作（" + strings.Join(caps, ",") + "）不可逆/需授权，必须人工确认；规划器不得自行授权"},
-				Reason:  "目标要求绕过确认；拒绝静默执行"}, nil
+				Missing: []string{"person: protected action (" + strings.Join(caps, ",") + ") irreversible/needs authorization; must be human-confirmed; planner must not self-authorize"},
+				Reason:  "goal asks to bypass confirmation; refusing silent execution"}, nil
 		}
 	}
 
@@ -285,20 +285,20 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 		//(SC-2/PL-2 needrequire: rejecttime  give  ; read-only  onlyuseat"  diff"objtgt, seeunder). 
 		cons, wm := observe(goal, m, nil, gaps)
 		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: gaps, Considered: cons, WM: wm,
-			Reason: "目标需要清单外能力（Manifest 即边界），不编造可执行计划"}, nil
+			Reason: "goal needs out-of-manifest capability (manifest is the boundary); will not fabricate an executable plan"}, nil
 	case len(gaps) > 0 && kind != "":
 		// partial: onlyrule   before , tail   Missing(   body  , also  bodyreject)
 		if missing := missingTools(m, steps); len(missing) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
-				Missing: append(gaps, "网关："+strings.Join(missing, ",")+" 不在能力清单内"), Reason: "可达前缀也需要清单外能力"}, nil
+				Missing: append(gaps, "gateway: "+strings.Join(missing, ",")+" not in capability manifest"), Reason: "even the reachable prefix needs out-of-manifest capability"}, nil
 		}
 		cons, wm := observe(goal, m, steps, gaps)
 		return Plan{Goal: goal, Source: "rule", Steps: steps, Missing: gaps, Considered: cons, WM: wm,
-			Degraded: true, DegradedReason: "目标部分不可达：只规划可达前缀，未覆盖全部目标"}, nil
+			Degraded: true, DegradedReason: "goal partially unreachable: planning only the reachable prefix, not the full goal"}, nil
 	case kind != "":
 		if missing := missingTools(m, steps); len(missing) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
-				Missing: []string{"网关：" + strings.Join(missing, ",") + " 不在能力清单内"}, Reason: "计划需要清单外能力"}, nil
+				Missing: []string{"gateway: " + strings.Join(missing, ",") + " not in capability manifest"}, Reason: "plan needs out-of-manifest capability"}, nil
 		}
 		cons, wm := observe(goal, m, steps, nil)
 		return Plan{Goal: goal, Source: "rule", Steps: steps, Considered: cons, WM: wm}, nil
@@ -311,9 +311,9 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 		cons, wm := observe(goal, m, probe, nil)
 		return Plan{
 			Goal: goal, Refused: true, Steps: probe, Source: "readonly-probe", Considered: cons, WM: wm,
-			Missing:  []string{"网关：无法判定该目标所需能力（不在已支持的目标形态内），不编造计划；如确需请提需求"},
-			Reason:   "无法判定目标所需能力，不编造计划",
-			Degraded: true, DegradedReason: "未识别目标：只做只读探查，不声称覆盖目标",
+			Missing:  []string{"gateway: cannot determine required capability (goal shape unsupported); will not fabricate a plan; request a feature if truly needed"},
+			Reason:   "cannot determine required capability; will not fabricate a plan",
+			Degraded: true, DegradedReason: "goal unrecognized: read-only probe only, does not claim to cover the goal",
 		}, nil
 	}
 }
@@ -337,14 +337,14 @@ func selfServiceSteps(g string) []Step {
 	if containsAny(g, "跑", "测试", "go test") {
 		return []Step{{
 			Tool: "test", Caps: []string{"run"}, Params: map[string]string{"command": "go test ./..."},
-			Action: "运行测试并查看结果（只读）", Output: "测试输出",
-			Why: "自服务：读取项目当前测试状态",
+			Action: "run tests and inspect results (read-only)", Output: "test output",
+			Why: "self-service: read current project test state",
 		}}
 	}
 	return []Step{{
 		Tool: "search", Caps: []string{"text"}, Params: map[string]string{"pattern": ".", "path": "."},
-		Action: "查看相关文件内容（只读）", Output: "匹配结果",
-		Why: "自服务：读取项目信息",
+		Action: "inspect related file content (read-only)", Output: "matches",
+		Why: "self-service: read project info",
 	}}
 }
 
@@ -365,10 +365,10 @@ func gapRequirements(goal string, m Manifest) []string {
 		}
 		seen[r.tool] = true
 		if r.auth {
-			out = append(out, "人："+r.tool+" 属不可逆/生产影响动作，须人工授权（授权是前置）")
+			out = append(out, "person: "+r.tool+" is an irreversible/production-impacting action; requires human authorization (authorization is a prerequisite)")
 		}
 		if !have[r.tool] {
-			out = append(out, "网关：且当前无 "+r.tool+" 能力（请求类型="+r.kind+"；域别名不是工具契约）")
+			out = append(out, "gateway: and there is currently no "+r.tool+" capability (request type="+r.kind+"; domain alias is not a tool contract)")
 		}
 	}
 	return out
@@ -401,12 +401,12 @@ func summarizeSteps() []Step {
 		{
 			Tool: "search", Caps: []string{"text"},
 			Params: map[string]string{"pattern": "TODO", "path": "."},
-			Action: "搜索项目内的 TODO 标记", Output: "TODO 列表（文件:行:内容）",
+			Action: "search TODO markers in project", Output: "TODO list (file:line:content)",
 		},
 		{
 			Tool: "file", Caps: []string{"write"}, DependsOn: []int{0},
-			Params: map[string]string{"path": "docs/TODO-汇总.md", "content": "# TODO 汇总（由搜索结果生成）"},
-			Action: "把 TODO 列表写入汇总文档", Output: "docs/TODO-汇总.md",
+			Params: map[string]string{"path": "docs/TODO-summary.md", "content": "# TODO summary (generated from search results)"},
+			Action: "write TODO list into summary doc", Output: "docs/TODO-summary.md",
 		},
 	}
 }
@@ -416,17 +416,17 @@ func editThenCommitSteps() []Step {
 		{
 			Tool: "file", Caps: []string{"read"},
 			Params: map[string]string{"path": "<待改文件>"},
-			Action: "读取待改文件原文", Output: "待改文件内容",
+			Action: "read original content of target file", Output: "target file content",
 		},
 		{
 			Tool: "file", Caps: []string{"write"}, DependsOn: []int{0},
 			Params: map[string]string{"path": "<待改文件>", "content": "<修改后内容>"},
-			Action: "写入修改后的内容", Output: "修改后的文件",
+			Action: "write modified content", Output: "modified file",
 		},
 		{
 			Tool: "git", Caps: []string{"commit"}, DependsOn: []int{1},
 			Params: map[string]string{"args": "commit", "message": "<提交说明>"},
-			Action: "提交改动", Output: "commit hash",
+			Action: "commit changes", Output: "commit hash",
 		},
 	}
 }
@@ -435,7 +435,7 @@ func searchSteps() []Step {
 	return []Step{{
 		Tool: "search", Caps: []string{"text"},
 		Params: map[string]string{"pattern": "TODO", "path": "."},
-		Action: "搜索匹配文件", Output: "匹配文件列表",
+		Action: "search matching files", Output: "matching file list",
 	}}
 }
 
@@ -478,14 +478,14 @@ func Replan(orig Plan, f StepFailure, m Manifest, attempt int) (Plan, error) {
 	if f.DomainDenied {
 		out.Voided = true
 		out.Changes = []string{fmt.Sprintf(
-			"第 %d 步（%s/%v）被域 %q 拒绝：计划作废，不换说法绕过门禁",
+			"step %d (%s/%v) rejected by domain %q: plan voided, will not rephrase to bypass the guard",
 			f.StepIndex, f.Tool, f.Caps, f.DeniedDomain)}
 		out.Steps = dropStep(orig.Steps, f.StepIndex)
 		out.Steps = ensureNonEmpty(out.Steps, m)
 		return out, nil
 	}
 	out.Changes = []string{fmt.Sprintf(
-		"第 %d 步（%s）失败：%s → 移除失败步，插入只读诊断步后再决定后续",
+		"step %d (%s) failed: %s -> remove failed step, insert read-only diagnostic step then decide",
 		f.StepIndex, f.Tool, f.Reason)}
 	out.Steps = dropStep(orig.Steps, f.StepIndex)
 	if diag, ok := diagnosticStep(m); ok {
@@ -531,11 +531,11 @@ func diagnosticStep(m Manifest) (Step, bool) {
 	}
 	if caps["git"]["status"] {
 		return Step{Tool: "git", Caps: []string{"status"}, Params: map[string]string{"args": "status"},
-			Action: "读取工作区状态以定位失败原因", Output: "git status 输出"}, true
+			Action: "read workspace state to locate failure cause", Output: "git status output"}, true
 	}
 	if caps["search"]["text"] {
 		return Step{Tool: "search", Caps: []string{"text"}, Params: map[string]string{"pattern": ".", "path": "."},
-			Action: "搜索相关上下文以定位失败原因", Output: "匹配结果"}, true
+			Action: "search related context to locate failure cause", Output: "matches"}, true
 	}
 	return Step{}, false
 }
@@ -550,6 +550,6 @@ func ensureNonEmpty(steps []Step, m Manifest) []Step {
 	}
 	return []Step{{
 		Tool: "search", Caps: []string{"text"}, Params: map[string]string{"pattern": ".", "path": "."},
-		Action: "只读诊断（清单内无更合适能力）", Output: "诊断输出",
+		Action: "read-only diagnosis (no better capability in manifest)", Output: "diagnostic output",
 	}}
 }

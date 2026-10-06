@@ -63,7 +63,7 @@ func TestPlanCapabilityGapRefusedWithOwner(t *testing.T) {
 		t.Fatalf("能力缺口应拒绝且不编步骤: %+v", got)
 	}
 	// C1/C2:   class before( : ),   class after( close: )--deploy curbefore erall . 
-	if len(got.Missing) < 2 || !strings.HasPrefix(got.Missing[0], "人：") || !strings.HasPrefix(got.Missing[1], "网关：") {
+	if len(got.Missing) < 2 || !strings.HasPrefix(got.Missing[0], "person:") || !strings.HasPrefix(got.Missing[1], "gateway:") {
 		t.Errorf("deploy 应「人：授权在前 + 网关：能力在后」: %+v", got.Missing)
 	}
 }
@@ -76,7 +76,7 @@ func TestPlanAuthorizationBypassRoutesToHuman(t *testing.T) {
 		t.Fatal("要求绕过确认时必须拒绝")
 	}
 	joined := strings.Join(got.Missing, "|")
-	if !strings.Contains(joined, "人：") {
+	if !strings.Contains(joined, "person:") {
 		t.Errorf("必须把卡点指到人: %v", got.Missing)
 	}
 }
@@ -90,7 +90,7 @@ func TestPlanPartialPlansReachablePrefix(t *testing.T) {
 	}
 	hasGateway := false
 	for _, mi := range got.Missing {
-		if strings.HasPrefix(mi, "网关：") {
+		if strings.HasPrefix(mi, "gateway:") {
 			hasGateway = true
 		}
 	}
