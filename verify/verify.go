@@ -289,7 +289,7 @@ func (v *Verifier) runGrep(base string, args []string) Result {
 			return Result{Status: StatusPass, Evidence: fmt.Sprintf("%s:%d: %s", rel, line, pattern), Detail: "pattern found in real filesystem content"}
 		}
 	}
-	return Result{Status: StatusFail, Detail: fmt.Sprintf("pattern %q not found in %d real files", len(targets), pattern)}
+	return Result{Status: StatusFail, Detail: fmt.Sprintf("%d real files searched, pattern %q not found", len(targets), pattern)}
 }
 
 // runFile verifyfilestore (  in disconnectlang). 
