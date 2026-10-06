@@ -91,15 +91,15 @@ func ParseActionPlan(raw string) (ActionPlan, error) {
 
 	var plan ActionPlan
 	if err := json.Unmarshal([]byte(s), &plan); err != nil {
-		return plan, fmt.Errorf("解析动作计划失败: %w; raw=%q", err, truncate(raw, 500))
+		return plan, fmt.Errorf("failed to parse action plan: %w; raw=%q", err, truncate(raw, 500))
 	}
 	if plan.Final == "" && len(plan.Actions) == 0 {
-		return plan, fmt.Errorf("动作计划为空: 既没有 actions 也没有 final; raw=%q", truncate(raw, 500))
+		return plan, fmt.Errorf("empty action plan: neither actions nor final; raw=%q", truncate(raw, 500))
 	}
 	for i := range plan.Actions {
 		a := &plan.Actions[i]
 		if a.Tool == "" {
-			return plan, fmt.Errorf("动作 #%d 缺少 tool 字段; raw=%q", i, truncate(raw, 500))
+			return plan, fmt.Errorf("action #%d missing tool field; raw=%q", i, truncate(raw, 500))
 		}
 		if a.Seq <= 0 {
 			a.Seq = i + 1
@@ -283,10 +283,10 @@ type ReceiptView struct {
 // RenderReceipt   four-line receipt base(mobile  in, SPEC  recvuseexample 11  form). 
 func RenderReceipt(r ReceiptView) string {
 	lines := []string{
-		"动作：" + r.Action,
-		"文件：" + r.Files,
-		"结果：" + r.Result,
-		"撤销：" + r.Undo,
+		"Action: " + r.Action,
+		"Files: " + r.Files,
+		"Result: " + r.Result,
+		"Undo: " + r.Undo,
 	}
 	return strings.Join(lines, "\n")
 }

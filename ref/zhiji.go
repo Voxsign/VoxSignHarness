@@ -58,14 +58,14 @@ func (c *ZhijiClient) Events(ctx context.Context) ([]Event, error) {
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d（按不可用处理）", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d (treated as unavailable)", resp.StatusCode)
 	}
 	var out struct {
 		Count  int     `json:"count"`
 		Events []Event `json:"events"`
 	}
 	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&out); err != nil {
-		return nil, fmt.Errorf("解析失败（按不可用处理）: %w", err)
+		return nil, fmt.Errorf("parse failed (treated as unavailable): %w", err)
 	}
 	return out.Events, nil
 }

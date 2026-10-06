@@ -90,7 +90,7 @@ func (s *Store) LoadIndex() (Index, string, error) {
 // SaveManifest       in . 
 func (s *Store) SaveManifest(m Manifest) error {
 	if m.ID == "" {
-		return fmt.Errorf("skill: manifest 缺 id")
+		return fmt.Errorf("skill: manifest missing id")
 	}
 	if m.FetchedAt == "" {
 		m.FetchedAt = s.Now().UTC().Format(time.RFC3339)

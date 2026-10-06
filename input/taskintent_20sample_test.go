@@ -117,7 +117,7 @@ func Test20SampleReceiptFields(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("回执应四行, 实际 %d 行: %q", len(lines), lines)
 	}
-	for i, want := range []string{"动作：", "文件：", "结果：", "撤销："} {
+	for i, want := range []string{"Action: ", "Files: ", "Result: ", "Undo: "} {
 		if len(lines[i]) < len(want) || lines[i][:len(want)] != want {
 			t.Errorf("第 %d 行应以 %q 开头, 实际 %q", i+1, want, lines[i])
 		}

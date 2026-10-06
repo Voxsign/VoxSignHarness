@@ -106,7 +106,7 @@ func say(t *testing.T, ts *httptest.Server, text string) phoneView {
 }
 
 // receiptLabels ismobileback       (contract.RenderReceipt    tgt ). 
-var receiptLabels = []string{"动作：", "文件：", "结果：", "撤销："}
+var receiptLabels = []string{"Action: ", "Files: ", "Result: ", "Undo: "}
 
 // asrFuzzyCorpus ismobile ASR  see    base(noaudiofreq,  connectgive base). 
 var asrFuzzyCorpus = []string{

@@ -54,7 +54,7 @@ func TestParseActionPlan_Empty(t *testing.T) {
 
 func TestParseActionPlan_MissingTool(t *testing.T) {
 	_, err := ParseActionPlan(`{"actions":[{"args":{}}]}`)
-	if err == nil || !strings.Contains(err.Error(), "缺少 tool") {
+	if err == nil || !strings.Contains(err.Error(), "missing tool") {
 		t.Fatalf("want missing-tool error, got: %v", err)
 	}
 }

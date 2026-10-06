@@ -341,7 +341,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"ok": "false", "code": "asr_channel_not_ready",
-			"error": "平台 model-center 未提供 /api/model/asr（AIOPS_KEY 未设置）"})
+			"error": "platform model-center does not provide /api/model/asr (AIOPS_KEY not set)"})
 		return
 	}
 	//    ASR endpoint: and model-center same  base, path /api/model/asr. 
@@ -378,7 +378,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 			"ok": "false", "code": code, "error": msg})
 		return
 	}
-	log.Printf("ASR: rid=%s 平台 %s → HTTP %d（text_len 见响应）resp=%s", requestIDFromReq(r), asrURL, status, truncate(string(data), 300))
+	log.Printf("ASR: rid=%s platform %s -> HTTP %d (see response for text_len) resp=%s", requestIDFromReq(r), asrURL, status, truncate(string(data), 300))
 	if status != http.StatusOK {
 		var perr map[string]any
 		_ = json.Unmarshal(data, &perr)
@@ -389,7 +389,7 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 		}
 		msg, _ := perr["error"].(string)
 		if msg == "" {
-			msg = "平台 model-center 的 /api/model/asr 返回 HTTP " + http.StatusText(status)
+			msg = "platform model-center /api/model/asr returned HTTP " + http.StatusText(status)
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"ok": "false", "code": code, "error": msg})
 		return
@@ -432,7 +432,7 @@ func loadASRHotwords(logDir string) []string {
 	seeds := []string{"VoxSign", "VoiceSign", "Harness", "aiops", "截个图", "远程控制", "查看天气", "校准"}
 	b, _ := json.MarshalIndent(seeds, "", "  ")
 	_ = os.WriteFile(p, b, 0o644)
-	log.Printf("ASR: init personalized hot-word lib %s（%d 词）", p, len(seeds))
+	log.Printf("ASR: init personalized hot-word lib %s (%d words)", p, len(seeds))
 	return trimHotwords(seeds)
 }
 
@@ -471,7 +471,7 @@ func (s *Server) handleScreenshot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) Start() error {
 	mux := s.Handler()
 	addr := s.cfg.ServerBind()
-	fmt.Printf("vhs server listening on %s (token_set=%v) 实际ASR端点=%s\n", addr, s.cfg.Server.Token != "", asrEndpoint())
+	fmt.Printf("vhs server listening on %s (token_set=%v) asr_endpoint=%s\n", addr, s.cfg.Server.Token != "", asrEndpoint())
 	return http.ListenAndServe(addr, mux)
 }
 
@@ -917,7 +917,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 	if req.TaskID != "" && len(ids) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id 或无活动任务可打断"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id or no active task to interrupt"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "interrupted": ids})
@@ -1379,7 +1379,7 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 	substituted := resolveClarified(ts.Text, answer)
 	if substituted == ts.Text {
 		// no   coreferenceword  botpath:  need     id before ,     pathhandle   (   S4). 
-		substituted = " 澄清：" + stripOptionPrefix(answer)
+		substituted = " clarification: " + stripOptionPrefix(answer)
 	}
 	s.runPipeline(ts, ctx, prefix+substituted, "", ts.Document)
 	return true
@@ -1673,9 +1673,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // handleRoles(M5-3): returnback   define + curbeforetask  . 
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 	all := []map[string]any{
-		{"id": RolePlanner, "label": "Planner（规划）"},
-		{"id": RoleExecutor, "label": "Executor（执行）"},
-		{"id": RoleVerifier, "label": "Verifier（校验）"},
+		{"id": RolePlanner, "label": "Planner"},
+		{"id": RoleExecutor, "label": "Executor"},
+		{"id": RoleVerifier, "label": "Verifier"},
 	}
 	// get     endstatetask   ; nothensafety inactive. 
 	s.mu.Lock()

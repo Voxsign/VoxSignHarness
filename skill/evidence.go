@@ -35,7 +35,7 @@ func ClaimedByCaller(detail string) Claim {
 // ExecutedCheck is**unique** produceoccur verified  path(needgiveout check tgt ). 
 func ExecutedCheck(checkID string, passed bool, detail string) (Claim, error) {
 	if checkID == "" {
-		return Claim{}, fmt.Errorf("skill: ExecutedCheck 需要 checkID（verified 必须有来源）")
+		return Claim{}, fmt.Errorf("skill: ExecutedCheck requires checkID (verified must have a source)")
 	}
 	c := Claim{kind: provExecuted, Executed: true, CheckID: checkID, Detail: detail}
 	if !passed {
