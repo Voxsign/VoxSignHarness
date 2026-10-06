@@ -48,7 +48,7 @@ jobs:
           else
             RANGE="HEAD~1..HEAD"
           fi
-          for c in $(git rev-list "$RANGE"); do
+          for c in $(git rev-list --no-merges "$RANGE"); do
             if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly=true)' "$c" | grep -q .; then
               echo "Missing Signed-off-by on commit $c"; exit 1
             fi
