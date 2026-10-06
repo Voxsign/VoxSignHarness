@@ -117,7 +117,7 @@ const maxOut = 4000
 
 func truncateOut(s string) string {
 	if len(s) > maxOut {
-		return s[:maxOut] + "…(截断)"
+		return s[:maxOut] + "...(truncated)"
 	}
 	return s
 }

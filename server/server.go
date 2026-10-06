@@ -323,18 +323,18 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	asrStart := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
 	if err := r.ParseMultipartForm(15 << 20); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "音频解析失败：" + err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "audio parse failed: " + err.Error()})
 		return
 	}
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "缺少 file 字段（multipart 音频）"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "missing file field (multipart audio)"})
 		return
 	}
 	defer file.Close()
 	audio, err := io.ReadAll(file)
 	if err != nil || len(audio) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "音频为空或读取失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"ok": "false", "code": "bad_audio", "error": "audio empty or unreadable"})
 		return
 	}
 	key := strings.TrimSpace(os.Getenv("AIOPS_KEY"))
@@ -369,10 +369,10 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 		map[string]string{"Authorization": "Bearer " + key})
 	if rerr != nil {
 		code := "asr_channel_not_ready"
-		msg := "平台 model-center 不可达：" + rerr.Error()
+		msg := "platform model-center unreachable: " + rerr.Error()
 		if err == ctx.Err() || ctx.Err() != nil {
 			code = "asr_timeout"
-			msg = "平台 model-center 超时（" + tMid.String() + "）"
+			msg = "platform model-center timed out (" + tMid.String() + "）"
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"ok": "false", "code": code, "error": msg})
@@ -405,10 +405,10 @@ func (s *Server) handleASR(w http.ResponseWriter, r *http.Request) {
 	// empty baseis  close ( audio/  audio),     error; only JSON   or ok=false only . 
 	if err := json.Unmarshal(data, &pr); err != nil || !pr.OK {
 		writeJSON(w, http.StatusBadGateway, map[string]string{
-			"ok": "false", "code": "asr_bad_response", "error": "平台返回异常：" + pr.Err})
+			"ok": "false", "code": "asr_bad_response", "error": "platform returned error: " + pr.Err})
 		return
 	}
-	log.Printf("ASR: rid=%s 校准成功 model=%s duration_ms=%d text_len=%d wall_ms=%d",
+	log.Printf("ASR: rid=%s calibrated model=%s duration_ms=%d text_len=%d wall_ms=%d",
 		requestIDFromReq(r), pr.Model, pr.DurMs, len(pr.Text), time.Since(asrStart).Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "text": pr.Text, "duration_ms": pr.DurMs, "model": pr.Model,
@@ -432,7 +432,7 @@ func loadASRHotwords(logDir string) []string {
 	seeds := []string{"VoxSign", "VoiceSign", "Harness", "aiops", "PeterZou", "季总", "截个图", "远程控制", "查看天气", "校准"}
 	b, _ := json.MarshalIndent(seeds, "", "  ")
 	_ = os.WriteFile(p, b, 0o644)
-	log.Printf("ASR: 初始化个性化热词库 %s（%d 词）", p, len(seeds))
+	log.Printf("ASR: init personalized hot-word lib %s（%d 词）", p, len(seeds))
 	return trimHotwords(seeds)
 }
 
@@ -527,7 +527,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			claims, err := s.cloud.verifyJWT(tok)
 			if err != nil {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
-					"error": "会话无效或已过期，请重新登录", "code": "unauthorized"})
+					"error": "session invalid or expired, please sign in again", "code": "unauthorized"})
 				return
 			}
 			ctx := withTenant(r.Context(), claims.Sub)
@@ -536,7 +536,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 				left, err := s.cloud.checkAndConsume(claims.Sub)
 				if err == quotaExceededErr {
 					writeJSON(w, http.StatusTooManyRequests, map[string]string{
-						"error": "今日免费额度已用完，升级 VoiceSign Prime 解锁不限量",
+						"error": "daily free quota exhausted; upgrade to VoiceSign Prime for unlimited",
 						"code":  "quota_exceeded",
 					})
 					return
@@ -549,7 +549,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		// base   : token asemptytimeonly allowback ly . 
 		if s.cfg.Server.Token == "" {
 			if !isLoopback(r.RemoteAddr) {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "缺 token 且非本机访问"})
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing token and non-loopback access"})
 				return
 			}
 		} else {
@@ -559,7 +559,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 				tok = r.Header.Get("X-Token")
 			}
 			if tok != s.cfg.Server.Token {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token 无效"})
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 				return
 			}
 		}
@@ -585,12 +585,12 @@ type runReq struct {
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req runReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {text}"})
 		return
 	}
 
@@ -634,7 +634,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			return approved, nil
 		case <-ctx.Done():
-			return false, errors.New("任务被取消")
+			return false, errors.New("task canceled")
 		}
 	}
 
@@ -682,12 +682,12 @@ func asrEndpoint() string {
 //	④ its   has pipeline.Run path( domain forbidand reversibleconfirm). 
 func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req voiceReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}（ASR 识别文本）"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {text} (ASR transcript)"})
 		return
 	}
 	// P0-4b:    ASR    id  connect--clientuserend  X-Session-Id   timeuseof,     "voice"(    has schema). 
@@ -696,7 +696,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// ② **     **:    503 + degraded, and**     task**
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error":    "ASR 服务不可达（不静默降级为直接执行原文）: " + err.Error(),
+			"error":    "ASR service unreachable (no silent fallback to raw text): " + err.Error(),
 			"degraded": true,
 			"endpoint": asrEndpoint(),
 		})
@@ -708,7 +708,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	ask, _ := intent["ask"].(string)
 	if needAsk || strings.EqualFold(typ, "ASK") || ask != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"executed": false, "reason": "意图需要澄清（ASK / 低置信）—— 红线：Ask != '' 绝不执行",
+			"executed": false, "reason": "intent needs clarification (ASK/low confidence) -- red line: never execute when Ask != ''",
 			"intent": intent,
 		})
 		return
@@ -738,7 +738,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			return approved, nil
 		case <-ctx.Done():
-			return false, errors.New("任务被取消")
+			return false, errors.New("task canceled")
 		}
 	}
 	safeGo("voice:"+ts.ID, func() {
@@ -778,7 +778,7 @@ func (s *Server) callASRProcess(ctx context.Context, text, sessionID string) (ma
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("线 B HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("line B HTTP %d", resp.StatusCode)
 	}
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -794,7 +794,7 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	ts, ok := s.tasks[id]
 	s.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id"})
 		return
 	}
 	writeJSON(w, http.StatusOK, ts)
@@ -807,25 +807,25 @@ type confirmReq struct {
 
 func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req confirmReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {task_id,approved}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {task_id,approved}"})
 		return
 	}
 	s.mu.Lock()
 	ts, ok := s.tasks[req.TaskID]
 	s.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id"})
 		return
 	}
 	select {
 	case ts.confirmCh <- req.Approved:
 	default:
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "任务不在等待确认状态"})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "task not waiting for confirmation"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -837,7 +837,7 @@ type cancelReq struct {
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req cancelReq
@@ -846,7 +846,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	ts, ok := s.tasks[req.TaskID]
 	s.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id"})
 		return
 	}
 	if ts.cancel != nil {
@@ -854,9 +854,9 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	applied := []string{}
-	notApplied := []string{"任务已取消，未执行动作"}
+	notApplied := []string{"task canceled, no action executed"}
 	if ts.Outcome != nil && len(ts.Outcome.Receipts) > 0 {
-		applied = []string{"已执行动作见回执"}
+		applied = []string{"see receipt for executed actions"}
 	}
 	s.emitEvent(ts, "interrupt", map[string]any{
 		"applied":     applied,
@@ -889,7 +889,7 @@ func isActiveTask(status string) bool {
 //  disconnect end), tgt  canceled andsendevent. controlface   betask    . 
 func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req interruptReq
@@ -917,7 +917,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 	if req.TaskID != "" && len(ids) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id 或无活动任务可打断"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id 或无活动任务可打断"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "interrupted": ids})
@@ -934,12 +934,12 @@ type withdrawReq struct {
 //   - done: alreadydone -> tgt  revoked(  use    has /v1/tasks/{id}/rollback). 
 func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req withdrawReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TaskID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {task_id, scope}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {task_id, scope}"})
 		return
 	}
 	if req.Scope == "" {
@@ -948,7 +948,7 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	switch req.Scope {
 	case "pending", "running", "done":
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope 应为 pending|running|done"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scope must be pending|running|done"})
 		return
 	}
 
@@ -956,7 +956,7 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	ts, ok := s.tasks[req.TaskID]
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id"})
 		return
 	}
 
@@ -964,7 +964,7 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	case "pending":
 		//  raiseclass(   finish/ openstart):  connectcancel. 
 		if !isActiveTask(ts.Status) {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务不在可撤回状态", "status": ts.Status})
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "task not in revocable state", "status": ts.Status})
 			return
 		}
 		if ts.cancel != nil {
@@ -976,7 +976,7 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "pending"})
 	case "running":
 		if !isActiveTask(ts.Status) {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务不在执行中", "status": ts.Status})
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "task not running", "status": ts.Status})
 			return
 		}
 		if ts.cancel != nil {
@@ -988,14 +988,14 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "running"})
 	case "done":
 		if ts.Status != stDone {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "任务未完成，无法按 done 撤回", "status": ts.Status})
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "task unfinished, cannot withdraw as done", "status": ts.Status})
 			return
 		}
 		s.markStatus(ts, stRevoked)
 		s.emitEvent(ts, "withdrawn", map[string]any{
 			"scope":      "done",
 			"reversible": ts.Reversible,
-			"note":       "副作用清理请走 /v1/tasks/{id}/rollback",
+			"note":       "for side-effect cleanup use /v1/tasks/{id}/rollback",
 		})
 		s.persist(ts)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scope": "done", "revoked": true})
@@ -1148,7 +1148,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			s.mu.Unlock()
 			return approved, nil
 		case <-ctx.Done():
-			return false, errors.New("任务被取消")
+			return false, errors.New("task canceled")
 		}
 	}
 
@@ -1193,10 +1193,10 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				if len(heard) > 40 {
 					heard = heard[:40] + "…"
 				}
-				receipt := "你说的是「" + heard + "」——我没太确定要做什么。" +
-					"可以直接说清楚对象，比如「查一下北京的天气」「记一个想法：…」「跑一下测试」。"
+				receipt := "you said [" + heard + "] -- I am not sure what you meant." +
+					"be explicit, e.g. check Beijing weather, note an idea, run the tests."
 				// mobilesidebypoll GET /v1/tasks/{id}   receipt asapprove,   modify View.Result,  modify event  occur . 
-				out.View.Action = "（待澄清）"
+				out.View.Action = "(needs clarification)"
 				out.View.Result = receipt
 				ts.Outcome = &out
 				s.markStatus(ts, stDone)
@@ -1214,8 +1214,8 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				ts.askedQuestions = map[string]bool{}
 			}
 			if ts.askedQuestions[out.Ask] || ts.askRounds >= maxAskRounds {
-				ts.Err = "澄清未收敛：同一个问题被反复问到，或已达澄清轮次上限；" +
-					"请直接用完整指令再说一遍（明确说出对象）"
+				ts.Err = "clarification not converged: same question repeated or round limit reached;" +
+					"please restate as a full command (name the object explicitly)"
 				s.markStatus(ts, stCanceled)
 				s.emitEvent(ts, "canceled", map[string]any{
 					"reason": "ask_not_converging", "rounds": ts.askRounds,
@@ -1387,12 +1387,12 @@ func (s *Server) resumeAsk(ts *taskState, answer string) bool {
 
 func (s *Server) handleTasksPost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req tasksPostReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {text}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {text}"})
 		return
 	}
 
@@ -1430,7 +1430,7 @@ func (s *Server) handleTasksSub(w http.ResponseWriter, r *http.Request) {
 	ts, ok := s.tasks[id]
 	s.mu.Unlock()
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "未知 task_id"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown task_id"})
 		return
 	}
 
@@ -1446,7 +1446,7 @@ func (s *Server) handleTasksSub(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 2 && parts[1] == "rollback" && r.Method == http.MethodPost:
 		s.handleRollback(w, ts)
 	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "不支持的方法/路径"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "unsupported method/path"})
 	}
 }
 
@@ -1526,9 +1526,9 @@ func (s *Server) handleCancelSub(w http.ResponseWriter, r *http.Request, ts *tas
 	}
 	s.mu.Lock()
 	applied := []string{}
-	notApplied := []string{"任务已取消，未执行动作"}
+	notApplied := []string{"task canceled, no action executed"}
 	if ts.Outcome != nil && len(ts.Outcome.Receipts) > 0 {
-		applied = []string{"已执行动作见回执"}
+		applied = []string{"see receipt for executed actions"}
 	}
 	s.emitEvent(ts, "interrupt", map[string]any{
 		"applied": applied, "notApplied": notApplied, "canRollback": ts.Reversible,
@@ -1576,7 +1576,7 @@ type answerReq struct {
 func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request, ts *taskState) {
 	var req answerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体应为 JSON {answer}"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must be JSON {answer}"})
 		return
 	}
 	s.mu.Lock()
@@ -1591,7 +1591,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request, ts *taskSt
 		if !accepted {
 			// empty  : rejectaccept , task stop  need_ask, useuser byagain   (   S7). 
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "澄清答案不能为空；任务仍在等待作答", "status": st,
+				"error": "clarification answer cannot be empty; task still awaiting answer", "status": st,
 			})
 			return
 		}
@@ -1600,7 +1600,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request, ts *taskSt
 	}
 
 	if st != stNeedConfirm {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "当前无待回答的决策点", "status": st})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no pending decision point", "status": st})
 		return
 	}
 	// confirmword:   /y/yes/true/1 ->   ; its  -> reject. 
@@ -1608,7 +1608,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request, ts *taskSt
 	select {
 	case ts.confirmCh <- approved:
 	default:
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "决策点已过期"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "decision point expired"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "approved": approved})
@@ -1637,24 +1637,24 @@ func (s *Server) handleRollback(w http.ResponseWriter, ts *taskState) {
 	s.mu.Unlock()
 
 	if st != stDone {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "任务未完成，不可回滚", "status": st})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "task unfinished, cannot roll back", "status": st})
 		return
 	}
 	if !rev {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "不可逆任务（COMMIT/DEPLOY）禁止回滚"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "irreversible tasks (COMMIT/DEPLOY) cannot roll back"})
 		return
 	}
 	if bak == "" || tgt == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "无可撤销备份或目标未知"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no revocable backup or unknown target"})
 		return
 	}
 	data, err := os.ReadFile(bak)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "备份文件不存在"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "backup file does not exist"})
 		return
 	}
 	if err := os.WriteFile(tgt, data, 0o644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "还原失败: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "restore failed: " + err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restored": tgt})
@@ -1764,7 +1764,7 @@ func (s *Server) restore() {
 		switch ts.Status {
 		case stRunning, stNeedAsk, stNeedConfirm, stWaiting:
 			ts.Status = stInterrupted
-			ts.Err = "任务在重启时被中断，请重新提交"
+			ts.Err = "task interrupted by restart, please resubmit"
 		}
 		s.tasks[ts.ID] = &ts
 		if ts.RequestID != "" {
@@ -1848,7 +1848,7 @@ func (s *Server) onTaskPanic(ts *taskState, o *pipeline.Options, r any) {
 		_ = o.Trace.Write(trajectory.Entry{
 			RequestID: rid,
 			Kind:      trajectory.KindError,
-			Content:   fmt.Sprintf("后台任务 goroutine panic: %v", r),
+			Content:   fmt.Sprintf("background task goroutine panic: %v", r),
 		})
 	}
 }

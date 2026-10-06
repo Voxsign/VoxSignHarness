@@ -225,62 +225,62 @@ func Load(configPath string) (Config, error) {
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
-			return cfg, fmt.Errorf("读取配置文件 %s 失败: %w", configPath, err)
+			return cfg, fmt.Errorf("failed to read config file %s: %w", configPath, err)
 		}
 		// firstresolve to raw map againbynodeoverwrite:   node(providers/routes)   body  , 
 		//    encoding/json to empty  "thenly usealreadyhas  ,  charsegoverwrite"  defaultvalue  
 		// (e.g.default provider center   endpoint  infilevoice   provider). 
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(data, &raw); err != nil {
-			return cfg, fmt.Errorf("解析配置文件 %s 失败: %w", configPath, err)
+			return cfg, fmt.Errorf("failed to parse config file %s: %w", configPath, err)
 		}
 		if v, ok := raw["global"]; ok {
 			if err := json.Unmarshal(v, &cfg.Global); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s global 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s global section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["providers"]; ok {
 			var ps []Provider
 			if err := json.Unmarshal(v, &ps); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s providers 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s providers section: %w", configPath, err)
 			}
 			cfg.Providers = ps
 		}
 		if v, ok := raw["routes"]; ok {
 			var rs []Route
 			if err := json.Unmarshal(v, &rs); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s routes 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s routes section: %w", configPath, err)
 			}
 			cfg.Routes = rs
 		}
 		if v, ok := raw["input"]; ok {
 			if err := json.Unmarshal(v, &cfg.Input); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s input 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s input section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["memory"]; ok {
 			if err := json.Unmarshal(v, &cfg.Memory); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s memory 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s memory section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["spaces"]; ok {
 			if err := json.Unmarshal(v, &cfg.Spaces); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s spaces 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s spaces section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["contracts"]; ok {
 			if err := json.Unmarshal(v, &cfg.Contracts); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s contracts 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s contracts section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["cache"]; ok {
 			if err := json.Unmarshal(v, &cfg.Cache); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s cache 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s cache section: %w", configPath, err)
 			}
 		}
 		if v, ok := raw["server"]; ok {
 			if err := json.Unmarshal(v, &cfg.Server); err != nil {
-				return cfg, fmt.Errorf("解析配置文件 %s server 节失败: %w", configPath, err)
+				return cfg, fmt.Errorf("failed to parse config file %s server section: %w", configPath, err)
 			}
 		}
 		cfg.ConfigPath = configPath
@@ -400,17 +400,17 @@ func (c *Config) validate() error {
 	//  base       token(in    boundary, SPEC v2    32  decide: listen   + token). 
 	if c.Server.Token == "" && !isLocalhost(c.Server.Bind) {
 		c.Warnings = append(c.Warnings,
-			fmt.Sprintf("server 绑定 %s 但未配置 token（VHS_TOKEN）：内网可访问且无认证，建议设置 token", c.Server.Bind))
+			fmt.Sprintf("server binds %s but no token (VHS_TOKEN) set: reachable internally without auth; set a token", c.Server.Bind))
 	}
 
 	seen := map[string]bool{}
 	for i := range c.Providers {
 		p := &c.Providers[i]
 		if strings.TrimSpace(p.Name) == "" {
-			return fmt.Errorf("providers[%d]: name 必填", i)
+			return fmt.Errorf("providers[%d]: name required", i)
 		}
 		if seen[p.Name] {
-			return fmt.Errorf("providers: provider 名重复: %q", p.Name)
+			return fmt.Errorf("providers: duplicate provider name: %q", p.Name)
 		}
 		seen[p.Name] = true
 		switch p.Kind {
@@ -420,16 +420,16 @@ func (c *Config) validate() error {
 			}
 		case OpenAIKind:
 			if strings.TrimSpace(p.Endpoint) == "" {
-				return fmt.Errorf("providers[%q]: openai 必须提供 endpoint", p.Name)
+				return fmt.Errorf("providers[%q]: openai requires endpoint", p.Name)
 			}
 			if strings.TrimSpace(p.Model) == "" {
-				return fmt.Errorf("providers[%q]: openai 必须提供 model", p.Name)
+				return fmt.Errorf("providers[%q]: openai requires model", p.Name)
 			}
 			if strings.TrimSpace(p.APIKey) == "" {
-				c.Warnings = append(c.Warnings, fmt.Sprintf("provider %q 未配置 api_key：若端点需鉴权将返回 401（可用 VHS_API_KEY）", p.Name))
+				c.Warnings = append(c.Warnings, fmt.Sprintf("provider %q has no api_key: endpoint requiring auth will return 401 (set VHS_API_KEY)", p.Name))
 			}
 		default:
-			return fmt.Errorf("providers[%q]: 不支持的 kind %q（仅 %s/%s）", p.Name, p.Kind, OpenAIKind, MockKind)
+			return fmt.Errorf("providers[%q]: unsupported kind %q (only %s/%s)", p.Name, p.Kind, OpenAIKind, MockKind)
 		}
 	}
 
@@ -437,23 +437,23 @@ func (c *Config) validate() error {
 	for i := range c.Routes {
 		r := &c.Routes[i]
 		if strings.TrimSpace(r.Name) == "" {
-			return fmt.Errorf("routes[%d]: name 必填", i)
+			return fmt.Errorf("routes[%d]: name required", i)
 		}
 		if strings.TrimSpace(r.Provider) == "" {
-			return fmt.Errorf("routes[%q]: provider 必填", r.Name)
+			return fmt.Errorf("routes[%q]: provider required", r.Name)
 		}
 		if r.Provider != LocalProvider && !seen[r.Provider] {
-			return fmt.Errorf("routes[%q]: provider %q 未在 providers 表中定义", r.Name, r.Provider)
+			return fmt.Errorf("routes[%q]: provider %q not defined in providers table", r.Name, r.Provider)
 		}
 		if r.Default {
 			if hasDefault {
-				return fmt.Errorf("routes: 存在多个 default 路由")
+				return fmt.Errorf("routes: multiple default routes")
 			}
 			hasDefault = true
 		}
 	}
 	if !hasDefault {
-		return fmt.Errorf("routes: 必须存在一条 default 路由")
+		return fmt.Errorf("routes: exactly one default route required")
 	}
 	return nil
 }

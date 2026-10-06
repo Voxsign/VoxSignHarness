@@ -550,7 +550,7 @@ type authLoginReq struct {
 // handleAuthGoogle POST /v1/auth/google ->  /  Google token ->  user ->    JWT. 
 func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
 		return
 	}
 	var req authLoginReq

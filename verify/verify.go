@@ -115,7 +115,7 @@ func (v *Verifier) Run(spec Spec) (Result, error) {
 		return Result{
 			Status:   StatusUnverifiable,
 			Evidence: "",
-			Detail:   fmt.Sprintf("未知校验类型 %q（仅 test|diff|grep|file）", spec.Kind),
+			Detail:   fmt.Sprintf("unknown verify kind %q (only test|diff|grep|file)", spec.Kind),
 		}, nil
 	}
 }
@@ -126,7 +126,7 @@ const maxEvidence = 2000
 func truncateEvidence(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) > maxEvidence {
-		return s[:maxEvidence] + "…(截断)"
+		return s[:maxEvidence] + "...(truncated)"
 	}
 	return s
 }
@@ -140,7 +140,7 @@ func truncateEvidence(s string) string {
 func resolve(base, p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
-		return "", fmt.Errorf("空路径")
+		return "", fmt.Errorf("empty path")
 	}
 	absBase, err := filepath.Abs(base)
 	if err != nil {
@@ -155,14 +155,14 @@ func resolve(base, p string) (string, error) {
 	clean := filepath.Clean(abs)
 	//    : word  containment
 	if !withinBase(clean, absBase) {
-		return "", fmt.Errorf("路径越界: %q 不在校验根 %q 内", p, absBase)
+		return "", fmt.Errorf("path out of bounds: %q not within verify root %q", p, absBase)
 	}
 
 	//    :  idchainconnect containment
 	realBase := evalSafe(absBase)
 	real := evalSafe(clean)
 	if !withinBase(real, realBase) {
-		return "", fmt.Errorf("符号链接逃逸: %q 解析后越出校验根 %q", p, realBase)
+		return "", fmt.Errorf("symlink escape: %q resolves outside verify root %q", p, realBase)
 	}
 	return clean, nil
 }
@@ -197,7 +197,7 @@ func evalSafe(p string) string {
 // runTest      , by   outcodeasapprove. 
 func (v *Verifier) runTest(base string, args []string) Result {
 	if len(args) == 0 {
-		return Result{Status: StatusUnverifiable, Detail: "test 校验缺命令 argv"}
+		return Result{Status: StatusUnverifiable, Detail: "test verify missing command argv"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
@@ -209,41 +209,41 @@ func (v *Verifier) runTest(base string, args []string) Result {
 	err := cmd.Run()
 	evidence := truncateEvidence(buf.String())
 	if ctx.Err() == context.DeadlineExceeded {
-		return Result{Status: StatusFail, Evidence: evidence, Detail: fmt.Sprintf("校验命令超时（>%s），判未通过", runTimeout)}
+		return Result{Status: StatusFail, Evidence: evidence, Detail: fmt.Sprintf("verify command timed out (>%s), judged failed", runTimeout)}
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "executable file not found") || os.IsNotExist(err) {
-			return Result{Status: StatusUnverifiable, Evidence: evidence, Detail: "校验命令不存在，无法复核: " + err.Error()}
+			return Result{Status: StatusUnverifiable, Evidence: evidence, Detail: "verify command does not exist, cannot re-check: " + err.Error()}
 		}
-		return Result{Status: StatusFail, Evidence: evidence, Detail: fmt.Sprintf("真实退出码非 0：%v", err)}
+		return Result{Status: StatusFail, Evidence: evidence, Detail: fmt.Sprintf("real exit code non-zero: %v", err)}
 	}
-	return Result{Status: StatusPass, Evidence: evidence, Detail: "校验命令真实退出码为 0"}
+	return Result{Status: StatusPass, Evidence: evidence, Detail: "verify command real exit code is 0"}
 }
 
 // runDiff read  filein toperiod   . 
 func (v *Verifier) runDiff(base string, args []string) Result {
 	if len(args) < 2 {
-		return Result{Status: StatusUnverifiable, Detail: "diff 校验需要 [路径, 期望子串]"}
+		return Result{Status: StatusUnverifiable, Detail: "diff verify needs [path, expected substring]"}
 	}
 	p, err := resolve(base, args[0])
 	if err != nil {
-		return Result{Status: StatusUnverifiable, Detail: "diff 路径非法: " + err.Error()}
+		return Result{Status: StatusUnverifiable, Detail: "diff path invalid: " + err.Error()}
 	}
 	data, rerr := os.ReadFile(p)
 	if rerr != nil {
-		return Result{Status: StatusFail, Evidence: truncateEvidence(rerr.Error()), Detail: "真实文件读不到（不存在或不可读），判未通过: " + args[0]}
+		return Result{Status: StatusFail, Evidence: truncateEvidence(rerr.Error()), Detail: "real file unreadable (missing or unreadable), judged failed: " + args[0]}
 	}
 	content := string(data)
 	if strings.Contains(content, args[1]) {
-		return Result{Status: StatusPass, Evidence: truncateEvidence(content), Detail: fmt.Sprintf("文件 %s 真实内容包含期望子串", args[0])}
+		return Result{Status: StatusPass, Evidence: truncateEvidence(content), Detail: fmt.Sprintf("file %s real content contains expected substring", args[0])}
 	}
-	return Result{Status: StatusFail, Evidence: truncateEvidence(content), Detail: fmt.Sprintf("文件 %s 真实内容【不包含】期望子串 %q", args[0], args[1])}
+	return Result{Status: StatusFail, Evidence: truncateEvidence(content), Detail: fmt.Sprintf("file %s real content does NOT contain expected substring %q", args[0], args[1])}
 }
 
 // runGrep    file     form. 
 func (v *Verifier) runGrep(base string, args []string) Result {
 	if len(args) == 0 {
-		return Result{Status: StatusUnverifiable, Detail: "grep 校验缺搜索模式"}
+		return Result{Status: StatusUnverifiable, Detail: "grep verify missing search pattern"}
 	}
 	pattern := args[0]
 	var targets []string
@@ -286,30 +286,30 @@ func (v *Verifier) runGrep(base string, args []string) Result {
 		if idx := strings.Index(string(data), pattern); idx >= 0 {
 			line := 1 + strings.Count(string(data)[:idx], "\n")
 			rel, _ := filepath.Rel(base, t)
-			return Result{Status: StatusPass, Evidence: fmt.Sprintf("%s:%d: %s", rel, line, pattern), Detail: "在文件系统真实内容中搜到模式"}
+			return Result{Status: StatusPass, Evidence: fmt.Sprintf("%s:%d: %s", rel, line, pattern), Detail: "pattern found in real filesystem content"}
 		}
 	}
-	return Result{Status: StatusFail, Detail: fmt.Sprintf("在 %d 个真实文件中未搜到模式 %q", len(targets), pattern)}
+	return Result{Status: StatusFail, Detail: fmt.Sprintf("pattern %q not found in %d real files", len(targets), pattern)}
 }
 
 // runFile verifyfilestore (  in disconnectlang). 
 func (v *Verifier) runFile(base string, args []string) Result {
 	if len(args) == 0 {
-		return Result{Status: StatusUnverifiable, Detail: "file 校验缺路径"}
+		return Result{Status: StatusUnverifiable, Detail: "file verify missing path"}
 	}
 	p, err := resolve(base, args[0])
 	if err != nil {
-		return Result{Status: StatusUnverifiable, Detail: "file 路径非法: " + err.Error()}
+		return Result{Status: StatusUnverifiable, Detail: "file path invalid: " + err.Error()}
 	}
 	data, rerr := os.ReadFile(p)
 	if rerr != nil {
-		return Result{Status: StatusFail, Detail: "真实文件不存在或不可读: " + args[0]}
+		return Result{Status: StatusFail, Detail: "real file missing or unreadable: " + args[0]}
 	}
 	if len(args) >= 2 && args[1] != "" {
 		if strings.Contains(string(data), args[1]) {
-			return Result{Status: StatusPass, Evidence: truncateEvidence(string(data)), Detail: "文件存在且包含期望子串"}
+			return Result{Status: StatusPass, Evidence: truncateEvidence(string(data)), Detail: "file exists and contains expected substring"}
 		}
-		return Result{Status: StatusFail, Evidence: truncateEvidence(string(data)), Detail: fmt.Sprintf("文件存在但内容不包含期望子串 %q", args[1])}
+		return Result{Status: StatusFail, Evidence: truncateEvidence(string(data)), Detail: fmt.Sprintf("file exists but content lacks expected substring %q", args[1])}
 	}
-	return Result{Status: StatusPass, Detail: "文件真实存在: " + args[0]}
+	return Result{Status: StatusPass, Detail: "file really exists: " + args[0]}
 }

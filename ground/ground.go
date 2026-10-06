@@ -231,8 +231,8 @@ func truncateBytes(s string, max int) string {
 	// back to after  finish  rune
 	for i := len(cut); i > 0; i-- {
 		if r := cut[i-1]; r < 0x80 || r >= 0xC0 {
-			return cut[:i] + "…(截断)"
+			return cut[:i] + "...(truncated)"
 		}
 	}
-	return cut + "…(截断)"
+	return cut + "...(truncated)"
 }
