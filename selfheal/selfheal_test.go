@@ -466,8 +466,8 @@ func TestBudgetFriendlyAndParamSuggestion(t *testing.T) {
 	kb := OpenKB(path)
 	kb.Remember(Diagnosis{Fingerprint: "fp-budget", Category: CatBudget, RootCause: "额度用尽", Suggestion: "今日额度耗尽", Action: ActionFallback, Recoverable: false})
 	d, _ := kb.Lookup("fp-budget")
-	if !strings.Contains(d.Suggestion, "预算") {
-		t.Fatalf("budget 类建议应友好含「预算」: %q", d.Suggestion)
+	if !strings.Contains(d.Suggestion, "budget") {
+		t.Fatalf("budget suggestion should be friendly with budget prefix: %q", d.Suggestion)
 	}
 }
 

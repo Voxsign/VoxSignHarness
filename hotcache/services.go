@@ -27,10 +27,10 @@ type servicesPayload struct {
 func LoadServicesSnapshot(raw []byte, endpoint string) (Snapshot, error) {
 	var p servicesPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return Snapshot{}, fmt.Errorf("解析 /api/services 失败: %w", err)
+		return Snapshot{}, fmt.Errorf("failed to parse /api/services: %w", err)
 	}
 	if len(p.Services) == 0 {
-		return Snapshot{}, fmt.Errorf("/api/services 未返回任何服务（不是「没有问题」）")
+		return Snapshot{}, fmt.Errorf("/api/services returned no services (does not mean healthy)")
 	}
 	fetched := p.TS
 	if fetched == "" {

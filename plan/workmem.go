@@ -207,17 +207,17 @@ func (w *WorkingMemory) Render() string {
 		for _, it := range items {
 			b.WriteString("- " + it.Element)
 			if it.JudgedBy != "" {
-				b.WriteString("（判断，judged_by=" + it.JudgedBy + "）")
+				b.WriteString(" (judged_by=" + it.JudgedBy + ")")
 			} else if it.Inferred {
-				b.WriteString("（推断）")
+				b.WriteString(" (inferred)")
 			}
 			b.WriteString(" [source=" + it.Source + "]\n")
 		}
 	}
-	write("情景", w.Situation)
-	write("活跃实体", w.BoundedWorkingSet())
-	write("约束", w.Constraints)
-	write("待决", w.OpenItems)
+	write("Situation", w.Situation)
+	write("Active entities", w.BoundedWorkingSet())
+	write("Constraints", w.Constraints)
+	write("Open items", w.OpenItems)
 	return strings.TrimSpace(b.String())
 }
 

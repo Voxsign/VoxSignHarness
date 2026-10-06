@@ -161,11 +161,11 @@ func (d *Diagnosis) friendlySuggestion() {
 	switch d.Category {
 	case CatBudget:
 		if !strings.Contains(d.Suggestion, "预算") {
-			d.Suggestion = "模型预算/额度已用尽：" + d.Suggestion
+			d.Suggestion = "Model budget/quota exhausted: " + d.Suggestion
 		}
 	case CatParam:
 		if len(d.RetryParams) > 0 && !strings.Contains(d.Suggestion, "参数") {
-			d.Suggestion = "按修正参数重试：" + d.Suggestion
+			d.Suggestion = "Retry with corrected params: " + d.Suggestion
 		}
 	}
 }

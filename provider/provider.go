@@ -104,7 +104,7 @@ type mockProvider struct {
 }
 
 // mockContent is mock   returnback in (   ActionPlan,   connectbe contract.ParseActionPlan resolve ). 
-const mockContent = `{"actions":[{"tool":"get_time"}],"final":"（本地闭环测试）已获取系统时间"}`
+const mockContent = `{"actions":[{"tool":"get_time"}],"final":"(local loopback test) system time obtained"}`
 
 func (m *mockProvider) Name() string { return m.name }
 
