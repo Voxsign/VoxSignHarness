@@ -100,7 +100,7 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 		// connect openday  API(wttr.in, no key), returnbackcurbeforeday ;   from lang get, default    . 
 		out, execErr, ok = e.execWeather(args)
 	default:
-		recv.Blocked = fmt.Sprintf("执行器未实现工具 %q（仅内置六工具可执行）", tool)
+		recv.Blocked = fmt.Sprintf("executor: tool %q not implemented (only six built-in tools are executable)", tool)
 		recv.DurationMs = time.Since(start).Milliseconds()
 		return recv, nil
 	}
@@ -125,7 +125,7 @@ func truncateOut(s string) string {
 // runCmd raise process    , returnback (stdout and, stderr  , OK). 
 func (e *Executor) runCmd(argv []string) (string, string, bool) {
 	if len(argv) == 0 {
-		return "", "缺命令 argv", false
+		return "", "missing command argv", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout())
 	defer cancel()
@@ -136,7 +136,7 @@ func (e *Executor) runCmd(argv []string) (string, string, bool) {
 	cmd.Stderr = &buf
 	err := cmd.Run()
 	if ctx.Err() == context.DeadlineExceeded {
-		return buf.String(), "超时", false
+		return buf.String(), "timed out", false
 	}
 	if err != nil {
 		return buf.String(), err.Error(), false
@@ -190,7 +190,7 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 	action := str(args, "action")
 	rel := str(args, "path")
 	if rel == "" {
-		return "", "file 动作缺 path", false
+		return "", "file action missing path", false
 	}
 	abs := rel
 	if !filepath.IsAbs(rel) {
@@ -240,14 +240,14 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 		}
 		return out, "", true
 	}
-	return "", "未知 file 动作: " + action, false
+	return "", "unknown file action: " + action, false
 }
 
 // execSearch    search  (read-only  ). 
 func (e *Executor) execSearch(args map[string]any) (string, string, bool) {
 	pattern := str(args, "pattern")
 	if pattern == "" {
-		return "", "search 缺 pattern", false
+		return "", "search missing pattern", false
 	}
 	opts := search.Options{Roots: []string{e.BaseDir}}
 	var (
@@ -305,7 +305,7 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "无法定位用户主目录: " + err.Error(), false
+		return "", "cannot locate user home dir: " + err.Error(), false
 	}
 
 	// ①  name read-only  :  base outnow "   ls /    cat /     df" etc -> resolve     . 
@@ -313,10 +313,10 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		argv := strings.Fields(cmd)
 		out, errStr, ok := e.runCmd(argv)
 		if ok {
-			b.WriteString("命令「" + cmd + "」执行结果：\n" + out)
+			b.WriteString("Command \"" + cmd + "\"" + " output:\n" + out)
 			return b.String(), "", true
 		}
-		b.WriteString("命令「" + cmd + "」执行失败：" + errStr + "\n")
+		b.WriteString("Command \"" + cmd + "\"" + " failed: " + errStr + "\n")
 	}
 
 	// ②  facefilelisttable("   faceonhas  "). 
@@ -325,7 +325,7 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		var names []string
 		for _, ent := range entries {
 			if len(names) >= 15 {
-				names = append(names, "…等共 "+fmt.Sprintf("%d", len(entries))+" 项")
+				names = append(names, "... and "+fmt.Sprintf("%d", len(entries))+" more")
 				break
 			}
 			suffix := ""
@@ -334,9 +334,9 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 			}
 			names = append(names, ent.Name()+suffix)
 		}
-		b.WriteString("桌面共 " + fmt.Sprintf("%d", len(entries)) + " 项：" + strings.Join(names, "、") + "\n")
+		b.WriteString("Desktop has " + fmt.Sprintf("%d", len(entries)) + " items: " + strings.Join(names, ", ") + "\n")
 	} else {
-		b.WriteString("（无法读取桌面目录：" + err.Error() + "）\n")
+		b.WriteString("(cannot read desktop dir: " + err.Error() + ")\n")
 	}
 
 	// ③     (screencapture need   restrict limit;      ,  show limit). 
@@ -348,13 +348,13 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		if err := os.MkdirAll(shotDir, 0o755); err == nil {
 			png := filepath.Join(shotDir, "screen-"+time.Now().Format("20060102-150405")+".png")
 			if err := exec.Command("screencapture", "-x", png).Run(); err != nil {
-				b.WriteString("截图失败（可能缺「屏幕录制」权限或屏幕不可用）：" + err.Error() + "\n")
+				b.WriteString("Screenshot failed (may lack screen-recording permission or screen unavailable): " + err.Error() + "\n")
 			} else if fi, err := os.Stat(png); err != nil || fi.Size() == 0 {
-				b.WriteString("截图未生成（文件为空或不可读）\n")
+				b.WriteString("No screenshot produced (file empty or unreadable)\n")
 			} else {
 				//   back :  out to URL(/screenshots/<file>), iOS end  base  connect  ; 
 				//  again out Mac basely topath(  no   ). 
-				b.WriteString("已截图：/screenshots/" + filepath.Base(png) + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
+				b.WriteString("Screenshot saved: /screenshots/" + filepath.Base(png) + " (" + fmt.Sprintf("%d", fi.Size()/1024) + " KB)\n")
 			}
 		}
 	}
@@ -380,22 +380,22 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 				}
 			}
 			if len(apps) > 0 {
-				b.WriteString("当前运行的主要进程：" + strings.Join(apps, "、") + "\n")
+				b.WriteString("Currently running main apps: " + strings.Join(apps, ", ") + "\n")
 			}
 		} else {
-			b.WriteString("进程列表失败：" + errStr + "\n")
+			b.WriteString("Process list failed: " + errStr + "\n")
 		}
 	}
 
 	if b.Len() == 0 {
-		b.WriteString("远程控制能力已就绪。可以说「看看桌面上有什么」「截个图」「运行 ls 看看」或「有哪些应用在跑」。")
+		b.WriteString("Remote control is ready. Try saying \"show what is on the desktop\", \"take a screenshot\", \"run ls\", or \"which apps are running\".")
 	} else if !strings.Contains(text, "截图") && !strings.Contains(text, "截个图") &&
 		!strings.Contains(text, "截屏") && !strings.Contains(text, "桌面") &&
 		!strings.Contains(text, "看看") && !strings.Contains(text, "应用") &&
 		!strings.Contains(text, "运行") && !strings.Contains(text, "程序") &&
 		extractReadOnlyCmd(text) == "" {
 		//      (" controlafter     "): alreadyuse facelisttable    ,     . 
-		b.WriteString("（可以控制。说「远程控制电脑截个图」「运行 ls -la /tmp」即可执行）\n")
+		b.WriteString("(You can control this machine. Say \"remote control: take a screenshot\" or \"run ls -la /tmp\" to execute)\n")
 	}
 	return b.String(), "", true
 }
@@ -453,23 +453,23 @@ func (e *Executor) execWeather(args map[string]any) (string, string, bool) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
 	if err != nil {
-		return "", "构造天气请求失败: " + err.Error(), false
+		return "", "failed to build weather request: " + err.Error(), false
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "天气服务不可达（网络问题）: " + err.Error(), false
+		return "", "weather service unreachable (network issue): " + err.Error(), false
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	raw := strings.TrimSpace(string(body))
 	if resp.StatusCode != 200 || raw == "" {
-		return "", fmt.Sprintf("天气服务返回异常（HTTP %d）", resp.StatusCode), false
+		return "", fmt.Sprintf("weather service returned error (HTTP %d)", resp.StatusCode), false
 	}
 	// wttr.in format  out e.g. "Patchy rain nearby +22°C 63% 9km/h"
 	where := city
 	if where == "" {
-		where = "当前城市"
+		where = "current city"
 	}
-	out := "天气实况（" + where + "）：" + raw
+	out := "Weather now (" + where + "): " + raw
 	return out, "", true
 }
