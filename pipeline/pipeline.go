@@ -679,9 +679,25 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		args := map[string]any{"pattern": pattern, "kind": "text"}
 		recv := o.run("search", args)
-		// M7 ②: use LLM pipe search close  become howeverlanglanganswer(  back  search stdout). 
-		if answer := o.queryLLMAnswer(context.Background(), it.RawText, recv.Stdout); answer != "" {
+		// M7 ②: use LLM pipe search close  become howeverlanglanganswer(  back  search stdout).
+		answer := o.queryLLMAnswer(ctx, it.RawText, recv.Stdout)
+		// F1: queryLLMAnswer failure returns the degrade phrase (prefix "哎呀，这条我一时没答上来").
+		degraded := strings.HasPrefix(answer, "哎呀，这条我一时没答上来")
+		if answer != "" {
 			recv.Stdout = answer
+		}
+		// F1: when a QUERY ends with no real answer — (a) empty search short-circuit, or
+		// (b) LLM unavailable/degraded (auth/402/timeout) — previously recv.OK stayed true
+		// with an empty/degraded Stdout, and renderView logged a fake "OK (auto-executed)".
+		// Mark it failed and pass the reason through the FAILED branch instead of an OK placeholder.
+		if degraded || strings.TrimSpace(recv.Stdout) == "" {
+			recv.OK = false
+			if degraded {
+				recv.Err = "LLM 服务不可用/降级，QUERY 未获得回答，任务未完成：" +
+					truncateStr(strings.TrimPrefix(answer, "哎呀，这条我一时没答上来"), 80)
+			} else {
+				recv.Err = "检索无结果且 LLM 未给出回答，QUERY 未完成"
+			}
 		}
 		return []contract.Receipt{recv}
 	case contract.IntentEdit:
