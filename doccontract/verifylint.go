@@ -224,13 +224,13 @@ func ruleV301(b *VerifyBlock) RuleResult {
 	const id = "V3-01"
 	claim := strings.TrimSpace(b.Claim)
 	if claim == "" {
-		return ruleFail(id, "claim 为空：缺少可判定的陈述句（§2 缺一即未完成）")
+		return ruleFail(id, "claim is empty: missing a decidable declarative sentence (§2; any missing item means incomplete)")
 	}
 	if w, ok := findVagueWord(claim); ok {
 		return ruleFail(id, fmt.Sprintf(
-			"claim 含模糊形容词 %q：形容词无法构造判据，须改成「在条件 C 下系统做/不做 X」的可观测形式", w))
+			"claim contains vague adjective %q: adjectives cannot define a criterion; rewrite as observable form \"under condition C the system does/does not do X\"", w))
 	}
-	return rulePass(id, "claim 非空，且不含模糊形容词")
+	return rulePass(id, "claim is non-empty and contains no vague adjectives")
 }
 
 // methodEnum is §2 rule   method getvalue  . 
@@ -241,14 +241,14 @@ func ruleV302(b *VerifyBlock) RuleResult {
 	const id = "V3-02"
 	m := strings.ToLower(strings.TrimSpace(b.Method))
 	if m == "" {
-		return ruleFail(id, "method 为空：必须显式声明验证方式")
+		return ruleFail(id, "method is empty: must explicitly declare the verification method")
 	}
 	for _, e := range methodEnum {
 		if m == e {
-			return rulePass(id, fmt.Sprintf("method=%s 在枚举内", e))
+			return rulePass(id, fmt.Sprintf("method=%s is in the enum", e))
 		}
 	}
-	return ruleFail(id, fmt.Sprintf("method=%q 不在枚举 %v 内", b.Method, methodEnum))
+	return ruleFail(id, fmt.Sprintf("method=%q is not in enum %v", b.Method, methodEnum))
 }
 
 // ruleV303: evidence.level ∈ {E0,E1,E2,E3}, and E0      verdict_states   met. 
@@ -256,20 +256,20 @@ func ruleV303(b *VerifyBlock) RuleResult {
 	const id = "V3-03"
 	lv := strings.ToUpper(strings.TrimSpace(b.EvidenceLevel))
 	if lv == "" {
-		return ruleFail(id, "evidence.level 为空：必须显式声明证据等级 E0–E3")
+		return ruleFail(id, "evidence.level is empty: must explicitly declare evidence level E0-E3")
 	}
 	if lv != "E0" && lv != "E1" && lv != "E2" && lv != "E3" {
-		return ruleFail(id, fmt.Sprintf("evidence.level=%q 不在枚举 {E0,E1,E2,E3} 内", b.EvidenceLevel))
+		return ruleFail(id, fmt.Sprintf("evidence.level=%q is not in enum {E0,E1,E2,E3}", b.EvidenceLevel))
 	}
 	if lv == "E0" && containsFold(b.verdictStates(), "met") {
-		return ruleFail(id, "evidence.level=E0 却允许 verdict_states 含 met：E0 无来源，禁止入结论（§4）")
+		return ruleFail(id, "evidence.level=E0 yet verdict_states allows met: E0 has no source, must not enter conclusions (§4)")
 	}
-	return rulePass(id, fmt.Sprintf("evidence.level=%s 合法%s", lv, e0Note(lv)))
+	return rulePass(id, fmt.Sprintf("evidence.level=%s is valid%s", lv, e0Note(lv)))
 }
 
 func e0Note(lv string) string {
 	if lv == "E0" {
-		return "，且未允许判 met"
+		return ", and met not allowed"
 	}
 	return ""
 }
@@ -279,18 +279,18 @@ func ruleV304(b *VerifyBlock, opts Options) RuleResult {
 	const id = "V3-04"
 	ref := strings.TrimSpace(b.EvidenceRef)
 	if ref == "" {
-		return ruleFail(id, "evidence.ref 为空：证据必须锚定到可重新打开的外部产物")
+		return ruleFail(id, "evidence.ref is empty: evidence must anchor to an external artifact that can be reopened")
 	}
 	if strings.ContainsAny(ref, "<>") {
-		return ruleFail(id, fmt.Sprintf("evidence.ref=%q 仍是规格书占位符，未替换为真实产物", ref))
+		return ruleFail(id, fmt.Sprintf("evidence.ref=%q is still a spec placeholder, not replaced by a real artifact", ref))
 	}
 
 	path := cleanRef(ref)
 	if opts.Exists != nil {
 		if !opts.Exists(path) {
-			return ruleFail(id, fmt.Sprintf("evidence.ref=%q 指向的产物不存在", ref))
+			return ruleFail(id, fmt.Sprintf("artifact at evidence.ref=%q does not exist", ref))
 		}
-		return rulePass(id, fmt.Sprintf("evidence.ref=%s 存在（外部解析器确认）", path))
+		return rulePass(id, fmt.Sprintf("evidence.ref=%s exists (confirmed by external parser)", path))
 	}
 
 	p := path
@@ -298,9 +298,9 @@ func ruleV304(b *VerifyBlock, opts Options) RuleResult {
 		p = filepath.Join(opts.Root, p)
 	}
 	if _, err := os.Stat(p); err != nil {
-		return ruleFail(id, fmt.Sprintf("evidence.ref=%q 指向的产物无法打开: %v", ref, err))
+		return ruleFail(id, fmt.Sprintf("artifact at evidence.ref=%q cannot be opened: %v", ref, err))
 	}
-	return rulePass(id, fmt.Sprintf("evidence.ref=%s 存在且可打开", p))
+	return rulePass(id, fmt.Sprintf("evidence.ref=%s exists and can be opened", p))
 }
 
 // ruleV305: threshold asnumchar+  , or as unset; unset timeforbidstop  met. 
@@ -308,18 +308,18 @@ func ruleV305(b *VerifyBlock) RuleResult {
 	const id = "V3-05"
 	t := strings.TrimSpace(b.Threshold)
 	if t == "" {
-		return ruleFail(id, "threshold 缺失：必须给数字+容差+出处，或显式写 unset")
+		return ruleFail(id, "threshold missing: must give number+tolerance+source, or explicitly write unset")
 	}
 	if strings.EqualFold(t, "unset") {
 		if containsFold(b.verdictStates(), "met") {
-			return ruleFail(id, "threshold=unset 却允许判 met：未验证不得折算为通过（§4）")
+			return ruleFail(id, "threshold=unset yet met allowed: unverified must not count as pass (§4)")
 		}
-		return rulePass(id, "threshold=unset 且未声称 met，允许存在（§7.2）")
+		return rulePass(id, "threshold=unset and met not claimed; allowed (§7.2)")
 	}
 	if !containsDigit(t) {
-		return ruleFail(id, fmt.Sprintf("threshold=%q 既不是 unset 也不含数字：无阈值无法判够不够（§1 形态三）", b.Threshold))
+		return ruleFail(id, fmt.Sprintf("threshold=%q is neither unset nor a number: without a threshold, adequacy cannot be judged (§1 form three)", b.Threshold))
 	}
-	return rulePass(id, "threshold 含数字，可作为可判定阈值")
+	return rulePass(id, "threshold contains a number, usable as a decidable threshold")
 }
 
 // ruleV306: counterexample    1  , and is claim    getrev. 
@@ -327,12 +327,12 @@ func ruleV306(b *VerifyBlock) RuleResult {
 	const id = "V3-06"
 	ce := strings.TrimSpace(b.Counterexample)
 	if ce == "" {
-		return ruleFail(id, "counterexample 为空：至少须有 1 条")
+		return ruleFail(id, "counterexample is empty: at least 1 is required")
 	}
 	if isSimpleNegation(ce, b.Claim) {
-		return ruleFail(id, "counterexample 只是 claim 的简单取反：必须写成可观测现象（错了一看就知道）")
+		return ruleFail(id, "counterexample is just the claim negated: must be written as an observable phenomenon (failure is obvious at a glance)")
 	}
-	return rulePass(id, "counterexample 非空，且不是 claim 的简单取反")
+	return rulePass(id, "counterexample is non-empty and not a simple negation of the claim")
 }
 
 // ruleV307: approver and nower same(same  in to owner charseg). 
@@ -340,25 +340,25 @@ func ruleV307(b *VerifyBlock) RuleResult {
 	const id = "V3-07"
 	approver := strings.TrimSpace(b.Approver)
 	if approver == "" {
-		return ruleFail(id, "approver 为空：必须写明谁判，且不得与实现者同一人/同一 agent")
+		return ruleFail(id, "approver is empty: must state who judges, and it must not be the same person/agent as the implementer")
 	}
 	owner := strings.TrimSpace(b.Owner)
 	if owner == "" {
-		return ruleFail(id, "缺少 owner/builder 字段：无法比对 approver 是否独立于实现者（fail-closed）")
+		return ruleFail(id, "missing owner/builder fields: cannot verify whether approver is independent of implementer (fail-closed)")
 	}
 	if canonicalAgent(approver) == canonicalAgent(owner) {
-		return ruleFail(id, fmt.Sprintf("approver=%q 与实现者 owner=%q 是同一人/同一 agent", approver, owner))
+		return ruleFail(id, fmt.Sprintf("approver=%q and implementer owner=%q are the same person/agent", approver, owner))
 	}
-	return rulePass(id, fmt.Sprintf("approver=%s 独立于实现者 owner=%s", approver, owner))
+	return rulePass(id, fmt.Sprintf("approver=%s is independent of implementer owner=%s", approver, owner))
 }
 
 // ruleV308: falsifier  empty. 
 func ruleV308(b *VerifyBlock) RuleResult {
 	const id = "V3-08"
 	if strings.TrimSpace(b.Falsifier) == "" {
-		return ruleFail(id, "falsifier 为空：必须写明谁能证伪它、用什么反例")
+		return ruleFail(id, "falsifier is empty: must state who can falsify it and with what counterexample")
 	}
-	return rulePass(id, "falsifier 非空")
+	return rulePass(id, "falsifier is non-empty")
 }
 
 // ---- rule   ----
@@ -546,7 +546,7 @@ func lexYAML(text string) ([]yline, error) {
 			indent++
 		}
 		if indent < len(line) && line[indent] == '\t' {
-			return nil, fmt.Errorf("第 %d 行使用了制表符缩进：本解析器只支持空格缩进", i+1)
+			return nil, fmt.Errorf("line %d uses tab indentation: this parser supports space indentation only", i+1)
 		}
 		out = append(out, yline{
 			indent: indent,
@@ -624,11 +624,11 @@ func parseYAMLMap(lines []yline, i, indent int) (map[string]*yvalue, int, error)
 			break
 		}
 		if ln.indent > indent {
-			return nil, i, fmt.Errorf("第 %d 行缩进异常：期望 %d 个空格，实际 %d", ln.num, indent, ln.indent)
+			return nil, i, fmt.Errorf("line %d indentation unexpected: expected %d spaces, got %d", ln.num, indent, ln.indent)
 		}
 		key, rest, ok := splitKey(ln.text)
 		if !ok {
-			return nil, i, fmt.Errorf("第 %d 行不是合法的「键: 值」：%q", ln.num, ln.text)
+			return nil, i, fmt.Errorf("line %d is not a valid \"key: value\": %q", ln.num, ln.text)
 		}
 		i++
 
@@ -649,7 +649,7 @@ func parseYAMLMap(lines []yline, i, indent int) (map[string]*yvalue, int, error)
 		if strings.HasPrefix(strings.TrimSpace(rest), "[") {
 			items, err := parseInlineList(rest)
 			if err != nil {
-				return nil, i, fmt.Errorf("第 %d 行内联列表解析失败: %v", ln.num, err)
+				return nil, i, fmt.Errorf("line %d inline list parse failed: %v", ln.num, err)
 			}
 			m[key] = &yvalue{isList: true, list: items}
 			continue
@@ -698,11 +698,11 @@ func parseYAMLValue(lines []yline, i, indent int) (*yvalue, int, error) {
 func parseInlineList(s string) ([]string, error) {
 	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, "[") {
-		return nil, fmt.Errorf("不是以 [ 开头的列表")
+		return nil, fmt.Errorf("list does not start with [")
 	}
 	end := strings.LastIndex(s, "]")
 	if end < 0 {
-		return nil, fmt.Errorf("列表缺少 ]")
+		return nil, fmt.Errorf("list is missing ]")
 	}
 	body := strings.TrimSpace(s[1:end])
 	if body == "" {
