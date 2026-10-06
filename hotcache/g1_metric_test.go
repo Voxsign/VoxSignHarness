@@ -29,7 +29,7 @@ var g1Cases = []g1Case{
 	{"格罗克", "grok-bot", "alias", "observed"},
 	{"哈尼斯", "harness", "alias", "observed"},
 	{"哎ops", "aiops", "mixed", "observed"},
-	{"P图做点com", "peterzou.com", "mixed", "observed"},
+	{"example.com", "example.com", "mixed", "observed"},
 	{"哎欧劈艾斯", "aiops", "zh_pinyin", "observed"},
 	{"哈你斯", "harness", "zh_pinyin", "constructed"},
 	{"voice sound harnessnes", "voice-sign harness", "latin_near", "observed"},
@@ -49,7 +49,7 @@ func g1Cache(t *testing.T) *Cache {
 	// rule word(useat  /  classdiff objtgt)
 	c.PutAlias("aiops", "aiops", "remote:/api/services")
 	c.PutAlias("DeepSeek", "DeepSeek", "remote:/api/services")
-	c.PutAlias("peterzou.com", "peterzou.com", "remote:/api/services")
+	c.PutAlias("example.com", "example.com", "remote:/api/services")
 	return c
 }
 

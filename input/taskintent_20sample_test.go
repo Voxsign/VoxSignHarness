@@ -40,7 +40,7 @@ var twentySamples = []sampleCase{
 	{5, "voxbuybot", "voxbuybot 下单页为什么报错啊", contract.IntentDebug, contract.IntentDebug, "voxbuybot", ""},
 	// ② consultant     
 	{6, "medsupply", "查一下医疗耗材那个透析器库存还有多少", contract.IntentQuery, contract.IntentQuery, "medsupply", ""},
-	{7, "medsupply", "记一下，季总那个厂房下周一出报价", contract.IntentNote, contract.IntentNote, "", "词典纠错 季总→冀总"},
+	{7, "medsupply", "记一下，网总那个厂房下周一出报价", contract.IntentNote, contract.IntentNote, "", "词典纠错 网总→王总"},
 	{8, "medsupply", "把医疗耗材的报价模板改成新的公司抬头", contract.IntentEdit, contract.IntentEdit, "medsupply", ""},
 	{9, "medsupply", "部署一下医疗耗材那个销售报表", contract.IntentDeploy, contract.IntentDeploy, "medsupply", ""},
 	{10, "medsupply", "医疗耗材进口沙特的政策你觉得要注意哪些", contract.IntentAsk, contract.IntentAsk, "medsupply", ""},

@@ -27,10 +27,10 @@ func testGateway(t *testing.T, h http.Handler) *Gateway {
 
 func TestSummaryParsesHostsWithoutStoringRaw(t *testing.T) {
 	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"ts":"T","zone":"inner","hosts":{"trelva":{"hostname":"VM","purpose":"生产中枢","ports":[22,443],"services":36}}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"T","zone":"inner","hosts":{"demo-host":{"hostname":"VM","purpose":"integration host","ports":[22,443],"services":36}}}`))
 	}))
 	sum := g.Summary(context.Background())
-	if sum.Status != StatusOK || len(sum.Hosts) != 1 || sum.Hosts[0].Key != "trelva" {
+	if sum.Status != StatusOK || len(sum.Hosts) != 1 || sum.Hosts[0].Key != "demo-host" {
 		t.Fatalf("解析失败: %+v", sum)
 	}
 	if sum.Source.Endpoint == "" || sum.Source.FetchedAt == "" {
@@ -73,7 +73,7 @@ func TestDependenciesFailOpenKeepsUnknownEntry(t *testing.T) {
 // TestWhoHandlesUnknownNotAbsent:    totime   unknown, and   " store ". 
 func TestWhoHandlesUnknownNotAbsent(t *testing.T) {
 	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"hosts":{"trelva":{"purpose":"生产中枢"}}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"hosts":{"demo-host":{"purpose":"integration host"}}}`))
 	}))
 	got := g.WhoHandles(context.Background(), "量子计算机")
 	if len(got) == 0 {
@@ -88,7 +88,7 @@ func TestWhoHandlesUnknownNotAbsent(t *testing.T) {
 		}
 	}
 	//  intime returnback  
-	hit := g.WhoHandles(context.Background(), "生产")
+	hit := g.WhoHandles(context.Background(), "integration")
 	if len(hit) == 0 || hit[0].Kind != "host" {
 		t.Errorf("命中主机失败: %+v", hit)
 	}

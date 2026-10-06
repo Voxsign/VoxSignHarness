@@ -80,10 +80,10 @@ func TestIntentNeedsClarification(t *testing.T) {
 func TestIntentJSONRoundTrip(t *testing.T) {
 	in := Intent{
 		Intent:        IntentFileList,
-		Slots:         map[string]string{"path": "~/Documents/Mansour"},
+		Slots:         map[string]string{"path": "~/Documents/Report"},
 		Confidence:    0.8,
-		CorrectedText: "打开 Mansour 的文件夹看看有什么",
-		Corrections:   []Correction{{From: "美墅", To: "Mansour", Rule: "dict"}},
+		CorrectedText: "打开 Report 的文件夹看看有什么",
+		Corrections:   []Correction{{From: "report", To: "Report", Rule: "dict"}},
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -93,8 +93,8 @@ func TestIntentJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.Intent != IntentFileList || out.Slots["path"] != "~/Documents/Mansour" ||
-		out.Confidence != 0.8 || len(out.Corrections) != 1 || out.Corrections[0].From != "美墅" {
+	if out.Intent != IntentFileList || out.Slots["path"] != "~/Documents/Report" ||
+		out.Confidence != 0.8 || len(out.Corrections) != 1 || out.Corrections[0].From != "report" {
 		t.Fatalf("round-trip mismatch: %+v", out)
 	}
 }

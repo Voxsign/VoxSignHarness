@@ -153,7 +153,7 @@ func TestASREXEC03HighRiskNeedsConfirm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读词典失败: %v", err)
 	}
-	got := postJSON(t, base+"/v1/dictionary", `{"op":"delete","term":"冀总"}`)
+	got := postJSON(t, base+"/v1/dictionary", `{"op":"delete","term":"王总"}`)
 	if got["need_confirm"] != true {
 		t.Errorf("[ASR-EXEC-03] 高风险删除未要求确认：%v", got)
 	}

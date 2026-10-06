@@ -149,7 +149,7 @@ var scOwnerPatterns = []struct {
 	Re   *regexp.Regexp
 }{
 	{"人", regexp.MustCompile(`(?i)owner|人[:：]|人工确认|人工裁决`)},
-	{"网关", regexp.MustCompile(`网关|aiops\.peterzou\.com`)},
+	{"网关", regexp.MustCompile(`网关|aiops\.example\.com`)},
 	{"模型通道", regexp.MustCompile(`模型通道|\b(?:default|diagnose|learn)\b`)},
 	{"无", regexp.MustCompile(`无外部依赖`)},
 }

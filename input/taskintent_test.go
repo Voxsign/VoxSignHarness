@@ -16,7 +16,7 @@ var testSpaces = []SpaceHint{
 func TestTaskClassifyNoteWithTimeAnchor(t *testing.T) {
 	// SPEC  recvuseexample 1: NOTE + timetime pt
 	c := NewTaskClassifier(0.6, testSpaces)
-	got := c.ClassifyTask("记一下冀总那个厂房下周一出报价")
+	got := c.ClassifyTask("记一下王总那个厂房下周一出报价")
 	if got.Intent != contract.IntentNote {
 		t.Fatalf("意图 = %q, 期望 NOTE", got.Intent)
 	}

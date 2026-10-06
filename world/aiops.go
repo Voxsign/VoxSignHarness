@@ -36,7 +36,7 @@ type Source struct {
 
 // Host is    (AIOps `/api/summary`   hosts[*]). 
 type Host struct {
-	Key      string            `json:"key"` // map  (e.g. trelva)
+	Key      string            `json:"key"` // map  (e.g. demo-host)
 	Hostname string            `json:"hostname"`
 	Purpose  string            `json:"purpose"`
 	Domain   string            `json:"domain"`

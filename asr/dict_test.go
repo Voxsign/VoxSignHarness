@@ -46,17 +46,17 @@ func TestDictionaryPersistAcrossInstances(t *testing.T) {
 
 // TestDictionaryVoiceInstructionAddsHomophone: langaudiorefer  ->   write  ->  audio back. 
 func TestDictionaryVoiceInstructionAddsHomophone(t *testing.T) {
-	e, ok := ParseVoiceAdd("记住，冀总是冀中的冀")
-	if !ok || e.Target != "冀总" {
+	e, ok := ParseVoiceAdd("记住，王总是国王的王")
+	if !ok || e.Target != "王总" {
 		t.Fatalf("语音指令解析失败: ok=%v entry=%+v", ok, e)
 	}
 	d, _ := newTestDict(t)
 	if err := d.Add(e); err != nil {
 		t.Fatal(err)
 	}
-	got, corrs := d.Apply("季总看一下")
-	if got != "冀总看一下" {
-		t.Fatalf("近音召回失败: %q → %q", "季总看一下", got)
+	got, corrs := d.Apply("网总看一下")
+	if got != "王总看一下" {
+		t.Fatalf("近音召回失败: %q → %q", "网总看一下", got)
 	}
 	if len(corrs) == 0 || corrs[0].Kind != "dictionary" {
 		t.Fatalf("缺可观测留痕: %+v", corrs)
@@ -66,14 +66,14 @@ func TestDictionaryVoiceInstructionAddsHomophone(t *testing.T) {
 // TestDictionaryDeleteNeedsConfirm: noconfirm delete,    ( line #3). 
 func TestDictionaryDeleteNeedsConfirm(t *testing.T) {
 	d, path := newTestDict(t)
-	if err := d.Add(DictionaryEntry{Target: "冀总", Source: "voice"}); err != nil {
+	if err := d.Add(DictionaryEntry{Target: "王总", Source: "voice"}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := d.Delete("冀总", false)
+	deleted, err := d.Delete("王总", false)
 	if err != nil || deleted {
 		t.Fatalf("未确认却删除: deleted=%v err=%v", deleted, err)
 	}
@@ -81,7 +81,7 @@ func TestDictionaryDeleteNeedsConfirm(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("未确认的删除改动了文件")
 	}
-	if deleted, err := d.Delete("冀总", true); err != nil || !deleted {
+	if deleted, err := d.Delete("王总", true); err != nil || !deleted {
 		t.Fatalf("确认后未删除: deleted=%v err=%v", deleted, err)
 	}
 	if len(d.List()) != 0 {
