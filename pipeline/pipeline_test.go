@@ -426,7 +426,7 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 	if !out.Confirmed {
 		t.Fatal("应放行")
 	}
-	if !strings.Contains(question, "未提交改动") {
+	if !strings.Contains(question, "uncommitted changes") {
 		t.Fatalf("确认问题应含未提交改动数: %q", question)
 	}
 	after := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))

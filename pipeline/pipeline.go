@@ -206,10 +206,10 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// ⭐     (Lead 2026-10-03     : o==nil / empty Options ⇒ **panic**,  isreturnbackerror). 
 	// origthen: **" "and"  "  diffis --   has     toorigbecause**(andif  after  goroutine, recover also  to). 
 	if o == nil {
-		return Outcome{}, fmt.Errorf("pipeline.Run: Options 为 nil（调用方必须提供完整 Options）")
+		return Outcome{}, fmt.Errorf("pipeline.Run: Options is nil (caller must supply complete Options)")
 	}
 	if o.Spaces == nil {
-		return Outcome{}, fmt.Errorf("pipeline.Run: Spaces 未配置（域门禁缺失 ⇒ 拒绝执行）")
+		return Outcome{}, fmt.Errorf("pipeline.Run: Spaces not configured (domain guard missing => refuse to run)")
 	}
 	// note: **    Providers** -- its    "nil time rule/  search path  disconnect"(Options.Providers note ). 
 	// if   require,  pipe"no LLM also  "     . onlycur needuse LLM timeonly to pathhandle. 
@@ -230,9 +230,9 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	o.RequestID = rid // write-back: basetask Options   inaftercontinue  (selfheal/llmSummarize day )  readtorule  rid
 	out := Outcome{RequestID: rid}
 	if strings.TrimSpace(text) == "" {
-		out.Ask = "空指令，没听清，请再说一遍"
+		out.Ask = "Empty command, did not catch that, please repeat"
 		out.View = contract.ReceiptView{
-			Action: "（空指令）", Files: "—", Result: "未执行（需回问：" + out.Ask + "）", Undo: "—",
+			Action: "(empty command)", Files: "-", Result: "Not executed (need clarification: " + out.Ask + ")", Undo: "-",
 		}
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
@@ -285,7 +285,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 
 	// §11     : intentclassifydone -> send     event(SSE/CLI endtoend see). nil   er  ,  as change. 
 	if o.ProgressObserver != nil {
-		o.ProgressObserver("intent", "意图="+intent.Intent)
+		o.ProgressObserver("intent", "intent="+intent.Intent)
 	}
 
 	// ⑤ refer  resolve( overwriteclassify already form   charseg); M4-5: sametime  refer objtgt  . 
@@ -320,13 +320,13 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		out.Options = mergeAskOptions(optionsForIntent(&intent, referOpts), referOpts)
 		out.ContextBlock = snap.Block
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
-			"待澄清："+intent.Ask, "轨迹 kind=intent/refer", "下次给出具体域/对象后重试")
+			"needs clarification: "+intent.Ask, "trace kind=intent/refer", "provide concrete domain/object next time")
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: "—",
-			Result: "未执行（需回问：" + intent.Ask + "）", Undo: "—（未执行）",
+			Result: "Not executed (need clarification: " + intent.Ask + ")", Undo: "- (not executed)",
 		}
 		o.writeTaskMetrics(intent, out, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
@@ -352,14 +352,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// blockexit: space_check reject ->     . 
 	if !verdict.Allowed {
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
-			"space_check 拒绝（"+verdict.Reason+"）", "轨迹 kind=space_check",
-			"先注册/确认域，或换到已授权的项目域")
+			"space_check rejected ("+verdict.Reason+")", "trace kind=space_check",
+			"register/confirm a domain first, or switch to an authorized project domain")
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: "—",
-			Result: "BOUNDARY_VIOLATION：" + reasonText(verdict.Reason), Undo: "—（未执行）",
+			Result: "BOUNDARY_VIOLATION: " + reasonText(verdict.Reason), Undo: "- (not executed)",
 		}
 		o.writeTaskMetrics(intent, out, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
@@ -392,24 +392,24 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		case contract.ConfirmAuto:
 			approved = true //   disconnect
 		case contract.ConfirmLight:
-			approved = o.confirm(ctx, out.RequestID, "轻确认："+decision.Reason+"，放行？(y/n)")
+			approved = o.confirm(ctx, out.RequestID, "light confirm: "+decision.Reason+", proceed? (y/n)")
 		case contract.ConfirmStrong:
 			if o.guard.ShouldDowngrade(targetPath(intent)) {
 				approved = true // samepathlinkcontinue confirm   ->  as     
 			} else {
-				approved = o.confirm(ctx, out.RequestID, "强确认："+decision.Reason+"，放行？(y/n)")
+				approved = o.confirm(ctx, out.RequestID, "strong confirm: "+decision.Reason+", proceed? (y/n)")
 			}
 		case contract.ConfirmHuman:
-			q := "人工放行（不可逆）：" + decision.Reason
+			q := "manual approval (irreversible): " + decision.Reason
 			// M4-4: COMMIT beforepipeuncommitted changesnumwrite confirm  ,   overwrite/modifywrite  . 
 			if it := intent; it.Intent == contract.IntentCommit {
 				if root := o.projectRootForCommit(it); root != "" {
 					if n := gitDirtyCount(root); n >= 0 {
-						q += fmt.Sprintf("；项目 %s 当前有 %d 个未提交改动，提交将包含它们（git add -A + commit，不改写历史）", root, n)
+						q += fmt.Sprintf("; project %s has %d uncommitted changes; commit will include them (git add -A + commit, no history rewrite)", root, n)
 					}
 				}
 			}
-			approved = o.confirm(ctx, out.RequestID, q+"，放行？(y/n)")
+			approved = o.confirm(ctx, out.RequestID, q+", proceed? (y/n)")
 		}
 	}
 	// M4-1: is   edhuman(auto   disconnect  wait; waitMs   µs   overhead   ). 
@@ -426,13 +426,13 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	//    exit:    . 
 	if !approved {
 		out.Attribution = o.attribution(out.RequestID, contract.AttrModel,
-			"用户未放行（decision="+decision.Level+"）", "轨迹 kind=confirm", "如属误拒可加入四元缓存放行")
+			"user did not approve (decision="+decision.Level+")", "trace kind=confirm", "if mistakenly rejected, add to 4-tuple allow-cache")
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: targetFiles(intent),
-			Result: "待确认（" + decision.Level + "，未放行）", Undo: "—（未执行）",
+			Result: "pending confirm (" + decision.Level + ", not approved)", Undo: "- (not executed)",
 		}
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
@@ -463,7 +463,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			out.Verify = res
 		}
 	} else {
-		out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: "M2 未为该意图定义独立校验"}
+		out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: "M2: no dedicated check defined for this intent"}
 	}
 	vb, _ := json.Marshal(out.Verify)
 	emit(trajectory.Entry{Kind: trajectory.KindVerify, Content: string(vb)})
@@ -484,7 +484,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	if svc := o.selfheal(); svc != nil {
 		if d := svc.LastDiagnosis(); d != nil && cls == contract.AttrExec {
 			suggestion = d.Suggestion
-			detail = detail + "（诊断根因：" + d.RootCause + "）"
+			detail = detail + " (diagnosed root cause: " + d.RootCause + ")"
 		}
 	}
 	out.Attribution = o.attribution(out.RequestID, cls, detail, evidenceOf(receipts, out.Verify), suggestion)
@@ -608,7 +608,7 @@ func planCaps(it contract.Intent) []string {
 // execActions pipeintent  become body    (M2       ; NOT E/QUERY   i.e. ). 
 func (o *Options) execActions(ctx context.Context, it contract.Intent) []contract.Receipt {
 	if o.Exec == nil {
-		return []contract.Receipt{{Tool: "pipeline", OK: false, Err: "执行器未配置"}}
+		return []contract.Receipt{{Tool: "pipeline", OK: false, Err: "executor not configured"}}
 	}
 	logDir := o.logDir()
 	switch it.Intent {
@@ -660,7 +660,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		path, content := extractWriteTarget(it.CorrectedText)
 		if path == "" {
 			return []contract.Receipt{{Tool: "file", OK: false,
-				Err: "未识别要写入的文件路径（说「把 XX 写到 /path/to/file」）"}}
+				Err: "could not identify target file path (say \u0022write XX to /path/to/file\u0022)"}}
 		}
 		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
 		return []contract.Receipt{o.run("file", args)}
@@ -668,7 +668,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// M4-4:   objdomain scope root     git   (git add -A + commit;  modifywrite  ). 
 		root := o.projectRootForCommit(it)
 		if root == "" {
-			return []contract.Receipt{{Tool: "git", OK: false, Err: "未解析到项目域根（COMMIT 需注册 project 域）"}}
+			return []contract.Receipt{{Tool: "git", OK: false, Err: "no project domain root resolved (COMMIT requires a registered project domain)"}}
 		}
 		msg := strings.TrimSpace(it.CorrectedText)
 		if msg == "" {
@@ -678,7 +678,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		add := exec.Command("git", "add", "-A")
 		add.Dir = root
 		if out, err := add.CombinedOutput(); err != nil {
-			return []contract.Receipt{{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}}
+			return []contract.Receipt{{Tool: "git", OK: false, Err: "git add failed: " + string(out)}}
 		}
 		cm := exec.Command("git", "commit", "-m", msg)
 		cm.Dir = root
@@ -701,7 +701,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// returnback    back , byaftercontinue   connect type    .  kind forbid/verify/attributionchainroute  M2 already    . 
 		return []contract.Receipt{{
 			Tool: "pipeline", OK: true,
-			Stdout: "M2 已过 space_check+risk+confirm，动作待模型工具循环落地（intent=" + it.Intent + "）",
+			Stdout: "M2 passed space_check+risk+confirm; action pending model tool loop (intent=" + it.Intent + ")",
 		}}
 	}
 }
@@ -836,7 +836,7 @@ func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return strings.TrimSpace(string(body)), resp.StatusCode
 	}
-	where, raw, code := "当前位置", "", 0
+	where, raw, code := "current location", "", 0
 	cityOK := false
 	if city != "" {
 		raw, code = fetch(city)
@@ -849,29 +849,29 @@ func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) 
 		// back :     (bybase exit IP)
 		if r2, c2 := fetch(""); c2 == 200 && r2 != "" {
 			raw, code = r2, c2
-			where = "当前位置"
+			where = "current location"
 		}
 	}
 	out := &Outcome{}
 	out.LoopMs = time.Since(start).Milliseconds()
 	note := ""
 	if city != "" && !cityOK {
-		note = "（没识别到「" + city + "」的天气，给你按当前位置查到的：）"
+		note = " (did not recognize weather for \"" + city + "\"; showing current location: )"
 	}
 	if code == 200 && raw != "" {
 		out.View = contract.ReceiptView{
-			Action: "查天气", Files: "—",
-			Result: "天气实况（" + where + "）：" + raw + note, Undo: "—（只读查询）",
+			Action: "check weather", Files: "-",
+			Result: "weather now (" + where + "): " + raw + note, Undo: "- (read-only query)",
 		}
 		out.Attribution = o.attribution(out.RequestID, contract.AttrModel,
-			"天气直通 wttr.in（HTTP 200）", "pipeline.tryWeather", "无需进一步操作")
+			"weather via wttr.in (HTTP 200)", "pipeline.tryWeather", "no further action")
 	} else {
 		out.View = contract.ReceiptView{
-			Action: "查天气", Files: "—",
-			Result: "天气服务暂时没查到（wttr.in HTTP " + itoa(code) + "），你可以过会儿再问一次，或换个城市名。", Undo: "—",
+			Action: "check weather", Files: "-",
+			Result: "weather service unavailable (wttr.in HTTP " + itoa(code) + "); ask again later or try another city name.", Undo: "-",
 		}
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
-			"天气查询失败（HTTP "+itoa(code)+"）", "pipeline.tryWeather", "稍后重试")
+			"weather query failed (HTTP "+itoa(code)+")", "pipeline.tryWeather", "retry later")
 	}
 	o.writeAttribution(out.Attribution)
 	o.write(trajectory.Entry{Kind: trajectory.KindInputRaw, Content: text})
@@ -938,7 +938,7 @@ func (o *Options) ensureProjectSpace() {
 	}
 	root := gitTopLevel()
 	if root == "" {
-		log.Printf("[ensureProjectSpace] 未探测到 git 仓库根（cwd=%s），跳过自动注册", mustGetwd())
+		log.Printf("[ensureProjectSpace] no git repo root detected (cwd=%s); skipping auto-register", mustGetwd())
 		return
 	}
 	if err := o.Spaces.Add(&space.Manifest{
@@ -948,10 +948,10 @@ func (o *Options) ensureProjectSpace() {
 		Tools: []string{"file", "git", "search", "read", "test", "run"},
 		Perms: space.Perms{Read: true, Write: true},
 	}); err != nil {
-		log.Printf("[ensureProjectSpace] 自动注册 project 域失败: %v", err)
+		log.Printf("[ensureProjectSpace] auto-register project domain failed: %v", err)
 		return
 	}
-	log.Printf("[ensureProjectSpace] 已自动注册 project 域 scope=%s/**", root)
+	log.Printf("[ensureProjectSpace] auto-registered project domain scope=%s/**", root)
 }
 
 func mustGetwd() string {
@@ -969,7 +969,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	root := o.projectRootForCommit(it)
 	if root == "" {
 		return []contract.Receipt{{Tool: "skill", OK: false,
-			Err: "技能调用需注册 project 域且 scope 指向项目根"}}
+			Err: "skill call requires a registered project domain whose scope points at the project root"}}
 	}
 	var receipts []contract.Receipt
 	nextSeq := func() int { return len(receipts) + 1 }
@@ -988,7 +988,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	recv.Tool = "skill"
 	recv.Seq = nextSeq()
 	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
-		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
+		Stdout: "C-01 skill discovery: skill_name=" + name + " action=" + action + " (intent layer, kind=skill)"})
 
 	// C-02   :   list  =    (aiops  end, Bearer $AIOPS_KEY),     basely  . 
 	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
@@ -999,7 +999,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 			catalogSource = "aiops-remote"
 		}
 	} else if err != nil {
-		log.Printf("[execSkill] aiops 清单不可用，降级本地镜像: %v", err)
+		log.Printf("[execSkill] aiops catalog unavailable, falling back to local mirror: %v", err)
 	}
 	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
 	if _, err := os.Stat(skillMD); err != nil {
@@ -1008,7 +1008,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	}
 	if _, err := os.Stat(skillMD); err != nil {
 		sel.OK = false
-		sel.Err = "技能 SKILL.md 不存在: " + skillMD
+		sel.Err = "skill SKILL.md not found: " + skillMD
 		receipts = append(receipts, sel)
 		return receipts
 	}
@@ -2520,7 +2520,7 @@ func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
 	add := exec.Command("git", "add", "--", absPath)
 	add.Dir = root
 	if out, err := add.CombinedOutput(); err != nil {
-		return contract.Receipt{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}
+		return contract.Receipt{Tool: "git", OK: false, Err: "git add failed: " + string(out)}
 	}
 	// only basepathis  in store (has diff); empty=nochangeize ->  etc ed  . 
 	ch := exec.Command("git", "diff", "--cached", "--name-only", "--", absPath)
