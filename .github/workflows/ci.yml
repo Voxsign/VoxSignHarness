@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go test (public packages)
+        run: go test $(go list ./... | grep -vE '/(asr|doccontract)$')
+
+  security-scan:
+    name: Sensitive-info scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for secrets and personal identifiers
+        run: |
+          set -e
+          FILES=$(git ls-files | grep -E '\.(go|json|yaml|yml|md|sh)$' || true)
+          grep -rnE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|X-AIops-Key' $FILES && { echo "SECRET_FOUND"; exit 1; } || echo "OK: no secrets"
+          grep -rnE 'peterzou|zouyongming|PeterZou|Mansour|meishu' $FILES && { echo "PERSONAL_IDENTIFIER_FOUND"; exit 1; } || echo "OK: no personal identifiers"
+
+  dco-check:
+    name: DCO check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify Signed-off-by on commits
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/main...HEAD"
+          else
+            RANGE="HEAD~1..HEAD"
+          fi
+          for c in $(git rev-list "$RANGE"); do
+            if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly=true)' "$c" | grep -q .; then
+              echo "Missing Signed-off-by on commit $c"; exit 1
+            fi
+          done
+          echo "OK: all commits signed"
