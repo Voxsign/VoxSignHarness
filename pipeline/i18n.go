@@ -23,15 +23,23 @@ const (
 	LangEN Lang = "en"
 	// LangZH is Simplified Chinese.
 	LangZH Lang = "zh"
+	// LangAR is Modern Standard Arabic (a strategic first-class language for
+	// the GCC market; see DESIGN.md section 9).
+	LangAR Lang = "ar"
 )
 
 // DetectLang heuristically maps an input text to a Lang: any CJK ideograph (or
-// common CJK punctuation / fullwidth form) forces zh; everything else is en.
-// This is the fallback used when Options.Lang does not pin a language.
+// common CJK punctuation / fullwidth form) forces zh; any Arabic-script letter
+// forces ar; everything else is en. This is the fallback used when Options.Lang
+// does not pin a language. Arabic and CJK share equal priority over the default
+// English (see DESIGN.md section 9.5): an Arabic-script rune is enough to pin ar.
 func DetectLang(text string) Lang {
 	for _, r := range text {
 		if isCJK(r) {
 			return LangZH
+		}
+		if isArabic(r) {
+			return LangAR
 		}
 	}
 	return LangEN
@@ -53,19 +61,27 @@ func isCJK(r rune) bool {
 	return false
 }
 
+// isArabic reports whether r belongs to the Arabic script block U+0600–U+06FF
+// (Arabic, per DESIGN.md section 9.5). Matching this block makes texts like
+// "جلسة جديدة" or "اضغط وتحدث" detect as ar.
+func isArabic(r rune) bool {
+	return r >= 0x0600 && r <= 0x06FF
+}
+
 // EffectiveLang resolves the template language with an explicit-override-then-
 // detect priority:
 //
-//  1. If Options.Lang is a known value ("en" or "zh"), it wins verbatim — this
-//     is the caller's explicit override.
+//  1. If Options.Lang is a known value ("en", "zh" or "ar"), it wins verbatim —
+//     this is the caller's explicit override.
 //  2. Otherwise (empty or unrecognized) we DetectLang over the input text; CJK
-//     input -> zh, everything else -> en.
+//     input -> zh, Arabic-script input -> ar, everything else -> en.
 //
-// The practical default is en: non-CJK input with no override renders English.
+// The practical default is en: non-CJK, non-Arabic input with no override
+// renders English.
 func (o *Options) EffectiveLang(input string) Lang {
 	if o != nil {
 		switch Lang(o.Lang) {
-		case LangEN, LangZH:
+		case LangEN, LangZH, LangAR:
 			return Lang(o.Lang)
 		}
 	}
@@ -137,10 +153,14 @@ type tmpl struct {
 // pickTmpl returns the template set for lang; unknown values fall back to en so
 // the pipeline never renders an empty/half-localized document.
 func pickTmpl(lang Lang) *tmpl {
-	if lang == LangZH {
+	switch lang {
+	case LangZH:
 		return &zhT
+	case LangAR:
+		return &arT
+	default:
+		return &enT
 	}
-	return &enT
 }
 
 var enT = tmpl{
@@ -277,4 +297,79 @@ var zhT = tmpl{
 	readmeReqFull:    "- 需求全文：用户提交的附件 document（见实现计划「需求文档全文摘录」）\n",
 	readmeStatus:     "\n## 状态\n",
 	readmeStatusBody: "骨架阶段（可编译、可运行 /v1/health）；核心逻辑待实现阶段按需求文档填充。\n",
+}
+
+// arT is the Arabic (Modern Standard Arabic) template set. It is a first-class,
+// hand-written localization (not machine-translated) that mirrors enT/zhT field
+// for field. The brand name "VoiceSign Harness"/"VoxSign" is intentionally kept
+// in Latin script. Frozen glossary terms (DESIGN.md 9.6) are used verbatim where
+// they apply; here the harness emits code/doc artifacts, so the UI glossary
+// strings (hold-to-talk etc.) appear in the app layer rather than in these
+// templates.
+var arT = tmpl{
+	sumOverview:    "## نظرة عامة\n\n",
+	sumIncludedFmt: "يتم تجميع هذا الملف تلقائيًا عبر التنسيق متعدد الخطوات، وهو يتضمّن المستندات المصدرية التالية (%d):\n\n",
+	sumSourcesHead: "\n## المستندات المصدرية\n\n",
+	sumNote:        "> ملاحظة: لم يُطبَّق تحسينٌ بواسطة نموذج لغوي (LLM) هذه المرة (النموذج غير متاح)؛ والمحتوى عبارة عن دمج منظّم للمستندات المصدرية.\n\n",
+	sumExcerptHead: "## مقتطف النص الكامل\n\n```markdown\n",
+
+	planGoalHead:    "## هدف التنفيذ\n\n",
+	planProductFmt:  "- المنتج: %s\n",
+	planBasis:       "- الأساس: مستند المتطلبات المقدَّم من المستخدم (انظر مقتطف النص الكامل في نهايته)\n\n",
+	planHighHead:    "## أبرز المتطلبات (استخلاص حتمي)\n\n",
+	planNoHeadings:  "- لا يحتوي المستند على عناوين Markdown؛ يُنصح بمراجعة يدوية لبنية المتطلبات.\n",
+	planModuleHead:  "\n## التقسيم المعياري المقترح (هيكل مبدئي؛ يُنقَّح أثناء التنفيذ)\n\n",
+	planModuleTable: "| الوحدة | المسؤولية | الواجهة الرئيسية |\n|---|---|---|\n| نقطة الدخول cmd/ | تجميع الخدمة وتشغيلها | main() |\n| مسارات server/ | نقاط نهاية HTTP والمصادقة | /v1/* |\n| منطق النطاق | الآليات الأساسية وفق المتطلبات (النية/المعجم/التغذية الراجعة) | دوال خدمة النطاق |\n| طبقة البيانات | الحفظ الدائم (ملف/قاعدة بيانات) | واجهات القراءة/الكتابة |\n",
+	planAcceptHead:  "\n## مطابقة القبول (وفق معايير القبول في مستند المتطلبات)\n\n",
+	planAcceptNote:  "> تُوسَّع أثناء التنفيذ بموازاة معايير قبول المتطلبات، مع تعبئة الدليل لكل معيار.\n\n",
+	planStepsHead:   "## خطوات التنفيذ (هيكل مبدئي)\n\n",
+	planStepItems: []string{
+		"1. تحليل مستند المتطلبات واستخلاص عقود الوحدات والواجهات\n",
+		"2. بناء هيكل الخدمة (المسارات/الإعداد/دليل البيانات)\n",
+		"3. تنفيذ الآليات الأساسية، والتحقق من كل وحدة عبر تشغيل فعلي\n",
+		"4. المراجعة مقابل معايير القبول بندًا ببند وإضافة الأدلة\n",
+		"5. التسليم (بما في ذلك الاختبارات الذاتية وتقرير القبول)\n\n",
+	},
+	planExcerptHead: "## مقتطف مستند المتطلبات الكامل\n\n```markdown\n",
+
+	skelHeadFmt:    "// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.\n// المنتج المستهدف: %s\n// هيكل مبدئي: نقطة دخول خدمة قابلة للترجمة (إعداد/مسارات/فحص صحي/عناصر مصادقة مؤقتة). منطق التنفيذ: راجع علامات TODO في domain.go وrouter.go.\n",
+	skelEntryDesc:  "",
+	skelAddrFlag:   "عنوان الاستماع (التوجيه الذاتي افتراضيًا؛ يُرفض ما عداه)",
+	skelDataFlag:   "دليل البيانات",
+	skelMkdirFail:  "فشل إنشاء دليل البيانات: %v",
+	skelServingFmt: "الخدمة تعمل على %s (دليل البيانات %s)",
+	skelExitFatal:  "خرج الخادم: %v",
+	skelWriteJSON:  "// writeJSON يُصدر استجابة JSON موحّدة (بما يتوافق مع عقد vhs-asr).",
+
+	routerHead:  "// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.\n// تسجيل المسارات: فحص صحي /v1/health + المعالج الأساسي /v1/process (هيكل عقد؛ تُملأ علامات TODO أثناء التنفيذ).\n",
+	appCmt:      "// App هو جذر تجميع الخدمة (منطق النطاق يقع في domain.go).",
+	registerCmt: "// RegisterRoutes يسجّل كل نقاط النهاية (عنصر مصادقة مؤقت: ربط بالتوجيه الذاتي + ترويسة رمز اختيارية).",
+	processCmt:  "// handleProcess هي نقطة المعالجة الأساسية: نفّذ وفق المتطلبات (النية/المعجم/التغذية الراجعة/حلقة التخصيص).",
+	processTODO: "\t// TODO(التنفيذ): تحليل جسم الطلب -> معالجة النطاق -> استجابة (مع تسجيل أثر التتبّع)\n\twriteJSON(w, http.StatusNotImplemented, map[string]any{\"ok\": false, \"error\": \"الهيكل المبدئي غير منفَّذ\"})",
+
+	domainHead: "// Code generated by VoiceSign Harness (ORCHESTRATE kind=implement). DO NOT EDIT manually.\n// هيكل طبقة النطاق: واجهات الوحدات وعلامات TODO موزّعة وفق مستند المتطلبات.\n",
+	chapLabel:  "  // أقسام المتطلبات:\n",
+	domainTODO: []string{
+		"\n// TODO(التنفيذ):\n",
+		"//  1. التنفيذ النطاقي للآليات الأساسية (النية/المعجم/التغذية الراجعة)، وفق فصول المتطلبات\n",
+		"//  2. حفظ طبقة البيانات (ملف/قاعدة بيانات، إلحاق فقط، محدود الحجم، مع سياسة انتهاء صلاحية)\n",
+		"//  3. قبول غير وظيفي: المصادقة، والحدود، وقياس الأداء التدريجي، والخطوط الحمر الأربعة\n",
+		"//  4. مطابقة القبول: تعبئة الدليل لكل معيار قبول (انظر docs/<title>-خطة-التنفيذ.md)\n",
+	},
+
+	readmeTitleSuffix: " (هيكل كود يولّده Harness)",
+	readmeAutoGen:     "> وُلّد تلقائيًا بواسطة التنسيق متعدد الخطوات في VoiceSign Harness (ORCHESTRATE kind=implement)، 2026-10-03.\n",
+	readmeContents:    "## المحتويات\n",
+	readmeContentList: []string{
+		"- main.go نقطة دخول الخدمة (إعداد/فحص صحي/عناصر مصادقة مؤقتة)\n",
+		"- router.go تسجيل المسارات (/v1/health، /v1/process)\n",
+		"- domain.go علامات TODO لطبقة النطاق (أقسام المتطلبات في تعليقات ترويسة الملف)\n",
+	},
+	readmeUsage:      "## طريقة الاستخدام\n",
+	readmeBuildCmt:  "go build ./...   # الهيكل المبدئي قابل للترجمة",
+	readmeMapping:   "\n## مطابقة المتطلبات\n",
+	readmePlanFmt:    "- خطة التنفيذ (الكاملة): docs/%s-خطة-التنفيذ.md\n",
+	readmeReqFull:    "- النص الكامل للمتطلبات: المستند المرفق المقدَّم من المستخدم (انظر «مقتطف مستند المتطلبات الكامل» في خطة التنفيذ)\n",
+	readmeStatus:     "\n## الحالة\n",
+	readmeStatusBody: "مرحلة الهيكل المبدئي (قابل للترجمة؛ تعمل /v1/health)؛ يُملأ المنطق الأساسي أثناء التنفيذ وفق مستند المتطلبات.\n",
 }
