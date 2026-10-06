@@ -329,10 +329,10 @@ func TestPipelineReceiptFourLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := strings.Join([]string{
-		"动作：" + out.View.Action, "文件：" + out.View.Files,
-		"结果：" + out.View.Result, "撤销：" + out.View.Undo,
+		"Action: " + out.View.Action, "Files: " + out.View.Files,
+		"Result: " + out.View.Result, "Undo: " + out.View.Undo,
 	}, "\n")
-	for _, want := range []string{"动作：", "文件：", "结果：", "撤销："} {
+	for _, want := range []string{"Action: ", "Files: ", "Result: ", "Undo: "} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("回执缺 %q:\n%s", want, rendered)
 		}

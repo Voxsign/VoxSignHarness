@@ -40,7 +40,7 @@ func (f *Fetcher) get(ctx context.Context, path string) ([]byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d（按不可用处理）", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d (treated as unavailable)", resp.StatusCode)
 	}
 	return b, nil
 }
@@ -58,7 +58,7 @@ func (f *Fetcher) List(ctx context.Context) ([]Skill, error) {
 		//   : also   connectisnum 
 		var arr []Skill
 		if err2 := json.Unmarshal(b, &arr); err2 != nil {
-			return nil, fmt.Errorf("解析失败（按不可用处理）: %w", err)
+			return nil, fmt.Errorf("parse failed (treated as unavailable): %w", err)
 		}
 		return arr, nil
 	}
@@ -104,7 +104,7 @@ func ListOffline(ctx context.Context, st *Store, f *Fetcher) ([]Skill, string, e
 		return idx.Skills, status, nil // inizethen   (SK-1)
 	}
 	if f == nil {
-		return nil, StatusUnknown, fmt.Errorf("无内化且无拉取器")
+		return nil, StatusUnknown, fmt.Errorf("neither inlined nor fetcher available")
 	}
 	all, err := f.List(ctx)
 	return all, StatusUnknown, err

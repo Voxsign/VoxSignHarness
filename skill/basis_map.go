@@ -63,7 +63,7 @@ func RuleOfBasis(text string) (string, bool, string) {
 			}
 		}
 	}
-	return "", false, "不属于证据优先级族（四条规则均不匹配）—— 按 manual 处理"
+	return "", false, "not in evidence-priority family (none of four rules matched) -> treat as manual"
 }
 
 // MapBasis  **  **  . 

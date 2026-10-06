@@ -86,7 +86,7 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 				layer string
 				cands []string
 				ev    Evidence
-			}{"session", cs, Evidence{Layer: "session", Detail: "会话内提及：" + strings.Join(cs, ",")}})
+			}{"session", cs, Evidence{Layer: "session", Detail: "in-session mention: " + strings.Join(cs, ",")}})
 		}
 	}
 	if r.WM != nil {
@@ -95,7 +95,7 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 				layer string
 				cands []string
 				ev    Evidence
-			}{"working_memory", []string{c}, Evidence{Layer: "working_memory", Detail: "工作记忆活跃实体命中：" + c}})
+			}{"working_memory", []string{c}, Evidence{Layer: "working_memory", Detail: "working-memory active entity hit: " + c}})
 		}
 	}
 	if r.Zhiji != nil {
@@ -120,14 +120,14 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 					layer string
 					cands []string
 					ev    Evidence
-				}{"zhiji", cs, Evidence{Layer: "zhiji", Detail: "知己只读命中 " + strings.Join(cs, ",")}})
+				}{"zhiji", cs, Evidence{Layer: "zhiji", Detail: "zhiji read-only hit " + strings.Join(cs, ",")}})
 			}
 		}
 	}
 
 	if len(layers) == 0 {
 		res.AskBack = true
-		res.Reason = "三层都无候选：回问用户（不脑补）"
+		res.Reason = "no candidate across all three layers: ask user (do not guess)"
 		return res
 	}
 	// recv     and     
@@ -146,7 +146,7 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 			if strings.Join(l.cands, "|") != first {
 				res.Conflict = true
 				res.AskBack = true
-				res.Reason = "来源冲突（" + layers[0].layer + " vs " + l.layer + "）⇒ 中断，交人裁决"
+				res.Reason = "source conflict (" + layers[0].layer + " vs " + l.layer + ") -> interrupt, escalate to human"
 				return res
 			}
 		}
@@ -154,11 +154,11 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 	if len(res.Candidates) == 1 {
 		res.Canonical = res.Candidates[0]
 		res.Ok = true
-		res.Reason = "唯一候选才消解"
+		res.Reason = "resolved only when unique candidate"
 		return res
 	}
 	res.AskBack = true
-	res.Reason = "多候选（" + itoa(len(res.Candidates)) + " 个）⇒ 回问用户，并给出候选"
+	res.Reason = "multiple candidates (" + itoa(len(res.Candidates)) + ") -> ask user, list candidates"
 	return res
 }
 

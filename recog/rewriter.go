@@ -51,7 +51,7 @@ func (r *Rewriter) Rewrite(text string) (string, []asr.Correction) {
 		asrCorrs = append(asrCorrs, asr.Correction{
 			Start: offs[c.Start], End: offs[c.End], From: c.From, To: c.To,
 			Kind: "hotword", Confidence: c.Score,
-			Evidence: "缓存关联度命中（route=" + c.Route + "，CACHE-001 K9）",
+			Evidence: "cache affinity hit (route=" + c.Route + ", CACHE-001 K9)",
 		})
 	}
 	if len(asrCorrs) == 0 {

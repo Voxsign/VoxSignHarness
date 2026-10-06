@@ -65,7 +65,7 @@ func MapKnowhow(skillID, version string, kh Knowhow) Mapping {
 	sum := len(m.Criteria) + len(m.Templates) + len(m.Excluded)
 	if sum != m.Total {
 		m.Excluded = append(m.Excluded, Excluded{
-			Key: "unmapped", Text: "", Reason: "映射缺口（守恒失败）—— 属实现缺陷，必须显式暴露",
+			Key: "unmapped", Text: "", Reason: "mapping gap (conservation failure) - implementation defect, must be surfaced explicitly",
 		})
 	}
 	return m
