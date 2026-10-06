@@ -44,7 +44,7 @@ jobs:
         run: |
           set -e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            RANGE="origin/main...HEAD"
+            RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
           else
             RANGE="HEAD~1..HEAD"
           fi
