@@ -229,11 +229,11 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 			it.Target = &contract.Target{Entity: top.Entity, RefType: "anaphora"}
 			return it, opts, nil
 		case !matchedSpace && len(spaces) > 1:
-			it.Ask = "你说的「" + trigger + "」是指哪个域？我看到多个域里都有最近操作"
+			it.Ask = "Which domain did you mean by \"" + trigger + "\"? I see recent activity in several domains"
 			opts = r.buildOptions(text, ranked)
 			return it, opts, nil
 		case tie:
-			it.Ask = "你说的「" + trigger + "」具体指哪一个？有多个相近的对象"
+			it.Ask = "Which one did you mean by \"" + trigger + "\"? Several similar objects exist"
 			opts = r.buildOptions(text, ranked)
 			return it, opts, nil
 		default:
@@ -256,7 +256,7 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 	}
 
 	// rule low-confidence allow     ->  formclarification(no  then Options asempty)
-	it.Ask = "你说的「" + trigger + "」指的是哪个？请再说清楚一点"
+	it.Ask = "Which did you mean by \"" + trigger + "\"? Please clarify"
 	return it, opts, nil
 }
 
@@ -264,13 +264,13 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 func kindPrefix(kind string) string {
 	switch kind {
 	case "file":
-		return "那个文件："
+		return "that file: "
 	case "project":
-		return "项目："
+		return "project: "
 	case "person":
-		return "人："
+		return "person: "
 	case "space":
-		return "域："
+		return "domain: "
 	default:
 		return ""
 	}
@@ -290,7 +290,7 @@ func (r *Resolver) buildOptions(text string, ranked []RecentEntity) []Option {
 			id := "dict:" + t.Term
 			if !seen[id] {
 				seen[id] = true
-				opts = append(opts, Option{ID: id, Label: t.Term + "（词典）"})
+				opts = append(opts, Option{ID: id, Label: t.Term + " (dictionary)"})
 			}
 		}
 	}
@@ -303,7 +303,7 @@ func (r *Resolver) buildOptions(text string, ranked []RecentEntity) []Option {
 		seen[id] = true
 		label := kindPrefix(e.Kind) + e.Entity
 		if e.Space != "" {
-			label += "（域:" + e.Space + "）"
+			label += " (domain:" + e.Space + ")"
 		}
 		opts = append(opts, Option{ID: id, Label: label})
 	}

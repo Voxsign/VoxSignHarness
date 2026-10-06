@@ -119,7 +119,7 @@ func TestNoteContentAnaphoraDoesNotAsk(t *testing.T) {
 	//  boundary: coreferencethenissafety in time    
 	it2 := &contract.Intent{Intent: contract.IntentNote, Confidence: 0.85, CorrectedText: "记一下 这个"}
 	got2, _, _ := r.ResolveOptions(it2, "")
-	if !strings.Contains(got2.Ask, "指的是哪个") {
+	if !strings.Contains(got2.Ask, "Which did you mean") {
 		t.Errorf("既有回归：'记一下 这个' 必须追问，实际 Ask=%q", got2.Ask)
 	}
 }

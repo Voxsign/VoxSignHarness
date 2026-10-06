@@ -64,16 +64,16 @@ type Config struct {
 // Load read JSON   andverify(C1–C5). YAML   reject(C4). 
 func Load(path string) (Config, error) {
 	if !strings.EqualFold(filepath.Ext(path), ".json") {
-		return Config{}, fmt.Errorf("C4 违反：配置必须是 .json（明令不用 YAML）: %s", path)
+		return Config{}, fmt.Errorf("C4 violation: config must be .json (YAML explicitly disallowed): %s", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("读配置失败: %w", err)
+		return Config{}, fmt.Errorf("failed to read config: %w", err)
 	}
 	var c Config
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	if err := dec.Decode(&c); err != nil {
-		return Config{}, fmt.Errorf("配置不是合法 JSON: %w", err)
+		return Config{}, fmt.Errorf("config is not valid JSON: %w", err)
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
@@ -93,17 +93,17 @@ const TierFast = "fast"
 func (c Config) ResolveModel(ch Channel) (string, error) {
 	cc, ok := c.Channels[string(ch)]
 	if !ok {
-		return "", fmt.Errorf("通道 %q 不存在", ch)
+		return "", fmt.Errorf("channel %q does not exist", ch)
 	}
 	if cc.ModelID != "" && cc.ModelID != "TBD" {
 		return cc.ModelID, nil
 	}
 	if cc.Tier == "" {
-		return "", fmt.Errorf("通道 %q 既无 model_id 也无 tier", ch)
+		return "", fmt.Errorf("channel %q has neither model_id nor tier", ch)
 	}
 	m, ok := c.Tiers[cc.Tier]
 	if !ok {
-		return "", fmt.Errorf("通道 %q 引用了不存在的 tier %q（fail-closed）", ch, cc.Tier)
+		return "", fmt.Errorf("channel %q references non-existent tier %q (fail-closed)", ch, cc.Tier)
 	}
 	return m, nil
 }
@@ -113,31 +113,31 @@ func (c Config) Validate() error {
 	for name, cc := range c.Channels {
 		if cc.Tier != "" {
 			if _, ok := c.Tiers[cc.Tier]; !ok {
-				return fmt.Errorf("通道 %q 引用了不存在的 tier %q（fail-closed，不许静默取默认）", name, cc.Tier)
+				return fmt.Errorf("channel %q references non-existent tier %q (fail-closed, no silent default)", name, cc.Tier)
 			}
 		}
 	}
 	// ⑤ **split    ize**: default     referto quality  . 
 	if cc, ok := c.Channels[string(ChannelDefault)]; ok && cc.Tier == TierQuality {
-		return fmt.Errorf("C6 违反：default 通道不得指向 %s 档（连常规调用都走最贵的 ⇒ 分档失效）", TierQuality)
+		return fmt.Errorf("C6 violation: default channel must not point to %s tier (even regular calls would use the most expensive -> tiering broken)", TierQuality)
 	}
 	if len(c.Channels) != len(AllChannels()) {
-		return fmt.Errorf("C1 违反：channels 必须恰好是 %v，实际 %d 条", AllChannels(), len(c.Channels))
+		return fmt.Errorf("C1 violation: channels must be exactly %v, got %d", AllChannels(), len(c.Channels))
 	}
 	for _, ch := range AllChannels() {
 		if _, ok := c.Channels[string(ch)]; !ok {
-			return fmt.Errorf("C1 违反：缺少通道 %q", ch)
+			return fmt.Errorf("C1 violation: missing channel %q", ch)
 		}
 	}
 	// C2: onlyhas learn  bywriteback. 
 	if c.Channels[string(ChannelDefault)].WriteBack {
-		return fmt.Errorf("C2 违反：default.write_back 必须为 false")
+		return fmt.Errorf("C2 violation: default.write_back must be false")
 	}
 	if c.Channels[string(ChannelDiagnose)].WriteBack {
-		return fmt.Errorf("C2 违反：diagnose.write_back 必须为 false")
+		return fmt.Errorf("C2 violation: diagnose.write_back must be false")
 	}
 	if !c.Channels[string(ChannelLearn)].WriteBack {
-		return fmt.Errorf("C2 违反：learn.write_back 必须为 true")
+		return fmt.Errorf("C2 violation: learn.write_back must be true")
 	}
 	// C3: enabled ⇒ model_id  emptyand  TBD(no model_id  calluse  attribution). 
 	for _, ch := range AllChannels() {
@@ -147,19 +147,19 @@ func (c Config) Validate() error {
 		}
 		//  type by model_id refer , **or**by tier resolve (  +useway  ). 
 		if (strings.TrimSpace(cc.ModelID) == "" || strings.EqualFold(cc.ModelID, "TBD")) && cc.Tier == "" {
-			return fmt.Errorf("C3 违反：通道 %q enabled 但既无 model_id 也无 tier（未指定模型不得启用）", ch)
+			return fmt.Errorf("C3 violation: channel %q enabled but has neither model_id nor tier (must not enable without a model)", ch)
 		}
 	}
 	// C5: learn  writeer. 
 	if c.Channels[string(ChannelLearn)].MaxConcurrency != 1 {
-		return fmt.Errorf("C5 违反：learn.max_concurrency 必须为 1（单一写者）")
+		return fmt.Errorf("C5 violation: learn.max_concurrency must be 1 (single writer)")
 	}
 	// in    calluse. 
 	if strings.TrimSpace(c.Gateway.BaseURL) == "" || strings.TrimSpace(c.Gateway.ChatPath) == "" {
-		return fmt.Errorf("入口配置不全：gateway.base_url / gateway.chat_path 必填")
+		return fmt.Errorf("incomplete gateway config: gateway.base_url / gateway.chat_path are required")
 	}
 	if strings.TrimSpace(c.Gateway.APIKeyEnv) == "" {
-		return fmt.Errorf("入口配置不全：gateway.api_key_env 必填（只存变量名，不存 key）")
+		return fmt.Errorf("incomplete gateway config: gateway.api_key_env required (store only the env var name, never the key)")
 	}
 	return nil
 }

@@ -49,7 +49,7 @@ func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 	}
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "改一下它"}
 	got, _ := r.Resolve(it, "voicesign-harness") // curbeforedomain    all  in
-	if got.Ask == "" || !strings.Contains(got.Ask, "哪个域") {
+	if got.Ask == "" || !strings.Contains(got.Ask, "Which domain") {
 		t.Fatalf("用例3: 应回问「哪个域？」, Ask=%q", got.Ask)
 	}
 	if got.Target != nil && got.Target.Entity != "" {

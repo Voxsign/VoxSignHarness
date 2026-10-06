@@ -147,37 +147,37 @@ func builtinTemplates() map[string]*Manifest {
 			Name: "global", Type: TypeGlobal,
 			Scope: []string{"."}, Perms: Perms{Read: true},
 			Tools: []string{"read", "query", "ask"}, RiskDefault: "auto",
-			Acceptance: "只读兜底，无写权限",
+			Acceptance: "read-only fallback, no write permission",
 		},
 		"project": {
 			Name: "project", Type: TypeProject,
 			Perms: Perms{Read: true, Write: true, Exec: []string{"test", "run"}},
 			Tools: []string{"file", "git", "search", "test", "run", "read"}, RiskDefault: "light",
-			Acceptance: "改动限定在 scope 内，无越界",
+			Acceptance: "changes limited to scope, no boundary breach",
 		},
 		"sandbox": {
 			Name: "sandbox", Type: TypeSandbox,
 			Perms: Perms{Read: true, Write: true},
 			Tools: []string{"file", "run", "search"}, RiskDefault: "auto",
-			Acceptance: "临时目录，自动清理，不触主库",
+			Acceptance: "temp dir, auto-cleaned, does not touch main repo",
 		},
 		"vault-notes": {
 			Name: "vault-notes", Type: TypeVaultNotes,
 			Perms: Perms{Read: true, Write: true},
 			Tools: []string{"note", "file-append", "read"}, RiskDefault: "auto",
-			Acceptance: "仅追加，不改写历史想法",
+			Acceptance: "append-only, no rewrite of past notes",
 		},
 		"vault-creds": {
 			Name: "vault-creds", Type: TypeVaultCreds,
 			Perms: Perms{Read: true}, //   read-only, nowritenooutsend
 			Tools: []string{"read"}, RiskDefault: "human",
-			Acceptance: "凭证库只读，禁止外发/写",
+			Acceptance: "credentials store read-only, no exfiltration/write",
 		},
 		"external": {
 			Name: "external", Type: TypeExternal,
 			Perms: Perms{Read: true},
 			Tools: []string{"deploy", "http", "read"}, RiskDefault: "strong",
-			Acceptance: "外发动作永远强确认，绑定具体目标",
+			Acceptance: "outbound actions always strong-confirmed, bound to a specific target",
 		},
 	}
 }
@@ -192,7 +192,7 @@ func Load(dir string) (*Registry, error) {
 		if os.IsNotExist(err) {
 			return r, nil // obj    ->  in   
 		}
-		return nil, fmt.Errorf("读取域目录 %s 失败: %w", dir, err)
+		return nil, fmt.Errorf("failed to read domain dir %s: %w", dir, err)
 	}
 	loaded := false
 	for _, e := range entries {
@@ -202,7 +202,7 @@ func Load(dir string) (*Registry, error) {
 		p := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return nil, fmt.Errorf("读取 manifest %s 失败: %w", p, err)
+			return nil, fmt.Errorf("failed to read manifest %s: %w", p, err)
 		}
 		var m Manifest
 		if err := json.Unmarshal(data, &m); err != nil {
@@ -245,10 +245,10 @@ func (r *Registry) List() []string {
 // Add    dir/<name>.space.json; samenamechangenew base+1(writebefore   file). 
 func (r *Registry) Add(m *Manifest) error {
 	if m.Name == "" {
-		return fmt.Errorf("manifest 缺少 name")
+		return fmt.Errorf("manifest missing name")
 	}
 	if r.Dir == "" {
-		return fmt.Errorf("registry 未指定落盘目录")
+		return fmt.Errorf("registry: no on-disk dir specified")
 	}
 	if old, ok := r.Manifests[m.Name]; ok && old.Path != "" {
 		if data, err := os.ReadFile(old.Path); err == nil {
@@ -260,15 +260,15 @@ func (r *Registry) Add(m *Manifest) error {
 	}
 	normalizeScopes(m)
 	if err := os.MkdirAll(r.Dir, 0o755); err != nil {
-		return fmt.Errorf("创建域目录失败: %w", err)
+		return fmt.Errorf("failed to create domain dir: %w", err)
 	}
 	p := filepath.Join(r.Dir, m.Name+".space.json")
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化 manifest %s 失败: %w", m.Name, err)
+		return fmt.Errorf("failed to serialize manifest %s: %w", m.Name, err)
 	}
 	if err := os.WriteFile(p, data, 0o600); err != nil {
-		return fmt.Errorf("写盘 %s 失败: %w", p, err)
+		return fmt.Errorf("failed to write %s: %w", p, err)
 	}
 	m.Path = p
 	r.Manifests[m.Name] = m
@@ -337,16 +337,16 @@ func driftOf(m *Manifest) string {
 		real, err := filepath.EvalSymlinks(p)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return "scope 路径不存在（符号链接解析后仍缺失）: " + p
+				return "scope path does not exist (still missing after symlink resolution): " + p
 			}
 			continue
 		}
 		fi, err := os.Stat(real)
 		if err != nil {
-			return "scope 路径不可访问: " + p
+			return "scope path not accessible: " + p
 		}
 		if !fi.IsDir() {
-			return "scope 路径不是目录: " + p
+			return "scope path is not a directory: " + p
 		}
 	}
 	return ""
