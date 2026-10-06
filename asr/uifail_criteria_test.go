@@ -29,7 +29,7 @@ const els = {t:el('t'), mic:el('mic'), michint:el('michint'), out:el('out'),
 global.document = { getElementById:id=>els[id]||el(id) };
 global.window = { addEventListener:(ev,fn)=>{ if(ev==='load') global.__onload=fn; } };
 global.alert=()=>{}; global.prompt=()=>null;
-// 预置安全 fetch：页面脚本末尾会立即调用 log()/probe()（否则 node 里用原生 fetch 解析相对 URL 会崩）
+// preset safe fetch: the page script calls log()/probe() at the end; without it, node's native fetch crashes resolving relative URLs
 global.fetch = ()=>Promise.resolve({ok:true, json:()=>Promise.resolve({total:0,recent:[],metrics:{l0_share:0,ask_back_rate:0,degraded_rate:0,note:''}})});
 function FakeRec(){ this.start=()=>{}; this.onresult=null; this.onend=null; }
 global.webkitSpeechRecognition = FakeRec; window.webkitSpeechRecognition = FakeRec;

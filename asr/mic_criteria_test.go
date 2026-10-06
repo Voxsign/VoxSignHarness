@@ -71,18 +71,18 @@ global.window = { addEventListener:(ev,fn)=>{ if(ev==='load') global.__onload=fn
 global.fetch = (url, opts)=>{ if(opts && opts.method === 'POST'){ posted++; } return Promise.resolve({ok:true, json:()=>Promise.resolve({total:0, recent:[], metrics:{l0_share:0, ask_back_rate:0, degraded_rate:0, note:''}})}); };
 function FakeRec(){ this.start=()=>{ started++; }; this.onresult=null; this.onend=null; }
 global.webkitSpeechRecognition = FakeRec;
-window.webkitSpeechRecognition = FakeRec; // 页面用 ('webkitSpeechRecognition' in window) 探测
+window.webkitSpeechRecognition = FakeRec; // page probes ('webkitSpeechRecognition' in window)
 global.alert = ()=>{};
 global.prompt = ()=>null;
 ` + script + `
-// 支持分支
+// supported branch
 __onload();
 els.mic.onclick();
 assert.strictEqual(started, 1, '点击后应调用 start()');
-// 触发 onresult：页面脚本的 var rec 在同一作用域内可直接访问
+// triggers onresult: the page script's var rec is directly reachable in the same scope
 els.t.dataset.recBase = '前缀';
-// 直接调用页面的 onresult 逻辑：重新挂一个假实例不可行 ⇒ 用真实实例 path:
-// 页面把实例存在 rec 变量里（脚本内 var rec）——在 global 作用域下我们可访问
+// invoke the page's onresult logic directly; re-attaching a fake instance is not viable, so use the real instance path:
+// the page stores the instance in rec (var rec inside the script); reachable from the global scope
 assert.ok(typeof rec !== 'undefined', 'rec 应存在于脚本作用域');
 rec.onresult({resultIndex:0, results:[[{transcript:'哎欧劈艾斯'}]]});
 assert.strictEqual(els.t.value, '前缀哎欧劈艾斯', 'onresult 应填入 textarea');
