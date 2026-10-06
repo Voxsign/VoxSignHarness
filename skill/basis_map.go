@@ -1,23 +1,23 @@
-// basis_map.go —— `basis 原文 → evidenceRanking 族规则` 映射表（Lead 批准）。
+// basis_map.go -- `basis orig  -> evidenceRanking  rule`   table(Lead approveapprove). 
 //
-// 动因：56 条 knowhow 里 basis 有 8 条，**全都是"证据优先级"** ⇒ 若能映到族里 4 条规则，
-// 自动化率从 1 抬到 8。**但"能映射"必须经得起推敲 —— 不许为抬比例硬凑。**
+//  because: 56   knowhow   basis has 8  , **safetyallis" data first "** ⇒ if  to   4  rule, 
+//   izeratefrom 1  to 8. **but"   "    raise   --  allowas  example  . **
 //
-// 口径（沿用 SK-11）：**basis 条数 == 已映射 + 显式不能映射**（不许静默丢）；
-// 不能映射的标 `manual` + **理由**。
+//  path( use SK-11): **basis  num == already   +  form    **( allow   ); 
+//      tgt `manual` + ** by**. 
 package skill
 
 import "strings"
 
-// 族规则名（与 evidenceRanking 的 4 条规则对应）。
+//  rulename(and evidenceRanking   4  ruleto ). 
 const (
-	RuleTraceable = "traceable_over_untraceable" // ① 可追溯 > 不可追溯
-	RuleExecuted  = "executed_over_claimed"      // ② 已执行 check > 口头称
-	RuleVerified  = "verified_over_hearsay"      // ③ 已查证 > 一方称
-	RuleParadigm  = "paradigm_default"           // ④ 范式优先（经 check 认定）
+	RuleTraceable = "traceable_over_untraceable" // ①     >     
+	RuleExecuted  = "executed_over_claimed"      // ② already   check >  headcalled
+	RuleVerified  = "verified_over_hearsay"      // ③ already   >   called
+	RuleParadigm  = "paradigm_default"           // ④  form first(  check   )
 )
 
-// basisKeywords 是**保守**的映射规则：命中才映射，命中多条按优先级取第一条。
+// basisKeywords is**keep **   rule:  inonly  ,  in  by first get   . 
 var basisKeywords = []struct {
 	rule  string
 	words []string
@@ -28,7 +28,7 @@ var basisKeywords = []struct {
 	{RuleParadigm, []string{"范式", "旧经验", "内核", "默认正确"}},
 }
 
-// MappedBasis 是一条成功映射的 basis。
+// MappedBasis is  become     basis. 
 type MappedBasis struct {
 	Skill   string `json:"source_skill"`
 	Version string `json:"source_version"`
@@ -36,7 +36,7 @@ type MappedBasis struct {
 	Rule    string `json:"rule"`
 }
 
-// ManualBasis 是一条**无法映射**的 basis（显式记录 + 理由，不许静默丢）。
+// ManualBasis is  **no   **  basis( form   +  by,  allow   ). 
 type ManualBasis struct {
 	Skill   string `json:"source_skill"`
 	Version string `json:"source_version"`
@@ -44,16 +44,16 @@ type ManualBasis struct {
 	Reason  string `json:"reason"`
 }
 
-// BasisMapping 是映射结果（**守恒**）。
+// BasisMapping is  close (**  **). 
 type BasisMapping struct {
 	Mapped []MappedBasis `json:"mapped"`
 	Manual []ManualBasis `json:"manual"`
 	Total  int           `json:"total"`
 }
 
-// RuleOfBasis 返回 basis 原文对应的族规则；ok=false 表示**不能映射**（附理由）。
+// RuleOfBasis returnback basis orig to   rule; ok=false tableshow**    **(  by). 
 //
-// ⚠️ 保守优先：宁可不映射，也不硬凑（例如"结论先行"属 style，不属证据优先级）。
+// ⚠️ keep  first:      , also   (examplee.g."close first "  style,    data first ). 
 func RuleOfBasis(text string) (string, bool, string) {
 	t := strings.ToLower(text)
 	for _, k := range basisKeywords {
@@ -66,7 +66,7 @@ func RuleOfBasis(text string) (string, bool, string) {
 	return "", false, "不属于证据优先级族（四条规则均不匹配）—— 按 manual 处理"
 }
 
-// MapBasis 做**守恒**映射。
+// MapBasis  **  **  . 
 func MapBasis(skillID, version string, basis []string) BasisMapping {
 	m := BasisMapping{Total: len(basis)}
 	for _, t := range basis {
@@ -80,7 +80,7 @@ func MapBasis(skillID, version string, basis []string) BasisMapping {
 	return m
 }
 
-// BasisAutomationRatio 返回 (已映射数, 总数) —— **唯一的能力指标**。
+// BasisAutomationRatio returnback (already  num,  num) -- **unique   refertgt**. 
 func BasisAutomationRatio(ms []BasisMapping) (int, int) {
 	ok, total := 0, 0
 	for _, m := range ms {

@@ -1,14 +1,14 @@
 //
-// relay.go：机器码异网转发基建（端口按服务分、不按机器分）。
+// relay.go:   codediff  sendbase (portbyserveservicesplit,  by  split). 
 //
-// 云端只暴露 443（内部 8898），不新增 per-machine 端口。每台 Mac 主动建立一条到
-// /v1/relay/connect 的 SSE 长连接；云端把「机器码 → 活动连接」放内存表（O(1)）。
-// 客户端请求 https://voxsign.ai/relay/<machine_code>/<path> 时，云端按机器码查到连接，
-// 把 {id,method,path,query,headers,body} 经 SSE 推给 Mac agent，agent 转发本地上游
-// （127.0.0.1:8897），再 POST /v1/relay/respond 回包。v1 为 request/response（非流式）。
+//  endonly   443(in  8898),  newadd per-machine port.    Mac       to
+// /v1/relay/connect   SSE  linkconnect;  endpipe"  code ->   linkconnect" instoretable(O(1)). 
+// clientuserend require https://voxsign.ai/relay/<machine_code>/<path> time,  endby  code tolinkconnect, 
+// pipe {id,method,path,query,headers,body}   SSE  give Mac agent, agent  sendbaselyon 
+// (127.0.0.1:8897), again POST /v1/relay/respond back . v1 as request/response(  form). 
 //
-// 鉴权：connect/respond/forward 均要求 Bearer == 设备注册表中该 machine_code 的 token。
-// 多租户：请求方 JWT 租户（若有）必须 == 设备 tenant，否则 403。
+//   : connect/respond/forward  needrequire Bearer ==   note tablein  machine_code   token. 
+//   user:  require  JWT  user(ifhas)   ==    tenant,  then 403. 
 package server
 
 import (
@@ -22,31 +22,31 @@ import (
 	"time"
 )
 
-// relayResp agent 回报的上游响应。
+// relayResp agent back  on   . 
 type relayResp struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body"`
 }
 
-// relayConn 一条活动的 Mac 反向连接。
+// relayConn       Mac revtolinkconnect. 
 type relayConn struct {
 	machine string
 	tenant  string
-	send    chan []byte // 出站 SSE 事件（JSON 信封），由 connect handler 消费
+	send    chan []byte // out  SSE event(JSON   ), by connect handler   
 }
 
 type relayHub struct {
 	mu       sync.Mutex
-	conns    map[string]*relayConn      // machine_code → 活动连接（O(1)）
-	pendings map[string]chan *relayResp // request_id → 等待者
+	conns    map[string]*relayConn      // machine_code ->   linkconnect(O(1))
+	pendings map[string]chan *relayResp // request_id -> waiter
 }
 
 func newRelayHub() *relayHub {
 	return &relayHub{conns: map[string]*relayConn{}, pendings: map[string]chan *relayResp{}}
 }
 
-// authorizeDevice 校验 Bearer/X-Token == 注册表中某机器码的 token，返回该记录。
+// authorizeDevice verify Bearer/X-Token == note tablein   code  token, returnback   . 
 func (s *Server) authorizeDevice(tok string) *DeviceRecord {
 	if s.devices == nil || tok == "" {
 		return nil
@@ -59,7 +59,7 @@ func (s *Server) authorizeDevice(tok string) *DeviceRecord {
 	return nil
 }
 
-// bearerToken 取 Authorization: Bearer / X-Token。
+// bearerToken get Authorization: Bearer / X-Token. 
 func bearerToken(r *http.Request) string {
 	t := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if t == "" {
@@ -68,8 +68,8 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(t)
 }
 
-// GET /v1/relay/connect?machine_code= —— Mac agent 常驻 SSE。
-// 鉴权：token 必须 == 注册表该 machine_code 的 token。
+// GET /v1/relay/connect?machine_code= -- Mac agent    SSE. 
+//   : token    == note table  machine_code   token. 
 func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("machine_code"))
 	tok := bearerToken(r)
@@ -86,7 +86,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	conn := &relayConn{machine: code, tenant: rec.Tenant, send: make(chan []byte, 16)}
 	s.relay.mu.Lock()
 	if old, exists := s.relay.conns[code]; exists {
-		close(old.send) // 同码重连：替掉旧连接
+		close(old.send) // samecodeheavylink:    linkconnect
 	}
 	s.relay.conns[code] = conn
 	s.relay.mu.Unlock()
@@ -98,7 +98,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// 退出时清理连接
+	//  outtime  linkconnect
 	defer func() {
 		s.relay.mu.Lock()
 		if cur, ok := s.relay.conns[code]; ok && cur == conn {
@@ -135,7 +135,7 @@ func (s *Server) handleRelayConnect(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// POST /v1/relay/respond —— agent 回报：{request_id,status,headers,body}。
+// POST /v1/relay/respond -- agent back : {request_id,status,headers,body}. 
 func (s *Server) handleRelayRespond(w http.ResponseWriter, r *http.Request) {
 	tok := bearerToken(r)
 	if rec := s.devices.findByToken(tok); rec == nil {
@@ -170,7 +170,7 @@ func (s *Server) handleRelayRespond(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// handleRelayForward 客户端转发入口：/v1/relay/{code}/{path...}。
+// handleRelayForward clientuserend sendin : /v1/relay/{code}/{path...}. 
 func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/relay/")
 	parts := strings.SplitN(rest, "/", 2)
@@ -185,7 +185,7 @@ func (s *Server) handleRelayForward(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token 与机器码不匹配"})
 		return
 	}
-	// 多租户：请求方带 JWT 租户时，必须与设备归属租户一致。
+	//   user:  require   JWT  usertime,   and     user  . 
 	if caller := ctxTenant(r.Context()); caller != "" && rec.Tenant != "" && caller != rec.Tenant {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "跨租户访问被拒绝"})
 		return

@@ -1,7 +1,7 @@
-// Package observe 是监督者输出层（E）的进程内 EventBus。
+// Package observe is  er out (E) processin EventBus. 
 //
-// 三出口（CLI 滚动 / SSE data / JSONL）共用同构 LineEvent；执行层唯一入口是 Publish（绝不阻塞）。
-// 设计：ARCHITECTURE 配套《单进程多任务可执行设计文档》§7.2。多机字段（MachineID）omitempty 预留。
+//  exit(CLI    / SSE data / JSONL) usesame  LineEvent;    uniquein is Publish(    ). 
+//   : ARCHITECTURE     process task        §7.2.   charseg(MachineID)omitempty   . 
 package observe
 
 import (
@@ -9,20 +9,20 @@ import (
 	"time"
 )
 
-// LineEvent 三出口同构事件（字段不可改名，与输出层契约严格一致）。
+// LineEvent  exitsame event(charseg  modifyname, and out       ). 
 type LineEvent struct {
 	Time      time.Time `json:"ts"`
 	SessionID string    `json:"session,omitempty"`
 	TraceID   string    `json:"trace"` // == request_id
 	RunnerID  string    `json:"runner,omitempty"`
-	MachineID string    `json:"machine,omitempty"` // 【预留】多机聚合
+	MachineID string    `json:"machine,omitempty"` // [  ]    
 	Stage     string    `json:"stage"`
 	Status    string    `json:"status"`
 	Detail    string    `json:"detail"`
 	ElapsedMs int64     `json:"elapsed_ms"`
 }
 
-// Filter 订阅过滤；空字段 = 通配。
+// Filter   ed ; emptycharseg =   . 
 type Filter struct{ SessionID, TraceID, RunnerID string }
 
 func (f Filter) match(ev LineEvent) bool {
@@ -38,14 +38,14 @@ func (f Filter) match(ev LineEvent) bool {
 	return true
 }
 
-// EventBus 进程内事件总线。Publish 是执行层唯一调用，绝不阻塞。
+// EventBus processinevent line. Publish is   uniquecalluse,     . 
 type EventBus interface {
-	Publish(ev LineEvent)                // 执行层唯一调用；绝不阻塞
-	Subscribe(f Filter) <-chan LineEvent // 尽力订阅（SSE/CLI，满则丢、靠 Replay 补齐）
-	Replay(traceID string) []LineEvent   // 对齐 SSE ?after=
+	Publish(ev LineEvent)                //    uniquecalluse;     
+	Subscribe(f Filter) <-chan LineEvent //     (SSE/CLI, fullthen ,   Replay patch )
+	Replay(traceID string) []LineEvent   // to  SSE ?after=
 	Snapshot(sessionID string, limit int) []LineEvent
-	SubscribeReliable(f Filter) <-chan LineEvent // 可靠订阅（摘要/落盘，不丢）
-	ExportStream() <-chan LineEvent              // 【预留】外部控制面/sidecar
+	SubscribeReliable(f Filter) <-chan LineEvent //     ( need/  ,   )
+	ExportStream() <-chan LineEvent              // [  ]out controlface/sidecar
 }
 
 const bestEffortBuf = 16
@@ -65,8 +65,8 @@ type bestSub struct {
 	ch chan LineEvent
 }
 
-// relSub 可靠订阅：内部内存队列 + 泵 goroutine。Publish 只入队（绝不阻塞）；
-// 泵把队列逐条转发给消费者——消费者慢就堆在队列里（内存），绝不丢。
+// relSub     : in instore list +   goroutine. Publish onlyin (    ); 
+//  pipe list   sendgive  er--  erslowthen   list (instore),    . 
 type relSub struct {
 	f     Filter
 	ch    chan LineEvent
@@ -76,7 +76,7 @@ type relSub struct {
 	done  chan struct{}
 }
 
-// NewBus 构造总线。machineID 写入每个事件的 MachineID（预留聚合维度）；history 是 Replay/Snapshot 保留的最近事件数。
+// NewBus    line. machineID write  event  MachineID(      ); history is Replay/Snapshot keep    eventnum. 
 func NewBus(machineID string, history int) EventBus {
 	if history <= 0 {
 		history = 256
@@ -100,8 +100,8 @@ func (b *bus) Publish(ev LineEvent) {
 	for _, s := range b.best {
 		if s.f.match(ev) {
 			select {
-			case s.ch <- ev: // 尽力：缓冲够就送
-			default: // 满则丢，靠 Replay/?after= 补齐；慢消费者绝不反向阻塞 Runner
+			case s.ch <- ev: //   :    then 
+			default: // fullthen ,   Replay/?after= patch ; slow  er  revto   Runner
 			}
 		}
 	}
@@ -112,7 +112,7 @@ func (b *bus) Publish(ev LineEvent) {
 	}
 	select {
 	case b.export <- ev:
-	default: // 预留出口，满则丢
+	default: //   exit, fullthen 
 	}
 	b.mu.Unlock()
 }
@@ -186,7 +186,7 @@ func (r *relSub) pump() {
 		r.mu.Unlock()
 		for _, ev := range q {
 			select {
-			case r.ch <- ev: // 消费者慢就在下一轮继续（内存队列兜底），绝不丢
+			case r.ch <- ev: //   erslowthen under  continuecontinue(instore list bot),    
 			case <-r.done:
 				return
 			}

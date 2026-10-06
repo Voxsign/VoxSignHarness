@@ -1,64 +1,64 @@
-// Package space 是域（Space）注册表 + 执行前统一拦截点 space_check。
-// 域 = 策略入口 + 稳定主键（设计 v2 §13）；真正拦截靠本包 Check：
-// 有效权限 = 域声明 ∩ 工具契约 ∩ 本次授权（Grant）的交集，默认拒绝。
-// 未注册空间不自动切 global；漂移即失效；越界（BOUNDARY_VIOLATION）不因确认放行。
-// 本包只依赖标准库 + contract。
+// Package space isdomain(Space)note table +   before  blockpt space_check. 
+// domain =   in  +     (   v2 §13);  posblock this package Check: 
+// has  limit = domainvoice  ∩      ∩ base   (Grant)   , defaultreject. 
+//  note emptytime     global;   i.e.  ; out-of-scope(BOUNDARY_VIOLATION) becauseconfirm  . 
+// this packageonlydependencytgtapprove  + contract. 
 package space
 
-// 【伪代码逻辑层】（评审关卡产物；裁决规则权威定义在冻结契约 §3 / 设计 v2 §13，
-//  本层只描述单模块控制流/分支/拒绝路径/异常处理，规则语义标注"搬 VSL"。）
+// [pseudocode logic layer](review gateartifact;  decideruleauthoritative definition frozen   §3 /    v2 §13, 
+//  this layeronlydescribe modulecontrol flow/branch/rejectpath/errorhandle, rule semanticstgtnote"  VSL". )
 //
-// Load(dir) -> Registry：
-//   seed = 内置六域模板（global/project/sandbox/vault-notes/vault-creds/external，不落盘）
-//   if dir 缺失或无 *.space.json: return seed（目录空→纯模板，不写盘）
-//   for each dir/*.space.json: 解析 → 覆盖 seed 同名域（真实 manifest 为准）
+// Load(dir) -> Registry: 
+//   seed = in  domain  (global/project/sandbox/vault-notes/vault-creds/external,    )
+//   if dir   orno *.space.json: return seed(obj empty->   ,  write )
+//   for each dir/*.space.json: resolve  -> overwrite seed samenamedomain(   manifest asapprove)
 //   return Registry{Dir, Manifests, Version:1}
 //
-// Add(m) -> error：
-//   if 同名已存在: 旧文件备份为 <name>.space.json.bak；m.Version = old.Version+1
-//   else: m.Version = 1；MkdirAll(dir)
-//   序列化 <name>.space.json（0o600）→ 写回内存表
+// Add(m) -> error: 
+//   if samenamealreadystore :  file  as <name>.space.json.bak; m.Version = old.Version+1
+//   else: m.Version = 1; MkdirAll(dir)
+//    listize <name>.space.json(0o600)-> writebackinstoretable
 //
-// DetectDrift() -> []Drift：
-//   for each manifest m：
-//     issue = 校验 m.Scope（剥 /** 后取目录）在磁盘上是否存在/是否目录
-//     if 不存在: append Drift{m.Name, "scope 路径不存在: "+p}  // 漂移→该域失效
+// DetectDrift() -> []Drift: 
+//   for each manifest m: 
+//     issue = verify m.Scope(  /** aftergetobj )   onis store /is obj 
+//     if  store : append Drift{m.Name, "scope path store : "+p}  //   -> domain  
 //   return issues
 //
-// Check(r, in) -> Verdict（搬 VSL 冻结§3 裁决规则；优先级从高到低）：
+// Check(r, in) -> Verdict(  VSL frozen§3  deciderule;  first from to ): 
 //   m = r.Get(in.Intent.Space)
-//   if !ok:                       return deny unknown_space      // 不自动切 global，回问
-//   if scope 路径漂移:            return deny drift              // 漂移即失效
+//   if !ok:                       return deny unknown_space      //      global, clarification
+//   if scope path  :            return deny drift              //   i.e.  
 //   if overlap(m.Scope, m.Exclude): return deny boundary_violation
 //   for cap in in.ToolCaps:
-//     if cap ∉ m.Tools:           return deny boundary_violation // 越界，不因确认放行
-//     if 有契约表且 cap ∉ ∪contract.Caps: return deny boundary_violation
-//   // 权限交集（搬 VSL：有效权限=域∩工具∩本次授权）
+//     if cap ∉ m.Tools:           return deny boundary_violation // out-of-scope,  becauseconfirm  
+//     if has  tableand cap ∉ ∪contract.Caps: return deny boundary_violation
+//   //  limit  (  VSL: has  limit=domain∩  ∩base   )
 //   if !in.Grant.Authorized:       return deny default_deny
 //   if needsWrite(intent) && !m.Perms.Write: return deny default_deny
 //   if !m.Perms.Read:              return deny default_deny
-//   // 跨域引用：目标/上下文点名了别的域且未声明 cross_refs
-//   for other in r.List(): if other!=sid and 意图点名 other and other∉m.CrossRefs:
+//   //  domain use: objtgt/onunder ptnamediff domainand voice  cross_refs
+//   for other in r.List(): if other!=sid and intentptname other and other∉m.CrossRefs:
 //                                  return deny cross_ref_deny
-//   return allow（ToolOK=通过的 caps）
+//   return allow(ToolOK= ed  caps)
 //
-// ResolveScopePath(scopeRoot, target) -> (abs, ok)【M3 #15 路径边界硬化】：
-//   // 双重 containment：词法 Clean 防 .. 穿越 + EvalSymlinks 防符号链接逃逸。
+// ResolveScopePath(scopeRoot, target) -> (abs, ok)[M3 #15 path boundary ize]: 
+//   //  heavy containment: word  Clean prevent ..    + EvalSymlinks prevent idchainconnect  . 
 //   if scopeRoot=="" or target=="": return "", false
-//   root  = filepath.Abs(scopeRoot)（词法根）
-//   realRoot = EvalSymlinks(root)；失败 → root 取最深已存在祖先
+//   root  = filepath.Abs(scopeRoot)(word root)
+//   realRoot = EvalSymlinks(root);    -> root get  alreadystore  first
 //   cand = IsAbs(target) ? target : Join(root, target)
 //   clean = Clean(cand)
-//   if !within(clean, root):            return "", false   // .. 逃逸
-//   real = EvalSymlinks(clean)；失败 → real 取最深已存在祖先（允许新建目标）
-//   if !within(real, realRoot):          return "", false   // 符号链接逃逸出域
+//   if !within(clean, root):            return "", false   // ..   
+//   real = EvalSymlinks(clean);    -> real get  alreadystore  first( allownew objtgt)
+//   if !within(real, realRoot):          return "", false   //  idchainconnect  outdomain
 //   return clean, true
 //   within(p, root): p==root || HasPrefix(p, root+Sep)
 //
-// normalizeScopes(m)：Load/Add 时把 m.Scope 的非 ~ 条目 Abs+Clean（保持相对 scope 可用）。
-// driftOf 升级：scope 经 EvalSymlinks 后仍缺失/非目录 → drift（符号链接感知）。
+// normalizeScopes(m): Load/Add timepipe m.Scope    ~  obj Abs+Clean(keepkeep to scope  use). 
+// driftOf   : scope   EvalSymlinks after   / obj  -> drift( idchainconnect  ). 
 //
-// 异常：JSON 损坏 → Load 报错；Add 写盘失败 → error 不污染内存。
+// error: JSON    -> Load   ; Add write    -> error    instore. 
 
 import (
 	"encoding/json"
@@ -72,7 +72,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// 域类型常量（Manifest.Type）。
+// domainclasstype  (Manifest.Type). 
 const (
 	TypeGlobal     = "global"
 	TypeProject    = "project"
@@ -82,14 +82,14 @@ const (
 	TypeExternal   = "external"
 )
 
-// Perms 是域声明的读/写/可执行权限（交集计算的一臂）。
+// Perms isdomainvoice  read/write/    limit(       ). 
 type Perms struct {
 	Read  bool     `json:"read"`
 	Write bool     `json:"write"`
 	Exec  []string `json:"exec,omitempty"`
 }
 
-// Manifest 是一个域的可执行策略单元（.space.json，机器可读）。
+// Manifest is  domain        (.space.json,    read). 
 type Manifest struct {
 	Name        string   `json:"name"`
 	Type        string   `json:"type"` // project|sandbox|vault-notes|vault-creds|external|global
@@ -102,37 +102,37 @@ type Manifest struct {
 	RiskDefault string   `json:"risk_default,omitempty"`
 	CrossRefs   []string `json:"cross_refs,omitempty"`
 	Version     int      `json:"version"`
-	Path        string   `json:"-"` // 落盘路径（内置模板为空）
+	Path        string   `json:"-"` //   path(in   asempty)
 }
 
-// Registry 是域注册表：name → *Manifest。Version 为策略版本（缓存失效联动）。
+// Registry isdomainnote table: name -> *Manifest. Version as   base(cache    ). 
 type Registry struct {
 	Dir       string
 	Manifests map[string]*Manifest
 	Version   int
 }
 
-// Drift 是一条漂移记录：域名 + 问题描述。
+// Drift is      : domainname +   describe. 
 type Drift struct {
 	Manifest string `json:"manifest"`
 	Issue    string `json:"issue"`
 }
 
-// Grant 是本次调用用户授予的权限（交集计算的另一臂）。
+// Grant isbase calluseuseuser    limit(        ). 
 type Grant struct {
 	Authorized bool     `json:"authorized"`
 	Paths      []string `json:"paths,omitempty"`
 }
 
-// CheckInput 是 space_check 的输入。Contracts 为 C 的工具契约表（数据传入，避免包依赖）。
+// CheckInput is space_check   in. Contracts as C      table(numdata in,    dependency). 
 type CheckInput struct {
 	Intent    contract.Intent
 	Grant     Grant
-	ToolCaps  []string // pipeline 规划产出的待调工具动作
+	ToolCaps  []string // pipeline rule produceout  call    
 	Contracts []contract.ToolContract
 }
 
-// Verdict 是 space_check 的裁决。Reason ∈ ""|unknown_space|drift|default_deny|boundary_violation|cross_ref_deny。
+// Verdict is space_check   decide. Reason ∈ ""|unknown_space|drift|default_deny|boundary_violation|cross_ref_deny. 
 type Verdict struct {
 	SpaceID string
 	Allowed bool
@@ -140,7 +140,7 @@ type Verdict struct {
 	ToolOK  []string
 }
 
-// builtinTemplates 返回内置六域模板（不落盘；设计 v2 §13 定稿域表）。
+// builtinTemplates returnbackin  domain  (   ;    v2 §13   domaintable). 
 func builtinTemplates() map[string]*Manifest {
 	return map[string]*Manifest{
 		"global": {
@@ -169,7 +169,7 @@ func builtinTemplates() map[string]*Manifest {
 		},
 		"vault-creds": {
 			Name: "vault-creds", Type: TypeVaultCreds,
-			Perms: Perms{Read: true}, // 高敏只读，无写无外发
+			Perms: Perms{Read: true}, //   read-only, nowritenooutsend
 			Tools: []string{"read"}, RiskDefault: "human",
 			Acceptance: "凭证库只读，禁止外发/写",
 		},
@@ -182,15 +182,15 @@ func builtinTemplates() map[string]*Manifest {
 	}
 }
 
-// Load 加载 dir/*.space.json；目录缺失/为空 → 内置六域模板（不落盘）。
-// 真实 manifest 按名覆盖内置模板同名域。
+// Load    dir/*.space.json; obj   /asempty -> in  domain  (   ). 
+//    manifest bynameoverwritein   samenamedomain. 
 func Load(dir string) (*Registry, error) {
 	r := &Registry{Dir: dir, Manifests: builtinTemplates(), Version: 1}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return r, nil // 目录缺失 → 纯内置模板
+			return r, nil // obj    ->  in   
 		}
 		return nil, fmt.Errorf("读取域目录 %s 失败: %w", dir, err)
 	}
@@ -206,8 +206,8 @@ func Load(dir string) (*Registry, error) {
 		}
 		var m Manifest
 		if err := json.Unmarshal(data, &m); err != nil {
-			// 单个 manifest 损坏只跳过该文件（防整个 Load 失败→Spaces nil→Check panic）。
-			// M7 实测 2026-10-03：perms.exec 误写 bool 触发此路径。
+			//    manifest   only ed file(prevent   Load   ->Spaces nil->Check panic). 
+			// M7    2026-10-03: perms.exec  write bool triggersend path. 
 			log.Printf("[space] skip malformed manifest %s: %v", p, err)
 			continue
 		}
@@ -220,19 +220,19 @@ func Load(dir string) (*Registry, error) {
 		loaded = true
 	}
 	if !loaded {
-		// 目录存在但无 manifest → 仍返回内置模板（冻结§3：目录空→内置模板）。
+		// obj store butno manifest ->  returnbackin   (frozen§3: obj empty->in   ). 
 		r.Manifests = builtinTemplates()
 	}
 	return r, nil
 }
 
-// Get 按名取域 manifest。
+// Get bynamegetdomain manifest. 
 func (r *Registry) Get(id string) (*Manifest, bool) {
 	m, ok := r.Manifests[id]
 	return m, ok
 }
 
-// List 返回全部已注册域名（排序，稳定输出）。
+// List returnbacksafety alreadynote domainname(  ,    out). 
 func (r *Registry) List() []string {
 	out := make([]string, 0, len(r.Manifests))
 	for name := range r.Manifests {
@@ -242,7 +242,7 @@ func (r *Registry) List() []string {
 	return out
 }
 
-// Add 落盘 dir/<name>.space.json；同名更新版本+1（写前备份旧文件）。
+// Add    dir/<name>.space.json; samenamechangenew base+1(writebefore   file). 
 func (r *Registry) Add(m *Manifest) error {
 	if m.Name == "" {
 		return fmt.Errorf("manifest 缺少 name")
@@ -252,7 +252,7 @@ func (r *Registry) Add(m *Manifest) error {
 	}
 	if old, ok := r.Manifests[m.Name]; ok && old.Path != "" {
 		if data, err := os.ReadFile(old.Path); err == nil {
-			_ = os.WriteFile(old.Path+".bak", data, 0o600) // 写前备份
+			_ = os.WriteFile(old.Path+".bak", data, 0o600) // writebefore  
 		}
 		m.Version = old.Version + 1
 	} else if m.Version == 0 {
@@ -275,7 +275,7 @@ func (r *Registry) Add(m *Manifest) error {
 	return nil
 }
 
-// scopeDirs 剥掉 scope 条目尾部的 /** 与 /*，取待校验目录。
+// scopeDirs    scope  objtail   /** and /*, get verifyobj . 
 func scopeDirs(scopes []string) []string {
 	var out []string
 	for _, s := range scopes {
@@ -290,7 +290,7 @@ func scopeDirs(scopes []string) []string {
 	return out
 }
 
-// normalizeScopes 把 m.Scope 的非 ~ 条目 Abs+Clean（Load/Add 时调用；保持相对 scope 可用）。
+// normalizeScopes pipe m.Scope    ~  obj Abs+Clean(Load/Add timecalluse; keepkeep to scope  use). 
 func normalizeScopes(m *Manifest) {
 	for i, s := range m.Scope {
 		if strings.HasPrefix(s, "~") {
@@ -304,7 +304,7 @@ func normalizeScopes(m *Manifest) {
 	}
 }
 
-// withinRoot 报告 p 是否等于 root 或位于 root 之下（词法前缀判定）。
+// withinRoot    p is etcat root or at root ofunder(word before   ). 
 func withinRoot(p, root string) bool {
 	if p == root {
 		return true
@@ -312,8 +312,8 @@ func withinRoot(p, root string) bool {
 	return strings.HasPrefix(p, root+string(os.PathSeparator))
 }
 
-// deepestExisting 从 p 向上找到第一个真实存在的路径（目标不存在时用于祖先解析，
-// 允许"新建文件"场景：只校验已存在祖先链是否逃逸）。
+// deepestExisting from p toon to     store  path(objtgt store timeuseat firstresolve , 
+//  allow"new file" scenario: onlyverifyalreadystore  firstchainis   ). 
 func deepestExisting(p string) string {
 	for {
 		if _, err := os.Stat(p); err == nil {
@@ -327,10 +327,10 @@ func deepestExisting(p string) string {
 	}
 }
 
-// driftOf 返回单个域的漂移问题（空串=无漂移；符号链接感知）。
+// driftOf returnback  domain     (empty =no  ;  idchainconnect  ). 
 func driftOf(m *Manifest) string {
 	for _, p := range scopeDirs(m.Scope) {
-		// 模板占位（~/）不做磁盘断言；已规范化的绝对路径必须经符号链接解析后仍存在。
+		//     (~/)    disconnectlang; alreadyrule ize  topath    idchainconnectresolve after store . 
 		if strings.HasPrefix(p, "~") || p == "" {
 			continue
 		}
@@ -352,13 +352,13 @@ func driftOf(m *Manifest) string {
 	return ""
 }
 
-// ResolveScopePath 把域内目标路径解析为绝对路径并做双重 containment 校验（M3 #15）：
-//   - target 相对/绝对均可；
-//   - 词法 Clean 后必须落在 scopeRoot 内（`..` 穿越 → ok=false）；
-//   - 对结果做 EvalSymlinks，真实路径仍须落在 scopeRoot 的真实路径内（符号链接逃逸 → ok=false）；
-//   - target 不存在时解析其最深已存在祖先（允许新建文件场景，不因此拒绝）。
+// ResolveScopePath pipedomaininobjtgtpathresolve as topathand  heavy containment verify(M3 #15): 
+//   - target  to/ to  ; 
+//   - word  Clean after     scopeRoot in(`..`    -> ok=false); 
+//   - toclose   EvalSymlinks,   path     scopeRoot    pathin( idchainconnect   -> ok=false); 
+//   - target  store timeresolve its  alreadystore  first( allownew file scenario,  because reject). 
 //
-// 返回可安全操作的词法绝对路径 clean。调用方据此判定"该目标是否真的在本域边界内"。
+// returnback safesafety   word  topath clean. calluse data   " objtgtis    basedomain boundaryin". 
 func ResolveScopePath(scopeRoot, target string) (string, bool) {
 	if strings.TrimSpace(scopeRoot) == "" || strings.TrimSpace(target) == "" {
 		return "", false
@@ -375,12 +375,12 @@ func ResolveScopePath(scopeRoot, target string) (string, bool) {
 	}
 	clean := filepath.Clean(cand)
 
-	// 第一道：词法 containment（防 .. 穿越）
+	//    : word  containment(prevent ..   )
 	if !withinRoot(clean, root) {
 		return "", false
 	}
 
-	// 真实根（符号链接解析后；根本身不存在→取最深已存在祖先并再解析）
+	//   root( idchainconnectresolve after; rootbase  store ->get  alreadystore  firstandagainresolve )
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		anc := deepestExisting(root)
@@ -391,7 +391,7 @@ func ResolveScopePath(scopeRoot, target string) (string, bool) {
 		}
 	}
 
-	// 第二道：符号链接解析后 containment（目标不存在→校验最深已存在祖先链的真实路径）
+	//    :  idchainconnectresolve after containment(objtgt store ->verify  alreadystore  firstchain   path)
 	real, err := filepath.EvalSymlinks(clean)
 	if err != nil {
 		anc := deepestExisting(clean)
@@ -407,7 +407,7 @@ func ResolveScopePath(scopeRoot, target string) (string, bool) {
 	return clean, true
 }
 
-// DetectDrift 校验各域 scope 路径存在性；返回漂移列表（漂移即该域失效）。
+// DetectDrift verify domain scope pathstore ity; returnback  listtable(  i.e. domain  ). 
 func (r *Registry) DetectDrift() ([]Drift, error) {
 	var out []Drift
 	for _, name := range r.List() {
@@ -419,7 +419,7 @@ func (r *Registry) DetectDrift() ([]Drift, error) {
 	return out, nil
 }
 
-// needsWrite 报告该意图是否需要写权限（搬 VSL：写意图清单）。
+// needsWrite    intentis needneedwrite limit(  VSL: write intentlist). 
 func needsWrite(it contract.Intent) bool {
 	switch it.Intent {
 	case contract.IntentEdit, contract.IntentCommit, contract.IntentDeploy,
@@ -440,7 +440,7 @@ func contains(list []string, v string) bool {
 	return false
 }
 
-// overlap 报告 a 与 b 是否有非空交集（Scope∩Exclude 非空 = 边界自相矛盾）。
+// overlap    a and b is has empty  (Scope∩Exclude  empty =  boundary    ). 
 func overlap(a, b []string) bool {
 	for _, x := range a {
 		if contains(b, x) {
@@ -450,7 +450,7 @@ func overlap(a, b []string) bool {
 	return false
 }
 
-// contractCaps 返回已注册工具契约的 caps 并集（无契约表时返回 nil）。
+// contractCaps returnbackalreadynote       caps and (no  tabletimereturnback nil). 
 func contractCaps(cs []contract.ToolContract) map[string]bool {
 	if len(cs) == 0 {
 		return nil
@@ -464,26 +464,26 @@ func contractCaps(cs []contract.ToolContract) map[string]bool {
 	return m
 }
 
-// Check 是执行前统一拦截点：按冻结§3 裁决规则做交集判定，默认拒绝。
+// Check is  before  blockpt: byfrozen§3  deciderule     , defaultreject. 
 func Check(r *Registry, in CheckInput) Verdict {
 	sid := in.Intent.Space
 	v := Verdict{SpaceID: sid}
 	m, ok := r.Get(sid)
 	if !ok {
-		v.Reason = "unknown_space" // 不自动切 global，回问
+		v.Reason = "unknown_space" //      global, clarification
 		return v
 	}
-	// 漂移即失效
+	//   i.e.  
 	if issue := driftOf(m); issue != "" {
 		v.Reason = "drift"
 		return v
 	}
-	// Scope∩Exclude 自相矛盾
+	// Scope∩Exclude     
 	if overlap(m.Scope, m.Exclude) {
 		v.Reason = "boundary_violation"
 		return v
 	}
-	// 工具动作必须 ⊆ 域声明 ∩ 契约 caps（越界即 BOUNDARY_VIOLATION，不因确认放行）
+	//        ⊆ domainvoice  ∩    caps(out-of-scopei.e. BOUNDARY_VIOLATION,  becauseconfirm  )
 	ccaps := contractCaps(in.Contracts)
 	for _, cap := range in.ToolCaps {
 		if !contains(m.Tools, cap) {
@@ -496,7 +496,7 @@ func Check(r *Registry, in CheckInput) Verdict {
 		}
 		v.ToolOK = append(v.ToolOK, cap)
 	}
-	// 权限交集为空 → default_deny
+	//  limit  asempty -> default_deny
 	if !in.Grant.Authorized {
 		v.Reason = "default_deny"
 		return v
@@ -509,7 +509,7 @@ func Check(r *Registry, in CheckInput) Verdict {
 		v.Reason = "default_deny"
 		return v
 	}
-	// 跨域引用：意图点名了别的域但未在 cross_refs 声明 → cross_ref_deny
+	//  domain use: intentptnamediff domainbut   cross_refs voice  -> cross_ref_deny
 	for _, other := range r.List() {
 		if other == sid {
 			continue

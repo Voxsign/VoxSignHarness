@@ -1,4 +1,4 @@
-// channel_model.go —— 把 modelcenter 的 `default` 通道接成 PlanModel（通道名固定）。
+// channel_model.go -- pipe modelcenter   `default`   connectbecome PlanModel(  name  ). 
 package plan
 
 import (
@@ -9,14 +9,14 @@ import (
 	"voicesign-harness/modelcenter"
 )
 
-// ChannelPlanModel 通过模型中心某通道产出候选计划。
-// 通道名由调用方固定传入（按 ASR-MODEL-02 L1：通道名固定、底层模型从配置读）。
+// ChannelPlanModel  ed typein    produceout    . 
+//   namebycalluse    in(by ASR-MODEL-02 L1:   name  , bot  typefrom  read). 
 type ChannelPlanModel struct {
 	Registry *modelcenter.Registry
 	Channel  modelcenter.Channel
 }
 
-// Propose 发一次规划请求，返回模型原始文本（由本机复核，绝不直接执行）。
+// Propose send  rule  require, returnback typeorigstart base(bybase   ,    connect  ). 
 func (c ChannelPlanModel) Propose(ctx context.Context, goal string, m Manifest) (string, error) {
 	resp, err := c.Registry.Invoke(ctx, c.Channel, BuildPlanPrompt(goal, m))
 	if err != nil {
@@ -25,8 +25,8 @@ func (c ChannelPlanModel) Propose(ctx context.Context, goal string, m Manifest) 
 	return resp.Content, nil
 }
 
-// BuildPlanPrompt 把目标 + **能力清单**（唯一真值）渲染成提示词。
-// 明确要求：只能用清单内工具；做不到就 refused + missing；输出 JSON。
+// BuildPlanPrompt pipeobjtgt + **  list**(unique value)  become showword. 
+//   needrequire: only uselistin  ;   tothen refused + missing;  out JSON. 
 func BuildPlanPrompt(goal string, m Manifest) string {
 	type capView struct {
 		Tool   string   `json:"tool"`

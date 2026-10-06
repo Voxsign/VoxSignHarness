@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /*
- * VoxSign iOS 壳 · 逻辑层冒烟测试（零依赖，node 内置 assert）
- * 运行：node test.js
- * 覆盖：消息状态机 / 回执四行解析 / 撤销按钮裁决 / 轻标签压缩 / 候选决策点路由 / 角色折叠 / 打断状态机。
+ * VoxSign iOS   ·        ( dependency, node in  assert)
+ *   : node test.js
+ * overwrite:   status  / back   resolve  /   by  decide /  tgt    /   decision pointrouteby /      /  disconnectstatus . 
  */
 'use strict';
 const L = require('./logic.js');
@@ -103,11 +103,11 @@ var seen = {};
 var evs = [
   L.parseSSEBlock('event: stage\ndata: {"seq":1,"step":"意图分类"}'),
   L.parseSSEBlock('event: stage\ndata: {"seq":2,"step":"执行"}'),
-  L.parseSSEBlock('event: stage\ndata: {"seq":1,"step":"意图分类"}') // 重放重复
+  L.parseSSEBlock('event: stage\ndata: {"seq":1,"step":"意图分类"}') // heavy heavy 
 ];
 var fresh1 = L.filterNew(seen, evs);
 eq(fresh1.length, 2, '首次只放行 seq 1,2（重复 1 去重）');
-// 断线重连 ?after=2：server 重放 seq>2
+// disconnectlineheavylink ?after=2: server heavy  seq>2
 var evs2 = [L.parseSSEBlock('event: stage\ndata: {"seq":3,"step":"校验"}')];
 var fresh2 = L.filterNew(seen, evs2);
 eq(fresh2.length, 1, '重连后只收到 seq 3');

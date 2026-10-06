@@ -18,14 +18,14 @@ import (
 	"voicesign-harness/verify"
 )
 
-// Executor 按契约 caps 机械执行六工具。门禁（space_check / risk 裁决）在 pipeline，
-// 本执行器不做策略拦截，只做「已知工具 + 已知 cap」的执行与失败回执。
+// Executor by   caps        .  forbid(space_check / risk  decide)  pipeline, 
+// base       block, only "already    + already  cap"   and  back . 
 type Executor struct {
 	BaseDir string
 	Timeout time.Duration
 }
 
-// defaultExecTimeout 是未指定超时时的执行上限。
+// defaultExecTimeout is refer  timetime   onlimit. 
 const defaultExecTimeout = 30 * time.Second
 
 func (e *Executor) timeout() time.Duration {
@@ -35,7 +35,7 @@ func (e *Executor) timeout() time.Duration {
 	return defaultExecTimeout
 }
 
-// str 从 args 取字符串。
+// str from args getchar  . 
 func str(args map[string]any, key string) string {
 	if v, ok := args[key]; ok {
 		if s, ok := v.(string); ok {
@@ -45,7 +45,7 @@ func str(args map[string]any, key string) string {
 	return ""
 }
 
-// strSlice 从 args 取 []string（兼容 []any 与单个 string）。
+// strSlice from args get []string(compat []any and   string). 
 func strSlice(args map[string]any, key string) []string {
 	switch v := args[key].(type) {
 	case []string:
@@ -67,7 +67,7 @@ func strSlice(args map[string]any, key string) []string {
 	return nil
 }
 
-// Exec 执行一个工具动作。tool 为契约名；args 为动作参数；c 为对应契约。
+// Exec         . tool as  name; args as   num; c asto   . 
 func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContract) (contract.Receipt, error) {
 	recv := contract.Receipt{Tool: tool}
 	if args == nil {
@@ -92,12 +92,12 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	case "verify":
 		out, execErr, ok = e.execVerify(args)
 	case "remote-desktop":
-		// 2026-10-04 自迭代第二段：语音自举注册的「远程控制电脑」能力 → 真实执行器
-		//（列桌面/截图/运行应用/只读命令白名单）。机器=用户自己的 Mac（harness 宿主）。
+		// 2026-10-04      seg: langaudio  note  "  control  "   ->      
+		//(list face/  /   use/read-only   name ).   =useuser    Mac(harness   ). 
 		out, execErr, ok = e.execRemote(args)
 	case "weather":
-		// 2026-10-04 自迭代第三段：语音注册的「查看天气」→ 真实执行器。
-		// 接公开天气 API（wttr.in，无 key），返回当前天气；城市从口语提取，默认自动定位。
+		// 2026-10-04      seg: langaudionote  "  day "->      . 
+		// connect openday  API(wttr.in, no key), returnbackcurbeforeday ;   from lang get, default    . 
 		out, execErr, ok = e.execWeather(args)
 	default:
 		recv.Blocked = fmt.Sprintf("执行器未实现工具 %q（仅内置六工具可执行）", tool)
@@ -122,7 +122,7 @@ func truncateOut(s string) string {
 	return s
 }
 
-// runCmd 起子进程执行命令，返回 (stdout合并, stderr信息, OK)。
+// runCmd raise process    , returnback (stdout and, stderr  , OK). 
 func (e *Executor) runCmd(argv []string) (string, string, bool) {
 	if len(argv) == 0 {
 		return "", "缺命令 argv", false
@@ -144,28 +144,28 @@ func (e *Executor) runCmd(argv []string) (string, string, bool) {
 	return buf.String(), "", true
 }
 
-// BackupMarker 是结构化备份路径输出的标记前缀（M4-2 输出契约，pipeline/server 消费口径）。
+// BackupMarker isclose ize  path out tgt before (M4-2  out  , pipeline/server    path). 
 //
-// 何时出现：file 工具 write/append（EDIT/NOTE）成功，且【目标文件改动前真实存在旧内容】、
-// 且 args 提供了 log_dir 时，executor 会先把旧内容备份到 <log_dir>/backups/，并在回执
-// stdout 【末尾】追加一行（冒号 + 空格 + 绝对路径）：
+//  timeoutnow: file    write/append(EDIT/NOTE)become , and[objtgtfilechangebefore  store  in ], 
+// and args  provide log_dir time, executor  firstpipe in   to <log_dir>/backups/, and back 
+// stdout [endtail]    ( id + empty  +  topath): 
 //
 //	VHS_BACKUP_PATH: /abs/path/to/notes.md.20261002T143000.123Z.bak
 //
-// 分隔约定（与 D 分片 server rollback 的既有抽取正则 `[^\s"]*backups[^\s"]*\.(bak|backup)`
-// 对齐，防接口漂移）：标记与路径之间必须是空白——这样正则从路径起点开始匹配，抽中的是
-// 【干净绝对路径】，不会把 `VHS_BACKUP_PATH:` 前缀吞进路径。
+// split   (and D split  server rollback   has getposthen `[^\s"]*backups[^\s"]*\.(bak|backup)`
+// to , preventconnect   ): tgt andpathoftime  isempty -- kindposthenfrompathraiseptopenstart  ,  in is
+// [   topath],   pipe `VHS_BACKUP_PATH:` before   path. 
 //
-// 消费方约定：
-//   - pipeline：用它渲染四行回执的"撤销"行（`撤销：备份 <basename>`），不再只写"备份目录"；
-//   - server rollback：用 ParseBackupPath(stdout) 取到【精确】.bak 路径直接恢复，
-//     不再"扫 backups 目录取最新"（避免多任务/并发下拿错备份）；
-//   - 无备份场景（read/exists/search/test/run 等只读动作、首次创建无旧内容、未传 log_dir）
-//     → stdout 不出现该前缀，解析得空串，撤销行回退为"不可撤销/无备份"。
+//      : 
+//   - pipeline: use   four-line receipt "  " (`  :    <basename>`),  againonlywrite"  obj "; 
+//   - server rollback: use ParseBackupPath(stdout) getto[  ].bak path connect  , 
+//      again"  backups obj get new"(   task/andsendunder    ); 
+//   - no   scenario(read/exists/search/test/run etcread-only  , first   no in ,    log_dir)
+//     -> stdout  outnow before , resolve  empty ,    back as"    /no  ". 
 const BackupMarker = "VHS_BACKUP_PATH:"
 
-// ParseBackupPath 从回执 stdout 解析结构化备份路径；无则返回 ""。
-// 统一解析口径，避免 pipeline 与 server 各写一套正则导致接口漂移。
+// ParseBackupPath fromback  stdout resolve close ize  path; nothenreturnback "". 
+//   resolve  path,    pipeline and server  write  posthen  connect   . 
 func ParseBackupPath(stdout string) string {
 	for _, line := range strings.Split(stdout, "\n") {
 		if strings.HasPrefix(line, BackupMarker) {
@@ -175,17 +175,17 @@ func ParseBackupPath(stdout string) string {
 	return ""
 }
 
-// backupName 生成人类可读 + 机器可定位的备份文件名（notes.md.20261002T143000.123456789Z.bak）。
-// 命名约束（与 D 分片 server rollback 的既有抽取正则/兜底扫描对齐，防接口漂移）：
-//   - 必须以 ".bak" 结尾（server backupRe `.(?:bak|backup)` 与 newestBackup HasSuffix 都据此匹配）；
-//   - 纳秒时间戳置于 ".bak" 之前，避免同一秒内连续编辑同名覆盖前一份备份。
+// backupName occurbecome class read +         filename(notes.md.20261002T143000.123456789Z.bak). 
+//  name end(and D split  server rollback   has getposthen/ bot  to , preventconnect   ): 
+//   -   by ".bak" closetail(server backupRe `.(?:bak|backup)` and newestBackup HasSuffix alldata   ); 
+//   -  sectimetime  at ".bak" ofbefore,   same secinlinkcontinue  samenameoverwritebefore    . 
 func backupName(rel string) string {
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	return fmt.Sprintf("%s.%s.bak", filepath.Base(rel), stamp)
 }
 
-// execFile 执行 file 工具的读/写/追加/存在性；write/append 前把既有内容备份到 <log_dir>/backups，
-// 并把具体备份文件绝对路径以 BackupMarker 行带出（结构化输出契约）。
+// execFile    file    read/write/  /store ity; write/append beforepipe hasin   to <log_dir>/backups, 
+// andpipe body  file topathby BackupMarker   out(close ize out  ). 
 func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 	action := str(args, "action")
 	rel := str(args, "path")
@@ -209,7 +209,7 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 		}
 		return "exists: " + rel, "", true
 	case "write", "append":
-		// EDIT/NOTE 前写备份（四行回执"撤销"行依据 + server 精确 rollback 输入）。
+		// EDIT/NOTE beforewrite  (four-line receipt"  "  data + server    rollback  in). 
 		backupPath := ""
 		if existing, rerr := os.ReadFile(abs); rerr == nil {
 			if logDir := str(args, "log_dir"); logDir != "" {
@@ -243,7 +243,7 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 	return "", "未知 file 动作: " + action, false
 }
 
-// execSearch 委托 search 包（只读扫描）。
+// execSearch    search  (read-only  ). 
 func (e *Executor) execSearch(args map[string]any) (string, string, bool) {
 	pattern := str(args, "pattern")
 	if pattern == "" {
@@ -269,7 +269,7 @@ func (e *Executor) execSearch(args map[string]any) (string, string, bool) {
 	return b.String(), "", true
 }
 
-// execVerify 委托 verify 包（独立只读复核，绝不读自报）。
+// execVerify    verify  (  read-only  ,   read  ). 
 func (e *Executor) execVerify(args map[string]any) (string, string, bool) {
 	spec := verify.Spec{Kind: str(args, "kind"), Args: strSlice(args, "args"), BaseDir: e.BaseDir}
 	v := &verify.Verifier{BaseDir: e.BaseDir}
@@ -285,19 +285,19 @@ func (e *Executor) execVerify(args map[string]any) (string, string, bool) {
 	return detail, "", ok
 }
 
-// ---------- 远程控制电脑（自迭代第二段：语音注册契约 → 真实执行器） ----------
+// ----------   control  (     seg: langaudionote    ->      ) ----------
 
-// remoteReadOnlyCmds 只读命令白名单（远程控制仅允许无副作用的查询类命令；
-// 写类操作走既有 git/file 执行器与门禁，不在此放开）。
+// remoteReadOnlyCmds read-only   name (  controlonly allowno  use   class  ; 
+// writeclass    has git/file    and forbid,     open). 
 var remoteReadOnlyCmds = map[string]bool{
 	"ls": true, "cat": true, "head": true, "tail": true,
 	"pwd": true, "whoami": true, "date": true, "ps": true,
 	"df": true, "du": true, "echo": true, "uptime": true,
 }
 
-// execRemote 执行「远程控制电脑」能力：按文本子动作列桌面文件、截取屏幕、
-// 列出运行应用、或执行白名单只读命令。输出人话结果（≤15 项），截图保存到
-// log_dir/screenshots/ 并报告路径（iOS 端以文本回执展示）。
+// execRemote   "  control  "  : by base   list facefile,  get  , 
+// listout   use, or   name read-only  .  out  close (<=15  ),   keepstoreto
+// log_dir/screenshots/ and  path(iOS endby baseback  show). 
 func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 	text := str(args, "text")
 	logDir := str(args, "log_dir")
@@ -308,7 +308,7 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		return "", "无法定位用户主目录: " + err.Error(), false
 	}
 
-	// ① 白名单只读命令：文本里出现 "运行 ls / 执行 cat / 帮我跑 df" 等 → 解析命令执行。
+	// ①  name read-only  :  base outnow "   ls /    cat /     df" etc -> resolve     . 
 	if cmd := extractReadOnlyCmd(text); cmd != "" {
 		argv := strings.Fields(cmd)
 		out, errStr, ok := e.runCmd(argv)
@@ -319,7 +319,7 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		b.WriteString("命令「" + cmd + "」执行失败：" + errStr + "\n")
 	}
 
-	// ② 桌面文件列表（"看看桌面上有什么"）。
+	// ②  facefilelisttable("   faceonhas  "). 
 	desktop := filepath.Join(home, "Desktop")
 	if entries, err := os.ReadDir(desktop); err == nil {
 		var names []string
@@ -339,8 +339,8 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		b.WriteString("（无法读取桌面目录：" + err.Error() + "）\n")
 	}
 
-	// ③ 屏幕截图（screencapture 需屏幕录制权限；失败不阻塞，提示权限）。
-	// 中文口语匹配："截个图"中间夹"个"字，"截个图/截屏/截图/桌面/看看"全收。
+	// ③     (screencapture need   restrict limit;      ,  show limit). 
+	// in  lang  : "   "middle " "char, "   /  /  / face/  "safetyrecv. 
 	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
 		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") ||
 		strings.Contains(text, "看看") {
@@ -352,14 +352,14 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 			} else if fi, err := os.Stat(png); err != nil || fi.Size() == 0 {
 				b.WriteString("截图未生成（文件为空或不可读）\n")
 			} else {
-				// 图片回执：输出相对 URL（/screenshots/<file>），iOS 端拼 base 直接渲染；
-				// 不再输出 Mac 本地绝对路径（真机无法访问）。
+				//   back :  out to URL(/screenshots/<file>), iOS end  base  connect  ; 
+				//  again out Mac basely topath(  no   ). 
 				b.WriteString("已截图：/screenshots/" + filepath.Base(png) + "（" + fmt.Sprintf("%d", fi.Size()/1024) + " KB）\n")
 			}
 		}
 	}
 
-	// ④ 运行中的应用（"打开/运行/有哪些应用"）。
+	// ④   in  use(" open/  /has   use"). 
 	if strings.Contains(text, "应用") || strings.Contains(text, "运行") || strings.Contains(text, "程序") {
 		if out, errStr, ok := e.runCmd([]string{"ps", "-axo", "comm"}); ok {
 			lines := strings.Split(out, "\n")
@@ -394,14 +394,14 @@ func (e *Executor) execRemote(args map[string]any) (string, string, bool) {
 		!strings.Contains(text, "看看") && !strings.Contains(text, "应用") &&
 		!strings.Contains(text, "运行") && !strings.Contains(text, "程序") &&
 		extractReadOnlyCmd(text) == "" {
-		// 纯能力询问（"能控制后台的电脑吗"）：已用桌面列表证明能力，追加引导。
+		//      (" controlafter     "): alreadyuse facelisttable    ,     . 
 		b.WriteString("（可以控制。说「远程控制电脑截个图」「运行 ls -la /tmp」即可执行）\n")
 	}
 	return b.String(), "", true
 }
 
-// extractReadOnlyCmd 从口语文本提取白名单只读命令（"运行 ls -la" / "帮我 cat xxx"）。
-// 只接受 remoteReadOnlyCmds 白名单内的命令名；其余一律不执行（防注入）。
+// extractReadOnlyCmd from lang base get name read-only  ("   ls -la" / "   cat xxx"). 
+// onlyconnectaccept remoteReadOnlyCmds  name in   name; its      (preventnotein). 
 func extractReadOnlyCmd(text string) string {
 	prefixes := []string{"运行 ", "执行 ", "帮我跑 ", "跑一下 ", "用 ", "命令 "}
 	for _, p := range prefixes {
@@ -417,7 +417,7 @@ func extractReadOnlyCmd(text string) string {
 	return ""
 }
 
-// weatherCities 常见城市名（中英），口语命中即按城市查天气；未命中自动定位。
+// weatherCities  see  name(in ),  lang ini.e.by   day ;   in    . 
 var weatherCities = []string{
 	"北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "武汉", "西安", "南京",
 	"天津", "苏州", "长沙", "青岛", "大连", "厦门", "福州", "合肥", "郑州", "济南",
@@ -426,8 +426,8 @@ var weatherCities = []string{
 	"Riyadh", "Dubai", "Doha", "Jeddah", "London", "New York", "Tokyo", "Singapore",
 }
 
-// extractCityForWeather 从口语提取城市名（"查一下北京的天气"→北京）；
-// 命中常见城市表则返回，否则空串（wttr.in 自动定位）。
+// extractCityForWeather from lang get  name("  under   day "->  ); 
+//  in see  tablethenreturnback,  thenempty (wttr.in     ). 
 func extractCityForWeather(text string) string {
 	for _, c := range weatherCities {
 		if strings.Contains(text, c) {
@@ -437,8 +437,8 @@ func extractCityForWeather(text string) string {
 	return ""
 }
 
-// execWeather 执行「查看天气」能力：真实调用公开天气 API（wttr.in，无需 key）。
-// 输出人话天气（天气现象/温度/湿度/风速）；失败返回原因回执（网络不可达等），不阻塞。
+// execWeather   "  day "  :   calluse openday  API(wttr.in, noneed key). 
+//  out  day (day now /  /  /  );   returnbackorigbecauseback (     etc),    . 
 func (e *Executor) execWeather(args map[string]any) (string, string, bool) {
 	text := str(args, "text")
 	if text == "" {
@@ -465,7 +465,7 @@ func (e *Executor) execWeather(args map[string]any) (string, string, bool) {
 	if resp.StatusCode != 200 || raw == "" {
 		return "", fmt.Sprintf("天气服务返回异常（HTTP %d）", resp.StatusCode), false
 	}
-	// wttr.in format 输出形如 "Patchy rain nearby +22°C 63% 9km/h"
+	// wttr.in format  out e.g. "Patchy rain nearby +22°C 63% 9km/h"
 	where := city
 	if where == "" {
 		where = "当前城市"

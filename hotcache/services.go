@@ -1,4 +1,4 @@
-// services.go —— L2 真实数据源：/api/services → 快照（只读、可落 L1）+ K7 定期刷新。
+// services.go -- L2   numdata : /api/services -> fast (read-only,    L1)+ K7  period new. 
 package hotcache
 
 import (
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// servicesPayload 是 GET /api/services 的响应形状（实测 2026-10-03，36 服务/146 别名）。
+// servicesPayload is GET /api/services     status(   2026-10-03, 36 serveservice/146 diffname). 
 type servicesPayload struct {
 	TS       string `json:"ts"`
 	Services []struct {
@@ -22,8 +22,8 @@ type servicesPayload struct {
 	} `json:"services"`
 }
 
-// LoadServicesSnapshot 把 /api/services 响应解析为快照（别名 → 服务名）。
-// 解析失败**不**返回半成品：调用方据此标 unknown（A3/K5）。
+// LoadServicesSnapshot pipe /api/services   resolve asfast (diffname -> serveservicename). 
+// resolve   ** **returnback become : calluse data tgt unknown(A3/K5). 
 func LoadServicesSnapshot(raw []byte, endpoint string) (Snapshot, error) {
 	var p servicesPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -51,7 +51,7 @@ func LoadServicesSnapshot(raw []byte, endpoint string) (Snapshot, error) {
 	return snap, nil
 }
 
-// HTTPFetcher 返回一个只读 L2 fetcher（Bearer 鉴权；key 由调用方从环境/.env 传入）。
+// HTTPFetcher returnback  read-only L2 fetcher(Bearer   ; key bycalluse from  /.env  in). 
 func HTTPFetcher(endpoint, apiKey string, timeout time.Duration) func(context.Context) (Snapshot, error) {
 	return func(ctx context.Context) (Snapshot, error) {
 		if timeout > 0 {
@@ -82,8 +82,8 @@ func HTTPFetcher(endpoint, apiKey string, timeout time.Duration) func(context.Co
 	}
 }
 
-// StartRefresh 启动**定期刷新**（K7）：立即刷一次，然后每 interval 一次；
-// 刷新失败由 Refresh 内部 fail-open 处理（保留本地数据 + 标 unknown），不会中断循环。
+// StartRefresh start ** period new**(K7):  i.e.   , howeverafter  interval   ; 
+//  new  by Refresh in  fail-open handle(keep baselynumdata + tgt unknown),   interrupt  . 
 func (c *Cache) StartRefresh(ctx context.Context, interval time.Duration) (stop func()) {
 	if interval <= 0 {
 		interval = 10 * time.Minute

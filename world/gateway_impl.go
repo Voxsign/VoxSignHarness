@@ -1,11 +1,11 @@
-// gateway_impl.go —— AIOps 网关只读客户端的行为实现（EXT-05..EXT-08 / A1..A6）。
+// gateway_impl.go -- AIOps  closeread-onlyclientuserend  as now(EXT-05..EXT-08 / A1..A6). 
 //
-// 设计要点：
-//   - **只读**：仅 GET；没有写方法；Grants() 恒为空（A4：读 200 ≠ 写权限）。
-//   - **fail-open**：任何网络/解析失败都返回 Status=unknown + Note（原因），绝不 panic、
-//     绝不当成"没有"（A3）。
-//   - **只缓存元数据**：缓存保存解析后的 Host/Ledger/Service 结构，不保存原始响应体（A1）。
-//   - **单一地址**：只有 BaseURL 一个出网配置（A6）。
+//   needpt: 
+//   - **read-only**: only GET;  haswrite  ; Grants()  asempty(A4: read 200 != write limit). 
+//   - **fail-open**:     /resolve   allreturnback Status=unknown + Note(origbecause),    panic, 
+//       curbecome" has"(A3). 
+//   - **onlycache numdata**: cachekeepstoreresolve after  Host/Ledger/Service close ,  keepstoreorigstart  body(A1). 
+//   - **  ly **: onlyhas BaseURL   out   (A6). 
 package world
 
 import (
@@ -27,14 +27,14 @@ const (
 	pathCICD    = "/api/cicd/status"
 	pathRoot    = "/"
 
-	maxBody = 4 << 20 // 单次读上限（防御性；不改变"只缓存元数据"）
+	maxBody = 4 << 20 //   readonlimit(prevent ity;  modifychange"onlycache numdata")
 
-	// DefaultServiceRegistryPath 是本地服务注册表的默认位置（可选数据源）。
-	// 读不到就 fail-open，不影响网络路径。
+	// DefaultServiceRegistryPath isbaselyserveservicenote table default  (  numdata ). 
+	// read tothen fail-open,      path. 
 	DefaultServiceRegistryPath = ".aiops/service-registry-live.json"
 )
 
-// fetch 发一次只读 GET，返回响应体与 Source（端点 + 抓取时间）。
+// fetch send  read-only GET, returnback  bodyand Source(endpoint +  gettimetime). 
 func (g *Gateway) fetch(ctx context.Context, path string) ([]byte, Source, error) {
 	endpoint := strings.TrimRight(g.BaseURL, "/") + path
 	src := Source{Endpoint: endpoint, FetchedAt: g.now().UTC().Format(time.RFC3339)}
@@ -61,7 +61,7 @@ func (g *Gateway) fetch(ctx context.Context, path string) ([]byte, Source, error
 	return body, src, nil
 }
 
-// Summary 读取主机清单（缓存感知）。失败 fail-open。
+// Summary readget  list(cache  ).    fail-open. 
 func (g *Gateway) Summary(ctx context.Context) Summary {
 	g.lock.Lock()
 	defer g.lock.Unlock()
@@ -102,7 +102,7 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 	for _, k := range keys {
 		var h Host
 		if err := json.Unmarshal(raw.Hosts[k], &h); err != nil {
-			unparsed = append(unparsed, k) // 不静默丢弃：下面保留为 unknown
+			unparsed = append(unparsed, k) //      : underfacekeep as unknown
 			continue
 		}
 		h.Key = k
@@ -115,7 +115,7 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 	return out
 }
 
-// CICD 读取 CI/CD 台账（缓存感知）。失败 fail-open。
+// CICD readget CI/CD   (cache  ).    fail-open. 
 func (g *Gateway) CICD(ctx context.Context) CICD {
 	g.lock.Lock()
 	defer g.lock.Unlock()
@@ -149,7 +149,7 @@ func (g *Gateway) fetchCICDLocked(ctx context.Context) CICD {
 	return CICD{Status: StatusOK, Source: src, CurrentTag: raw.CurrentTag, Ledger: raw.Ledger}
 }
 
-// Dependencies 把 summary 映射成「我依赖谁」（EXT-05）。失败时保留 unknown 条目（EXT-06）。
+// Dependencies pipe summary   become" dependency "(EXT-05).   timekeep  unknown  obj(EXT-06). 
 func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 	sum := g.Summary(ctx)
 	if sum.Status != StatusOK || len(sum.Hosts) == 0 {
@@ -186,7 +186,7 @@ func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 	return out
 }
 
-// Boundaries 返回与网关相关的硬边界（EXT-07/A4）。
+// Boundaries returnbackand close close   boundary(EXT-07/A4). 
 func (g *Gateway) Boundaries(context.Context) []Boundary {
 	return []Boundary{
 		{ID: "no-deploy", Claim: "本 harness 没有 deploy 工具契约：部署不可执行", Source: "tools/registry.go", Status: "verified"},
@@ -194,10 +194,10 @@ func (g *Gateway) Boundaries(context.Context) []Boundary {
 	}
 }
 
-// Grants 恒为空：网关读到的任何内容都不产生本机能力（A4）。
+// Grants  asempty:  closereadto   in all produceoccurbase   (A4). 
 func (g *Gateway) Grants(context.Context) []string { return nil }
 
-// DiscoverEndpoints 读页面里真实出现的 /api/* 路径（A5：不猜路径）。
+// DiscoverEndpoints read face   outnow  /api/* path(A5:   path). 
 func (g *Gateway) DiscoverEndpoints(ctx context.Context) ([]string, error) {
 	body, _, err := g.fetch(ctx, pathRoot)
 	if err != nil {
@@ -217,14 +217,14 @@ func (g *Gateway) DiscoverEndpoints(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// ClearCache 清空缓存（A1）。清空后再次读取会重建，结果应与首次一致。
+// ClearCache  emptycache(A1).  emptyafteragain readget heavy , close  andfirst   . 
 func (g *Gateway) ClearCache() {
 	g.lock.Lock()
 	defer g.lock.Unlock()
 	g.cache = cache{}
 }
 
-// Services 返回已加载的本地服务注册表（未加载则为空）。
+// Services returnbackalready   baselyserveservicenote table(   thenasempty). 
 func (g *Gateway) Services() []Service {
 	g.lock.Lock()
 	defer g.lock.Unlock()
@@ -233,14 +233,14 @@ func (g *Gateway) Services() []Service {
 	return out
 }
 
-// LoadServiceRegistry 读本地服务注册表（可选数据源）。
-// 文件缺失/格式异常 → 返回 error，但**不改变**任何已有缓存（fail-open，A3）。
+// LoadServiceRegistry readbaselyserveservicenote table(  numdata ). 
+// file  / formerror -> returnback error, but** modifychange**  alreadyhascache(fail-open, A3). 
 func (g *Gateway) LoadServiceRegistry(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("读服务注册表失败（fail-open，不是「没有」）: %w", err)
 	}
-	// 容忍尾部多余内容：只解析第一个 JSON 值。
+	//   tail   in : onlyresolve     JSON value. 
 	var raw struct {
 		Services []Service `json:"services"`
 	}
@@ -257,7 +257,7 @@ func (g *Gateway) LoadServiceRegistry(path string) error {
 	return nil
 }
 
-// DefaultServiceRegistry 尝试加载默认位置的服务注册表；失败不报错（fail-open）。
+// DefaultServiceRegistry     default   serveservicenote table;      (fail-open). 
 func (g *Gateway) DefaultServiceRegistry() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -269,8 +269,8 @@ func (g *Gateway) DefaultServiceRegistry() bool {
 	return true
 }
 
-// WhoHandles 回答「这件事该找谁」：主机 purpose + 本地服务注册表 aliases 匹配。
-// 匹配不到时返回 Status=unknown 的条目 —— "没匹配到"不等于"不存在"（A3）。
+// WhoHandles answer"      ":    purpose + baselyserveservicenote table aliases   . 
+//    totimereturnback Status=unknown   obj -- "   to" etcat" store "(A3). 
 func (g *Gateway) WhoHandles(ctx context.Context, query string) []Dependency {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {

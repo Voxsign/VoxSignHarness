@@ -1,10 +1,10 @@
-// vector_index.go —— 知己 · 最小可用向量索引骨架（M1 P1：TF-IDF/词袋兜底，纯 stdlib，不下载任何外部模型）。
+// vector_index.go --    ·    useto     (M1 P1: TF-IDF/word  bot,   stdlib,  under   out  type). 
 //
-// 定位：model.go 已有 Embedding []float32 字段但留空；本文件先用纯词袋 TF-IDF
-// 做出可召回的「向量锚点」，供 store.go 的 BudgetSearch 与词法种子混合（hybridSeeds）。
-// 中文无 jieba 依赖：按 rune 切 unigram+bigram；英文按小写单词切。
-// DF 内存累计；IDF 平滑 = log((N+1)/(df+1))+1；向量 L2 归一化后算余弦（非负权重，余弦∈[0,1]）。
-// 小库全量算余弦即可（M1 量级），预留 Save/Load JSON 持久化。
+//   : model.go alreadyhas Embedding []float32 charsegbut empty; basefilefirstuse word  TF-IDF
+//  out  back "to  pt", provide store.go   BudgetSearch andword kind   (hybridSeeds). 
+// in no jieba dependency: by rune   unigram+bigram;   by write word . 
+// DF instore  ; IDF    = log((N+1)/(df+1))+1; to  L2   izeafter   (   heavy,   ∈[0,1]). 
+//   safety    i.e. (M1   ),    Save/Load JSON keep ize. 
 package zhiji
 
 import (
@@ -15,27 +15,27 @@ import (
 	"sync"
 )
 
-// ScoredNode 向量召回的一条结果（nodeID + 余弦分数，Search 已按分数降序）。
+// ScoredNode to  back   close (nodeID +   splitnum, Search alreadybysplitnum  ). 
 type ScoredNode struct {
 	NodeID string  `json:"node_id"`
 	Score  float64 `json:"score"`
 }
 
-// VectorIndex TF-IDF 内存向量索引（线程安全；文档原始计数 + DF，检索时现算归一化向量，避免 Upsert 后 IDF 漂移）。
+// VectorIndex TF-IDF instoreto   (line safesafety;   origstart num + DF,   timenow   izeto ,    Upsert after IDF   ). 
 type VectorIndex struct {
 	mu   sync.RWMutex
-	docs map[string]map[string]int // nodeID -> token -> 原始词频计数
-	df   map[string]int            // token -> 文档频率（含该 token 的文档数）
-	n    int                        // 文档数（distinct nodeID；= len(docs)）
+	docs map[string]map[string]int // nodeID -> token -> origstartwordfreq num
+	df   map[string]int            // token ->   freqrate(   token    num)
+	n    int                        //   num(distinct nodeID; = len(docs))
 }
 
-// NewVectorIndex 空索引构造（NewStore 不自动建 Vec；调用方按需 New 后挂到 Store.Vec）。
+// NewVectorIndex empty    (NewStore      Vec; calluse byneed New after to Store.Vec). 
 func NewVectorIndex() *VectorIndex {
 	return &VectorIndex{docs: map[string]map[string]int{}, df: map[string]int{}}
 }
 
-// Upsert 写入/更新一个节点文本；同 nodeID 重写先回滚旧 token 的 DF，再累计新的。
-// 空文本视为删除该节点（不 panic）。
+// Upsert write/changenew  nodept base; same nodeID heavywritefirstrollback  token   DF, again  new . 
+// empty base asdelete nodept(  panic). 
 func (v *VectorIndex) Upsert(nodeID, text string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -64,7 +64,7 @@ func (v *VectorIndex) Upsert(nodeID, text string) {
 	v.n = len(v.docs)
 }
 
-// Search 查询 top-k（余弦分数降序）；空索引/空 query 安全返回 nil，不 panic。
+// Search    top-k(  splitnum  ); empty  /empty query safesafetyreturnback nil,   panic. 
 func (v *VectorIndex) Search(query string, k int) []ScoredNode {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -88,7 +88,7 @@ func (v *VectorIndex) Search(query string, k int) []ScoredNode {
 		dv := v.vecOf(dc)
 		var dot float64
 		for t, w := range qv {
-			dot += w * dv[t] // dv[t] 缺键即 0（Go map 零值）
+			dot += w * dv[t] // dv[t]   i.e. 0(Go map  value)
 		}
 		if dot > 0 {
 			all = append(all, scored{id, dot})
@@ -105,22 +105,22 @@ func (v *VectorIndex) Search(query string, k int) []ScoredNode {
 	return out
 }
 
-// Size 已索引文档数（供监控/测试）。
+// Size already    num(provide  /  ). 
 func (v *VectorIndex) Size() int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.n
 }
 
-// ---- 内部：分词 / IDF / 归一化向量 ----
+// ---- in : splitword / IDF /   izeto  ----
 
-// idf 平滑逆文档频率：log((N+1)/(df+1))+1（恒 >0，避免除零与零权重）。
+// idf      freqrate: log((N+1)/(df+1))+1(  >0,     and  heavy). 
 func (v *VectorIndex) idf(t string) float64 {
 	df := v.df[t]
 	return math.Log(float64(v.n+1)/float64(df+1)) + 1
 }
 
-// vecOf 由原始词频计数构造 L2 归一化 TF-IDF 稀疏向量。
+// vecOf byorigstartwordfreq num   L2   ize TF-IDF   to . 
 func (v *VectorIndex) vecOf(counts map[string]int) map[string]float64 {
 	w := make(map[string]float64, len(counts))
 	var sum float64
@@ -138,8 +138,8 @@ func (v *VectorIndex) vecOf(counts map[string]int) map[string]float64 {
 	return w
 }
 
-// tokenizeText 统一分词：ASCII 字母数字连成英文小写词；其余非分隔 rune 按中文字符流
-// 吐 unigram + bigram；空白/标点作边界。无外部依赖。
+// tokenizeText   splitword: ASCII char numcharlinkbecome   writeword; its  split  rune byin char  
+//   unigram + bigram; empty /tgtpt  boundary. noout dependency. 
 func tokenizeText(text string) []string {
 	var out []string
 	var eng []rune
@@ -188,7 +188,7 @@ func isASCIIAlnum(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
-// ---- 持久化（照 store.go writeJSON：tmp+rename 原子写）----
+// ---- keep ize(  store.go writeJSON: tmp+rename orig write)----
 
 type vectorIndexSnapshot struct {
 	N    int                        `json:"n"`
@@ -196,14 +196,14 @@ type vectorIndexSnapshot struct {
 	Docs map[string]map[string]int `json:"docs"`
 }
 
-// Save 落盘（独立 vector.json；风格同 graph.go.Save）。
+// Save   (   vector.json;   same graph.go.Save). 
 func (v *VectorIndex) Save(path string) error {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return writeJSON(path, vectorIndexSnapshot{N: v.n, DF: v.df, Docs: v.docs})
 }
 
-// Load 从 path 加载；文件不存在视为空索引（与 graph.go.Load 一致）。
+// Load from path   ; file store  asempty  (and graph.go.Load   ). 
 func (v *VectorIndex) Load(path string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()

@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// KBFileName 是异常知识库文件名（位于 <log_dir>/ 下）。
+// KBFileName iserror   filename( at <log_dir>/ under). 
 const KBFileName = "exceptions.jsonl"
 
-// KBEntry 是 exceptions.jsonl 的一行（按指纹去重，加载时取最新 updated）。
+// KBEntry is exceptions.jsonl    (byrefer  heavy,   timeget new updated). 
 type KBEntry struct {
 	Fingerprint string         `json:"fingerprint"`
 	Category    string         `json:"category"`
@@ -26,21 +26,21 @@ type KBEntry struct {
 	Updated     string         `json:"updated"`
 }
 
-// KB 是异常知识库：错误指纹 → 根因/修复。加载时按 fingerprint 去重取最新；
-// 命中直接复用（0 模型调用）；回写仅发生在【修复成功后】。并发安全。
+// KB iserror   : errorrefer  -> rootbecause/fix .   timeby fingerprint  heavyget new; 
+//  in connect use(0  typecalluse); write-backonlysendoccur [fix become after]. andsendsafesafety. 
 type KB struct {
 	path string
 	mu   sync.Mutex
 	m    map[string]KBEntry
 }
 
-// OpenKB 加载 <log_dir>/exceptions.jsonl；文件不存在 → 空知识库（不报错）。
-// 解析坏行跳过，绝不因坏行让诊断层整体不可用。
+// OpenKB    <log_dir>/exceptions.jsonl; file store  -> empty   (   ). 
+// resolve    ed,   because    disconnect  body  use. 
 func OpenKB(path string) *KB {
 	kb := &KB{path: path, m: map[string]KBEntry{}}
 	f, err := os.Open(path)
 	if err != nil {
-		return kb // 首次运行/文件缺失 → 空库
+		return kb // first   /file   -> empty 
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -52,15 +52,15 @@ func OpenKB(path string) *KB {
 		}
 		var e KBEntry
 		if err := json.Unmarshal([]byte(line), &e); err != nil || e.Fingerprint == "" {
-			continue // 坏行跳过
+			continue //    ed
 		}
-		// 同指纹：后读的覆盖先读的（文件按时间追加，后者更新）。
+		// samerefer : afterread overwritefirstread (filebytimetime  , aftererchangenew). 
 		kb.m[e.Fingerprint] = e
 	}
 	return kb
 }
 
-// Lookup 按指纹查知识库；命中返回结论（source=kb）。
+// Lookup byrefer     ;  inreturnbackclose (source=kb). 
 func (kb *KB) Lookup(fp string) (Diagnosis, bool) {
 	kb.mu.Lock()
 	defer kb.mu.Unlock()
@@ -78,8 +78,8 @@ func (kb *KB) Lookup(fp string) (Diagnosis, bool) {
 	return d, true
 }
 
-// Remember 在【修复成功后】回写/更新一条知识：指纹已存在则 hits+1 并刷新结论与 updated；
-// 不存在则追加一行。任何 IO 错误都静默（知识库是加速器，写失败不影响主链）。
+// Remember  [fix become after]write-back/changenew    : refer alreadystore then hits+1 and newclose and updated; 
+//  store then    .    IO errorall  (   is   , write      chain). 
 func (kb *KB) Remember(d Diagnosis) {
 	kb.mu.Lock()
 	e := KBEntry{
@@ -96,7 +96,7 @@ func (kb *KB) Remember(d Diagnosis) {
 	kb.appendLine(e)
 }
 
-// appendLine 把一条记录追加到磁盘（调用方已持数据副本，不持锁，避免 IO 阻塞其他读）。
+// appendLine pipe      to  (calluse alreadykeepnumdata base,  keep ,    IO   its read). 
 func (kb *KB) appendLine(e KBEntry) {
 	b, err := json.Marshal(e)
 	if err != nil {
@@ -110,7 +110,7 @@ func (kb *KB) appendLine(e KBEntry) {
 	_, _ = f.Write(append(b, '\n'))
 }
 
-// Count 返回当前知识库条目数（测试/诊断用）。
+// Count returnbackcurbefore    objnum(  / disconnectuse). 
 func (kb *KB) Count() int {
 	kb.mu.Lock()
 	defer kb.mu.Unlock()

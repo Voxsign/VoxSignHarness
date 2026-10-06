@@ -1,83 +1,83 @@
-// Package pipeline 是 M2 语音驱动开发的编排循环（freeze §3 pipeline）：
-// 把「ASR 文本」从原文一路串到「四行回执」，中间经过 清洗→纠错→任务分类→指代消解→
-// space_check→风险分级→确认→工具执行→独立校验→归因回写→四元缓存→四行回执。
+// Package pipeline is M2 voice-drivenopensend orchestration loop(freeze §3 pipeline): 
+// pipe"ASR  base"fromorig  route to"four-line receipt", middlethrough clean->correction->task classification->coreference resolution->
+// space_check->risk grading->confirm->tool execution->independent verification->attributionwrite-back->quad cache->four-line receipt. 
 //
-// 本包是集成分片：space/refer/risk/verify/search/cache/tools 均为已交付只读依赖，
-// 本包【不修改】它们的规则本体，只负责按冻结签名把它们编排起来。
-// 规则语义（什么算越界 / 几类确认 / 不可逆清单）一律标注「搬 VSL」，不在本层重述。
+// this packageisintegration shim: space/refer/risk/verify/search/cache/tools arealreadydeliverread-only dependency, 
+// this package[ modify]   rulebody, onlyresponsiblebyfrozen signaturepipe  orchestrateraise . 
+// rule semantics(   out-of-scope /  classconfirm / irreversible list)  tgtnote"  VSL",   this layerheavy . 
 package pipeline
 
-// 【伪代码逻辑层】（必写模块，评审关卡产物。规则语义权威定义在 freeze §3 / SPEC v2 §2；
-//  本层只描述 Run 的 13 阶段控制流 / 各阶段拒绝路径 / 确认分支 / 异常与中断处理，不可编译。）
+// [pseudocode logic layer]( writemodule, review gateartifact. rule semanticsauthoritative definition  freeze §3 / SPEC v2 §2; 
+//  this layeronlydescribe Run   13 stagecontrol flow /  stagerejectpath / confirmbranch / errorandinterrupthandle,     . )
 //
-// 全局不变量：
-//   - 串行闸（用户拍板）：同一进程同时只允许一个 Run 在飞（Options.mu 互斥），
-//     保护用户未提交改动，绝不覆盖/删除他人文件。
-//   - start 事件 = input_raw 轨迹写入【完成】的时刻；end 事件 = 归因写入【完成】的时刻。
-//     LoopMs = end-start 墙钟（含人工等待）；NetMs = 墙钟 − confirmFn/回问等待段。
+// global invariants: 
+//   - serial gate(useuser  ): same processsametimeonly allow   Run in flight(Options.mu mutex), 
+//     protectuseuseruncommitted changes,   overwrite/delete  file. 
+//   - start event = input_raw tracewrite[done] moment; end event = attributionwrite[done] moment. 
+//     LoopMs = end-start wall-clock( human wait); NetMs = wall-clock − confirmFn/clarificationwaitseg. 
 //
-// Run(ctx, o, text) -> Outcome, error：
+// Run(ctx, o, text) -> Outcome, error: 
 //
-//   gate.lock()                              // 串行闸；ctx 取消 → 立即返回且不破坏中间态
+//   gate.lock()                              // serial gate; ctx cancel -> return immediatelyand   intermediate state
 //   rid = "req-" + nano()
 //   write(input_raw{text}); start = now()
 //
-//   阶段② clean:     cleaned = Cleaner.Clean(text); write(input_clean)
-//   阶段③ correct:   corrected,corr = Dict.Correct(cleaned); write(input_correct)
-//   阶段④ classify:  intent = TaskClassifier(corrected); write(intent)
-//                    if intent.Ask != "": 跳到 [回问出口]
-//   阶段⑤ refer:     intent = Refer.Resolve(intent, spaceOf(intent)); write(refer)
-//                    if intent.Ask != "": 跳到 [回问出口]
-//   阶段⑥ space:     space = 默认域(intent)（NOTE→vault-notes / 只读→global / 写意图须已点名）
+//   stage② clean:     cleaned = Cleaner.Clean(text); write(input_clean)
+//   stage③ correct:   corrected,corr = Dict.Correct(cleaned); write(input_correct)
+//   stage④ classify:  intent = TaskClassifier(corrected); write(intent)
+//                    if intent.Ask != "":  to [clarificationexit]
+//   stage⑤ refer:     intent = Refer.Resolve(intent, spaceOf(intent)); write(refer)
+//                    if intent.Ask != "":  to [clarificationexit]
+//   stage⑥ space:     space = default space(intent)(NOTE->vault-notes / read-only->global / write intent alreadyptname)
 //                    caps = planCaps(intent)
 //                    verdict = space.Check(Registry, {Intent, Grant:{Auth:true}, ToolCaps:caps})
 //                    write(space_check)
-//                    if !verdict.Allowed: 跳到 [拦截出口]（verdict.Reason 进结果，绝不执行）
-//   阶段⑦ risk:      imp = 机械信号（search 引用统计 + trajectory 热度；无 fs 时取 0）
+//                    if !verdict.Allowed:  to [blockexit](verdict.Reason  close ,     )
+//   stage⑦ risk:      imp =   signal(search citation stats + trajectory heat; no fs timeget 0)
 //                    decision = risk.Evaluate(intent, imp)
-//                    intent.Confirm = decision.Level（回填权威值）; write(risk)
-//   阶段⑧ confirm:   wait0 = now()
-//                    if cache.Get(quad) 命中: approved=true（不再问，决策复用）
+//                    intent.Confirm = decision.Level(backfillauthoritative value); write(risk)
+//   stage⑧ confirm:   wait0 = now()
+//                    if cache.Get(quad)  in: approved=true( again , decide  use)
 //                    else:
 //                      switch decision.Level:
-//                        auto:   approved=true（不打断）
+//                        auto:   approved=true(  disconnect)
 //                        light:  approved = ConfirmFn(rid, lightQuestion)
-//                        strong: if Guard.ShouldDowngrade(path): approved=true（汇总待复核，不打断）
+//                        strong: if Guard.ShouldDowngrade(path): approved=true(     ,   disconnect)
 //                                else:            approved = ConfirmFn(rid, strongQuestion)
-//                        human:  approved = ConfirmFn(rid, humanQuestion)   // 永远问
+//                        human:  approved = ConfirmFn(rid, humanQuestion)   //    
 //                    waitMs += now()-wait0
 //                    write(confirm)
-//                    if !approved: 跳到 [未放行出口]（Confirmed=false，不执行）
+//                    if !approved:  to [   exit](Confirmed=false,    )
 //                    cache.Set(quad, decision.Level)
-//   阶段⑨ exec:     for action in planActions(intent):
-//                        receipt = Exec.Exec(tool, args(with log_dir 注入), contract)
+//   stage⑨ exec:     for action in planActions(intent):
+//                        receipt = Exec.Exec(tool, args(with log_dir notein), contract)
 //                        Receipts = append(Receipts, receipt)
 //                    write(receipts)
-//                    拒绝路径：任一 receipt.Blocked != "" → 不重试，原样进结果
-//   阶段⑩ verify:    spec = planVerify(intent, verdict)
+//                    rejectpath:    receipt.Blocked != "" ->  heavy , origkind close 
+//   stage⑩ verify:    spec = planVerify(intent, verdict)
 //                    if spec != nil: Verify = Verifier.Run(spec)
-//                    else:           Verify = {unverifiable, "M2 未定义该校验"}
+//                    else:           Verify = {unverifiable, "M2  define verify"}
 //                    write(verify)
-//   阶段⑪ attribution: cls = classifyAttribution(intent, verdict, Receipts, Verify, corr)
+//   stage⑪ attribution: cls = classifyAttribution(intent, verdict, Receipts, Verify, corr)
 //                      attr = Attribution{rid, discuss, cls, evidence, suggestion}
 //                      write(kind=attribution)  // ← end = now()
-//                      append discuss.jsonl（人可见结论，下一轮注入；不自动改词典/策略）
-//   阶段⑫ cache:   四元组已在⑧ Set；此处仅在漂移/拦截时 InvalidateSpace（不命中即跳过）
-//   阶段⑬ view:   View = renderView(intent, verdict, decision, Receipts, Verify, Ask)
+//                      append discuss.jsonl(  seeclose , under  notein;    modifyword /  )
+//   stage⑫ cache:      already ⑧ Set;  placeonly   /blocktime InvalidateSpace(  ini.e. ed)
+//   stage⑬ view:   View = renderView(intent, verdict, decision, Receipts, Verify, Ask)
 //                  write(final)
 //
 //   LoopMs = end-start; NetMs = LoopMs - waitMs
 //   return Outcome, nil
 //
-// [回问出口]   View.result="未执行（需回问：…）"; Attribution.class=context; end 照常计量
-// [拦截出口]   View.result="BOUNDARY_VIOLATION/…"; Attribution.class=context; 不执行不校验
-// [未放行出口] View.result="待确认（已拒绝/未放行）"; 不执行；Attribution.class=model
+// [clarificationexit]   View.result="   (needclarification: …)"; Attribution.class=context; end     
+// [blockexit]   View.result="BOUNDARY_VIOLATION/…"; Attribution.class=context;     verify
+// [   exit] View.result=" confirm(alreadyreject/   )";    ; Attribution.class=model
 //
-// 异常：Dict/Trace/Refer 为 nil 时对应阶段薄降级（不报错）；ctx 提前取消 → 返回 error，
-//   但已落盘的轨迹条目保留（append-only，不回滚）。
+// error: Dict/Trace/Refer as nil timeto stage   (   ); ctx  beforecancel -> returnback error, 
+//   butalready   trace objkeep (append-only,  rollback). 
 //
-// Summary(o, since) -> string：
-//   读当日 trajectory-YYYYMMDD.jsonl，按 域 / 意图 / 失败原因 聚合；手机可读纯文本。
+// Summary(o, since) -> string: 
+//   readcurday trajectory-YYYYMMDD.jsonl, by domain / intent /   origbecause   ; mobile read  base. 
 
 import (
 	"bufio"
@@ -115,7 +115,7 @@ import (
 	"voicesign-harness/verify"
 )
 
-// Options 是编排循环的全部依赖（冻结签名）。未导出字段为集成层实现细节（串行闸/确认疲劳防护）。
+// Options isorchestration loop safety dependency(frozen signature).   outcharsegasintegrate  now node(serial gate/confirm  preventprotect). 
 type Options struct {
 	Cfg      *config.Config
 	Dict     *memory.Dictionary
@@ -126,46 +126,46 @@ type Options struct {
 	Tools    *tools.Registry
 	Exec     *tools.Executor
 
-	// ConfirmFn 阻塞等待人工放行（CLI=stdin / server=HTTP）；返回 false 表示拒绝。
+	// ConfirmFn   waithuman  (CLI=stdin / server=HTTP); returnback false tableshowreject. 
 	ConfirmFn func(taskID, question string) (bool, error)
 	Trace     *trajectory.Trajectory
 
-	// Ground（M3 #37）认知切片注入器；nil 时薄降级（空 context）。
+	// Ground(M3 #37)    notein ; nil time   (empty context). 
 	Ground *ground.Ground
 
-	// Providers（M7）LLM 接线层；nil 时纯规则/纯 search 路径不阻断。
+	// Providers(M7)LLM connectline ; nil time rule/  search path  disconnect. 
 	Providers *provider.Registry
 
-	// selfhealSvc 异常自愈层（三环）；懒装配。Providers==nil 时恒为 nil（零开销跳过，主链不变）。
+	// selfhealSvc error   (  );    . Providers==nil time as nil( open  ed,  chain change). 
 	selfhealSvc *selfheal.Service
 
-	// ConvID 会话标识（同 logDir 下多轮 run 共享；缺省 "default"）。
+	// ConvID   tgt (same logDir under   run   ;    "default"). 
 	ConvID string
-	// RequestID 外部指定的请求 ID（P0-4b）。空则 Run 内自生成（= 现状行为，向后兼容）；
-	// 非空则整链（轨迹/selfheal/日志）统一用它，使入口 request_id 与轨迹 Entry id 一致。
+	// RequestID out refer   require ID(P0-4b). emptythen Run in occurbecome(= nowstatus as, toaftercompat); 
+	//  emptythen chain(trace/selfheal/day )  use ,  in  request_id andtrace Entry id   . 
 	RequestID string
-	// ProgressObserver 可选的细粒度进度观察者（nil=静默，零行为变化）。
-	// 设计 §7.4/§11 最小闭环：pipeline 在关键阶段（意图分类）回调 stage/detail，
-	// server 桥接进 SSE（kind:"internal"）、CLI 也可消费。nil 时与现状逐字节一致。
+	// ProgressObserver           er(nil=  ,   aschangeize). 
+	//    §7.4/§11     : pipeline  close stage(intentclassify)backcall stage/detail, 
+	// server  connect  SSE(kind:"internal"), CLI also   . nil timeandnowstatus charnode  . 
 	ProgressObserver func(stage, detail string)
-	// ASRDataDir ASR 数据目录（反馈/黑名单/词典记忆，跨会话全局生效）。
+	// ASRDataDir ASR numdataobj (rev / name /word   ,    globaloccur ). 
 	ASRDataDir string
-	// RoundEvidence 上一轮证据门缺口（第 2+ 轮携带，回喂 LLM 修复）。
+	// RoundEvidence on   data   (  2+    , back  LLM fix ). 
 	RoundEvidence string
-	// Document 需求文档全文（实现类任务；证据门/LLM 生成共用）。
+	// Document needrequire  safety ( nowclasstask;  data /LLM occurbecome use). 
 	Document string
 
 	mu    *sync.Mutex
 	guard *risk.Guard
 }
 
-// AskOption 是 need_ask 回问的结构化候选（M4-3 ①：点选即续跑，机器可读）。
+// AskOption is need_ask clarification close ize  (M4-3 ①: pt i.e.continue ,    read). 
 type AskOption struct {
-	ID    string `json:"id"`    // 稳定候选 id（edit/query/note/commit/... 或 refer 目标 id）
-	Label string `json:"label"` // 一句话中文 label
+	ID    string `json:"id"`    //      id(edit/query/note/commit/... or refer objtgt id)
+	Label string `json:"label"` //  sent in  label
 }
 
-// Outcome 是一次 Run 的完整产物（冻结签名）。
+// Outcome is   Run  finish artifact(frozen signature). 
 type Outcome struct {
 	RequestID    string               `json:"request_id"`
 	Intent       contract.Intent      `json:"intent"`
@@ -177,42 +177,42 @@ type Outcome struct {
 	Attribution  contract.Attribution `json:"attribution"`
 	View         contract.ReceiptView `json:"view"`
 	Ask          string               `json:"ask,omitempty"`
-	Options      []AskOption          `json:"options,omitempty"` // M4-3 结构化候选
+	Options      []AskOption          `json:"options,omitempty"` // M4-3 close ize  
 	ContextBlock string               `json:"context_block,omitempty"`
 	LoopMs       int64                `json:"loop_ms"`
 	NetMs        int64                `json:"net_ms"`
 }
 
-// discussLogName 是 discuss-log 文件名（<log_dir>/discuss.jsonl）。
+// discussLogName is discuss-log filename(<log_dir>/discuss.jsonl). 
 const discussLogName = "discuss.jsonl"
 
-// EnableSerialGate 初始化共享串行闸（C0 受控串行过渡态）。
+// EnableSerialGate initstartize  serial gate(C0 accept serialed state). 
 //
-// 必须在**克隆 Options 之前对模板调用一次**：server 侧每任务 `o := *tmpl` 是浅拷贝，
-// o.mu 是指针，会被一起复制 → 所有任务克隆共享同一把锁，跨任务串行生效。
-// 若不先调本方法，模板 o.mu 为 nil，Run 内懒建会给每个任务**各造一把新锁** → 串行闸形同虚设。
+//    **   Options ofbeforeto  calluse  **: server side task `o := *tmpl` is   , 
+// o.mu isrefer ,  be raise restrict ->  hastask    same pipe ,  taskserialoccur . 
+// if firstcallbase  ,    o.mu as nil, Run in   give  task**   pipenew ** -> serial gate same  . 
 //
-// C0 定位（用户拍板 2026-10-05）：这是**受控串行过渡态**，不是永久设计。最终目标是单进程内
-// 多 Runner（子代理）按虚拟用户/会话并发——绝不引向任务级多进程；safeGo 是任务级崩溃隔离手段。
-// 锁持有期 = 整个 Run 全程（Run 开头 Lock、defer Unlock），C0 下任务全串行，勿并发假设。
+// C0   (useuser   2026-10-05):  is**accept serialed state**,  is    .  endobjtgtis processin
+//   Runner(   )by  useuser/  andsend--   totask  process; safeGo istask      seg. 
+//  keephasperiod =    Run safety (Run openhead Lock, defer Unlock), C0 undertasksafetyserial,  andsend  . 
 func (o *Options) EnableSerialGate() {
 	if o != nil && o.mu == nil {
 		o.mu = &sync.Mutex{}
 	}
 }
 
-// Run 执行完整 13 阶段编排循环。ctx 取消会中止等待人工确认，但已落盘轨迹不回滚。
+// Run   finish  13 stageorchestration loop. ctx cancel instopwaithumanconfirm, butalready  trace rollback. 
 func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
-	// ⭐ 必填检查（Lead 2026-10-03 真跑实证：o==nil / 空 Options ⇒ **panic**，不是返回错误）。
-	// 原则：**"崩"与"报错"的区别是 —— 崩了没有任何人能看到原因**（且若崩在后台 goroutine，recover 也抓不到）。
+	// ⭐     (Lead 2026-10-03     : o==nil / empty Options ⇒ **panic**,  isreturnbackerror). 
+	// origthen: **" "and"  "  diffis --   has     toorigbecause**(andif  after  goroutine, recover also  to). 
 	if o == nil {
 		return Outcome{}, fmt.Errorf("pipeline.Run: Options 为 nil（调用方必须提供完整 Options）")
 	}
 	if o.Spaces == nil {
 		return Outcome{}, fmt.Errorf("pipeline.Run: Spaces 未配置（域门禁缺失 ⇒ 拒绝执行）")
 	}
-	// 注：**不检查 Providers** —— 其文档明确"nil 时纯规则/纯 search 路径不阻断"（Options.Providers 注释）。
-	// 若在此强求，会把"无 LLM 也能跑"的设计判死。仅当真要用 LLM 时才在对应路径处理。
+	// note: **    Providers** -- its    "nil time rule/  search path  disconnect"(Options.Providers note ). 
+	// if   require,  pipe"no LLM also  "     . onlycur needuse LLM timeonly to pathhandle. 
 	if o.mu == nil {
 		o.mu = &sync.Mutex{}
 	}
@@ -222,12 +222,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		o.guard = risk.NewGuard()
 	}
 
-	// P0-4b：外部指定 request_id（入口/byReq 透传）优先；空则自生成（= 现状行为）。
+	// P0-4b: out refer  request_id(in /byReq   ) first; emptythen occurbecome(= nowstatus as). 
 	rid := strings.TrimSpace(o.RequestID)
 	if rid == "" {
 		rid = newRequestID()
 	}
-	o.RequestID = rid // 回写：本任务 Options 克隆内后续方法（selfheal/llmSummarize 日志）统一读到规范 rid
+	o.RequestID = rid // write-back: basetask Options   inaftercontinue  (selfheal/llmSummarize day )  readtorule  rid
 	out := Outcome{RequestID: rid}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "空指令，没听清，请再说一遍"
@@ -246,7 +246,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		o.write(e)
 	}
 
-	// ① input_raw 轨迹写入完成 → start 事件（#45）。
+	// ① input_raw tracewritedone -> start event(#45). 
 	emit(trajectory.Entry{Kind: trajectory.KindInputRaw, Content: text})
 	start := time.Now()
 	var waitMs time.Duration
@@ -263,45 +263,45 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindInputCorrec, Content: corrected})
 
-	// ③.5 天气直通（离线、免 LLM）：只要口语含"天气"就直接查 wttr.in 返回。
-	// 背景（2026-10-05 真机）：天气意图原先靠 LLM ActionPlan 触发，LLM 欠费/超时时
-	// 整条"查天气"退化为"上游 5xx"。wttr.in 无需 key、本机 200，故天气走确定性直连，
-	// 不再依赖 LLM。命中即返回 done；未命中返回 false 继续正常分类。
+	// ③.5 day   ( line,   LLM): onlyneed lang "day "then connect  wttr.in returnback. 
+	//  scenario(2026-10-05   ): day intentorigfirst  LLM ActionPlan triggersend, LLM   / timetime
+	//   " day " izeas"on  5xx". wttr.in noneed key, base  200, thusday    ity link, 
+	//  againdependency LLM.  ini.e.returnback done;   inreturnback false continuecontinuepos classify. 
 	if wout, ok := o.tryWeather(ctx, corrected, start); ok {
 		wout.RequestID = out.RequestID
 		emit(trajectory.Entry{Kind: trajectory.KindFinal, Content: contract.RenderReceipt(wout.View)})
 		return *wout, nil
 	}
 
-	// ④ TaskClassifier.ClassifyTask（空间候选取自注册域列表）
+	// ④ TaskClassifier.ClassifyTask(emptytime  get note domainlisttable)
 	classifier := input.NewTaskClassifier(confOf(o.Cfg), spaceHints(o.Spaces))
 	intent := classifier.ClassifyTask(corrected)
 	intent.RawText = text
 	intent.Corrections = corrections
 
-	// M7 ① 意图分类 LLM 回退：规则低置信/UNKNOWN 且像自然语言问句时 → fast provider 补分类。
+	// M7 ① intentclassify LLM back : rulelow-confidence/UNKNOWN and  howeverlanglang senttime -> fast provider patchclassify. 
 	intent = o.llmIntentFallback(ctx, intent, corrected)
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
 
-	// §11 最小闭环：意图分类完成 → 发细粒度进度事件（SSE/CLI 端到端可见）。nil 观察者静默，行为不变。
+	// §11     : intentclassifydone -> send     event(SSE/CLI endtoend see). nil   er  ,  as change. 
 	if o.ProgressObserver != nil {
 		o.ProgressObserver("intent", "意图="+intent.Intent)
 	}
 
-	// ⑤ refer 消解（不覆盖分类器已显式填好的字段）；M4-5：同时拿 refer 目标候选。
-	// M7 修复（Codex/gpt-6-luna 外部诊断 2026-10-02）：按意图门控——
-	// QUERY 高置信（>=0.8）的"这个/那个"是普通口语代词，跳过指代消解，
-	// 否则 refer 候选为空会写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
+	// ⑤ refer  resolve( overwriteclassify already form   charseg); M4-5: sametime  refer objtgt  . 
+	// M7 fix (Codex/gpt-6-luna out  disconnect 2026-10-02): byintent  --
+	// QUERY    (>=0.8) "  /  "is   lang word,  edcoreference resolution, 
+	//  then refer   asempty write Ask"   "  "refer is   "-> need_ask(    ). 
 	var referOpts []refer.Option
-	// hasRecent：当前单轮调用无上下文判定，传 false（多轮接线由上层 refer 模块在链上启用时再传 true）。
+	// hasRecent: curbefore  callusenoonunder   ,   false(  connectlinebyon  refer module chainonstartusetimeagain  true). 
 	if o.Refer != nil && shouldResolveRefer(&intent, false) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
 			prevAsk := intent.Ask
 			intent = *resolved
 			referOpts = opts
-			// Codex 收紧（2026-10-02）：refer 新写 Ask（"指的是哪个"）时，
-			// 若歧义不阻止执行（陈述/查询有实体/记录类）→ 清掉继续执行，不因指代 Ask。
+			// Codex recv (2026-10-02): refer newwrite Ask("refer is  ")time, 
+			// if    stop  (  /  has body/  class)->   continuecontinue  ,  becausecoreference Ask. 
 			if intent.Ask != "" && intent.Ask != prevAsk && !clarificationBlocksExecution(&intent, referOpts) {
 				intent.Ask = ""
 			}
@@ -309,14 +309,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
 
-	// 回问出口：分类器/指代任一层要回问 → 不执行。
-	// M3 #37：回问是真实的"模型/人需要更多上下文"点，这里注入 ground 认知切片。
+	// clarificationexit: classify /coreference   needclarification ->    . 
+	// M3 #37: clarificationis   " type/ needneedchange onunder "pt,   notein ground     . 
 	if intent.NeedsClarification() {
 		snap := o.renderGround()
 		intent.Context = append(intent.Context, snap.ProjectMap...)
 		out.Intent = intent
 		out.Ask = intent.Ask
-		// Codex 收紧（2026-10-02）：options 按澄清意图动态生成，不再塞固定"改文件/查代码/记想法/提交"。
+		// Codex recv (2026-10-02): options by  intent stateoccurbecome,  again   "modifyfile/  code/   /  ". 
 		out.Options = mergeAskOptions(optionsForIntent(&intent, referOpts), referOpts)
 		out.ContextBlock = snap.Block
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
@@ -341,15 +341,15 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		Intent:   intent,
 		Grant:    space.Grant{Authorized: true},
 		ToolCaps: caps,
-		// Contracts 有意传 nil：B/C 测试与冻结语义均以工具族名（file/git/read/…）做族级门禁；
-		// 契约逐 cap 的 risk 分级在 risk.Evaluate 阶段消费，不在此重复交集。
+		// Contracts has   nil: B/C   andfrozensemantic by   name(file/git/read/…)    forbid; 
+		//     cap   risk split   risk.Evaluate stage  ,    heavy   . 
 	})
 	b, _ := json.Marshal(verdict)
 	emit(trajectory.Entry{Kind: trajectory.KindSpaceCheck, Content: string(b)})
 	out.Intent = intent
 	out.Verdict = verdict
 
-	// 拦截出口：space_check 拒绝 → 绝不执行。
+	// blockexit: space_check reject ->     . 
 	if !verdict.Allowed {
 		out.Attribution = o.attribution(out.RequestID, contract.AttrContext,
 			"space_check 拒绝（"+verdict.Reason+"）", "轨迹 kind=space_check",
@@ -366,7 +366,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		return out, nil
 	}
 
-	// ⑦ risk.Evaluate（机械信号：fs 引用统计 + 热度；无真实项目时取 0）
+	// ⑦ risk.Evaluate(  signal: fs citation stats + heat; no   objtimeget 0)
 	imp := o.mechanicalImpact(intent)
 	decision := risk.Evaluate(intent, imp)
 	intent.Confirm = decision.Level
@@ -374,34 +374,34 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	db, _ := json.Marshal(decision)
 	emit(trajectory.Entry{Kind: trajectory.KindRisk, Content: string(db)})
 
-	// ⑧ confirm（按 Decision 分派；四元缓存命中=不再问）
-	// 安全不变量（SPEC #40/#29）：human=不可逆，永远走 ConfirmFn，
-	// 从四元缓存 Get 与 Set 双双排除——"不可逆不可被学习掉"。
+	// ⑧ confirm(by Decision split ; quad cache in= again )
+	// safesafetyinvariant(SPEC #40/#29): human= reversible,     ConfirmFn, 
+	// fromquad cache Get and Set     --" reversible  be   ". 
 	wait0 := time.Now()
 	approved := false
 	quad := quadKey(intent, decision.Level)
 	cacheable := decision.Level != contract.ConfirmHuman
 	if o.Cache != nil && cacheable {
 		if cached, ok := o.Cache.Get(quad); ok {
-			// cached 只在 Set 处写入 decision.Level；"approved" 是历史兼容串，一并放行。
+			// cached only  Set placewrite decision.Level; "approved" is  compat ,  and  . 
 			approved = cached == decision.Level || cached == "approved"
 		}
 	}
 	if !approved {
 		switch decision.Level {
 		case contract.ConfirmAuto:
-			approved = true // 不打断
+			approved = true //   disconnect
 		case contract.ConfirmLight:
 			approved = o.confirm(ctx, out.RequestID, "轻确认："+decision.Reason+"，放行？(y/n)")
 		case contract.ConfirmStrong:
 			if o.guard.ShouldDowngrade(targetPath(intent)) {
-				approved = true // 同路径连续强确认疲劳 → 降为汇总待复核
+				approved = true // samepathlinkcontinue confirm   ->  as     
 			} else {
 				approved = o.confirm(ctx, out.RequestID, "强确认："+decision.Reason+"，放行？(y/n)")
 			}
 		case contract.ConfirmHuman:
 			q := "人工放行（不可逆）：" + decision.Reason
-			// M4-4：COMMIT 前把未提交改动数写进确认问题，绝不覆盖/改写历史。
+			// M4-4: COMMIT beforepipeuncommitted changesnumwrite confirm  ,   overwrite/modifywrite  . 
 			if it := intent; it.Intent == contract.IntentCommit {
 				if root := o.projectRootForCommit(it); root != "" {
 					if n := gitDirtyCount(root); n >= 0 {
@@ -412,18 +412,18 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			approved = o.confirm(ctx, out.RequestID, q+"，放行？(y/n)")
 		}
 	}
-	// M4-1：是否真问过人工（auto 不打断不算等待；waitMs 的 µs 级 overhead 不计）。
+	// M4-1: is   edhuman(auto   disconnect  wait; waitMs   µs   overhead   ). 
 	humanWait := decision.Level != contract.ConfirmAuto
 	waitMs += time.Since(wait0)
 	out.Confirmed = approved
 	emit(trajectory.Entry{Kind: trajectory.KindConfirm, Content: fmt.Sprintf("level=%s approved=%v", decision.Level, approved)})
 	o.recordDecision(out.RequestID, intent, decision, approved)
 	if o.Cache != nil && approved && cacheable {
-		// human 级绝不写缓存（不可逆永远人工）。
+		// human    writecache( reversible  human). 
 		_ = o.Cache.Set(quad, decision.Level)
 	}
 
-	// 未放行出口：不执行。
+	//    exit:    . 
 	if !approved {
 		out.Attribution = o.attribution(out.RequestID, contract.AttrModel,
 			"用户未放行（decision="+decision.Level+"）", "轨迹 kind=confirm", "如属误拒可加入四元缓存放行")
@@ -438,13 +438,13 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		return out, nil
 	}
 
-	// ⑨ Exec（仅已过 space_check + risk 的动作）
+	// ⑨ Exec(onlyalreadyed space_check + risk    )
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
 
-	// ⑨-bis 异常自愈层（可选）：有失败回执 → 诊断 + 只读安全重放（限 2 轮）。
-	// 诊断层未配置/失败一律不阻断；重放成功的新回执合并进 out.Receipts，诊断结论供归因。
+	// ⑨-bis error   (  ): has  back  ->  disconnect + read-onlysafesafetyheavy (limit 2  ). 
+	//  disconnect    /      disconnect; heavy become  newback  and  out.Receipts,  disconnectclose provideattribution. 
 	if hasFailure(receipts) {
 		if repaired := o.repairFailed(ctx, intent, receipts); len(repaired) > 0 {
 			receipts = append(receipts, repaired...)
@@ -453,7 +453,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		}
 	}
 
-	// ⑩ verify 独立校验
+	// ⑩ verify independent verification
 	spec := o.planVerify(intent, o.logDir())
 	if spec != nil && o.Verifier != nil {
 		res, err := o.Verifier.Run(*spec)
@@ -468,19 +468,19 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	vb, _ := json.Marshal(out.Verify)
 	emit(trajectory.Entry{Kind: trajectory.KindVerify, Content: string(vb)})
 
-	// ⑩-bis verify fail → 带 tool:"verify" 进诊断层（不自动重跑 verify，结论供归因）。
+	// ⑩-bis verify fail ->   tool:"verify"   disconnect (   heavy  verify, close provideattribution). 
 	if out.Verify.Status == verify.StatusFail {
 		if svc := o.selfheal(); svc != nil {
 			tr := selfheal.NewTrace("verify", "", map[string]any{"evidence": out.Verify.Evidence}, out.Verify.Detail)
-			tr.RequestID = out.RequestID // P0-4a：诊断轨迹/日志带 request_id
+			tr.RequestID = out.RequestID // P0-4a:  disconnecttrace/day   request_id
 			_ = svc.Diagnose(ctx, intent.RawText, intent.Intent, []selfheal.Trace{tr})
 		}
 	}
 
-	// ⑪ attribution + 轨迹（end = 归因写入完成）
+	// ⑪ attribution + trace(end = attributionwritedone)
 	cls, detail, suggestion := classifyAttribution(intent, receipts, out.Verify, corrections)
-	// ⑪-bis：执行类归因且诊断层有结论时，用诊断 suggestion 替换静态建议，detail 附根因；
-	// 无诊断结论 → 静态建议逐字不变。
+	// ⑪-bis:   classattributionand disconnect hasclose time, use disconnect suggestion    state  , detail  rootbecause; 
+	// no disconnectclose  ->  state   char change. 
 	if svc := o.selfheal(); svc != nil {
 		if d := svc.LastDiagnosis(); d != nil && cls == contract.AttrExec {
 			suggestion = d.Suggestion
@@ -490,7 +490,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	out.Attribution = o.attribution(out.RequestID, cls, detail, evidenceOf(receipts, out.Verify), suggestion)
 	o.writeAttribution(out.Attribution)
 
-	// ⑫ cache：四元组已在⑧ Set；拦截/漂移路径在 o.attribution 里无需额外失效。
+	// ⑫ cache:    already ⑧ Set; block/  path  o.attribution  noneed out  . 
 	// ⑬ view
 	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
 	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
@@ -498,12 +498,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	out.LoopMs = time.Since(start).Milliseconds()
 	out.NetMs = out.LoopMs - waitMs.Milliseconds()
 
-	// ⑭ 任务指标入轨迹（#52 摘要聚合源）：结构化 JSON 一行。
+	// ⑭ taskrefertgtintrace(#52  need   ): close ize JSON   . 
 	o.writeTaskMetrics(intent, out, humanWait)
 	return out, nil
 }
 
-// taskMetricsPayload 是写入轨迹的单行结构化指标（#52/#M4-1 摘要按此聚合）。
+// taskMetricsPayload iswritetrace   close izerefertgt(#52/#M4-1  needby   ). 
 type taskMetricsPayload struct {
 	Kind    string `json:"kind"` // "task_metrics"
 	Space   string `json:"space"`
@@ -511,14 +511,14 @@ type taskMetricsPayload struct {
 	AttrCls string `json:"attr_class"`
 	LoopMs  int64  `json:"loop_ms"`
 	NetMs   int64  `json:"net_ms"`
-	HadWait bool   `json:"had_wait"` // M4-1：有人工等待/LLM 才计入 Net 均值
+	HadWait bool   `json:"had_wait"` // M4-1: hashuman wait/LLM only in Net  value
 	OK      bool   `json:"ok"`
 }
 
 func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bool) {
 	space := it.Space
 	if space == "" {
-		// 回问/拦截早返回路径发生在 space select 之前：域归属与是否澄清无关，补默认域。
+		// clarification/block returnbackpathsendoccur  space select ofbefore: domain  andis   noclose, patchdefault space. 
 		space = defaultSpaceFor(it)
 	}
 	p := taskMetricsPayload{
@@ -535,7 +535,7 @@ func (o *Options) writeTaskMetrics(it contract.Intent, out Outcome, humanWait bo
 	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindTaskMetrics, Content: string(b)})
 }
 
-// ---------- 集成层小工具（薄封装，规则语义均在被编排的包内） ----------
+// ---------- integrate    (   , rule semantics  beorchestrate  in) ----------
 
 func confOf(cfg *config.Config) float64 {
 	if cfg != nil && cfg.Input.IntentConf > 0 {
@@ -555,8 +555,8 @@ func spaceHints(r *space.Registry) []input.SpaceHint {
 	return hints
 }
 
-// defaultSpaceFor 按意图类别落默认域（搬 VSL：只读→global 兜底；NOTE→vault-notes 追加；
-// 写意图必须由分类器/指代点名域，否则落到 global 只读会被 space_check 自然拒绝）。
+// defaultSpaceFor byintentclassdiff default space(  VSL: read-only->global  bot; NOTE->vault-notes   ; 
+// write intent  byclassify /coreferenceptnamedomain,  then to global read-only be space_check  howeverreject). 
 func defaultSpaceFor(it contract.Intent) string {
 	if it.Space != "" {
 		return it.Space
@@ -567,20 +567,20 @@ func defaultSpaceFor(it contract.Intent) string {
 	case contract.IntentQuery, contract.IntentAsk:
 		return "global"
 	case contract.IntentOrchestrate:
-		return "project" // 多步编排=读文档+写文件+git 提交，落在项目域
+		return "project" //   orchestrate=read  +writefile+git   ,    objdomain
 	case contract.IntentRegisterTool:
-		return "project" // 2026-10-04 能力自举：注册工具=写类意图，需可写域（global 只读会拒）
+		return "project" // 2026-10-04     : note   =writeclassintent, need writedomain(global read-only reject)
 	case contract.IntentEdit, contract.IntentDebug, contract.IntentTest,
 		contract.IntentCommit, contract.IntentDeploy:
-		// 2026-10-04 用户实测"跑一下测试/提交一下代码"→越界（BOUNDARY_VIOLATION）：
-		// 写/执行类意图无点名域时默认落 project（可写+test/run/git 工具），消除语音场景"越界"。
+		// 2026-10-04 useuser  "  under  /   under code"->out-of-scope(BOUNDARY_VIOLATION): 
+		// write/  classintentnoptnamedomaintimedefault  project( write+test/run/git   ),   langaudio scenario"out-of-scope". 
 		return "project"
 	default:
 		return "global"
 	}
 }
 
-// planCaps 把意图翻译成待调工具族名（与 manifest.Tools 词表对齐）。
+// planCaps pipeintent  become call   name(and manifest.Tools wordtableto ). 
 func planCaps(it contract.Intent) []string {
 	switch it.Intent {
 	case contract.IntentNote:
@@ -594,7 +594,7 @@ func planCaps(it contract.Intent) []string {
 	case contract.IntentCommit:
 		return []string{"git", "read"}
 	case contract.IntentOrchestrate:
-		// 组织者式多步链：读文档（file/search）→ 写文件（file）→ git 提交（git）。
+		//   erform  chain: read  (file/search)-> writefile(file)-> git   (git). 
 		return []string{"file", "read", "git", "search"}
 	case contract.IntentDeploy:
 		return []string{"deploy", "http", "read"}
@@ -605,7 +605,7 @@ func planCaps(it contract.Intent) []string {
 	}
 }
 
-// execActions 把意图翻译成具体工具动作（M2 最小可执行集；NOT E/QUERY 走通即可）。
+// execActions pipeintent  become body    (M2       ; NOT E/QUERY   i.e. ). 
 func (o *Options) execActions(ctx context.Context, it contract.Intent) []contract.Receipt {
 	if o.Exec == nil {
 		return []contract.Receipt{{Tool: "pipeline", OK: false, Err: "执行器未配置"}}
@@ -615,8 +615,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 	case contract.IntentOrchestrate:
 		return o.execOrchestrate(ctx, it, logDir)
 	case contract.IntentRegisterTool:
-		// 2026-10-04 用户强要求"后台必须有能力扩展能力，自迭代自更新"：
-		// REGISTER_TOOL 意图真正落地注册（此前只给 caps，未执行）。
+		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
+		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
 		return o.execRegisterTool(ctx, it, logDir)
 	case contract.IntentNote:
 		path := filepath.Join(logDir, "notes.md")
@@ -628,8 +628,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentQuery, contract.IntentAsk:
-		// 自迭代第二段（2026-10-04）：语音自举注册的契约能力优先执行。
-		// 文本命中已注册能力（如「远程控制电脑」）→ 调真实执行器，不再回"无法远程控制"。
+		//      seg(2026-10-04): langaudio  note       first  . 
+		//  base inalreadynote   (e.g."  control  ")-> call     ,  againback"no   control". 
 		if capName := o.matchVoiceContract(&it); capName != "" {
 			tool := "remote-desktop"
 			if strings.Contains(capName, "天气") {
@@ -649,14 +649,14 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		args := map[string]any{"pattern": pattern, "kind": "text"}
 		recv := o.run("search", args)
-		// M7 ②：用 LLM 把 search 结果转成自然语言回答（失败回退 search stdout）。
+		// M7 ②: use LLM pipe search close  become howeverlanglanganswer(  back  search stdout). 
 		if answer := o.queryLLMAnswer(context.Background(), it.RawText, recv.Stdout); answer != "" {
 			recv.Stdout = answer
 		}
 		return []contract.Receipt{recv}
 	case contract.IntentEdit:
-		// 2026-10-04 验证器 R6/R7：写文件意图真实执行（此前走 default 占位
-		// "动作待模型工具循环落地"）。路径从"写到/写入/保存到"后提取。
+		// 2026-10-04     R6/R7: writefileintent    ( before  default   
+		// "    type     ly"). pathfrom"writeto/write/keepstoreto"after get. 
 		path, content := extractWriteTarget(it.CorrectedText)
 		if path == "" {
 			return []contract.Receipt{{Tool: "file", OK: false,
@@ -665,7 +665,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
 		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentCommit:
-		// M4-4：在项目域 scope 根执行真实 git 提交（git add -A + commit；不改写历史）。
+		// M4-4:   objdomain scope root     git   (git add -A + commit;  modifywrite  ). 
 		root := o.projectRootForCommit(it)
 		if root == "" {
 			return []contract.Receipt{{Tool: "git", OK: false, Err: "未解析到项目域根（COMMIT 需注册 project 域）"}}
@@ -683,13 +683,13 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		cm := exec.Command("git", "commit", "-m", msg)
 		cm.Dir = root
 		if out, err := cm.CombinedOutput(); err != nil {
-			// 无改动也返回 OK=false（不报错历史）；回执带 stdout。
+			// nochangealsoreturnback OK=false(     ); back   stdout. 
 			stdout.Write(out)
 			return []contract.Receipt{{Tool: "git", OK: false, Stdout: stdout.String(), Err: "git commit: " + err.Error()}}
 		} else {
 			stdout.Write(out)
 		}
-		// 取新提交 hash 作为回执证据（fs 事实）。
+		// getnew   hash  asback  data(fs   ). 
 		log := exec.Command("git", "log", "-1", "--format=%H %s")
 		log.Dir = root
 		if lout, err := log.Output(); err == nil {
@@ -697,8 +697,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		return []contract.Receipt{{Tool: "git", OK: true, Stdout: stdout.String()}}
 	default:
-		// EDIT/DEBUG/TEST/COMMIT/DEPLOY：M2 编排层只接通门禁与回执，不擅自起子进程写项目库；
-		// 返回一条占位回执，由后续里程碑接模型工具循环。这样门禁/校验/归因链路在 M2 已闭环可测。
+		// EDIT/DEBUG/TEST/COMMIT/DEPLOY: M2 orchestrate onlyconnect  forbidandback ,    raise processwrite obj ; 
+		// returnback    back , byaftercontinue   connect type    .  kind forbid/verify/attributionchainroute  M2 already    . 
 		return []contract.Receipt{{
 			Tool: "pipeline", OK: true,
 			Stdout: "M2 已过 space_check+risk+confirm，动作待模型工具循环落地（intent=" + it.Intent + "）",
@@ -716,8 +716,8 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 	return recv
 }
 
-// extractWriteTarget 从"把 XX 写到 /path"类口语提取 (路径, 内容)。
-// 路径 = "写到/写入/保存到/保存为/创建文件"后第一个以 / 开头的词；内容 = 其余文本（去"把"）。
+// extractWriteTarget from"pipe XX writeto /path"class lang get (path, in ). 
+// path = "writeto/write/keepstoreto/keepstoreas/  file"after   by / openhead word; in  = its  base( "pipe"). 
 func extractWriteTarget(text string) (string, string) {
 	marks := []string{"写到", "写入", "保存到", "保存为", "创建文件"}
 	rest := ""
@@ -747,9 +747,9 @@ func extractWriteTarget(text string) (string, string) {
 	return path, strings.TrimSpace(content)
 }
 
-// matchVoiceContract 检测口语文本是否命中语音自举注册的契约能力（Source=="voice"）。
-// 命中返回能力名（如「远程控制电脑」），未命中返回空串。仅查询类意图走此优先路径，
-// 执行动作类意图仍走各自专用执行器（test/git/file…）。
+// matchVoiceContract    lang baseis  inlangaudio  note      (Source=="voice"). 
+//  inreturnback  name(e.g."  control  "),   inreturnbackempty . only  classintent   firstpath, 
+//     classintent     use   (test/git/file…). 
 func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	if o.Tools == nil {
 		return ""
@@ -758,7 +758,7 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	if text == "" {
 		text = it.RawText
 	}
-	// ① 契约名直接命中：文本含能力名（如「远程控制电脑」）→ 执行。
+	// ①   name connect in:  base   name(e.g."  control  ")->   . 
 	for _, c := range o.Tools.All() {
 		if c.Source != "voice" || c.Name == "" {
 			continue
@@ -767,9 +767,9 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 			return c.Name
 		}
 	}
-	// ② 能力询问命中：用户问"能不能控制电脑/能控制后台吗"（未带能力名）——
-	// 不能让模型回"我无法控制"（模型不知道已注册能力），命中后执行器用真实
-	// 桌面列表证明能力。2026-10-04 用户真机实测："能够控制后台的电脑吗"被回"不能"。
+	// ②      in: useuser "   control  / controlafter  "(    name)--
+	//     typeback" no control"( type   alreadynote   ),  inafter   use  
+	//  facelisttable    . 2026-10-04 useuser    : "  controlafter     "beback"  ". 
 	if strings.Contains(text, "天气") {
 		for _, c := range o.Tools.All() {
 			if c.Source == "voice" && strings.Contains(c.Name, "天气") {
@@ -777,7 +777,7 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 			}
 		}
 	}
-	// ③ 动作触发：截图/列桌面（"给我截个图"不含"远程控制"字样，但意图明确）。
+	// ③   triggersend:   /list face("give    "  "  control"charkind, butintent  ). 
 	if strings.Contains(text, "截个图") || strings.Contains(text, "截图") ||
 		strings.Contains(text, "截屏") || strings.Contains(text, "桌面") {
 		for _, c := range o.Tools.All() {
@@ -798,13 +798,13 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 	return ""
 }
 
-// weatherCityRe 从"查一下加利利亚的天气吧"提取地点候选：取"…的天气"前的名词段。
+// weatherCityRe from"  under     day  " getlypt  : get"… day "before namewordseg. 
 var weatherCityRe = regexp.MustCompile(`([^，,。！？!？ ]{1,20}?)的?天气`)
 
-// tryWeather 天气直通：口语含"天气"时直接查 wttr.in（无 key、离线可用），不依赖 LLM。
-// 命中返回 done Outcome 与 true；否则返回 false 继续正常意图分类。
-// 失败策略（任务要求）：先按提取到的城市查；非 200/空 → 回退自动定位（按出口 IP），
-// 并在回执里说明"未识别到 X，给你当前位置"。全程 < 5s。
+// tryWeather day   :  lang "day "time connect  wttr.in(no key,  line use),  dependency LLM. 
+//  inreturnback done Outcome and true;  thenreturnback false continuecontinuepos intentclassify. 
+//     (taskneedrequire): firstby getto    ;   200/empty -> back     (byexit IP), 
+// and back    "  diffto X, give curbefore  ". safety  < 5s. 
 func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) (*Outcome, bool) {
 	if !strings.Contains(text, "天气") {
 		return nil, false
@@ -812,7 +812,7 @@ func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) 
 	city := ""
 	if m := weatherCityRe.FindStringSubmatch(text); len(m) == 2 {
 		city = strings.TrimSpace(m[1])
-		// 去掉前引导词：查一下/帮我/问/现在/今天/明天/北京…里的动词前缀
+		//   before  word:   under/  / /now / day/ day/  …   wordbefore 
 		for _, p := range []string{"帮我查一下", "帮我查", "帮我", "查一下", "查下", "查", "问一下", "问", "现在", "今天", "明天", "请问", "一下"} {
 			city = strings.TrimPrefix(city, p)
 		}
@@ -846,7 +846,7 @@ func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) 
 		}
 	}
 	if !cityOK {
-		// 回退：自动定位（按本机出口 IP）
+		// back :     (bybase exit IP)
 		if r2, c2 := fetch(""); c2 == 200 && r2 != "" {
 			raw, code = r2, c2
 			where = "当前位置"
@@ -882,23 +882,23 @@ func (o *Options) tryWeather(ctx context.Context, text string, start time.Time) 
 func itoa(i int) string { return strconv.Itoa(i) }
 
 //
-// 【设计取舍：方案 B】复合/长任务由组织者确定性拆成 read→summarize→write→commit 子序列，
-// 在 harness 自身闭环跑完（不外包给外部 shell 脚本）。动作计划不由模型 function-calling 产出，
-// 模型只参与"summarize 内容"那一步（noJSON 纯文本，失败回退确定性拼接）。
+// [  get :    B]  / taskby  er  ity become read->summarize->write->commit   list, 
+//   harness      finish( out giveout  shell  base).      by type function-calling produceout, 
+//  typeonly and"summarize in "   (noJSON   base,   back   ity connect). 
 //
-// 硬约束：
-//   - 所有文件读/写路径都经 space.ResolveScopePath(root, path) 双重 containment 校验，
-//     白名单外路径直接返回失败回执，绝不落盘；
-//   - git 提交只 `git add -- <生成文件>`，绝不 `git add -A`，避免扫入无关未跟踪文件；
-//   - 复用既有 ⑥ space_check / ⑦ risk(不可逆=human) / ⑧ 人工确认闸，一次确认放行整条链。
+//   end: 
+//   -  hasfileread/writepathall  space.ResolveScopePath(root, path)  heavy containment verify, 
+//      name outpath connectreturnback  back ,     ; 
+//   - git   only `git add -- <occurbecomefile>`,    `git add -A`,    innoclose   file; 
+//   -  use has ⑥ space_check / ⑦ risk( reversible=human) / ⑧ humanconfirm ,   confirm    chain. 
 
 const (
-	orchestrateMaxSourceBytes = 8000 // 每份源文档读入上限（防爆上下文）
+	orchestrateMaxSourceBytes = 8000 //      readinonlimit(prevent onunder )
 	orchestrateMaxSources     = 6
 )
 
-// defaultOrchestrateSources 组织者默认纳入汇总的设计/沟通记录文档（docs/ 下按文件名命中；
-// 不存在则跳过，不阻断）。
+// defaultOrchestrateSources   erdefault in     /      (docs/ underbyfilename in; 
+//  store then ed,   disconnect). 
 var defaultOrchestrateSources = []string{
 	"SPEC-v2-可执行规格书.md",
 	"详细设计-语音驱动开发-v2定稿-20261002.md",
@@ -907,8 +907,8 @@ var defaultOrchestrateSources = []string{
 	"全会话记录.md",
 }
 
-// gitTopLevel 探测服务器进程工作目录所在 git 仓库根（`git rev-parse --show-toplevel`）。
-// m7-serve.sh 在仓库根启动二进制，故 cwd 即仓库根；探测失败返回空串。
+// gitTopLevel   serveservice process  obj    git   root(`git rev-parse --show-toplevel`). 
+// m7-serve.sh    rootstart   restrict, thus cwd i.e.  root;     returnbackempty . 
 func gitTopLevel() string {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -923,18 +923,18 @@ func gitTopLevel() string {
 	return strings.TrimSpace(string(out))
 }
 
-// ensureProjectSpace 惰性确保 project 域已注册且 scope 指向 git 仓库根。
+// ensureProjectSpace  ity keep project domainalreadynote and scope referto git   root. 
 //
-// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空，长任务会因 projectRootForCommit 未解析而 FAILED。
-// 这里自动探测 git toplevel 并注册 project 域（落盘到日志目录 spaces/，与 m7-serve.sh 防清理一致）。
-// 硬约束：仅注册 project 域，tools/权限取最小集（read+write），不扩大写权限范围；
-// 已存在带非空 scope 的 project 域则不覆盖（尊重用户/运维手工注册）。
+// safetynew  (rm -rf /tmp/vhs-m7 afterheavy )spaces/ asempty,  task because projectRootForCommit  resolve but FAILED. 
+//        git toplevel andnote  project domain(  today obj  spaces/, and m7-serve.sh prevent    ). 
+//   end: onlynote  project domain, tools/ limitget   (read+write),    write limit  ; 
+// alreadystore   empty scope   project domainthen overwrite( heavyuseuser/    note ). 
 func (o *Options) ensureProjectSpace() {
 	if o == nil || o.Spaces == nil {
 		return
 	}
 	if m, ok := o.Spaces.Get("project"); ok && m != nil && len(m.Scope) > 0 {
-		return // 已有带 scope 的 project 域，不动
+		return // alreadyhas  scope   project domain,   
 	}
 	root := gitTopLevel()
 	if root == "" {
@@ -962,8 +962,8 @@ func mustGetwd() string {
 }
 
 
-// execSkill 技能调用链（线 C 修订卡）：发现→选择→调用→证据留痕→产出→定向提交。
-// 真装配：读技能 SKILL.md（技能系统清单的本地镜像），按其流程产出校准报告骨架。
+// execSkill   callusechain(line C fix  ): sendnow->  ->calluse-> data  ->produceout-> to  . 
+//    : read   SKILL.md(    list basely  ), byitsflowproduceout approve    . 
 func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	o.ensureProjectSpace()
 	root := o.projectRootForCommit(it)
@@ -977,20 +977,20 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	name := strings.TrimSpace(it.Params["skill_name"])
 	action := strings.TrimSpace(it.Params["action"])
 	if name == "" {
-		name = "validate-align" // 缺省技能
+		name = "validate-align" //     
 	}
 	if action == "" {
 		action = "校准"
 	}
 
-	// C-01 发现：意图层已识别（skill_name/action 存在）——留痕
+	// C-01 sendnow: intent already diff(skill_name/action store )--  
 	recv := o.run("search", map[string]any{"pattern": "SKILL.md", "kind": "file"})
 	recv.Tool = "skill"
 	recv.Seq = nextSeq()
 	receipts = append(receipts, contract.Receipt{Tool: "skill", OK: true, Seq: nextSeq(),
 		Stdout: "C-01 技能发现: skill_name=" + name + " action=" + action + "（意图层，kind=skill）"})
 
-	// C-02 选择：技能清单来源=技能系统（aiops 远端，Bearer $AIOPS_KEY），失败降级本地镜像。
+	// C-02   :   list  =    (aiops  end, Bearer $AIOPS_KEY),     basely  . 
 	skillDir := filepath.Join(root, "skills", sanitizePathPart(name))
 	skillMD := filepath.Join(skillDir, "SKILL.md")
 	catalogSource := "local-mirror"
@@ -1003,7 +1003,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	}
 	sel := contract.Receipt{Tool: "skill", Seq: nextSeq()}
 	if _, err := os.Stat(skillMD); err != nil {
-		// 兜底 validate-align（仓库 skills/validate-align/SKILL.md）
+		//  bot validate-align(   skills/validate-align/SKILL.md)
 		skillMD = filepath.Join(root, "skills", "validate-align", "SKILL.md")
 	}
 	if _, err := os.Stat(skillMD); err != nil {
@@ -1016,7 +1016,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	sel.Stdout = "C-02 技能选择: " + skillMD + "（清单来源=" + catalogSource + "）"
 	receipts = append(receipts, sel)
 
-	// C-03 调用：读 SKILL.md → 按技能流程产出报告骨架（LLM 不可用走确定性）。
+	// C-03 calluse: read SKILL.md -> by  flowproduceout    (LLM   use   ity). 
 	readRecv := o.run("file", map[string]any{"action": "read", "path": skillMD})
 	readRecv.Seq = nextSeq()
 	receipts = append(receipts, readRecv)
@@ -1047,7 +1047,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 		return receipts
 	}
 
-	// C-04 证据留痕：调用链逐段已入 receipts（发现/选择/调用/产出）——服务层 emit trajectory。
+	// C-04  data  : callusechain segalreadyin receipts(sendnow/  /calluse/produceout)--serveservice  emit trajectory. 
 	receipts = append(receipts, contract.Receipt{Tool: "skill", Seq: nextSeq(), OK: true,
 		Stdout: "C-04 证据留痕: 调用链 4 段已记录（find/select/call/produce）"})
 
@@ -1057,7 +1057,7 @@ func (o *Options) execSkill(ctx context.Context, it contract.Intent, logDir stri
 	return receipts
 }
 
-// skillReportBody 组装技能产出报告（确定性）：技能流程骨架 + 校准对象摘要 + 判据清单占位。
+// skillReportBody     produceout  (  ity):   flow   +  approveto  need +  datalist  . 
 func skillReportBody(name, action, skillMDContent, doc, catalogSource string) string {
 	var sb strings.Builder
 	sb.WriteString("## 技能信息\n\n")
@@ -1115,8 +1115,8 @@ func skillReportBody(name, action, skillMDContent, doc, catalogSource string) st
 	return sb.String()
 }
 
-// fetchSkillCatalog 从 aiops 技能系统拉技能清单（线 C 修订卡 C-02：清单来源=技能系统）。
-// Bearer 用 $AIOPS_KEY；网络/鉴权失败返回错误（调用方降级本地镜像并留痕）。
+// fetchSkillCatalog from aiops        list(line C fix   C-02: list  =    ). 
+// Bearer use $AIOPS_KEY;   /    returnbackerror(calluse   basely  and  ). 
 func fetchSkillCatalog() (string, error) {
 	key := os.Getenv("AIOPS_KEY")
 	if key == "" {
@@ -1140,7 +1140,7 @@ func fetchSkillCatalog() (string, error) {
 	return string(b), nil
 }
 
-// defaultSkillCriteria 按技能/动作给出判据清单（线 C 遗留②：逐条双证的起点）。
+// defaultSkillCriteria by  /  giveout datalist(line C   ②:      raisept). 
 func defaultSkillCriteria(name, action string) []string {
 	switch action {
 	case "校准", "对齐", "校验":
@@ -1160,10 +1160,10 @@ func defaultSkillCriteria(name, action string) []string {
 	}
 }
 
-// bracketTitle 抽取《…》书名号目标（与 input 层 extractBookTitle 语义一致）。
+// bracketTitle  get …  nameidobjtgt(and input   extractBookTitle semantic  ). 
 var bracketTitle = regexp.MustCompile(`《([^》]+)》`)
 
-// hasDeicticDocRef 判定文本是否含文档指代（"这份/该文档/此文档/这份需求说明书"等）。
+// hasDeicticDocRef    baseis    coreference("  /   /   /  needrequire   "etc). 
 func hasDeicticDocRef(text string) bool {
 	for _, d := range []string{"这份", "该文档", "此文档", "这份需求", "上述文档", "前面那份", "这个", "这些", "那", "它"} {
 		if strings.Contains(text, d) {
@@ -1173,7 +1173,7 @@ func hasDeicticDocRef(text string) bool {
 	return false
 }
 
-// referTargetFromSlots 从本会话上下文槽读最近含《…》的记录，抽书名号作为指代目标。
+// referTargetFromSlots frombase  onunder  read    …    ,   nameid ascoreferenceobjtgt. 
 func (o *Options) referTargetFromSlots() string {
 	convID := strings.TrimSpace(o.ConvID)
 	if convID == "" {
@@ -1190,8 +1190,8 @@ func (o *Options) referTargetFromSlots() string {
 	return ""
 }
 
-// slotLatestDocument 读会话槽最近一条 has_doc=true 记录的 doc_full（指代命中后恢复全文）。
-// 2026-10-03 记忆增强：配合 referTargetFromSlots，让"那个事"不仅解出书名号，还能拿到可执行的 document。
+// slotLatestDocument read        has_doc=true     doc_full(coreference inafter  safety ). 
+// 2026-10-03   add :    referTargetFromSlots,  "   " onlyresolveout nameid, also  to     document. 
 func slotLatestDocument(logDir, convID string) string {
 	recs := serverReadContextSlots(logDir, convID)
 	for i := len(recs) - 1; i >= 0; i-- {
@@ -1204,9 +1204,9 @@ func slotLatestDocument(logDir, convID string) string {
 	return ""
 }
 
-// loadASRMemory 读 ASR 服务沉淀（feedback.jsonl 最近 10 条 / blacklist.json / dictionary.json 教词），
-// 生成"我学到的用户偏好"摘要。空目录/空文件 → 返回 ""（不注入，无副作用）。
-// 2026-10-04：ASR 学到的东西跨会话全局生效 —— 这就是"越来越懂你"的记忆来源。
+// loadASRMemory read ASR serveservice  (feedback.jsonl    10   / blacklist.json / dictionary.json  word), 
+// occurbecome"  to useuser  " need. emptyobj /emptyfile -> returnback ""( notein, no  use). 
+// 2026-10-04: ASR  to      globaloccur  --  thenis"     "     . 
 func (o *Options) loadASRMemory() string {
 	if o.ASRDataDir == "" {
 		return ""
@@ -1261,7 +1261,7 @@ func (o *Options) loadASRMemory() string {
 	return strings.Join(parts, "；")
 }
 
-// memoryBlock 把 memory 拼成 prompt 后缀（空 → ""，长 → 截断 1200）。
+// memoryBlock pipe memory  become prompt after (empty -> "",   ->  disconnect 1200). 
 func memoryBlock(memory string) string {
 	if memory == "" {
 		return ""
@@ -1269,9 +1269,9 @@ func memoryBlock(memory string) string {
 	return "\n\n" + truncateStr(memory, 1200)
 }
 
-// memoryContext 从 intent.Context 提取"我学到的"记忆（asr-memory / project-map），
-// 拼进 LLM prompt —— 让"越来越懂你"真正被模型消费。
-// 2026-10-04 修复：此前 Context 只有注入无消费点（纸面记忆），LLM 看不到 ASR 沉淀。
+// memoryContext from intent.Context  get"  to "  (asr-memory / project-map), 
+//    LLM prompt --  "     " posbe type  . 
+// 2026-10-04 fix :  before Context onlyhasnoteinno  pt( face  ), LLM   to ASR   . 
 func (o *Options) memoryContext(it contract.Intent) string {
 	var parts []string
 	for _, c := range it.Context {
@@ -1288,7 +1288,7 @@ func (o *Options) memoryContext(it contract.Intent) string {
 	return "记忆上下文（你从用户/过往会话学到的，应尊重并在输出中体现）：\n" + strings.Join(parts, "\n")
 }
 
-// writeASRSlot 把 ASR 沉淀快照 append 到 <logDir>/context_slots/asr.jsonl（槽体系内、可审计）。
+// writeASRSlot pipe ASR   fast  append to <logDir>/context_slots/asr.jsonl( body in,    ). 
 func (o *Options) writeASRSlot(line string) {
 	dir := filepath.Join(o.logDir(), "context_slots")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1302,8 +1302,8 @@ func (o *Options) writeASRSlot(line string) {
 	_ = f.Close()
 }
 
-// serverReadContextSlots 读槽（server.go 同函数导出代理——避免 import cycle：pipeline 不依赖 server）。
-// 实际由 server 包写入；pipeline 经此只读。放在本文件尾部。
+// serverReadContextSlots read (server.go same num out  --   import cycle: pipeline  dependency server). 
+//   by server  write; pipeline   read-only.   basefiletail . 
 func serverReadContextSlots(logDir, convID string) []map[string]any {
 	raw, err := os.ReadFile(filepath.Join(logDir, "context_slots", convID+".jsonl"))
 	if err != nil {
@@ -1322,20 +1322,20 @@ func serverReadContextSlots(logDir, convID string) []map[string]any {
 	return out
 }
 
-// ---------- 多轮指代接线（2026-10-04）：refer.Recent 会话槽读写 ----------
+// ----------   coreferenceconnectline(2026-10-04): refer.Recent    readwrite ----------
 //
-// 背景：refer.Resolver 的 Recent（跨轮上下文）生产路径此前**零构造**——grep RecentEntity{
-// 仅出现在测试代码，"这个方案"永远回问。此处补上"写入端 + 读取端"：
-//   - 执行成功的轮次把对话核心实体 append 到 <logDir>/context_slots/<convID>.jsonl
-//     （与文档槽/ASR 槽同体系：append-only、会话隔离、可审计）；
-//   - 下一轮 refer 解析前从同槽读回，注入 resolver.Recent。
-// 会话隔离：按 ConvID 分文件；CLI 缺省 "default"（同 logDir 下多轮 run 共享），
-// server 按真实会话 ID 隔离，不跨会话猜（与 358b2f0 指代固化槽同范式）。
+//  scenario: refer.Resolver   Recent(  onunder )occurproducepath before**   **--grep RecentEntity{
+// onlyoutnow    code, "    "  clarification.  placepatchon"writeend + readgetend": 
+//   -   become    pipeto    body append to <logDir>/context_slots/<convID>.jsonl
+//     (and   /ASR  samebody : append-only,     ,    ); 
+//   - under   refer resolve beforefromsame readback, notein resolver.Recent. 
+//     : by ConvID splitfile; CLI    "default"(same logDir under   run   ), 
+// server by     ID   ,      (and 358b2f0 coreference ize same form). 
 
-const recentSlotMax = 16 // 上下文窗口上限（防槽无限膨胀）
+const recentSlotMax = 16 // onunder   onlimit(prevent nolimit  )
 
-// extractRecentEntities 从文本提取可作指代上下文的核心实体：
-// 拉丁专名（OT-ODP/SPoG/DMZ…）+ 书名号《…》内容 + 引号短语。去重、带时间戳。
+// extractRecentEntities from base get  coreferenceonunder     body: 
+//    name(OT-ODP/SPoG/DMZ…)+  nameid … in  +  id lang.  heavy,  timetime . 
 func extractRecentEntities(text string) []refer.RecentEntity {
 	seen := map[string]bool{}
 	var out []refer.RecentEntity
@@ -1347,17 +1347,17 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 		seen[e] = true
 		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
 	}
-	// 拉丁大写专名（含 - 连接可 0..N 段）：OT-ODP / SPoG / DMZ / NGSA
+	//    write name(  - linkconnect  0..N seg): OT-ODP / SPoG / DMZ / NGSA
 	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
 	for _, m := range re.FindAllString(text, -1) {
 		add(m, "project")
 	}
-	// 《…》书名号文档（2-30 字）
+	//  …  nameid  (2-30 char)
 	re2 := regexp.MustCompile(`《([^》]{2,30})》`)
 	for _, m := range re2.FindAllStringSubmatch(text, -1) {
 		add(m[1], "file")
 	}
-	// 引号短语（4-30 字，像实体名/专有表述）
+	//  id lang(4-30 char,   bodyname/ hastable )
 	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
 	for _, m := range re3.FindAllStringSubmatch(text, -1) {
 		add(m[1], "project")
@@ -1365,7 +1365,7 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 	return out
 }
 
-// writeRecentEntities 把最近实体 append 到会话槽（append-only、可审计）。
+// writeRecentEntities pipe   body append to   (append-only,    ). 
 func writeRecentEntities(logDir, convID string, ents []refer.RecentEntity) {
 	dir := filepath.Join(logDir, "context_slots")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1384,7 +1384,7 @@ func writeRecentEntities(logDir, convID string, ents []refer.RecentEntity) {
 	}
 }
 
-// loadRecentEntities 从会话槽读最近实体（type=recent_entity），ts 倒序取前 N。
+// loadRecentEntities from   read   body(type=recent_entity), ts   getbefore N. 
 func loadRecentEntities(logDir, convID string) []refer.RecentEntity {
 	recs := serverReadContextSlots(logDir, convID)
 	var out []refer.RecentEntity
@@ -1415,15 +1415,15 @@ func loadRecentEntities(logDir, convID string) []refer.RecentEntity {
 }
 
 
-// execOrchestrate 跑 read→summarize→write→commit 多步链，每步产出真实回执。
+// execOrchestrate   read->summarize->write->commit   chain,   produceout  back . 
 func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
-	// 全新环境（rm -rf /tmp/vhs-m7 后重建）spaces/ 为空 → 惰性自动注册 project 域，
-	// scope 指向 git 仓库根，落盘到日志目录 spaces/，长任务即开即用（不覆盖已有注册）。
+	// safetynew  (rm -rf /tmp/vhs-m7 afterheavy )spaces/ asempty ->  ity  note  project domain, 
+	// scope referto git   root,   today obj  spaces/,  taski.e.openi.e.use( overwritealreadyhasnote ). 
 	o.ensureProjectSpace()
-	// 2026-10-04 接线（断链修复）：kind=implement 的实现类长任务 → execImplement
-	//（LLM 生成 + 证据门多轮收敛 + git 提交）。此前 llmGenerateImplement/EvidenceGaps
-	// 只有定义无调用者 → 实现类任务全部落到文档整理分支（读文档→汇总→写全景文档），
-	// 证据门永不触发——这是"无人工一次成功"主线的架构性断链。
+	// 2026-10-04 connectline(disconnectchainfix ): kind=implement   nowclass task -> execImplement
+	//(LLM occurbecome +  data   recv  + git   ).  before llmGenerateImplement/EvidenceGaps
+	// onlyhasdefinenocalluseer ->  nowclasstasksafety  to    branch(read  ->  ->writesafetyscenario  ), 
+	//  data   triggersend-- is"nohuman  become " line   itydisconnectchain. 
 	if it.Params != nil && it.Params["kind"] == "implement" {
 		return o.execImplement(ctx, it, logDir)
 	}
@@ -1435,7 +1435,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	var receipts []contract.Receipt
 	nextSeq := func() int { return len(receipts) + 1 }
 
-	// 1) 发现源文档并逐个做域内白名单校验（docs/ 下命中默认清单）。
+	// 1) sendnow   and   domainin name verify(docs/ under indefaultlist). 
 	docDir := filepath.Join(root, "docs")
 	type srcDoc struct{ abs, base string }
 	var sources []srcDoc
@@ -1447,7 +1447,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 				OK: false, Err: "白名单外路径被拒绝（越界）: " + abs})
 		}
 		if _, err := os.Stat(clean); err != nil {
-			continue // 源文档不存在则跳过
+			continue //     store then ed
 		}
 		sources = append(sources, srcDoc{abs: clean, base: name})
 		if len(sources) >= orchestrateMaxSources {
@@ -1455,7 +1455,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		}
 	}
 
-	// 2) 逐份读（file read，真实回执）；任一失败 → 不写不提交。
+	// 2)   read(file read,   back );      ->  write   . 
 	var contents []string
 	for _, s := range sources {
 		recv := o.run("file", map[string]any{"action": "read", "path": s.abs})
@@ -1467,7 +1467,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		contents = append(contents, "# 源文档: "+s.base+"\n"+truncateStr(recv.Stdout, orchestrateMaxSourceBytes))
 	}
 
-	// 3) 汇总成一份文档（LLM noJSON 纯文本；不可用则确定性拼接，仍产出真实文件）。
+	// 3)   become    (LLM noJSON   base;   usethen  ity connect,  produceout  file). 
 	title := strings.TrimSpace(it.Params["target_doc"])
 	if title == "" {
 		title = "VoiceSign-Harness-全景开发文档"
@@ -1485,7 +1485,7 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		"> 本文件由 VoiceSign Harness 多步编排（ORCHESTRATE：读→汇总→写→提交）自动生成。\n\n" +
 		body + "\n"
 
-	// 4) 写目标文件（白名单校验后走 file write，真实回执，含备份标记）。
+	// 4) writeobjtgtfile( name verifyafter  file write,   back ,    tgt ). 
 	targetAbs := filepath.Join(docDir, title+".md")
 	cleanTarget, ok := space.ResolveScopePath(root, targetAbs)
 	if !ok {
@@ -1501,17 +1501,17 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 		return receipts
 	}
 
-	// 5) 定向 git 提交（只 add 生成文件，绝不 git add -A）。
+	// 5)  to git   (only add occurbecomefile,    git add -A). 
 	crecv := o.commitTargetPath(root, cleanTarget, "vhs(orchestrate): 生成《"+title+"》多步编排落地")
 	crecv.Seq = nextSeq()
 	receipts = append(receipts, crecv)
 	return receipts
 }
 
-// execImplement（2026-10-04 接线）：kind=implement 的实现类长任务——
-// LLM 按需求文档生成 Go 服务到 harness-output/<slug>/，证据门多轮收敛（≤5 轮，
-// 缺口回喂下一轮 memory），无缺口后 git 提交。doc 优先取 o.Document（server document
-// 通道），回退 it.Params["document"]。
+// execImplement(2026-10-04 connectline): kind=implement   nowclass task--
+// LLM byneedrequire  occurbecome Go serveserviceto harness-output/<slug>/,  data   recv (<=5  , 
+//   back under   memory), no  after git   . doc  firstget o.Document(server document
+//   ), back  it.Params["document"]. 
 func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	root := o.projectRootForCommit(it)
 	if root == "" {
@@ -1535,13 +1535,13 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 	nextSeq := func() int { return len(receipts) + 1 }
 	memory := ""
 	done := false
-	// 2026-10-04 加码：5→8（用户"一直给它加码直到成功"；每轮注入当前代码后收敛率提高）
+	// 2026-10-04  code: 5->8(useuser"  give  code tobecome ";   noteincurbefore codeafterrecv rate  )
 	const maxImplRounds = 8
 	for round := 1; round <= maxImplRounds && !done; round++ {
 		files, note := o.llmGenerateImplement(ctx, title, doc, skelDir, memory)
 		if files == nil {
-			// 2026-10-04 修复：note 是编译信息（"编译全绿（N 轮）"）不是错误——
-			// 只有 files==nil 才判失败（LLM 不可用/迭代耗尽），否则产物已真实写盘。
+			// 2026-10-04 fix : note is    ("  safety (N  )") iserror--
+			// onlyhas files==nil only   (LLM   use/    ),  thenartifactalready  write . 
 			receipts = append(receipts, contract.Receipt{Seq: nextSeq(), Tool: "implement",
 				OK: false, Err: note})
 			break
@@ -1566,9 +1566,9 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 			break
 		}
 		memory = "上一轮证据门缺口（必须修复后才能完成）：\n" + strings.Join(gaps, "\n")
-		// 2026-10-04 修复：修订轮注入当前产物代码（LLM 全量重写导致"修A坏B"）。
-		// 2026-10-04 再修：仅开头 3000 字符看不到文件后部的 E4/E5 handler（8 轮耗死）——
-		// 改首尾拼接（首 1500 + 尾 3500），保证缺口对应函数可见。
+		// 2026-10-04 fix : fix  noteincurbeforeartifact code(LLM safety heavywrite  "fixA B"). 
+		// 2026-10-04 againfix: onlyopenhead 3000 char   tofileafter   E4/E5 handler(8    )--
+		// modifyfirsttail connect(first 1500 + tail 3500), keep   to  num see. 
 		if cur, err := os.ReadFile(filepath.Join(skelDir, "main.go")); err == nil && len(cur) > 0 {
 			src := string(cur)
 			head, tail := truncateStr(src, 1500), truncateStrTail(src, 3500)
@@ -1588,8 +1588,8 @@ func (o *Options) execImplement(ctx context.Context, it contract.Intent, logDir 
 	return receipts
 }
 
-// implCapabilityBrief 是实现类任务的 P0 能力清单兜底摘要（LLM 不可用时骨架仍可编译）。
-// 洞4（2026-10-04）起以需求文档端点清单注入为主，本清单仅作无文档兜底。
+// implCapabilityBrief is nowclasstask  P0   list bot need(LLM   usetime      ). 
+//  4(2026-10-04)raisebyneedrequire  endpointlistnoteinas , baselistonly no   bot. 
 const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配与纠错安全）
 ②文本纠错：清洗 + 词典纠错（正常文本不被改坏）
 ③意图分类：NOTE/QUERY/EDIT/COMMIT/ORCHESTRATE 五类
@@ -1598,18 +1598,18 @@ const implCapabilityBrief = `①个性化词典：增/删/查条目（含匹配�
 ⑥HTTP 端点：/v1/health、/v1/process（JSON 请求/响应）
 ⑦只监听 127.0.0.1（非回环拒绝），鉴权可占位但须有`
 
-// llmSummarize 用 fast provider 把多份文档内容整理成一份 Markdown 文档（noJSON 纯文本，
-// 与 QUERY 回答层同款：显式关闭 json_object，不发 temperature=0）。任何失败 → 返回空串。
+// llmSummarize use fast provider pipe    in   become   Markdown   (noJSON   base, 
+// and QUERY answer same :  formclose  json_object,  send temperature=0).      -> returnbackempty . 
 //
-// 【推理模型预算】gpt-6-luna 是推理模型，reasoning 会吃掉 max_completion_tokens；
-// 1500 全被思考吃光→finish_reason=length、content 空。故预算给到 8000，并在 system 里
-// 要求"直接输出正文、勿长篇推理"。失败/空必须打日志（对照 queryLLMAnswer，不再吞错）。
+// [   type  ]gpt-6-luna is   type, reasoning     max_completion_tokens; 
+// 1500 safetybe    ->finish_reason=length, content empty. thus  giveto 8000, and  system  
+// needrequire" connect outpos ,      ".   /empty   day (to  queryLLMAnswer,  again  ). 
 func (o *Options) llmSummarize(ctx context.Context, title, merged string) string {
 	if o == nil || o.Providers == nil {
 		log.Printf("[llmSummarize] providers nil")
 		return ""
 	}
-	rid := o.RequestID // P0-4b：日志带主链 request_id（Run 已回写 o.RequestID）
+	rid := o.RequestID // P0-4b: day   chain request_id(Run alreadywrite-back o.RequestID)
 	p, err := o.Providers.Get("fast")
 	if err != nil {
 		log.Printf("[llmSummarize] rid=%s fast provider unavailable: %v", rid, err)
@@ -1632,7 +1632,7 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 		return ""
 	}
 	c := strings.TrimSpace(resp.Content)
-	// provider 级默认 json_object 时可能仍包一层 JSON 壳，解出文本字段。
+	// provider  default json_object time       JSON  , resolveout basecharseg. 
 	if strings.HasPrefix(c, "{") {
 		var j map[string]any
 		if err := json.Unmarshal([]byte(c), &j); err == nil {
@@ -1651,7 +1651,7 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 	return c
 }
 
-// deterministicSummary 无模型时的确定性汇总（结构化拼接源文档），保证仍产出真实文件。
+// deterministicSummary no typetime   ity  (close ize connect   ), keep  produceout  file. 
 func deterministicSummary(title string, sourceNames []string, merged string) string {
 	var sb strings.Builder
 	sb.WriteString("## 概览\n\n")
@@ -1668,7 +1668,7 @@ func deterministicSummary(title string, sourceNames []string, merged string) str
 }
 
 
-// sanitizePathPart 把标题转为安全的路径分段（保留中英文数字与连字符）。
+// sanitizePathPart pipetgt  assafesafety pathsplitseg(keep in  numcharandlinkchar ). 
 func sanitizePathPart(s string) string {
 	var sb strings.Builder
 	for _, r := range s {
@@ -1688,7 +1688,7 @@ func sanitizePathPart(s string) string {
 	return out
 }
 
-// asciiSlug 把标题转为 ASCII 安全名（module path 用；非 ASCII 一律 '-'，空则回退 impl）。
+// asciiSlug pipetgt  as ASCII safesafetyname(module path use;   ASCII    '-', emptythenback  impl). 
 func asciiSlug(s string) string {
 	var sb strings.Builder
 	for _, r := range s {
@@ -1705,17 +1705,17 @@ func asciiSlug(s string) string {
 	return out
 }
 
-// llmGenerateImplement（L-01 验收 2026-10-03）：需求文档 → LLM 生成**完整可运行**
-// 的 Go 实现 → 写盘 → go build 真编译验证 → 编译错误回喂修复（≤2 轮）。
+// llmGenerateImplement(L-01  recv 2026-10-03): needrequire   -> LLM occurbecome**finish    **
+//   Go  now -> write  -> go build       ->   errorback fix (<=2  ). 
 //
-// **逐文件生成**（2026-10-03 真跑实测）：aiops 网关对 /api/model/chat 有 ~60s 硬上限
-// （裸调 12000 tokens 60.6s → 504 Gateway Time-out）；单文件生成实测 36s/11913 字符 ✅。
-// ⇒ 拆成 main.go（自包含完整服务）一次调用 + go.mod/README 小文件，避免网关 504。
+// ** fileoccurbecome**(2026-10-03     ): aiops  closeto /api/model/chat has ~60s  onlimit
+// ( call 12000 tokens 60.6s -> 504 Gateway Time-out);  fileoccurbecome   36s/11913 char  ✅. 
+// ⇒  become main.go(   finish serveservice)  calluse + go.mod/README  file,    close 504. 
 //
-// 返回 (files, note)：files=nil 表示 LLM 不可用/迭代耗尽（调用方回落确定性骨架）；
-// note 为失败原因或"编译全绿（N 轮）"。
-// chatWithFallback（2026-10-04 适配 provider 新 API + 模型调度）：按 pref 顺序尝试 provider，
-// 失败/异常自动切下一个（欠费/故障不卡死；对齐"最差模型兜底"需求）。
+// returnback (files, note): files=nil tableshow LLM   use/    (calluse back   ity  ); 
+// note as  origbecauseor"  safety (N  )". 
+// chatWithFallback(2026-10-04    provider new API +  typecall ): by pref      provider, 
+//   /error   under  (  /thus    ; to " diff type bot"needrequire). 
 func (o *Options) chatWithFallback(ctx context.Context, pref []string, req provider.ChatRequest) (provider.ChatResponse, error) {
 	if o == nil || o.Providers == nil {
 		return provider.ChatResponse{}, fmt.Errorf("providers nil")
@@ -1741,7 +1741,7 @@ func (o *Options) chatWithFallback(ctx context.Context, pref []string, req provi
 	return provider.ChatResponse{}, lastErr
 }
 
-// stripCodeFence 剥离 LLM 输出的 Markdown 代码围栏（```go ... ```）。
+// stripCodeFence    LLM  out  Markdown  code  (```go ... ```). 
 func stripCodeFence(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
@@ -1760,9 +1760,9 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	if o == nil || o.Providers == nil {
 		return nil, "providers nil"
 	}
-	// 清掉骨架残留 .go（2026-10-03 实证：骨架 domain.go/router.go 与 LLM 自包含 main.go 冲突，
-	// 编译报 ./router.go:21 undefined: writeJSON → 修复轮永远修不掉非 LLM 生成的文件）。
-	// LLM 自包含生成后只保留 LLM 产物（main.go/go.mod/README），目录内其他 .go 一律移除。
+	//        .go(2026-10-03   :    domain.go/router.go and LLM     main.go   , 
+	//     ./router.go:21 undefined: writeJSON -> fix    fix    LLM occurbecome file). 
+	// LLM    occurbecomeafteronlykeep  LLM artifact(main.go/go.mod/README), obj inits  .go     . 
 	if ents, err := os.ReadDir(skelDir); err == nil {
 		for _, e := range ents {
 			n := e.Name()
@@ -1771,18 +1771,18 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 			}
 		}
 	}
-	// 模型调度（2026-10-03）：fast 失败自动降级 center→strong→gpt-mini，不再单点卡死。
-	// genWithPref：按 pref 降级链调度（fast=deepseek 等；gpt4o/gpt-mini 质量最稳）。
-	// 2026-10-03 真跑实证：①fast 曾 1.8s 返回<200 字符短输出 → 判无效（输出质量无法被调度层感知）；
-	// ②gpt-4o 输出必带 ```go Markdown 围栏 → 直接写盘必编译失败（expected 'package'）→ stripCodeFence 剥离。
+	//  typecall (2026-10-03): fast        center->strong->gpt-mini,  again pt  . 
+	// genWithPref: by pref   chaincall (fast=deepseek etc; gpt4o/gpt-mini     ). 
+	// 2026-10-03     : ①fast   1.8s returnback<200 char   out ->  no ( out  no becall    ); 
+	// ②gpt-4o  out   ```go Markdown    ->  connectwrite      (expected 'package')-> stripCodeFence   . 
 	genWithPref := func(pref []string, minLen int, sysMsg, usrMsg string) (string, string) {
 		resp, err := o.chatWithFallback(ctx, pref, provider.ChatRequest{
 			Messages: []contract.Message{
 				{Role: "system", Content: sysMsg},
 				{Role: "user", Content: usrMsg},
 			},
-			// 2026-10-03 真跑实证：MaxTokens 上限会令模型用满 12000 tokens → 网关 60s 504/超时；
-			// 不设上限 → 模型自然收敛（裸调实测 36s/11913 字符）。故此处不传 MaxTokens。
+			// 2026-10-03     : MaxTokens onlimit   typeusefull 12000 tokens ->  close 60s 504/ time; 
+			//   onlimit ->  type howeverrecv ( call   36s/11913 char ). thus place   MaxTokens. 
 			ResponseFormat: noJSON(),
 		})
 		if err != nil {
@@ -1794,27 +1794,27 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		}
 		return c, ""
 	}
-	// 质量门按文件分级：main.go≥200（完整服务）；go.mod≥20（module+go 行仅 ~35 字符，
-	// 2026-10-03 实证 200 会误杀合法 go.mod → 整个实现失败）；README≥50。
+	//    byfilesplit : main.go>=200(finish serveservice); go.mod>=20(module+go  only ~35 char , 
+	// 2026-10-03    200       go.mod ->    now  ); README>=50. 
 	gen := func(sysMsg, usrMsg string) (string, string) {
 		return genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 200, sysMsg, usrMsg)
 	}
 
-	// 2026-10-04 洞4 修复：需求文档端点清单 + 要点摘要必须注入 prompt。
-	// 此前 req 只喂硬编码 implCapabilityBrief（ASR 能力清单）——清单恰好匹配 ASR 需求时
-	// 看似可用；换需求（语音适配层）后 LLM 无需求信息 → 生成错误内容 → 证据门永远缺口 →
-	// 修订死循环到 blocked。正解：从 doc 提取端点清单注入（复用 endpointRefsOf 证据门逻辑），
-	// 摘要控制长度（网关 60s 上限），语义判据仍由证据门兜底。
+	// 2026-10-04  4 fix : needrequire  endpointlist + needpt need  notein prompt. 
+	//  before req only   code implCapabilityBrief(ASR   list)--list     ASR needrequiretime
+	//    use;  needrequire(langaudio   )after LLM noneedrequire   -> occurbecomeerrorin  ->  data      ->
+	// fix    to blocked. posresolve: from doc  getendpointlistnotein( use endpointRefsOf  data   ), 
+	//  needcontrol  ( close 60s onlimit), semantic data by data  bot. 
 	req := "目标产品标题：" + title + "\n\n需求文档要求实现的端点清单（验收逐端点核对，必须全部注册）：\n" +
 		sortedEndpoints(doc) + "\n\n需求要点摘要（简要）：\n" + docBrief(doc, 1200) +
 		"\n\nP0 能力清单（按此实现，可合理扩展）：\n" + implCapabilityBrief + memoryBlock(memory)
 	if o.RoundEvidence != "" {
-		// L-01 架构：第 2+ 轮携带上一轮证据门缺口（对齐 dsh goal-round 的"完成前收集证据"）。
+		// L-01   :   2+    on   data   (to  dsh goal-round  "donebeforerecv  data"). 
 		req += "\n\n上一轮证据门缺口（本轮必须补齐后才能验收）：\n" + o.RoundEvidence + "\n"
 	}
 	files := map[string]string{}
 
-	// ① main.go：自包含完整服务（词典/纠错/意图/反馈/JSONL 落盘/端点/健康检查）——大文件独立调用。
+	// ① main.go:    finish serveservice(word /correction/intent/rev /JSONL   /endpoint/    )-- file  calluse. 
 	sysMain := "你是资深 Go 工程师。只输出 main.go 的**完整代码文本**（自包含、可直接 go build 通过的服务）。" +
 		"硬性要求：①仅用标准库，零第三方依赖；②**每个 http.HandleFunc 端点必须实现完整可运行的业务逻辑并返回真实数据**，禁止任何 501 StatusNotImplemented、`// Placeholder`、TODO、panic 占位——验收会逐个真跑打接口断言响应；③实现需求文档 P0 核心能力（词典增删查/纠错/意图分类/反馈/数据 JSONL 落盘 append-only）；" +
 		"④需求文档要求/提及的**每一个 /v1/ 端点**都必须用 http.HandleFunc(\"/v1/...\", …) 字面量逐一注册（验收会按需求端点清单逐端点核对，缺一即不合格）；" +
@@ -1826,14 +1826,14 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	}
 	files["main.go"] = mainCode
 
-	// ② go.mod：小文件独立调用。
+	// ② go.mod:  file  calluse. 
 	modCode, note := genWithPref([]string{"fast", "center", "strong", "gpt-mini"}, 20, "你是 Go 工程师。只输出 go.mod 的完整文本：module 名用 harness-output/impl（ASCII 小写，中文 module 非法），go 版本 1.21。纯文本，不要围栏。", req)
 	if modCode == "" {
 		return nil, "go.mod 生成失败: " + note
 	}
 	files["go.mod"] = modCode
 
-	// ③ README.md：小文件，失败不致命（跳过仍可编译）。
+	// ③ README.md:  file,      ( ed    ). 
 	if rd, rn := gen("你是技术文档作者。输出 README.md 的简短中文运行说明（启动命令/端点/数据文件）。纯文本，不要围栏。", req); rd != "" {
 		files["README.md"] = rd
 	} else {
@@ -1843,20 +1843,20 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	if err := writeFilesToDisk(skelDir, files); err != nil {
 		return nil, "写盘失败: " + err.Error()
 	}
-	// 真编译验证（不许桩）：go build -C <skelDir> ./...（Go 1.20+ -C 支持，runCmd Dir 固定故用 -C）。
+	//      ( allow ): go build -C <skelDir> ./...(Go 1.20+ -C  keep, runCmd Dir   thususe -C). 
 	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", skelDir, "./..."}})
 	if buildRecv.OK {
 		return files, "编译全绿（0 轮修复）"
 	}
-	// 编译失败 → ①确定性修复循环（import 未用按名清理 + 未使用变量按行号删，机械错误 LLM 修不稳；
-	// 2026-10-04 真跑实证：import 错位修复 + objects 未用变量，LLM 全量重写 3 轮均不收敛）；
-	// ②确定性耗尽仍失败才回喂 LLM（≤3 轮）。
+	//      -> ①  ityfix   (import  usebyname   +   usechange by id ,   error LLM fix  ; 
+	// 2026-10-04     : import   fix  + objects  usechange , LLM safety heavywrite 3    recv ); 
+	// ②  ity     onlyback  LLM(<=3  ). 
 	log.Printf("[llmGenerate] 编译失败（首轮），错误：\n%s", truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 1200))
-	// 调试保留：LLM 产物副本（骨架兜底会覆盖写盘产物，这里留一份供编译错误分析）。
+	// call keep : LLM artifact base(   bot overwritewrite artifact,      provide  errorsplit ). 
 	_ = os.WriteFile("/tmp/llm_main_debug.go", []byte(files["main.go"]), 0o644)
 	cleanErrs := buildRecv.Stdout + "\n" + buildRecv.Stderr
 	lastErr := truncateStr(cleanErrs, 2500)
-	// 确定性修复循环：每次清理后立即重编译（行号/上下文逐轮收敛，最多 6 轮）。
+	//   ityfix   :     after i.e.heavy  ( id/onunder   recv ,    6  ). 
 	for d := 1; d <= 6; d++ {
 		cleaned, n := deterministicClean(files["main.go"], lastErr)
 		if n == 0 {
@@ -1873,10 +1873,10 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		}
 		lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 	}
-	// 2026-10-04 加码：3→5（LLM 修复轮生成新代码可能引入非 import/变量错误，多给机会）
+	// 2026-10-04  code: 3->5(LLM fix  occurbecomenew code   in  import/change error,  give  )
 	for i := 1; i <= 5; i++ {
-		// 2026-10-04 修复：编译修复轮也改首尾拼接（仅开头 2500 看不到行 234 的 E5 类型错误——
-		// LLM 修不掉、5 轮耗尽、8 轮重投仍失败。编译错误自带行号，首尾注入保证错误行可见）。
+		// 2026-10-04 fix :   fix  alsomodifyfirsttail connect(onlyopenhead 2500   to  234   E5 classtypeerror--
+		// LLM fix  , 5    , 8  heavy    .   error   id, firsttailnoteinkeep error  see). 
 		srcCur := files["main.go"]
 		head, tail := truncateStr(srcCur, 1500), truncateStrTail(srcCur, 2500)
 		mainCode, note = genWithPref([]string{"gpt4o", "gpt-mini", "fast", "center", "strong"}, 200, sysMain+"\n\n上一轮 main.go **编译失败**，请在以下当前代码基础上**仅修复编译错误**（其他逻辑保持不变）后输出**完整 main.go**。编译错误行号对应【末尾 2500 字符】里的代码。\n\n当前 main.go 开头（1500 字符）：\n"+head+"\n\n当前 main.go 末尾（2500 字符，错误行在此范围）：\n"+tail+"\n\n编译错误：\n"+lastErr, req)
@@ -1891,9 +1891,9 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 		if buildRecv.OK {
 			return files, fmt.Sprintf("编译全绿（%d 轮修复）", i)
 		}
-		// 2026-10-04 修复：build 失败后**先用本轮错误确定性清理**（LLM 每轮重写会引入
-		// 新的未用 import；此前用上一轮错误清理本轮代码 → 错位 → 3 轮永远耗死在
-		// "imported and not used"，真跑复现"编译迭代 3 轮仍未通过"）。
+		// 2026-10-04 fix : build   after**firstusebase error  ity  **(LLM   heavywrite  in
+		// new  use import;  beforeuseon  error  base  code ->    -> 3       
+		// "imported and not used",    now"     3     ed"). 
 		lastErr = truncateStr(buildRecv.Stdout+"\n"+buildRecv.Stderr, 2500)
 		if c3, n3 := removeUnusedImports(files["main.go"], lastErr); c3 != "" {
 			log.Printf("[llmGenerate] 修复轮 %d 确定性清理 %d 个未使用 import（本轮错误）", i, n3)
@@ -1905,13 +1905,13 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 			if recv.OK {
 				return files, fmt.Sprintf("编译全绿（修复轮 %d 确定性清理 %d 个 import）", i, n3)
 			}
-			// 清理后仍有非 import 错误：更新 lastErr 供下轮 LLM 修复（避免拿旧错误修）。
+			//   after has  import error: changenew lastErr provideunder  LLM fix (    errorfix). 
 			log.Printf("[llmGenerate] 修复轮 %d 清理后仍失败：\n%s", i, truncateStr(recv.Stdout+"\n"+recv.Stderr, 800))
 			lastErr = truncateStr(recv.Stdout+"\n"+recv.Stderr, 2500)
 		}
 	}
-	// 2026-10-04 修复：编译迭代耗尽仍返回最后一次写盘产物（编译缺口由证据门判据 3 报出、
-	// 修订轮继续逼近——此前返回 nil 直接 break，8 轮上限形同虚设（真跑：round 2 编译失败即终）。
+	// 2026-10-04 fix :        returnback after  write artifact(    by data  data 3  out, 
+	// fix  continuecontinue  -- beforereturnback nil  connect break, 8  onlimit same  (  : round 2     i.e.end). 
 	lastNote := "编译迭代耗尽：最后编译错误——"
 	if lastErr != "" {
 		lastNote += truncateStr(lastErr, 300)
@@ -1921,11 +1921,11 @@ func (o *Options) llmGenerateImplement(ctx context.Context, title, doc, skelDir,
 	return files, lastNote
 }
 
-// parseGenFiles 解析 LLM 返回的 {"files":{...}} JSON（容忍 ```json 围栏与前后杂质）。
+// parseGenFiles resolve  LLM returnback  {"files":{...}} JSON(   ```json   andbeforeafter  ). 
 func parseGenFiles(content string) (map[string]string, string) {
 	c := strings.TrimSpace(content)
 	if i := strings.Index(c, "```"); i >= 0 {
-		// 去掉首个围栏行与结尾围栏
+		//   first    andclosetail  
 		rest := c[i:]
 		if j := strings.Index(rest, "\n"); j >= 0 {
 			rest = rest[j+1:]
@@ -1953,7 +1953,7 @@ func parseGenFiles(content string) (map[string]string, string) {
 	return parsed.Files, ""
 }
 
-// writeFilesToDisk 把生成文件写入 skelDir（先建目录）。
+// writeFilesToDisk pipeoccurbecomefilewrite skelDir(first obj ). 
 func writeFilesToDisk(dir string, files map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -1969,10 +1969,10 @@ func writeFilesToDisk(dir string, files map[string]string) error {
 	return nil
 }
 
-// removeUnusedImports 从 Go 源码确定性移除编译错误报告中的未使用 import（机械错误）。
-// 匹配 go build 错误形如 `./main.go:4:2: "bufio" imported and not used`；import 块内的
-// `	"bufio"` 行逐行删除。2026-10-03 实证：LLM 修复轮对这类错误修复不稳定（3 轮仍失败），
-// 确定性清理是 harness 的工程兜底（不依赖 LLM 运气）。返回清理后的源码与清理数量。
+// removeUnusedImports from Go  code  ity    error  in   use import(  error). 
+//    go build error e.g. `./main.go:4:2: "bufio" imported and not used`; import  in 
+// `	"bufio"`    delete. 2026-10-03   : LLM fix  to classerrorfix    (3     ), 
+//   ity  is harness     bot( dependency LLM   ). returnback  after  codeand  num . 
 func removeUnusedImports(src, buildOut string) (string, int) {
 	unused := map[string]bool{}
 	for _, m := range regexp.MustCompile(`"(.*?)" imported and not used`).FindAllStringSubmatch(buildOut, -1) {
@@ -2004,11 +2004,11 @@ func removeUnusedImports(src, buildOut string) (string, int) {
 	return strings.TrimSuffix(sb.String(), "\n"), removed
 }
 
-// removeUnusedVars 按编译器行号删除未使用变量声明（declared and not used）。
-// 2026-10-04 真跑实证：语音适配层生成 `objects := [...]` 但函数内未用 →
-// go build 报 `./main.go:76:2: declared and not used: objects`，LLM 修复轮
-// 全量重写 3 轮不收敛。机械错误由 harness 确定性兜底：删除错误行（含缩进）。
-// 一次只删一个（多行号会因删除错位），由外层循环逐轮重编译收敛。
+// removeUnusedVars by    iddelete  usechange voice (declared and not used). 
+// 2026-10-04     : langaudio   occurbecome `objects := [...]` but numin use ->
+// go build   `./main.go:76:2: declared and not used: objects`, LLM fix  
+// safety heavywrite 3   recv .   errorby harness   ity bot: deleteerror (   ). 
+//   only   (  id becausedelete  ), byout     heavy  recv . 
 func removeUnusedVars(src, buildOut string) (string, int) {
 	m := regexp.MustCompile(`\./main\.go:(\d+):\d+: declared and not used: (\w+)`).FindStringSubmatch(buildOut)
 	if len(m) != 3 {
@@ -2022,7 +2022,7 @@ func removeUnusedVars(src, buildOut string) (string, int) {
 	if lineNo > len(lines) {
 		return "", 0
 	}
-	// 只删单行声明（该行含 := 或 var 前缀），避免删错结构体/函数边界。
+	// only   voice (    := or var before ),     close body/ num boundary. 
 	trim := strings.TrimSpace(lines[lineNo-1])
 	if !strings.Contains(trim, ":=") && !strings.HasPrefix(trim, "var ") {
 		return "", 0
@@ -2031,9 +2031,9 @@ func removeUnusedVars(src, buildOut string) (string, int) {
 	return strings.Join(lines, "\n"), 1
 }
 
-// deterministicClean 编译失败机械修复：import 全量清理（按名）+ 变量一次一个（按行号）
-// + 占位注释删除（// Placeholder —— 2026-10-04 实证：行为全过后残留 1 处占位注释，
-// LLM 看不到中部代码（修订轮只注入开头 3000 字符）8 轮修不掉；注释无害，机械删除兜底）。
+// deterministicClean       fix : import safety   (byname)+ change     (by id)
+// +   note delete(// Placeholder -- 2026-10-04   :  assafetyedafter   1 place  note , 
+// LLM   toin  code(fix  onlynoteinopenhead 3000 char )8  fix  ; note no ,   delete bot). 
 func deterministicClean(src, buildOut string) (string, int) {
 	if c, n := removeUnusedImports(src, buildOut); c != "" {
 		return c, n
@@ -2058,22 +2058,22 @@ func deterministicClean(src, buildOut string) (string, int) {
 	return "", 0
 }
 
-// EvidenceGaps（L-01 架构 2026-10-03）：对一次实现的产物做**证据门**检查，
-// 返回缺口列表；空列表 = 证据门全过（产物存在且非空、真编译通过、P0 能力存在性）。
+// EvidenceGaps(L-01    2026-10-03): to   now artifact ** data **  , 
+// returnback  listtable; emptylisttable =  data safetyed(artifactstore and empty,     ed, P0   store ity). 
 //
-// 判据（对齐 dsh"完成前收集证据"）：
-//  1. 产物目录存在且 main.go 非空（骨架/占位/空文件 → 缺口）
-//  2. main.go 不含 TODO/占位标记（LLM 语义实现 vs 确定性骨架兜底的区分）
-//  3. go build -C <产物根> ./... 真编译通过（不许桩）
-//  4. P0 能力存在性：词典/纠错/意图/反馈/JSONL 落盘/健康检查（关键字扫描产物源码）
+//  data(to  dsh"donebeforerecv  data"): 
+//  1. artifactobj store and main.go  empty(  /  /emptyfile ->   )
+//  2. main.go    TODO/  tgt (LLM semantic now vs   ity   bot  split)
+//  3. go build -C <artifactroot> ./...     ed( allow )
+//  4. P0   store ity: word /correction/intent/rev /JSONL   /    (close char  artifact code)
 func (o *Options) EvidenceGaps(out *Outcome) []string {
 	if out == nil {
 		return []string{"任务无产物（Outcome 为空）"}
 	}
-	// 从回执提取 harness-output/ 产物根目录（stdout 形如 "writed: /abs/harness-output/<title>/main.go"）。
-	// 2026-10-03 修复：stdout 多行（writed 路径 + VHS_BACKUP_PATH: ...），TrimPrefix 后 line 是整块，
-	// HasSuffix(main.go) 永远失败 → implRoot 空 → Glob 回退取错目录（读到别的任务骨架 → 判"含 todo"假 FAIL）。
-	// 只取第一行（writed 路径行）。
+	// fromback  get harness-output/ artifactrootobj (stdout  e.g. "writed: /abs/harness-output/<title>/main.go"). 
+	// 2026-10-03 fix : stdout   (writed path + VHS_BACKUP_PATH: ...), TrimPrefix after line is  , 
+	// HasSuffix(main.go)      -> implRoot empty -> Glob back get obj (readtodiff task   ->  "  todo"  FAIL). 
+	// onlyget   (writed path ). 
 	implRoot := ""
 	for _, r := range out.Receipts {
 		stdout := strings.TrimSpace(r.Stdout)
@@ -2088,7 +2088,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		}
 	}
 	if implRoot == "" {
-		// 回执未必含路径：回退扫项目根 harness-output/。
+		// back    path: back   objroot harness-output/. 
 		if candidates, _ := filepath.Glob("harness-output/*"); len(candidates) > 0 {
 			implRoot = candidates[len(candidates)-1]
 		}
@@ -2104,7 +2104,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		return append(gaps, "main.go 缺失或为空（"+mainPath+"）")
 	}
 	mainSrc := string(mainBytes)
-	// 判据 2：骨架/占位检测（确定性骨架的特征注释）。
+	//  data 2:   /    (  ity     note ). 
 	low := strings.ToLower(mainSrc)
 	for _, marker := range []string{"todo", "占位", "not implemented", "code generated by voice sign harness"} {
 		if strings.Contains(low, marker) {
@@ -2112,29 +2112,29 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			break
 		}
 	}
-	// 判据 4 已移除（2026-10-04）：旧判据是 ASR 契约硬编码 P0 清单（词典/纠错/process…），
-	// 换需求（语音适配层）后永远报缺 → 5 轮都不收敛。证据门改为需求驱动：
-	// 判据 5（需求端点 ↔ 产物 HandleFunc 差集）才是核心存在性判据；能力语义由校验对齐服务评。
-	// 判据 3：真编译（不许桩）。
+	//  data 4 already  (2026-10-04):   datais ASR     code P0 list(word /correction/process…), 
+	//  needrequire(langaudio   )after     -> 5  all recv .  data modifyasneedrequire  : 
+	//  data 5(needrequireendpoint ↔ artifact HandleFunc diff )onlyis  store ity data;   semanticbyverifyto serveservice . 
+	//  data 3:    ( allow ). 
 	buildRecv := o.run("run", map[string]any{"command": []string{"go", "build", "-C", implRoot, "./..."}})
 	if !buildRecv.OK {
 		gaps = append(gaps, "真编译失败："+truncateStr(buildRecv.Stderr, 300))
 	}
-	// 判据 5：需求端点 ↔ 产物路由端点存在性（洞 1，2026-10-04 无人工干预测试复现：
-	// 需求 7 端点产物仅 2 端点（/v1/health+/v1/process），P0 关键字仍判"齐全"放行）。
-	// 需求侧：从 o.Document（需求全文）提取所有出现的 /v1/xxx 字面量；
-	// 产物侧：从 main.go 提取 http.HandleFunc("/v1/xxx") 已注册端点；
-	// 差集 = 缺口 → 证据门 FAIL → 多轮修订（RoundEvidence 回喂 LLM 补齐端点）。
+	//  data 5: needrequireendpoint ↔ artifactroutebyendpointstore ity(  1, 2026-10-04 nohuman     now: 
+	// needrequire 7 endpointartifactonly 2 endpoint(/v1/health+/v1/process), P0 close char  " safety"  ). 
+	// needrequireside: from o.Document(needrequiresafety ) get hasoutnow  /v1/xxx charface ; 
+	// artifactside: from main.go  get http.HandleFunc("/v1/xxx") alreadynote endpoint; 
+	// diff  =    ->  data  FAIL ->   fix (RoundEvidence back  LLM patch endpoint). 
 	if o.Document != "" {
 		reqEP := endpointRefsOf(o.Document)
 		prodEP := endpointHandlersOf(mainSrc)
-		// 2026-10-04 修复：需求文档会引用上游 harness 端点（"只调其 POST /v1/tasks 与 GET
-		// /v1/tasks/{id}"）——那是要调用的，不是产物要注册的。判据 5 只查产物端点族
-		//（/v1/voice/ 前缀；上游端点排除），否则永远误报缺口导致修订死循环。
+		// 2026-10-04 fix : needrequire    useon  harness endpoint("onlycallits POST /v1/tasks and GET
+		// /v1/tasks/{id}")-- isneedcalluse ,  isartifactneednote  .  data 5 only artifactendpoint 
+		//(/v1/voice/ before ; on endpoint  ),  then        fix    . 
 		upstreamEP := map[string]bool{"/v1/tasks": true, "/v1/tasks/{id}": true}
-		// 路径参数归一化：/v1/voice/tasks/{conversation_id} → /v1/voice/tasks/（参数名不参与匹配）。
-		// 2026-10-04 真跑：LLM 生成 HandleFunc("/v1/voice/tasks/")（尾斜杠，Go 路径参数兼容写法），
-		// 严格匹配 {conversation_id} 永远缺 → 5 轮修订死循环。归一后只验证端点路径存在。
+		// path num  ize: /v1/voice/tasks/{conversation_id} -> /v1/voice/tasks/( numname  and  ). 
+		// 2026-10-04   : LLM occurbecome HandleFunc("/v1/voice/tasks/")(tail  , Go path numcompatwrite ), 
+		//      {conversation_id}     -> 5  fix    .   afteronly  endpointpathstore . 
 		normEP := func(ep string) string {
 			return regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(ep, "")
 		}
@@ -2155,10 +2155,10 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			}
 		}
 	}
-	// 判据 6：无桩实现（2026-10-04 真跑实证：LLM 生成 resolve/run/tasks handler 全部
-	// `// Placeholder for ... logic` + StatusNotImplemented(501)——端点注册全在、判据 5 PASS、
-	// 证据门误判收敛，但真跑打接口全 501。用户红线"真装配级不许桩"，桩必须抓）。
-	// 检测：StatusNotImplemented / "// Placeholder" / panic("not implemented") / TODO 占位。
+	//  data 6: no  now(2026-10-04     : LLM occurbecome resolve/run/tasks handler safety 
+	// `// Placeholder for ... logic` + StatusNotImplemented(501)--endpointnote safety ,  data 5 PASS, 
+	//  data   recv , but   connect safety 501. useuser line"     allow ",     ). 
+	//   : StatusNotImplemented / "// Placeholder" / panic("not implemented") / TODO   . 
 	lowMain := strings.ToLower(mainSrc)
 	stubHits := []string{}
 	if strings.Contains(mainSrc, "http.StatusNotImplemented") {
@@ -2171,8 +2171,8 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		stubHits = append(stubHits, "panic/TODO `not implemented`")
 	}
 	if len(stubHits) > 0 {
-		// 缺口具体化：从需求文档提取 E 节端点语义（LLM 只知道"有桩"不会实现；
-		// 2026-10-04 真跑实证：泛化缺口下 LLM 5 轮重写仍生成 501 桩）。
+		//    bodyize: fromneedrequire   get E nodeendpointsemantic(LLM only  "has "   now; 
+		// 2026-10-04     :  ize  under LLM 5  heavywrite occurbecome 501  ). 
 		var eHints []string
 		if o.Document != "" {
 			for _, line := range strings.Split(o.Document, "\n") {
@@ -2193,9 +2193,9 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 		}
 		gaps = append(gaps, "产物含桩实现（"+strings.Join(stubHits, "；")+"）——必须实现真实业务逻辑，禁止占位"+sem)
 	}
-	// 判据 7：行为级真跑（2026-10-04 实证：LLM 生成 parse/decompose 返回软空壳——
-	// 无 501 但 E2 parse actions=null、E3 decompose tasks=null；判据 6 桩检测抓不到软桩。
-	// 必须起产物服务打标准输入断言行为（真装配级，呼应需求判据 2/4）。
+	//  data 7:  as   (2026-10-04   : LLM occurbecome parse/decompose returnback empty --
+	// no 501 but E2 parse actions=null, E3 decompose tasks=null;  data 6      to  . 
+	//   raiseartifactserveservice tgtapprove indisconnectlang as(    ,   needrequire data 2/4). 
 	if len(gaps) == 0 {
 		bin := filepath.Join(implRoot, "impl")
 		if _, err := os.Stat(bin); err == nil {
@@ -2204,8 +2204,8 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 				"lsof -ti :18950 | xargs kill 2>/dev/null; sleep 0.3; nohup " + bin +
 					" -addr 127.0.0.1:" + port + " >/tmp/vhs_evg_srv.log 2>&1 & echo $! > /tmp/vhs_evg.pid; sleep 1"}})
 			defer o.run("run", map[string]any{"command": []string{"sh", "-c", "kill $(cat /tmp/vhs_evg.pid) 2>/dev/null"}})
-			// E2 parse：标准口语输入必须返回非空 actions 数组（需求判据 2；2026-10-04 加严：
-			// 空数组/actions:null 都算不达标——LLM 曾返回 {"actions":null} 溜过）。
+			// E2 parse: tgtapprove lang in  returnback empty actions num (needrequire data 2; 2026-10-04   : 
+			// emptynum /actions:null all   tgt--LLM  returnback {"actions":null}  ed). 
 			p := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "6", "-X", "POST",
 				"http://127.0.0.1:" + port + "/v1/voice/parse", "-H", "Content-Type: application/json",
 				"-d", `{"text":"就是那个现在开始跑一下测试对吧","conversation_id":"evg-1"}`}})
@@ -2215,8 +2215,8 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			if !hasActs || emptyActs {
 				gaps = append(gaps, "E2 parse 行为不达标：输入「就是那个现在开始跑一下测试对吧」应返回**非空** actions 数组（动作识别），实测="+ps+"——实现动作词表与过滤逻辑，禁止空 actions")
 			}
-			// E3 decompose：复合指令必须拆出 ≥1 个任务（需求判据 4；2026-10-04 加严：
-			// 空数组 tasks:[] 曾溜过——字段在但无任务）。
+			// E3 decompose:   refer    out >=1  task(needrequire data 4; 2026-10-04   : 
+			// emptynum  tasks:[]   ed--charseg butnotask). 
 			d := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "6", "-X", "POST",
 				"http://127.0.0.1:" + port + "/v1/voice/decompose", "-H", "Content-Type: application/json",
 				"-d", `{"text":"拉取最新版，编译并启动服务，跑长程任务验收测试，输出报告","conversation_id":"evg-1"}`}})
@@ -2226,7 +2226,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			if !hasTasks || emptyTasks {
 				gaps = append(gaps, "E3 decompose 行为不达标：复合指令「拉取最新版，编译并启动服务，跑长程任务验收测试，输出报告」应拆出**多个任务**（非空 tasks 数组），实测="+ds+"——实现动作分割与任务列表，禁止空 tasks")
 			}
-			// E4 resolve：无历史且无对象 → target=unresolved / pending_resolve（需求判据 7）。
+			// E4 resolve: no  andnoto  -> target=unresolved / pending_resolve(needrequire data 7). 
 			r := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "6", "-X", "POST",
 				"http://127.0.0.1:" + port + "/v1/voice/resolve", "-H", "Content-Type: application/json",
 				"-d", `{"text":"帮我拉取那个仓库","conversation_id":"evg-1"}`}})
@@ -2234,7 +2234,7 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 			if !strings.Contains(strings.ToLower(rs), "unresolved") && !strings.Contains(rs, "pending_resolve") && !strings.Contains(rs, "补全") {
 				gaps = append(gaps, "E4 resolve 行为不达标：无会话历史且无明确对象时应返回 unresolved/pending_resolve（需求判据 7），实测="+rs+"。实现要点：resolve handler 先查该 conversation_id 的会话历史（JSONL/内存 session store）——若该会话无任何历史记录且 text 含指代词（那个/这个/它/帮我…那个），必须返回含 unresolved 或 pending_resolve 的响应（如 {\"resolved\":false,\"target\":\"unresolved\",\"pending_resolve\":true}）；有历史时从最近记录补全 target。禁止返回 {\"resolved_target\":\"\"} 或 \"default target\" 等默认值。Go 行为锚点（可直接参照）：无历史时 handler 内做 `if 该会话无记录 { w.Header().Set(\"Content-Type\",\"application/json\"); io.WriteString(w, \"{\\\"resolved\\\":false,\\\"target\\\":\\\"unresolved\\\",\\\"pending_resolve\\\":true}\"); return }`")
 			}
-			// E5 run：编排执行必须投递上游并返回任务引用（需求判据 8 语义：summary/任务状态）。
+			// E5 run: orchestrate      on andreturnbacktask use(needrequire data 8 semantic: summary/taskstatus). 
 			ru := o.run("run", map[string]any{"command": []string{"curl", "-s", "--max-time", "8", "-X", "POST",
 				"http://127.0.0.1:" + port + "/v1/voice/run", "-H", "Content-Type: application/json",
 				"-d", `{"text":"拉取最新版，编译并启动服务","conversation_id":"evg-1"}`}})
@@ -2247,12 +2247,12 @@ func (o *Options) EvidenceGaps(out *Outcome) []string {
 	return gaps
 }
 
-// endpointRefsOf 提取文本中出现的所有 /v1/xxx 端点字面量（需求侧：文档里提到的即算需求端点）。
+// endpointRefsOf  get baseinoutnow  has /v1/xxx endpointcharface (needrequireside:     to i.e. needrequireendpoint). 
 func endpointRefsOf(src string) map[string]bool {
 	set := map[string]bool{}
-	// 2026-10-04 修复：单级正则 /v1/[a-z_]+ 会把 /v1/voice/health 截成 /v1/voice——
-	// 需求 6 端点被压成 2 个父路径，判据 5 形同虚设（真跑：缺口 8 项全是 ASR 硬编码判据，
-	// 缺 resolve/run 的端点缺口 0 条）。改多级：/v1/voice/resolve、/v1/voice/tasks/{cid} 等全量。
+	// 2026-10-04 fix :   posthen /v1/[a-z_]+  pipe /v1/voice/health  become /v1/voice--
+	// needrequire 6 endpointbe become 2   path,  data 5  same  (  :    8  safetyis ASR   code data, 
+	//   resolve/run  endpoint   0  ). modify  : /v1/voice/resolve, /v1/voice/tasks/{cid} etcsafety . 
 	re := regexp.MustCompile(`/v1/[a-zA-Z0-9_/{}-]+`)
 	for _, m := range re.FindAllString(src, -1) {
 		set[m] = true
@@ -2260,7 +2260,7 @@ func endpointRefsOf(src string) map[string]bool {
 	return set
 }
 
-// sortedEndpoints 将端点集合排序为逐行清单（LLM prompt 用，稳定可读）。
+// sortedEndpoints willendpoint set   as  list(LLM prompt use,    read). 
 func sortedEndpoints(src string) string {
 	if src == "" {
 		return "（需求文档为空——无端点清单）"
@@ -2277,7 +2277,7 @@ func sortedEndpoints(src string) string {
 	return strings.Join(list, "\n")
 }
 
-// docBrief 截取需求文档前 n 字符作为要点摘要（含标题与首个判据表，控制 prompt 长度）。
+// docBrief  getneedrequire  before n char  asneedpt need( tgt andfirst  datatable, control prompt   ). 
 func docBrief(src string, n int) string {
 	if src == "" {
 		return "（无需求文档）"
@@ -2290,10 +2290,10 @@ func docBrief(src string, n int) string {
 	return string(runes[:n]) + "\n…（文档过长，以上为摘要，完整判据以端点清单 + 证据门为准）"
 }
 
-// endpointHandlersOf 提取源码中 http.HandleFunc("/v1/xxx", …) 已注册的端点（产物侧：注册才算实现）。
+// endpointHandlersOf  get codein http.HandleFunc("/v1/xxx", …) alreadynote  endpoint(artifactside: note only  now). 
 func endpointHandlersOf(src string) map[string]bool {
 	set := map[string]bool{}
-	// 2026-10-04 同步多级：/v1/voice/health 完整提取（与 endpointRefsOf 对齐）。
+	// 2026-10-04 same   : /v1/voice/health finish  get(and endpointRefsOf to ). 
 	re := regexp.MustCompile(`HandleFunc\("/v1/[a-zA-Z0-9_/{}-]+`)
 	for _, m := range re.FindAllString(src, -1) {
 		set[strings.TrimPrefix(m, `HandleFunc("`)] = true
@@ -2301,16 +2301,16 @@ func endpointHandlersOf(src string) map[string]bool {
 	return set
 }
 
-// deterministicImplementSkeleton 生成可编译 Go 代码骨架（LLM 不可用时仍产出）。
-// 文件：README.md / go.mod / main.go / router.go / domain.go（服务骨架 + 需求映射）。
-// 目标：harness-output/<title>/ 下 `go build ./...` 可通过；实现逻辑留 TODO 交实现阶段。
+// deterministicImplementSkeleton occurbecome    Go  code  (LLM   usetime produceout). 
+// file: README.md / go.mod / main.go / router.go / domain.go(serveservice   + needrequire  ). 
+// objtgt: harness-output/<title>/ under `go build ./...`   ed;  now    TODO   nowstage. 
 func deterministicImplementSkeleton(title, doc string) map[string]string {
-	// module 名必须 ASCII（Go 限制：中文 module path 非法）；目录名可保留中文。
+	// module name   ASCII(Go limitrestrict: in  module path   ); obj name keep in . 
 	mod := "harness-output/" + asciiSlug(title)
 	if mod == "harness-output/" {
 		mod = "harness-output/impl"
 	}
-	// 从需求文档提取章节标题作为领域要点注释（真实结构，不编造）。
+	// fromneedrequire   get nodetgt  as domainneedptnote (  close ,    ). 
 	var chapters []string
 	for _, ln := range strings.Split(doc, "\n") {
 		ln = strings.TrimSpace(ln)
@@ -2447,8 +2447,8 @@ package main
 	}
 }
 
-// deterministicImplementPlan 确定性生成实现计划（LLM 不可用时的降级，仍产出真实可迭代文件）。
-// 结构：目标 → 需求要点提取（章节标题/关键词）→ 模块清单 → 接口/数据契约 → 验收映射 → 实施步骤。
+// deterministicImplementPlan   ityoccurbecome now  (LLM   usetime   ,  produceout     file). 
+// close : objtgt -> needrequireneedpt get( nodetgt /close word)-> modulelist -> connect /numdata   ->  recv   ->     . 
 func deterministicImplementPlan(title, doc string) string {
 	var sb strings.Builder
 	sb.WriteString("## 实现目标\n\n")
@@ -2512,17 +2512,17 @@ func deterministicImplementPlan(title, doc string) string {
 }
 
 
-// commitTargetPath 定向提交单个文件：git add -- <abs> →（无 diff 则幂等跳过）→ git commit → git log -1 取 hash。
-// 绝不 `git add -A`，避免扫入工作区无关未跟踪文件。
-// 幂等：该文件相对暂存区/HEAD 无变化（重跑同内容）时，不触发 "nothing to commit" 失败，
-// 而是视为成功收尾，receipt 注明"内容无变化，跳过提交（已是最新）"。
+// commitTargetPath  to    file: git add -- <abs> ->(no diff then etc ed)-> git commit -> git log -1 get hash. 
+//    `git add -A`,    in   noclose   file. 
+//  etc:  file to store /HEAD nochangeize(heavy samein )time,  triggersend "nothing to commit"   , 
+// butis asbecome recvtail, receipt note "in nochangeize,  ed  (alreadyis new)". 
 func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
 	add := exec.Command("git", "add", "--", absPath)
 	add.Dir = root
 	if out, err := add.CombinedOutput(); err != nil {
 		return contract.Receipt{Tool: "git", OK: false, Err: "git add 失败: " + string(out)}
 	}
-	// 仅看本路径是否进入暂存区（有 diff）；空=无变化 → 幂等跳过提交。
+	// only basepathis  in store (has diff); empty=nochangeize ->  etc ed  . 
 	ch := exec.Command("git", "diff", "--cached", "--name-only", "--", absPath)
 	ch.Dir = root
 	names, _ := ch.Output()
@@ -2552,8 +2552,8 @@ func (o *Options) commitTargetPath(root, absPath, msg string) contract.Receipt {
 	return contract.Receipt{Tool: "git", OK: true, Stdout: stdout.String()}
 }
 
-// planVerify 给可独立复核的意图生成 verify.Spec；否则返回 nil（unverifiable）。
-// COMMIT 的独立证据直接落在回执 stdout（git log -1 输出），不另设 verify.Kind（verify 包不可改）。
+// planVerify give      intentoccurbecome verify.Spec;  thenreturnback nil(unverifiable). 
+// COMMIT     data connect  back  stdout(git log -1  out),     verify.Kind(verify    modify). 
 func (o *Options) planVerify(it contract.Intent, logDir string) *verify.Spec {
 	switch it.Intent {
 	case contract.IntentNote:
@@ -2563,15 +2563,15 @@ func (o *Options) planVerify(it contract.Intent, logDir string) *verify.Spec {
 	}
 }
 
-// projectRootForCommit 解析 COMMIT 意图域的项目根（M4-4）。
+// projectRootForCommit resolve  COMMIT intentdomain  objroot(M4-4). 
 //
-// 【伪代码逻辑层】（执行根解析属裁决逻辑）：
+// [pseudocode logic layer](  rootresolve   decide  ): 
 //
-//	if intent.Intent != COMMIT: return ""（其他意图保持 logDir）。
-//	m = o.Spaces.Get(intent.Space)；无 manifest → return ""。
-//	对 m.Scope 第 1 条：剥 "/**" 后缀 → Clean → 必须是已存在目录 → 否则 return ""。
-//	硬约束：根不得 ==/under logDir（防把 logDir 当项目库）。
-//	return 根路径。
+//	if intent.Intent != COMMIT: return ""(its intentkeepkeep logDir). 
+//	m = o.Spaces.Get(intent.Space); no manifest -> return "". 
+//	to m.Scope   1  :   "/**" after  -> Clean ->   isalreadystore obj  ->  then return "". 
+//	  end: root   ==/under logDir(preventpipe logDir cur obj ). 
+//	return rootpath. 
 func (o *Options) projectRootForCommit(it contract.Intent) string {
 	if it.Intent != contract.IntentCommit && it.Intent != contract.IntentOrchestrate {
 		return ""
@@ -2592,8 +2592,8 @@ func (o *Options) projectRootForCommit(it contract.Intent) string {
 	return root
 }
 
-// gitDirtyCount 在 root 跑 `git status --porcelain` 统计未提交改动行数。
-// 非 git 仓/命令失败 → 返回 -1（保守：确认文案不写计数，但仍提交）。
+// gitDirtyCount   root   `git status --porcelain`   uncommitted changes num. 
+//   git  /     -> returnback -1(keep : confirm   write num, but   ). 
 func gitDirtyCount(root string) int {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = root
@@ -2610,26 +2610,26 @@ func gitDirtyCount(root string) int {
 	return n
 }
 
-// mechanicalImpact 用真实 fs 机械算影响面（RefCount/HasTest/Heat）。
+// mechanicalImpact use   fs      face(RefCount/HasTest/Heat). 
 //
-// 【伪代码逻辑层】（必写模块：引用定义/排除规则/上限；阈值定义搬 VSL risk.StaticImpact）
+// [pseudocode logic layer]( writemodule:  usedefine/  rule/onlimit;  valuedefine  VSL risk.StaticImpact)
 //
-// 控制流：
+// control flow: 
 //
-//	target = targetPath(it)；空 → return 零值（回退 auto/small，绝不臆造）。
-//	m = o.Spaces.Get(it.Space)；无 manifest → return 零值。
-//	roots = m.Scope 剥 "/**" 后取目录；
-//	  硬排除（M2 失败模式防回归）：跳过任何 ==/under logDir 的 root，
-//	  Ignore 注入 [".git","node_modules","memory","data"]——轨迹/discuss/decisions/词典
-//	  自身绝不能被算成"引用"。
-//	if len(roots)==0: return 零值。
+//	target = targetPath(it); empty -> return  value(back  auto/small,     ). 
+//	m = o.Spaces.Get(it.Space); no manifest -> return  value. 
+//	roots = m.Scope   "/**" aftergetobj ; 
+//	     (M2    formpreventback ):  ed   ==/under logDir   root, 
+//	  Ignore notein [".git","node_modules","memory","data"]--trace/discuss/decisions/word 
+//	       be become" use". 
+//	if len(roots)==0: return  value. 
 //	hits = search.FindText(target, {Roots:roots, Ignore})
-//	RefCount = 去重后命中文件数；封顶 refCap（默认 50，防大库爆量）。
-//	HasTest = 任一 root 下存在 *_test.go 文件（filepath.Walk 一级深度即可）。
-//	Heat    = 当日 trajectory-*.jsonl 中含 target basename 的行数（字段匹配才计数）。
-//	return {RefCount, HasTest, Heat}。
+//	RefCount =  heavyafter infilenum;  top refCap(default 50, prevent    ). 
+//	HasTest =    root understore  *_test.go file(filepath.Walk     i.e. ). 
+//	Heat    = curday trajectory-*.jsonl in  target basename   num(charseg  only num). 
+//	return {RefCount, HasTest, Heat}. 
 //
-// 异常：search 返回 err → RefCount=0（保守 small）；轨迹文件读不到 → Heat=0。
+// error: search returnback err -> RefCount=0(keep  small); tracefileread to -> Heat=0. 
 const refCap = 50
 
 func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
@@ -2646,7 +2646,7 @@ func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
 		return imp
 	}
 
-	// scope roots，剥 /**/* 后缀
+	// scope roots,   /**/* after 
 	logAbs, _ := filepath.Abs(o.logDir())
 	var roots []string
 	for _, s := range m.Scope {
@@ -2658,7 +2658,7 @@ func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
 		if err != nil {
 			continue
 		}
-		// 硬排除：root 落在 log_dir 内（防把轨迹/决策日志当引用）
+		//    : root    log_dir in(preventpipetrace/decide day cur use)
 		if logAbs != "" && (abs == logAbs || strings.HasPrefix(abs, logAbs+string(os.PathSeparator))) {
 			continue
 		}
@@ -2670,7 +2670,7 @@ func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
 
 	ignore := []string{".git", "node_modules", "memory", "data"}
 
-	// RefCount = 引用 target 的去重文件数
+	// RefCount =  use target   heavyfilenum
 	if hits, err := search.FindText(target, search.Options{Roots: roots, Ignore: ignore}); err == nil {
 		files := map[string]bool{}
 		for _, h := range hits {
@@ -2682,15 +2682,15 @@ func (o *Options) mechanicalImpact(it contract.Intent) risk.ImpactInput {
 		}
 	}
 
-	// HasTest = scope 内存在 *_test.go
+	// HasTest = scope instore  *_test.go
 	imp.HasTest = hasTestFile(roots, ignore)
 
-	// Heat = 当日轨迹中命中 target basename 的次数
+	// Heat = curdaytracein in target basename   num
 	imp.Heat = o.trajectoryHeat(target)
 	return imp
 }
 
-// hasTestFile 在 roots 下找 *_test.go（尊重 ignore 段）。
+// hasTestFile   roots under  *_test.go( heavy ignore seg). 
 func hasTestFile(roots, ignore []string) bool {
 	for _, root := range roots {
 		found := false
@@ -2723,7 +2723,7 @@ func hasTestFile(roots, ignore []string) bool {
 	return false
 }
 
-// trajectoryHeat 数当日轨迹文件中含 target basename 的行数。
+// trajectoryHeat numcurdaytracefilein  target basename   num. 
 func (o *Options) trajectoryHeat(target string) int {
 	base := filepath.Base(target)
 	if base == "" || base == "." {
@@ -2750,7 +2750,7 @@ func (o *Options) logDir() string {
 	return os.TempDir()
 }
 
-// fastResponseMs 返回快速响应阈值（Global.FastResponseMs，<=0 归一化为 10000）。
+// fastResponseMs returnbackfast    value(Global.FastResponseMs, <=0   izeas 10000). 
 func (o *Options) fastResponseMs() int {
 	if o.Cfg != nil && o.Cfg.Global.FastResponseMs > 0 {
 		return o.Cfg.Global.FastResponseMs
@@ -2758,8 +2758,8 @@ func (o *Options) fastResponseMs() int {
 	return 10000
 }
 
-// selfheal 懒装配异常自愈层。Providers==nil（testOptions 现状/纯规则路径）→ 恒 nil，
-// 诊断层零开销跳过，主链行为 100% 不变。diag provider 未注册 → 模型环 nil（知识库环仍可用）。
+// selfheal    error   . Providers==nil(testOptions nowstatus/ rulepath)->   nil, 
+//  disconnect  open  ed,  chain as 100%  change. diag provider  note  ->  type  nil(      use). 
 func (o *Options) selfheal() *selfheal.Service {
 	if o == nil || o.Providers == nil {
 		return nil
@@ -2776,8 +2776,8 @@ func (o *Options) selfheal() *selfheal.Service {
 	return o.selfhealSvc
 }
 
-// repairFailed 对失败回执跑异常自愈（可选层）：诊断 + 只读安全重放（限 2 轮）。
-// 重放成功的新回执由主链合并进 out.Receipts；诊断结论暂存供归因。诊断层未配置/失败 → 返回 nil。
+// repairFailed to  back  error  (   ):  disconnect + read-onlysafesafetyheavy (limit 2  ). 
+// heavy become  newback by chain and  out.Receipts;  disconnectclose  storeprovideattribution.  disconnect    /   -> returnback nil. 
 func (o *Options) repairFailed(ctx context.Context, it contract.Intent, receipts []contract.Receipt) []contract.Receipt {
 	svc := o.selfheal()
 	if svc == nil {
@@ -2789,7 +2789,7 @@ func (o *Options) repairFailed(ctx context.Context, it contract.Intent, receipts
 		if r.OK {
 			continue
 		}
-		att := selfheal.Attempt{Tool: r.Tool, Args: o.argsForFailed(it, r.Tool), Receipt: r, RequestID: o.RequestID} // P0-4b：诊断 trace 带主链 request_id
+		att := selfheal.Attempt{Tool: r.Tool, Args: o.argsForFailed(it, r.Tool), Receipt: r, RequestID: o.RequestID} // P0-4b:  disconnect trace   chain request_id
 		if nr, _ := svc.SafeRetry(ctx, it.RawText, it.Intent, att); nr != nil {
 			repaired = append(repaired, *nr)
 		}
@@ -2797,7 +2797,7 @@ func (o *Options) repairFailed(ctx context.Context, it contract.Intent, receipts
 	return repaired
 }
 
-// argsForFailed 为重放重建最小参数（只有只读族失败才会真重放；写类重建了也被 IsReadOnly 拦下）。
+// argsForFailed asheavy heavy    num(onlyhasread-only   only  heavy ; writeclassheavy alsobe IsReadOnly  under). 
 func (o *Options) argsForFailed(it contract.Intent, tool string) map[string]any {
 	switch tool {
 	case "search":
@@ -2807,14 +2807,14 @@ func (o *Options) argsForFailed(it contract.Intent, tool string) map[string]any 
 		}
 		return map[string]any{"pattern": pattern, "kind": "text"}
 	case "file":
-		// NOTE 追加（写类，不会被自动重放）。
+		// NOTE   (writeclass,   be  heavy ). 
 		return map[string]any{"action": "append", "path": filepath.Join(o.logDir(), "notes.md"), "log_dir": o.logDir()}
 	default:
 		return map[string]any{}
 	}
 }
 
-// renderGround 渲染认知切片（#37）；Ground 未配置 → 空快照（薄降级，Ask 照常走）。
+// renderGround       (#37); Ground     -> emptyfast (   , Ask    ). 
 func (o *Options) renderGround() ground.Snapshot {
 	if o.Ground != nil {
 		return o.Ground.Render()
@@ -2822,7 +2822,7 @@ func (o *Options) renderGround() ground.Snapshot {
 	return ground.Snapshot{}
 }
 
-// recordDecision 在确认闸落盘一条裁决（#37 decisions.jsonl 数据源）。
+// recordDecision  confirm      decide(#37 decisions.jsonl numdata ). 
 func (o *Options) recordDecision(rid string, it contract.Intent, d risk.Decision, approved bool) {
 	if o.Ground == nil {
 		return
@@ -2868,7 +2868,7 @@ func targetPath(it contract.Intent) string {
 	return ""
 }
 
-// ---------- 归因（六格） ----------
+// ---------- attribution(  ) ----------
 
 func classifyAttribution(it contract.Intent, receipts []contract.Receipt, v verify.Result, corr []contract.Correction) (cls, detail, suggestion string) {
 	switch {
@@ -2908,7 +2908,7 @@ func firstErr(rs []contract.Receipt) string {
 	return "未知执行错误"
 }
 
-// ---------- 视图（四行回执，SPEC §2.41） ----------
+// ----------   (four-line receipt, SPEC §2.41) ----------
 
 func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contract.Receipt, vr verify.Result, confirmed bool) contract.ReceiptView {
 	view := contract.ReceiptView{
@@ -2927,17 +2927,17 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		view.Result = "FAILED：" + truncateStr(reason, 60)
 	default:
 		view.Result = "OK（" + confirmWord(d.Level) + "）"
-		// M7：工具 stdout 有实质内容（QUERY 的 LLM 回答/降级文案等纯文本）时，
-		// 四行回执的"结果"展示回答文本（截断 400；此前 120 会把多行结果吞掉后半），
-		// 不再只显示"OK（自动执行）"空壳。
+		// M7:    stdout has  in (QUERY   LLM answer/    etc  base)time, 
+		// four-line receipt "close " showanswer base( disconnect 400;  before 120  pipe  close   after ), 
+		//  againonly show"OK(    )"empty . 
 		if len(rs) > 0 {
 			if s := strings.TrimSpace(rs[0].Stdout); s != "" && !strings.HasPrefix(s, "{") {
 				view.Result = truncateStr(s, 400)
 			}
 		}
 	}
-	// ORCHESTRATE 多步链：回执要展示真实动作链（读 N 份文档 → 写文件 → git commit hash），
-	// 不能只取第一条 file-read 的文档正文。
+	// ORCHESTRATE   chain: back need show    chain(read N     -> writefile -> git commit hash), 
+	//   onlyget    file-read    pos . 
 	if it.Intent == contract.IntentOrchestrate && !hasFailure(rs) {
 		view.Action = "多步编排：读文档→汇总→写文件→git提交"
 		view.Files = orchestrateFiles(rs)
@@ -2947,7 +2947,7 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 	return view
 }
 
-// orchestrateFiles 从多步回执里提取写文件目标（file write 回执里的 "writed: <path>"）。
+// orchestrateFiles from  back   getwritefileobjtgt(file write back    "writed: <path>"). 
 func orchestrateFiles(rs []contract.Receipt) string {
 	for _, r := range rs {
 		if r.Tool == "file" && strings.HasPrefix(r.Stdout, "writed:") {
@@ -2957,7 +2957,7 @@ func orchestrateFiles(rs []contract.Receipt) string {
 	return "—"
 }
 
-// orchestrateChainResult 生成多步链的一句话结果（读 N 份 → commit hash）。
+// orchestrateChainResult occurbecome  chain  sent close (read N   -> commit hash). 
 func orchestrateChainResult(rs []contract.Receipt) string {
 	reads := 0
 	for _, r := range rs {
@@ -2968,7 +2968,7 @@ func orchestrateChainResult(rs []contract.Receipt) string {
 	hash := ""
 	for _, r := range rs {
 		if r.Tool == "git" && r.OK {
-			// git log -1 行格式："<hash> <subject>"，取最后一行首个 token。
+			// git log -1   form: "<hash> <subject>", get after  first  token. 
 			lines := strings.Split(strings.TrimSpace(r.Stdout), "\n")
 			last := lines[len(lines)-1]
 			if f := strings.Fields(last); len(f) > 0 && len(f[0]) >= 7 {
@@ -2979,24 +2979,24 @@ func orchestrateChainResult(rs []contract.Receipt) string {
 	return fmt.Sprintf("多步链完成：读 %d 份文档→汇总生成→git commit %s", reads, hash)
 }
 
-// intentCandidates 产出低置信回问的结构化意图候选（M4-3 ①）。
+// intentCandidates produceoutlow-confidenceclarification close izeintent  (M4-3 ①). 
 //
-// 【伪代码逻辑层】（候选集生成属裁决逻辑）：
+// [pseudocode logic layer](   occurbecome  decide  ): 
 //
-//	返回 4 个稳定意图候选 {id,label}：edit/query/note/commit。
-//	id 与 label 一一对应、稳定可测；answer 传 id 时 server 续跑据此映射为强关键词前缀。
+//	returnback 4    intent   {id,label}: edit/query/note/commit. 
+//	id and label   to ,     ; answer   id time server continue data   as close wordbefore . 
 //
-// optionsForIntent 按澄清意图动态生成候选（Codex/gpt-6-luna 诊断 2026-10-02）：
-// 不再塞固定"改文件/查代码/记想法/提交"——
+// optionsForIntent by  intent stateoccurbecome  (Codex/gpt-6-luna  disconnect 2026-10-02): 
+//  again   "modifyfile/  code/   /  "--
 //
-//	【伪代码逻辑层】
-//	EDIT/DEBUG → refer 解析出的目标文件候选（无 → nil，不塞无关项）
-//	QUERY → 回答范围/对象（当前无安全派生源 → nil，保留简短 Ask 文本）
-//	NOTE → 笔记归属（无候选源 → nil）
-//	其余 → nil
-//	无安全候选时保留 Ask 文本即可（Codex："若无法安全地产生有效候选，保留简短 Ask 文本"）。
+//	[pseudocode logic layer]
+//	EDIT/DEBUG -> refer resolve out objtgtfile  (no -> nil,   noclose )
+//	QUERY -> answer  /to (curbeforenosafesafety occur  -> nil, keep    Ask  base)
+//	NOTE ->     (no    -> nil)
+//	its  -> nil
+//	nosafesafety  timekeep  Ask  basei.e. (Codex: "ifno safesafetylyproduceoccurhas   , keep    Ask  base"). 
 //
-// 验证器：pipeline.TestCodexOptionsForIntent。
+//    : pipeline.TestCodexOptionsForIntent. 
 func optionsForIntent(it *contract.Intent, referOpts []refer.Option) []AskOption {
 	switch it.Intent {
 	case contract.IntentEdit, contract.IntentDebug:
@@ -3006,7 +3006,7 @@ func optionsForIntent(it *contract.Intent, referOpts []refer.Option) []AskOption
 	}
 }
 
-// referToAskOptions 转换 refer 目标候选为 AskOption。
+// referToAskOptions    refer objtgt  as AskOption. 
 func referToAskOptions(referOpts []refer.Option) []AskOption {
 	out := make([]AskOption, 0, len(referOpts))
 	for _, o := range referOpts {
@@ -3015,38 +3015,38 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 	return out
 }
 
-// shouldResolveRefer 判定是否对当前意图执行 refer 指代消解（M7，外部模型诊断方案定稿）。
+// shouldResolveRefer   is tocurbeforeintent   refer coreference resolution(M7, out  type disconnect    ). 
 //
-// 【伪代码逻辑层】（裁决逻辑，方案来源：Codex/gpt-6-luna 外部诊断 2026-10-02 定稿）：
+// [pseudocode logic layer]( decide  ,     : Codex/gpt-6-luna out  disconnect 2026-10-02   ): 
 //
-//  1. 口语问句特征（?？吗呢怎么如何为什么哪）→ false
-//     （"如果这个效果好/看看效果怎么样"里的"这个/那个"是口语代词，不是操作指代——22:04 真机证据）。
+//  1.  lang sent  (?     e.g. as   )-> false
+//     ("e.g.      /      kind"  "  /  "is lang word,  is  coreference--22:04    data). 
 //
-//  2. 文件操作动词（把/将/打开/改/修/提交/删/建/换/设/存/写/跑/记/部署/上线/发布…）→ true
-//     （操作指代强信号；"打开上次那个"即使被判 QUERY 也解析）。
+//  2. file   word(pipe/will/ open/modify/fix/  / / / / /store/write/ / /  /online/send …)-> true
+//     (  coreference signal; " openon   "i.e. be  QUERY alsoresolve ). 
 //
-//  3. QUERY 高置信（>=0.8）→ 仅裸指代（"查一下这个"对象悬空）仍解析；有实体（"这个方案"）不解析。
+//  3. QUERY    (>=0.8)-> only coreference("  under  "to  empty) resolve ; has body("    ") resolve . 
 //
-//  4. UNKNOWN（无操作动词）→ false（陈述引用/元指令，如"我那个前端的问题又不过来"——不因指代 Ask）。
+//  4. UNKNOWN(no   word)-> false(   use/ refer , e.g."   beforeend   again ed "-- becausecoreference Ask). 
 //
-//  5. NOTE/EDIT/COMMIT/DEBUG → true（真操作指代消解保持原行为）。
+//  5. NOTE/EDIT/COMMIT/DEBUG -> true(   coreference resolutionkeepkeeporig as). 
 //
-//     验证器：pipeline.TestShouldResolveReferGate（16 用例）+ Codex 9 项回归测试。
+//        : pipeline.TestShouldResolveReferGate(16 useexample)+ Codex 9  back   . 
 //
-// hasRecent=true 表示多轮上下文存在最近指代目标：QUERY 即使有实体也做指代接线
-// （"查一下这个方案"在多轮中"这个方案"可回指前文实体）。
+// hasRecent=true tableshow  onunder store   coreferenceobjtgt: QUERY i.e. has bodyalso coreferenceconnectline
+// ("  under    "   in"    " backreferbefore  body). 
 func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
 	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
 	}
 	if hasFileOpVerb(text) {
-		return true // 文件操作动词 → 操作指代（强操作信号），即使 QUERY 也解析
+		return true // file   word ->   coreference(   signal), i.e.  QUERY alsoresolve 
 	}
 	switch it.Intent {
 	case contract.IntentQuery:
-		// 查询对象裸指代（"查一下这个"）→ 真歧义仍解析；有实体（"这个方案"）→ 默认不解析；
-		// 但多轮上下文有最近指代目标（hasRecent）→ 接线解析（"查一下这个方案"回指前文实体）。
+		//   to  coreference("  under  ")->     resolve ; has body("    ")-> default resolve ; 
+		// but  onunder has  coreferenceobjtgt(hasRecent)-> connectlineresolve ("  under    "backreferbefore  body). 
 		if it.Confidence >= 0.8 {
 			if isBareReferent(text) {
 				return true
@@ -3057,17 +3057,17 @@ func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	case contract.IntentNote, contract.IntentEdit, contract.IntentCommit, contract.IntentDebug:
 		return true
 	case contract.IntentUnknown:
-		// 陈述引用/元指令（"我那个前端的问题又不过来"）→ 不因指代 Ask，走分类器回问
+		//    use/ refer ("   beforeend   again ed ")->  becausecoreference Ask,  classify clarification
 		return false
 	default:
 		return true
 	}
 }
 
-// fileOpVerbs 文件/记录操作动词集（Codex 诊断 2026-10-02）：命中视为"操作指代"强信号。
+// fileOpVerbs file/     word (Codex  disconnect 2026-10-02):  in as"  coreference" signal. 
 var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名"}
 
-// hasAnySubstr 子串匹配（input.containsAny 为包私有，pipeline 用同语义本地实现）。
+// hasAnySubstr     (input.containsAny as  has, pipeline usesamesemanticbasely now). 
 func hasAnySubstr(text string, keywords []string) bool {
 	for _, k := range keywords {
 		if k != "" && strings.Contains(text, k) {
@@ -3081,8 +3081,8 @@ func hasFileOpVerb(text string) bool {
 	return hasAnySubstr(text, fileOpVerbs)
 }
 
-// isBareReferent 判定指代词后无实质对象（"查一下这个"/"这个呢"→裸；"这个方案"→非裸）。
-// ASR 噪音填充（"这个哈你真的开始推进起来"）后仍有实质内容 → 非裸，不触发指代 Ask。
+// isBareReferent   coreferencewordafterno  to ("  under  "/"   "-> ; "    "->  ). 
+// ASR  audio fill("      openstart  raise ")after has  in  ->   ,  triggersendcoreference Ask. 
 func isBareReferent(text string) bool {
 	for _, p := range []string{"这个", "那个"} {
 		if i := strings.Index(text, p); i >= 0 {
@@ -3094,9 +3094,9 @@ func isBareReferent(text string) bool {
 	return false
 }
 
-// clarificationBlocksExecution 判定 refer 歧义是否阻止执行（Codex/gpt-6-luna 2026-10-02）：
-// 有候选 → 阻止（需用户选择）；文件操作动词 → 阻止（操作对象不明会出错）；
-// 查询裸指代 → 阻止（对象悬空）；其余（查询有实体/记录类）→ 不阻止（不因指代 Ask）。
+// clarificationBlocksExecution    refer   is  stop  (Codex/gpt-6-luna 2026-10-02): 
+// has   ->  stop(needuseuser  ); file   word ->  stop(  to    out ); 
+//    coreference ->  stop(to  empty); its (  has body/  class)->   stop( becausecoreference Ask). 
 func clarificationBlocksExecution(it *contract.Intent, referOpts []refer.Option) bool {
 	if len(referOpts) > 0 {
 		return true
@@ -3107,53 +3107,53 @@ func clarificationBlocksExecution(it *contract.Intent, referOpts []refer.Option)
 	return isBareReferent(it.CorrectedText)
 }
 
-// llmIntentFallback（M7 ①）：规则低置信/UNKNOWN 且像自然语言问句时，调 fast provider 补分类。
+// llmIntentFallback(M7 ①): rulelow-confidence/UNKNOWN and  howeverlanglang senttime, call fast provider patchclassify. 
 //
-// 【伪代码逻辑层】（新裁决逻辑）：
+// [pseudocode logic layer](new decide  ): 
 //
-//	if o.Providers == nil: return intent（纯规则路径）。
-//	trigger = (intent.Intent==UNKNOWN || intent.Confidence < 0.6) && 文本含 [?？吗呢怎么如何为什么]。
-//	if !trigger: return intent。
-//	调 fast.Chat(system="你是意图分类器，输出 JSON {intent,confidence}")
-//		user=原始文本 + 可用域列表。
-//	解析 JSON：合法且 intent∈{NOTE,QUERY,EDIT,COMMIT} → 覆盖 intent；否则保留规则结果。
-//	任何 err/超时 → return intent（不阻断）。
+//	if o.Providers == nil: return intent( rulepath). 
+//	trigger = (intent.Intent==UNKNOWN || intent.Confidence < 0.6) &&  base  [?     e.g. as  ]. 
+//	if !trigger: return intent. 
+//	call fast.Chat(system=" isintentclassify ,  out JSON {intent,confidence}")
+//		user=origstart base +  usedomainlisttable. 
+//	resolve  JSON:   and intent∈{NOTE,QUERY,EDIT,COMMIT} -> overwrite intent;  thenkeep ruleclose . 
+//	   err/ time -> return intent(  disconnect). 
 func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, text string) contract.Intent {
 	if o == nil || o.Providers == nil {
 		return it
 	}
-	// 评审 P4（G1）/ P3（G3）：进入"绝不执行"确认态的结果**不得**被 LLM 回退覆盖。
-	// 回退命中后会把 it.Ask 清空，而「Ask != '' → 绝不执行」是安全红线：
-	//   - 否定：「不要删除那个文件吗？」会被清 Ask 后判 EDIT 执行；
-	//   - 元指令：「开始测试吗」同理（评审 G3-P3）；
-	//   - 条件句：「如果测试通过就提交吗」同理；
-	//   - 多动作：「把报价改成中文然后跑一下测试，行吗？」（评审 G5-P0-1）。
+	//    P4(G1)/ P3(G3):  in"    "confirmstate close **  **be LLM back overwrite. 
+	// back  inafter pipe it.Ask  empty, but"Ask != '' ->     "issafesafety line: 
+	//   -   : " needdelete  file  " be  Ask after  EDIT   ; 
+	//   -  refer : "openstart   "same (   G3-P3); 
+	//   -   sent: "e.g.    edthen   "same ; 
+	//   -    : "pipe  modifybecomein howeverafter  under  ,    "(   G5-P0-1). 
 	//
-	// 结构性不变式（技能 §4）：**仲裁已发生，且已落在 Ask 确认态** → 一律豁免。
-	// 即 `Conflict != "" && Ask != ""`。原实现是白名单 switch
-	// （negation/meta/conditional/multi_action），于是同一类缺口连踩三次：
-	// 每新增一条"靠 Ask 拦住"的仲裁分支，就忘了登记到这里。白名单必然漏 ——
-	// 实测就漏收了 ConflictDebugPlan（input/taskintent.go:717-721，Ask 非空，
-	// 却不在白名单里，回退可以把"要给思路还是直接修"这个确认态直接清掉）。
+	// close ity changeform(   §4): **  alreadysendoccur, andalready   Ask confirmstate** ->     . 
+	// i.e. `Conflict != "" && Ask != ""`. orig nowis name  switch
+	// (negation/meta/conditional/multi_action), atissame class  link   : 
+	//  newadd  "  Ask   "   branch, then   to  .  name  however  --
+	//   then recv ConflictDebugPlan(input/taskintent.go:717-721, Ask  empty, 
+	// but   name  , back  bypipe"needgive routealsois connectfix"  confirmstate connect  ). 
 	//
-	// 为什么是 Conflict+Ask 两者，而不是只用其中任一：
-	//   - 只用 `Conflict != ""`：会误伤 ConflictDelete / ConflictNoteVsDeploy /
-	//     ConflictAskVsOp 这些 **Ask 为空的合法可执行路径**（删除由下游域/风险门禁管，
-	//     不该在这里被挡住回退）；
-	//   - 只用 `Ask != ""`：会误杀回退本身 —— ClassifyTask 初始化即带
-	//     `Ask: taskAskTemplate`（"你是想让我做什么？"），UNKNOWN/低置信出口
-	//     必然 Ask 非空，于是本函数永不触发（M7 ① 静默失效）。
-	//     分类器把两种 Ask 混用了：**默认分类 Ask**（UNKNOWN 模板/低置信）与
-	//     **仲裁 Ask**（安全停）。Conflict 非空正是"这是仲裁 Ask"的可观测标志。
+	// as  is Conflict+Ask  er, but isonlyuseitsin  : 
+	//   - onlyuse `Conflict != ""`:     ConflictDelete / ConflictNoteVsDeploy /
+	//     ConflictAskVsOp    **Ask asempty      path**(deletebyunder domain/risk forbidmanage, 
+	//          be  back ); 
+	//   - onlyuse `Ask != ""`:    back base  -- ClassifyTask initstartizei.e. 
+	//     `Ask: taskAskTemplate`(" is       "), UNKNOWN/low-confidenceexit
+	//      however Ask  empty, atisbase num  triggersend(M7 ①     ). 
+	//     classify pipe kind Ask  use: **defaultclassify Ask**(UNKNOWN   /low-confidence)and
+	//     **   Ask**(safesafetystop). Conflict  emptyposis" is   Ask"    tgt . 
 	//
-	// 回归保护见 pipeline/intentfallback_regression_test.go（四类双向反例）。
+	// back protectsee pipeline/intentfallback_regression_test.go( class torevexample). 
 	if it.Conflict != "" && it.Ask != "" {
 		return it
 	}
 	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
-	// M7 复验补强：含问句特征时，规则未判 QUERY（UNKNOWN/低置信/误判其他意图如 NOTE）
-	// 一律调 LLM 复查——规则词典对口语长问句常误判（22:04 真机："我现在测试一下…看看效果怎么样"
-	// 被规则判 NOTE 高置信，若只看低置信则 fallback 永不触发）。已是 QUERY 则直接信任规则。
+	// M7   patch :   sent  time, rule   QUERY(UNKNOWN/low-confidence/  its intente.g. NOTE)
+	//   call LLM   --ruleword to lang  sent   (22:04   : " now    under…      kind"
+	// berule  NOTE    , ifonly low-confidencethen fallback   triggersend). alreadyis QUERY then connect  rule. 
 	if !hasQ {
 		return it
 	}
@@ -3174,7 +3174,7 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if err != nil || resp.Content == "" {
 		return it
 	}
-	// 极简 JSON 解析（零依赖）。
+	//    JSON resolve ( dependency). 
 	var parsed struct {
 		Intent     string  `json:"intent"`
 		Confidence float64 `json:"confidence"`
@@ -3193,28 +3193,28 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if parsed.Confidence > 0 {
 		it.Confidence = parsed.Confidence
 	}
-	// 覆盖成功后清掉旧 UNKNOWN 澄清残留（否则 NeedsClarification 仍触发回问；
-	// refer 层若目标仍歧义会重新填 Ask）。
+	// overwritebecome after    UNKNOWN     ( then NeedsClarification  triggersendclarification; 
+	// refer  ifobjtgt    heavynew  Ask). 
 	it.Ask = ""
 	return it
 }
 
-// noJSON 返回 false 指针：显式关闭本次调用的 response_format（QUERY 回答层要纯文本）。
+// noJSON returnback false refer :  formclose base calluse  response_format(QUERY answer need  base). 
 func noJSON() *bool {
 	v := false
 	return &v
 }
 
-// queryLLMAnswer（M7 ②）：QUERY 搜索后调 fast 生成自然语言回答。
-// 失败（网络/预算超限/超时）→ 返回友好降级文案（不再空壳"OK（自动执行）"）。
+// queryLLMAnswer(M7 ②): QUERY   aftercall fast occurbecome howeverlanglanganswer. 
+//   (  /   limit/ time)-> returnback      ( againempty "OK(    )"). 
 //
-// 异常自愈接线（可选层，不改变成功路径与降级文案逐字）：
-//   - 测量 fast.Chat 墙钟：慢但成功 → 不丢回答，仅带 model:"fast" 进诊断层记一笔供归因；
-//   - err/空内容 → 先诊断（budget/network/param 分类），diag 可用且 action=retry/modify →
-//     指数退避重试（≤2 轮），成功返回回答并回写知识库；失败或 diag 不可用 → 逐字降级文案。
+// error  connectline(   ,  modifychangebecome pathand     char): 
+//   -    fast.Chat wall-clock: slowbutbecome  ->   answer, only  model:"fast"   disconnect    provideattribution; 
+//   - err/emptyin  -> first disconnect(budget/network/param classify), diag  useand action=retry/modify ->
+//     refernum  heavy (<=2  ), become returnbackanswerandwrite-back   ;   or diag   use ->  char    . 
 func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStdout string) string {
-	// ⚠️ **归因必须来自真实错误**（Lead 实测：日志里是 HTTP 401 invalid_api_key，
-	// 对外却说"预算可能已用尽或网络异常" ⇒ 用户会去等明天、去查网络，而真正要做的是换 key）。
+	// ⚠️ **attribution      error**(Lead   : day  is HTTP 401 invalid_api_key, 
+	// tooutbut "    alreadyuse or  error" ⇒ useuser  etc day,     , but posneed  is  key). 
 	reason := ""
 	degradedNow := func() string { return degradeMsg(reason, searchStdout) }
 	if o == nil || o.Providers == nil {
@@ -3227,7 +3227,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		return degradedNow()
 	}
 
-	// callFast 发一次 fast 调用并解 JSON 壳；ok=false 表示失败/空/意外壳（与原逻辑一致）。
+	// callFast send   fast calluseandresolve JSON  ; ok=false tableshow  /empty/ out (andorig    ). 
 	var lastErr error
 	callFast := func() (string, bool) {
 		resp, err := p.Chat(ctx, provider.ChatRequest{
@@ -3236,21 +3236,21 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 				{Role: "user", Content: "用户问题：" + original + "\n检索结果：" + searchStdout},
 			},
 			MaxTokens: 400,
-			// 回答层要纯文本：显式关掉 json_object（provider 级默认开启）。
-			// 否则模型在"不要输出 JSON"+json_object 矛盾指令下输出无意义 JSON 壳（{"x":0}），
-			// 解包失败会误判成"模型不可用"降级（M7 实测 2026-10-03）。
+			// answer need  base:  formclose  json_object(provider  defaultopenstart). 
+			//  then type " need out JSON"+json_object   refer under outno   JSON  ({"x":0}), 
+			// resolve      become" type  use"  (M7    2026-10-03). 
 			ResponseFormat: noJSON(),
 		})
 		if err != nil {
 			log.Printf("[queryLLMAnswer] fast Chat err: %v", err)
-			lastErr = err // 真实错误：供归因使用（不许对外说"预算/网络"）
+			lastErr = err //   error: provideattribution use( allowtoout "  /  ")
 			return "", false
 		}
 		if strings.TrimSpace(resp.Content) == "" {
 			log.Printf("[queryLLMAnswer] fast Chat empty content")
 			return "", false
 		}
-		// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本回答。
+		// fast   json_object response_format-- type out JSON  ; resolveout basecharsegalsoorig  baseanswer. 
 		content := strings.TrimSpace(resp.Content)
 		if strings.HasPrefix(content, "{") {
 			var j map[string]any
@@ -3275,7 +3275,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	elapsed := time.Since(start)
 
 	if ok {
-		// 慢但成功：不丢弃已有回答，只把慢响应带 model 名进诊断层（供归因/后续学习）。
+		// slowbutbecome :    alreadyhasanswer, onlypipeslow    model name  disconnect (provideattribution/aftercontinue  ). 
 		if elapsed > time.Duration(o.fastResponseMs())*time.Millisecond {
 			if svc := o.selfheal(); svc != nil {
 				_ = svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Trace{
@@ -3286,7 +3286,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		return content
 	}
 
-	// err/空内容 → 先诊断；diag 可用且可重试 → 指数退避重试（≤2 轮）。
+	// err/emptyin  -> first disconnect; diag  useand heavy  -> refernum  heavy (<=2  ). 
 	svc := o.selfheal()
 	if svc != nil {
 		d := svc.Diagnose(ctx, original, contract.IntentQuery, []selfheal.Trace{
@@ -3311,7 +3311,7 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 	return degradedNow()
 }
 
-// mergeAskOptions 合并意图候选与 refer 目标候选（id 去重，上限 8）。
+// mergeAskOptions  andintent  and refer objtgt  (id  heavy, onlimit 8). 
 func mergeAskOptions(base []AskOption, referOpts []refer.Option) []AskOption {
 	seen := map[string]bool{}
 	out := make([]AskOption, 0, len(base)+len(referOpts))
@@ -3354,7 +3354,7 @@ func undoText(it contract.Intent, rs []contract.Receipt) string {
 	case contract.IntentCommit, contract.IntentDeploy:
 		return "不可撤销（不可逆，已人工确认）"
 	}
-	// M4-3：用 C 交付的结构化 VHS_BACKUP_PATH: 标记解析具体备份文件。
+	// M4-3: use C deliver close ize VHS_BACKUP_PATH: tgt resolve  body  file. 
 	for _, r := range rs {
 		if p := tools.ParseBackupPath(r.Stdout); p != "" {
 			return "备份 " + filepath.Base(p) + "（" + filepath.Dir(p) + "）"
@@ -3411,15 +3411,15 @@ func strconvItoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// ---------- 轨迹/discuss 薄封装（nil-safe） ----------
+// ---------- trace/discuss    (nil-safe) ----------
 
 func (o *Options) write(e trajectory.Entry) {
 	if o.Trace == nil {
 		return
 	}
-	// #44：轨迹写失败不阻断只读任务。
-	// P0-1b：不再 `_ =` 静默吞错——未登记 kind / 序列化 / 写盘错误一律打 warning。
-	// 否则判据会"因为 kind 名不存在而空过"，比一般假绿更隐蔽（kinds.go 动因）。
+	// #44: tracewrite    disconnectread-onlytask. 
+	// P0-1b:  again `_ =`     --    kind /  listize / write error    warning. 
+	//  then data "becauseas kind name store butemptyed",      change  (kinds.go  because). 
 	if err := o.Trace.Write(e); err != nil {
 		log.Printf("[trajectory] write 被丢弃（kind=%q request_id=%s）: %v", e.Kind, e.RequestID, err)
 	}
@@ -3434,7 +3434,7 @@ func (o *Options) attribution(rid, cls, detail, evidence, suggestion string) con
 }
 
 func (o *Options) writeAttribution(a contract.Attribution) {
-	// 用 Content 携带完整归因 JSON（trajectory.Entry 无 Attrib 字段，按 #44 用 content 落）
+	// use Content   finish attribution JSON(trajectory.Entry no Attrib charseg, by #44 use content  )
 	b, _ := json.Marshal(a)
 	o.write(trajectory.Entry{RequestID: a.RequestID, Kind: trajectory.KindAttribution, Content: string(b)})
 	o.appendDiscussLog(a)
@@ -3451,7 +3451,7 @@ func evidenceOf(rs []contract.Receipt, v verify.Result) string {
 	return strings.Join(parts, ",")
 }
 
-// appendDiscussLog 追加一条人可见结论到 <log_dir>/discuss.jsonl（下一轮注入；不自动改词典/策略）。
+// appendDiscussLog       seeclose to <log_dir>/discuss.jsonl(under  notein;    modifyword /  ). 
 func (o *Options) appendDiscussLog(a contract.Attribution) {
 	dir := o.logDir()
 	_ = os.MkdirAll(dir, 0o755)
@@ -3464,15 +3464,15 @@ func (o *Options) appendDiscussLog(a contract.Attribution) {
 	_, _ = f.Write(append(b, '\n'))
 }
 
-// confirm 包装 ConfirmFn，ctx 取消时返回 false（不等待）。
+// confirm    ConfirmFn, ctx canceltimereturnback false( wait). 
 func (o *Options) confirm(ctx context.Context, taskID, question string) bool {
 	if o.ConfirmFn == nil {
 		return false
 	}
 	type res struct{ ok bool }
 	ch := make(chan res, 1)
-	// P0-2：ConfirmFn 内 panic 不得 crash 进程（否则一次人工确认回调拖垮整个 harness）。
-	// recover 后回退 ok=false（与 err 路径同义=拒绝放行），父 select 照常收到终态。
+	// P0-2: ConfirmFn in panic    crash process( then  humanconfirmbackcall     harness). 
+	// recover afterback  ok=false(and err pathsame =reject  ),   select   recvtoendstate. 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -3498,10 +3498,10 @@ func newRequestID() string {
 	return "req-" + time.Now().Format("150405.000000") + "-" + fmt.Sprintf("%x", time.Now().UnixNano()%0xffff)
 }
 
-// ---------- Summary（每日摘要） ----------
+// ---------- Summary( day need) ----------
 
-// Summary 聚合当日（since 之后）轨迹，按域/归因 class 分组，算认知闭环均值与通过率。
-// #52：手机可读纯文本；数据源=轨迹 kind=task_metrics（结构化单行）。
+// Summary   curday(since ofafter)trace, bydomain/attribution class split ,       valueand edrate. 
+// #52: mobile read  base; numdata =trace kind=task_metrics(close ize  ). 
 func Summary(o *Options, since time.Time) (string, error) {
 	dir := o.logDir()
 	day := time.Now().Format("20060102")
@@ -3521,9 +3521,9 @@ func Summary(o *Options, since time.Time) (string, error) {
 		total    int
 		ok       int
 		sumLoop  int64
-		waitN    int // M4-1：有人工等待/LLM 的任务数（Net 均值分母）
+		waitN    int // M4-1: hashuman wait/LLM  tasknum(Net  valuesplit )
 		sumWait  int64
-		pureN    int // 纯管线任务数（Net 均值分母外）
+		pureN    int //  managelinetasknum(Net  valuesplit out)
 	)
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -3536,7 +3536,7 @@ func Summary(o *Options, since time.Time) (string, error) {
 		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
 			continue
 		}
-		// #52 主聚合源：结构化 task_metrics 行
+		// #52     : close ize task_metrics  
 		if e.Kind == "task_metrics" {
 			var p taskMetricsPayload
 			if json.Unmarshal([]byte(e.Content), &p) != nil {
@@ -3562,7 +3562,7 @@ func Summary(o *Options, since time.Time) (string, error) {
 			}
 			continue
 		}
-		// 兼容旧轨迹：无 task_metrics 时仍数 intent 行（M2 历史）
+		// compat trace: no task_metrics time num intent  (M2   )
 		if e.Intent != nil && e.Kind == trajectory.KindIntent {
 			total++
 			byIntent[e.Intent.Intent]++
@@ -3623,11 +3623,11 @@ func writeCounts(sb *strings.Builder, title string, m map[string]int) {
 	}
 }
 
-// degradeMsg 由**真实错误**生成降级文案（归因必须准确；未知才说未知）。
+// degradeMsg by**  error**occurbecome    (attribution  approve ;   only   ). 
 //
-// v2.3（2026-10-04 用户指令："语气词很重要，别像机器人"）：模型不可用时
-// 不再输出"（上游限流（429）…）"机器人括号，改本地人话模板——承认问题、
-// 给可行动建议、带语气词。归因仍来自 attributeLLMError（真实错误，不许瞎说）。
+// v2.3(2026-10-04 useuserrefer : "lang word heavyneed, diff    "):  type  usetime
+//  again out"(on limit (429)…)"    id, modifybasely    --    , 
+// give     ,  lang word. attribution    attributeLLMError(  error,  allow  ). 
 func degradeMsg(rawErr, searchStdout string) string {
 	reason := attributeLLMError(rawErr)
 	action := "我这边调整一下就能接着干"
@@ -3648,12 +3648,12 @@ func degradeMsg(rawErr, searchStdout string) string {
 	return prefix
 }
 
-// attributeLLMError 把真实错误归因成人能行动的一句话。
+// attributeLLMError pipe  errorattributionbecome      sent . 
 //
-// 判据要求（Lead 2026-10-03）：
+//  dataneedrequire(Lead 2026-10-03): 
 //
-//	401/403 ⇒ **鉴权/API key**（不得出现"预算/网络"）；429 ⇒ 限流；5xx ⇒ 上游；
-//	超时 ⇒ 超时；**未知 ⇒ 未知 + 原始错误文本**（不许套用通用话术）。
+//	401/403 ⇒ **  /API key**(  outnow"  /  "); 429 ⇒ limit ; 5xx ⇒ on ; 
+//	 time ⇒  time; **   ⇒    + origstarterror base**( allow use use  ). 
 func attributeLLMError(rawErr string) string {
 	e := strings.ToLower(rawErr)
 	switch {
@@ -3665,8 +3665,8 @@ func attributeLLMError(rawErr string) string {
 		return "上游限流（429）—— 稍后重试"
 	case strings.Contains(e, "402"), strings.Contains(e, "payment required"),
 		strings.Contains(e, "insufficient"), strings.Contains(e, "余额"), strings.Contains(e, "欠费"):
-		// 2026-10-05 真机：上游实为 402 Payment Required（账户欠费），被 model-center 包成 502。
-		// 必须在 5xx 分支之前识别，否则误报"5xx 非本机问题"，误导排查方向。
+		// 2026-10-05   : on  as 402 Payment Required( user  ), be model-center  become 502. 
+		//     5xx branchofbefore diff,  then  "5xx  base   ",      to. 
 		return "模型账户余额/额度不足（上游 402 Payment Required）—— 需充值/换 key，不是本机网络问题"
 	case strings.Contains(e, "500"), strings.Contains(e, "502"), strings.Contains(e, "503"), strings.Contains(e, "504"):
 		return "上游服务错误（HTTP 5xx）—— 非本机问题，稍后重试"
@@ -3681,9 +3681,9 @@ func attributeLLMError(rawErr string) string {
 	}
 }
 
-// execRegisterTool —— 2026-10-04 用户强要求"后台必须有能力扩展能力，自迭代自更新"：
-// REGISTER_TOOL 意图执行：抽取能力名 → 生成工具契约 → Registry.Register 落盘 →
-// 回复人话确认（"好，我来增加「XX」能力"）。能力名抽不到/注册表未绑定 → 明确回执，不静默失败。
+// execRegisterTool -- 2026-10-04 useuser needrequire"after   has      ,     changenew": 
+// REGISTER_TOOL intent  :  get  name -> occurbecome     -> Registry.Register    ->
+// back   confirm(" ,   add "XX"  ").   name  to/note table    ->   back ,      . 
 func (o *Options) execRegisterTool(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	name := extractCapabilityName(it.CorrectedText)
 	if name == "" {
@@ -3710,7 +3710,7 @@ func (o *Options) execRegisterTool(ctx context.Context, it contract.Intent, logD
 	if err := o.Tools.Register(c, true); err != nil {
 		return []contract.Receipt{{Tool: "register", OK: false, Err: "注册失败: " + err.Error()}}
 	}
-	// 能力契约已落盘（自举第一步）；执行器实现在后续迭代接入。
+	//     already  (     );     now aftercontinue  connectin. 
 	return []contract.Receipt{{
 		Tool: "register", OK: true,
 		Stdout: "好，我来增加「" + name + "」能力：已登记为可扩展工具（语音自举注册）。" +
@@ -3718,8 +3718,8 @@ func (o *Options) execRegisterTool(ctx context.Context, it contract.Intent, logD
 	}}
 }
 
-// extractCapabilityName 从注册请求中抽取能力名：
-// 「你必须增加一个 远程控制电脑 的能力」→ 远程控制电脑；「加一个 压缩图片 的工具」→ 压缩图片。
+// extractCapabilityName fromnote  requirein get  name: 
+// "   add      control      "->   control  ; "            "->     . 
 func extractCapabilityName(text string) string {
 	re := regexp.MustCompile(`(?:增加|加|注册|新增|添加|创建|新建|搞|做|接入|上架)(?:一个|个|个新的|新的|一种|一项)?(?:工具|能力|功能|技能|插件|小工具)?(?:的)?([\p{Han}A-Za-z0-9\-_ ]+?)(?:的能力|的功能|的工具|的技能|的插件|吧|呢|了|。|？|\?|，|,|$)`)
 	m := re.FindStringSubmatch(text)
@@ -3730,7 +3730,7 @@ func extractCapabilityName(text string) string {
 			return name
 		}
 	}
-	// 兜底：去尾虚词后取整句（≤20 字，防把整段抱怨当能力名）。
+	//  bot:  tail wordafterget sent(<=20 char, preventpipe seg  cur  name). 
 	t := strings.TrimSpace(text)
 	t = strings.TrimRight(t, "的了吧呢。？?!！，, ")
 	if t != "" && len([]rune(t)) <= 20 {

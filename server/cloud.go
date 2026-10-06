@@ -1,12 +1,12 @@
 package server
 
-// cloud.go — 云端模式（VHS_MODE=cloud）：
-// 谷歌登录（OIDC Authorization Code + PKCE；测试可传 id_token 直验）、
-// 会话 JWT（HS256 自签短效）、租户命名空间隔离、三档配额。
-// 设计：docs/云端谷歌登录与发布架构-20261004.md（ADR-001/002/004/006）。
+// cloud.go —  end form(VHS_MODE=cloud): 
+//     (OIDC Authorization Code + PKCE;      id_token   ), 
+//    JWT(HS256     ),  user nameemptytime  ,     . 
+//   : docs/ end    andsend   -20261004.md(ADR-001/002/004/006). 
 //
-// 零第三方依赖：JWT 手写（标准库 HMAC/base64url），Google id_token 用
-// 本地缓存的 JWKS（RSA RS256）验签（crypto/rsa + x509），不引入外部库。
+//     dependency: JWT  write(tgtapprove  HMAC/base64url), Google id_token use
+// baselycache  JWKS(RSA RS256)  (crypto/rsa + x509),   inout  . 
 
 import (
 	"context"
@@ -31,9 +31,9 @@ import (
 	"voicesign-harness/config"
 )
 
-// ---------- 会话 JWT（HS256 自签，零依赖） ----------
+// ----------    JWT(HS256   ,  dependency) ----------
 
-const jwtLeeway = 60 // 秒
+const jwtLeeway = 60 // sec
 
 type sessionClaims struct {
 	Sub   string `json:"sub"`
@@ -48,7 +48,7 @@ func b64uDecode(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
-// signJWT 签发 HS256 JWT（header.payload.sig）。
+// signJWT  send HS256 JWT(header.payload.sig). 
 func signJWT(secret []byte, claims sessionClaims) (string, error) {
 	header, _ := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
 	payload, err := json.Marshal(claims)
@@ -61,7 +61,7 @@ func signJWT(secret []byte, claims sessionClaims) (string, error) {
 	return seg + "." + b64u(mac.Sum(nil)), nil
 }
 
-// verifyJWT 校验签名 + 时效，返回 claims。
+// verifyJWT verifysignature + time , returnback claims. 
 func verifyJWT(secret []byte, token string) (*sessionClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -91,7 +91,7 @@ func verifyJWT(secret []byte, token string) (*sessionClaims, error) {
 	return &c, nil
 }
 
-// ---------- Google JWKS（RS256）验证 ----------
+// ---------- Google JWKS(RS256)   ----------
 
 const googleCertsURL = "https://www.googleapis.com/oauth2/v3/certs"
 
@@ -108,7 +108,7 @@ type jwksDoc struct {
 	Keys []jwk `json:"keys"`
 }
 
-// googleIDToken 是 Google id_token 的解码态（仅取验签所需字段 + 声明）。
+// googleIDToken is Google id_token  resolvecodestate(onlyget   needcharseg + voice ). 
 type googleIDToken struct {
 	Iss   string `json:"iss"`
 	Aud   string `json:"aud"`
@@ -118,10 +118,10 @@ type googleIDToken struct {
 	Iat   int64  `json:"iat"`
 }
 
-// jwksCache 本地缓存 Google 公钥（5 分钟 TTL），避免每次登录都拉取。
+// jwksCache baselycache Google   (5 splitclock TTL),       all get. 
 type jwksCache struct {
 	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey // kid → key
+	keys    map[string]*rsa.PublicKey // kid -> key
 	fetched time.Time
 }
 
@@ -184,8 +184,8 @@ func fetchJWKS() (*jwksDoc, error) {
 	return &doc, nil
 }
 
-// acceptsAud 判断 id_token 的 aud 是否为受信 client：优先 VHS_GOOGLE_CLIENT_IDS（逗号分隔，
-// 支持 iOS 类型 client 与 Web client 并存），未配置时退回单个 VHS_GOOGLE_CLIENT_ID。
+// acceptsAud  disconnect id_token   aud is asaccept  client:  first VHS_GOOGLE_CLIENT_IDS( idsplit , 
+//  keep iOS classtype client and Web client andstore),    time back   VHS_GOOGLE_CLIENT_ID. 
 func (c *cloudAuth) acceptsAud(aud string) bool {
 	ids := c.cfg.Cloud.GoogleClientIDs
 	if ids == "" {
@@ -199,12 +199,12 @@ func (c *cloudAuth) acceptsAud(aud string) bool {
 	return false
 }
 
-// verifyGoogleIDToken 校验 Google id_token：RS256 验签 + iss/aud/exp。
+// verifyGoogleIDToken verify Google id_token: RS256    + iss/aud/exp. 
 func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) {	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("id_token 段数错误")
 	}
-	// 头部取 kid
+	// head get kid
 	hdr, err := b64uDecode(parts[0])
 	if err != nil {
 		return nil, err
@@ -252,9 +252,9 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 	return &tok, nil
 }
 
-// ---------- 谷歌 code 交换（OAuth token 端点） ----------
+// ----------    code   (OAuth token endpoint) ----------
 
-// exchangeGoogleCode 用 authorization code + PKCE verifier 换 id_token。
+// exchangeGoogleCode use authorization code + PKCE verifier   id_token. 
 func (c *cloudAuth) exchangeGoogleCode(code, verifier string) (*googleIDToken, error) {
 	if c.cfg.Cloud.GoogleClientID == "" || c.cfg.Cloud.GoogleClientSecret == "" {
 		return nil, fmt.Errorf("未配置 VHS_GOOGLE_CLIENT_ID / VHS_GOOGLE_CLIENT_SECRET")
@@ -299,22 +299,22 @@ func (c *cloudAuth) redirectURI() string {
 	return "https://voicesign.ai/auth/callback"
 }
 
-// ---------- 租户（命名空间 + 档位 + 配额） ----------
+// ----------  user( nameemptytime +    +   ) ----------
 
 type tenantState struct {
 	Sub        string `json:"sub"`
 	Email      string `json:"email,omitempty"`
 	Tier       string `json:"tier"`                  // free | prime | enterprise
-	TrialUntil int64  `json:"trial_until,omitempty"` // 体验会员到期 unix；未过期按 prime 计
+	TrialUntil int64  `json:"trial_until,omitempty"` // body   toperiod unix;  edperiodby prime  
 	CreatedAt  int64  `json:"created_at"`
 }
 
 type quotaState struct {
-	Date  string `json:"date"` // YYYY-MM-DD（按服务器本地日）
+	Date  string `json:"date"` // YYYY-MM-DD(byserveservice baselyday)
 	Tasks int    `json:"tasks"`
 }
 
-// effectiveTier 返回实际生效档位（体验会员期内按 prime）。
+// effectiveTier returnback  occur   (body   periodinby prime). 
 func (t *tenantState) effectiveTier() string {
 	if t.Tier == "enterprise" {
 		return "enterprise"
@@ -328,7 +328,7 @@ func (t *tenantState) effectiveTier() string {
 	return "free"
 }
 
-// limitFor 免费档额度；prime/enterprise 不限额（返回 -1）。
+// limitFor      ; prime/enterprise  limit (returnback -1). 
 func (c *cloudAuth) limitFor(effTier string) int {
 	if effTier == "free" {
 		n := c.cfg.Cloud.FreeDailyTasks
@@ -357,12 +357,12 @@ func newCloudAuth(cfg *config.Config) *cloudAuth {
 	return c
 }
 
-// ensureInit 懒初始化：JWT secret（env 或持久化文件）、目录。
+// ensureInit  initstartize: JWT secret(env orkeep izefile), obj . 
 func (c *cloudAuth) ensureInit() error {
 	c.initOnce.Do(func() {
 		key := []byte(c.cfg.Cloud.JWTSecret)
 		if len(key) == 0 {
-			// 首次启动自动生成并持久化 <log_dir>/cloud/jwt-secret
+			// first start   occurbecomeandkeep ize <log_dir>/cloud/jwt-secret
 			dir := filepath.Join(c.cfg.Global.LogDir, "cloud")
 			secPath := filepath.Join(dir, "jwt-secret")
 			if b, err := os.ReadFile(secPath); err == nil && len(b) >= 16 {
@@ -396,7 +396,7 @@ func (c *cloudAuth) tenantPath(sub string) string {
 	return filepath.Join(c.tenants, sanitizeSub(sub))
 }
 
-// sanitizeSub 防目录穿越：租户 sub 只允许安全字符。
+// sanitizeSub preventobj   :  user sub only allowsafesafetychar . 
 func sanitizeSub(sub string) string {
 	var b strings.Builder
 	for _, r := range sub {
@@ -413,7 +413,7 @@ func sanitizeSub(sub string) string {
 	return s
 }
 
-// loadTenant 读租户状态；不存在则创建（免费档 + 15 天体验会员）。
+// loadTenant read userstatus;  store then  (    + 15 daybody   ). 
 func (c *cloudAuth) loadTenant(sub, email string) (*tenantState, error) {
 	if err := c.ensureInit(); err != nil {
 		return nil, err
@@ -450,12 +450,12 @@ func trialDays(cfg *config.Config) int {
 	return 15
 }
 
-// quotaFile 配额计数路径（按租户 + 日期重置）。
+// quotaFile    numpath(by user + dayperiodheavy ). 
 func (c *cloudAuth) quotaFile(sub string) string {
 	return filepath.Join(c.tenantPath(sub), "quota.json")
 }
 
-// readQuota 读当日配额（无则零值）。
+// readQuota readcurday  (nothen value). 
 func (c *cloudAuth) readQuota(sub string) (*quotaState, error) {
 	today := time.Now().Format("2006-01-02")
 	var q quotaState
@@ -467,7 +467,7 @@ func (c *cloudAuth) readQuota(sub string) (*quotaState, error) {
 	return &quotaState{Date: today}, nil
 }
 
-// consumeTask 原子计数 +1（临时文件 + rename，避免并发写坏）。
+// consumeTask orig  num +1( timefile + rename,   andsendwrite ). 
 func (c *cloudAuth) consumeTask(sub string) (*quotaState, error) {
 	q, err := c.readQuota(sub)
 	if err != nil {
@@ -486,8 +486,8 @@ func (c *cloudAuth) consumeTask(sub string) (*quotaState, error) {
 	return q, nil
 }
 
-// checkAndConsume 配额检查 + 消费：返回 (剩余额度, err)；超限 err=quotaExceeded。
-// effTier 由调用方先取（effectiveTier）。
+// checkAndConsume      +   : returnback (    , err);  limit err=quotaExceeded. 
+// effTier bycalluse firstget(effectiveTier). 
 func (c *cloudAuth) checkAndConsume(sub string) (int, error) {
 	t, err := c.loadTenant(sub, "")
 	if err != nil {
@@ -495,7 +495,7 @@ func (c *cloudAuth) checkAndConsume(sub string) (int, error) {
 	}
 	eff := t.effectiveTier()
 	if c.limitFor(eff) < 0 {
-		return -1, nil // prime/enterprise 不限额
+		return -1, nil // prime/enterprise  limit 
 	}
 	q, err := c.consumeTask(sub)
 	if err != nil {
@@ -514,7 +514,7 @@ func (c *cloudAuth) checkAndConsume(sub string) (int, error) {
 
 var quotaExceededErr = fmt.Errorf("quota_exceeded")
 
-// verifyJWT 校验会话 JWT（方法包装，供 auth 中间件用）。
+// verifyJWT verify   JWT(    , provide auth middle use). 
 func (c *cloudAuth) verifyJWT(token string) (*sessionClaims, error) {
 	if err := c.ensureInit(); err != nil {
 		return nil, err
@@ -522,7 +522,7 @@ func (c *cloudAuth) verifyJWT(token string) (*sessionClaims, error) {
 	return verifyJWT(c.jwtKey, token)
 }
 
-// signSession 签发会话 JWT（10h 默认）。
+// signSession  send   JWT(10h default). 
 func (c *cloudAuth) signSession(t *tenantState) (string, error) {
 	if err := c.ensureInit(); err != nil {
 		return "", err
@@ -538,16 +538,16 @@ func (c *cloudAuth) signSession(t *tenantState) (string, error) {
 	})
 }
 
-// ---------- HTTP 端点 ----------
+// ---------- HTTP endpoint ----------
 
-// authLoginReq 登录请求：真实链路传 code(+verifier)；测试链路可直传 id_token。
+// authLoginReq    require:   chainroute  code(+verifier);   chainroute    id_token. 
 type authLoginReq struct {
 	Code         string `json:"code,omitempty"`
 	CodeVerifier string `json:"code_verifier,omitempty"`
 	IDToken      string `json:"id_token,omitempty"`
 }
 
-// handleAuthGoogle POST /v1/auth/google → 换/验 Google token → 租户 → 会话 JWT。
+// handleAuthGoogle POST /v1/auth/google ->  /  Google token ->  user ->    JWT. 
 func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅 POST"})
@@ -604,7 +604,7 @@ func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleMe GET /v1/me（cloud 模式，JWT 已由 auth 中间件解析注入 ctx）。
+// handleMe GET /v1/me(cloud  form, JWT alreadyby auth middle resolve notein ctx). 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	sub := ctxTenant(r.Context())
 	if sub == "" {
@@ -632,7 +632,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------- ctx 租户注入 ----------
+// ---------- ctx  usernotein ----------
 
 type ctxKey int
 
@@ -647,7 +647,7 @@ func ctxTenant(ctx context.Context) string {
 	return v
 }
 
-// 设备凭证（机器码）身份注入：设备 token 命中本机注册表后，把机器码放进上下文。
+//     (  code)  notein:    token  inbase note tableafter, pipe  code  onunder . 
 type machineCtxKey struct{}
 
 func withMachine(ctx context.Context, code string) context.Context {
@@ -659,7 +659,7 @@ func ctxMachine(ctx context.Context) string {
 	return v
 }
 
-// truncate 日志脱敏用截断。
+// truncate day   use disconnect. 
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

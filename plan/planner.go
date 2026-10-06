@@ -1,10 +1,10 @@
-// planner.go —— 规划器（VHS-PLAN-001 §4：PL-1..PL-5）。
+// planner.go -- rule  (VHS-PLAN-001 §4: PL-1..PL-5). 
 //
-// 本轮实现是**规则式**的：离线、确定性、只用 Manifest 内的真实能力。
-// 它不调用模型 —— PL/RV 判据要求可复现，模型式 planner 天生非确定，
-// 应作为**增强**另立判据（不混进这 9 条）。
+// base  nowis**ruleform** :  line,   ity, onlyuse Manifest in     . 
+//   calluse type -- PL/RV  dataneedrequire  now,  typeform planner dayoccur   , 
+//   as**add **   data(     9  ). 
 //
-// PL-2（不可达必须明确拒绝）是反幻觉的核心：清单里没有的能力 = 做不到。
+// PL-2(       reject)isrev     : list  has    =   to. 
 package plan
 
 import (
@@ -13,76 +13,76 @@ import (
 	"strings"
 )
 
-// ErrNotImplemented 保留给尚未实现的路径（当前规划器已实现，不再返回它）。
+// ErrNotImplemented keep give   now path(curbeforerule  already now,  againreturnback ). 
 var ErrNotImplemented = errors.New("plan: 未实现")
 
-// ErrUnachievable 表示超出能力边界且复规次数用尽 —— 必须如实说"做不到"。
+// ErrUnachievable tableshow out   boundaryand rule numuse  --   e.g.  "  to". 
 var ErrUnachievable = errors.New("plan: 超出能力边界，做不到")
 
-// Step 是计划中的一步：必须映射到清单内的真实能力，且参数明确。
+// Step is  in   :     tolistin     , and num  . 
 type Step struct {
-	Tool      string            `json:"tool"`             // 必须是 Manifest.Tools 里的能力名
-	Caps      []string          `json:"caps"`             // 用到的 cap（如 git 的 commit）
-	Params    map[string]string `json:"params"`           // 明确参数（PL-3：不得空泛）
-	Action    string            `json:"action"`           // 可执行动作（不得是"分析一下"这类空话）
-	Output    string            `json:"output"`           // 产出物（PL-3）
-	Why       string            `json:"why,omitempty"`    // PM-5：这一步的依据（不得是黑盒）
-	Domain    string            `json:"domain,omitempty"` // PM-4：目标域（本机按 AllowedSpaces 复核）
+	Tool      string            `json:"tool"`             //   is Manifest.Tools     name
+	Caps      []string          `json:"caps"`             // useto  cap(e.g. git   commit)
+	Params    map[string]string `json:"params"`           //    num(PL-3:   empty )
+	Action    string            `json:"action"`           //      (  is"split  under" classempty )
+	Output    string            `json:"output"`           // produceout (PL-3)
+	Why       string            `json:"why,omitempty"`    // PM-5:      data(  is  )
+	Domain    string            `json:"domain,omitempty"` // PM-4: objtgtdomain(base by AllowedSpaces   )
 	DependsOn []int             `json:"depends_on,omitempty"`
 }
 
-// ConsideredItem 是"这次规划**考虑了哪个要素**"（P2 先决条件：没有观测面，W_* 测不出来）。
+// ConsideredItem is"  rule **    need **"(P2 firstdecide  :  has  face, W_*   out ). 
 type ConsideredItem struct {
 	Element  string `json:"element"`
-	Source   string `json:"source"`   // WM-3：每条必须有来源
-	Inferred bool   `json:"inferred"` // 推断来的（而非事实）
+	Source   string `json:"source"`   // WM-3:     has  
+	Inferred bool   `json:"inferred"` //  disconnect  (but   )
 }
 
-// WMStats 是工作记忆的可测指标（WORKMEM-001 §3）。
+// WMStats is       refertgt(WORKMEM-001 §3). 
 type WMStats struct {
-	Max       int      `json:"w_max"`                  // 一次规划同时引用的要素上界（容量）
-	Used      int      `json:"w_used"`                 // 实际用到
-	Drop      int      `json:"w_drop"`                 // 因握不住被丢弃的要素数
-	DropTrace []string `json:"w_drop_trace,omitempty"` // WM-2：丢弃必须留痕
-	ChainLen  int      `json:"chain_len"`              // 计划能排到第几步
-	// WMCAP 留痕（VHS-WMCAP-001 C1/C2/WMC-5）：容量变化必须可解释。
+	Max       int      `json:"w_max"`                  //   rule sametime use need onboundary(  )
+	Used      int      `json:"w_used"`                 //   useto
+	Drop      int      `json:"w_drop"`                 // because   be   need num
+	DropTrace []string `json:"w_drop_trace,omitempty"` // WM-2:       
+	ChainLen  int      `json:"chain_len"`              //     to   
+	// WMCAP   (VHS-WMCAP-001 C1/C2/WMC-5):   changeize   resolve . 
 	Capacity    int     `json:"capacity,omitempty"`
 	DemandFloor int     `json:"demand_floor,omitempty"`
 	Familiarity float64 `json:"familiarity,omitempty"`
 	Capped      bool    `json:"capped,omitempty"`
 }
 
-// Plan 是一次规划的结果。
+// Plan is  rule  close . 
 type Plan struct {
 	Goal    string   `json:"goal"`
 	Steps   []Step   `json:"steps"`
-	Refused bool     `json:"refused"`           // PL-2：不可达时必须为 true
-	Missing []string `json:"missing,omitempty"` // PL-2：拒绝时缺什么
+	Refused bool     `json:"refused"`           // PL-2:    time  as true
+	Missing []string `json:"missing,omitempty"` // PL-2: rejecttime   
 	Reason  string   `json:"reason,omitempty"`
-	Voided  bool     `json:"voided,omitempty"`  // RV-3：被域门禁拒绝 → 计划作废
-	Changes []string `json:"changes,omitempty"` // RV-2：复规时必须说明"变了什么"
+	Voided  bool     `json:"voided,omitempty"`  // RV-3: bedomain forbidreject ->     
+	Changes []string `json:"changes,omitempty"` // RV-2:  ruletime    "change  "
 
-	Considered     []ConsideredItem `json:"considered,omitempty"`      // 观测面（P2）
-	WM             WMStats          `json:"wm,omitempty"`              // 可测的 W（P2）
-	Source         string           `json:"source,omitempty"`          // rule | model | readonly-fallback（PM-5 可解释）
-	Degraded       bool             `json:"degraded,omitempty"`        // PM-2：模型失败已降级
-	DegradedReason string           `json:"degraded_reason,omitempty"` // 降级原因（不得静默）
+	Considered     []ConsideredItem `json:"considered,omitempty"`      //   face(P2)
+	WM             WMStats          `json:"wm,omitempty"`              //     W(P2)
+	Source         string           `json:"source,omitempty"`          // rule | model | readonly-fallback(PM-5  resolve )
+	Degraded       bool             `json:"degraded,omitempty"`        // PM-2:  type  already  
+	DegradedReason string           `json:"degraded_reason,omitempty"` //   origbecause(    )
 }
 
-// Planner 是规划器接口。
+// Planner isrule  connect . 
 type Planner interface {
 	Plan(goal string, m Manifest) (Plan, error)
 }
 
-// LocalPlanner 是规则式规划器：只用 Manifest 内的能力，离线可复现。
+// LocalPlanner isruleformrule  : onlyuse Manifest in   ,  line  now. 
 type LocalPlanner struct{}
 
-// 目标关键词 → 必需能力。缺失即"做不到"（不猜、不编）。
+// objtgtclose word ->  need  .   i.e."  to"(  ,   ). 
 var requirementRules = []struct {
 	words []string
 	tool  string
-	auth  bool   // true = 不可逆/生产影响 ⇒ 授权在前（U1：授权才是本质）
-	kind  string // 网关请求类型：工具 | 模型（U3/C3）
+	auth  bool   // true =  reversible/occurproduce   ⇒    before(U1:   onlyisbase )
+	kind  string //  close requireclasstype:    |  type(U3/C3)
 }{
 	{[]string{"部署", "上线", "deploy"}, "deploy", true, "工具"},
 	{[]string{"发布到生产", "生产发布"}, "release", true, "工具"},
@@ -94,10 +94,10 @@ var requirementRules = []struct {
 	{[]string{"判断一下", "评估一下", "帮我判断", "帮我评估"}, "model-judgment", false, "模型"},
 }
 
-// bypassWords 是"要求跳过确认"的口语形态（F3：不得无声执行被保护动作）。
+// bypassWords is"needrequire edconfirm"  lang state(F3:   novoice  beprotect  ). 
 var bypassWords = []string{"不用确认", "不用我确认", "无须确认", "别问", "不用问", "直接提交", "自行决定", "不用请示"}
 
-// protectedCapsIn 找出目标里涉及的被保护动作（不可逆/需授权）。
+// protectedCapsIn  outobjtgt  and beprotect  ( reversible/need  ). 
 func protectedCapsIn(goal string) []string {
 	var out []string
 	if containsAny(goal, "提交", "commit") {
@@ -112,11 +112,11 @@ func protectedCapsIn(goal string) []string {
 	return out
 }
 
-// selfServiceWords 是"只读自服务"目标形态（SC-1：必须有模板）。
+// selfServiceWords is"read-only serveservice"objtgt state(SC-1:   has  ). 
 var selfServiceWords = []string{"读一下", "看一下", "看看", "列出", "数一下", "几个", "跑一下", "查一下", "告诉我"}
 
-// readonlyProbeSteps 返回**只读探查**步骤（F1 裁决：拒绝承诺，但可以去看看）。
-// 只允许 file.read / search.text / test.run / git.status；Action 与 Why 不得声称"完成/达成"。
+// readonlyProbeSteps returnback**read-only  **  (F1  decide: reject  , but by   ). 
+// only allow file.read / search.text / test.run / git.status; Action and Why   voicecalled"done/ become". 
 func readonlyProbeSteps() []Step {
 	return []Step{
 		{
@@ -134,8 +134,8 @@ func readonlyProbeSteps() []Step {
 	}
 }
 
-// PlanWithMemory 按给定容量重规划（WM-1：容量越大，能握住的实体越多）。
-// goal 形如 "目标|实体1|实体2|…"：'|' 之后是被注入的活跃实体。
+// PlanWithMemory bygive   heavyrule (WM-1:     ,      body  ). 
+// goal  e.g. "objtgt| body1| body2|…": '|' ofafterisbenotein    body. 
 func (LocalPlanner) PlanWithMemory(goal string, m Manifest, capacity int) (Plan, error) {
 	parts := strings.Split(goal, "|")
 	w := &WorkingMemory{Capacity: capacity}
@@ -145,8 +145,8 @@ func (LocalPlanner) PlanWithMemory(goal string, m Manifest, capacity int) (Plan,
 	return LocalPlanner{}.planWithWorkingMemory(parts[0], m, w)
 }
 
-// PlanWithWorkingMemory 是"带工作记忆"的规划入口（WM-5 的观测口径）：
-// 有记忆 ⇒ 能消解指代、能排链；清空 ⇒ 只能回问。
+// PlanWithWorkingMemory is"     " rule in (WM-5     path): 
+// has   ⇒   resolvecoreference,   chain;  empty ⇒ only clarification. 
 func (LocalPlanner) PlanWithWorkingMemory(goal string, m Manifest, w *WorkingMemory) (Plan, error) {
 	return LocalPlanner{}.planWithWorkingMemory(goal, m, w)
 }
@@ -161,7 +161,7 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 			Considered: cons, WM: wm,
 		}, nil
 	}
-	// 约束板有**否决权**：命中约束即拒绝（不得绕过）。
+	//  end has** decide **:  in endi.e.reject(   ed). 
 	for _, c := range w.Constraints {
 		if strings.Contains(goal, c.Element) {
 			cons, wm := observe(goal, m, nil, nil)
@@ -170,7 +170,7 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 				Reason:  "约束板否决", Considered: cons, WM: wm}, nil
 		}
 	}
-	// 待决板非空 ⇒ 先回问（不猜）。
+	//  decide  empty ⇒ firstclarification(  ). 
 	if len(w.OpenItems) > 0 {
 		cons, wm := observe(goal, m, nil, nil)
 		return Plan{Goal: goal, Source: "rule", Refused: true,
@@ -178,8 +178,8 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 			Reason:     "待决板非空，先问再动",
 			Considered: cons, WM: wm}, nil
 	}
-	// 需求下限 = 目标里**显式提到**的实体数（一个都不提 ⇒ 1）；
-	// 供给 = 活跃实体板。两者分开，容量才有意义（否则永远够用、公式空转）。
+	// needrequireunderlimit = objtgt ** form to**  bodynum(  all   ⇒ 1); 
+	// providegive =    body .  ersplitopen,   onlyhas  ( then   use,  formempty ). 
 	if w.DemandFloor <= 0 {
 		w.DemandFloor = 1
 		for _, it := range w.WorkingSet {
@@ -188,7 +188,7 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 			}
 		}
 	}
-	// 活跃实体板驱动链长：每个被握住的实体 ⇒ 读 + 改，末尾提交。
+	//    body   chain :   be    body ⇒ read + modify, endtail  . 
 	var steps []Step
 	for range w.BoundedWorkingSet() {
 		steps = append(steps,
@@ -216,10 +216,10 @@ func (LocalPlanner) planWithWorkingMemory(goal string, m Manifest, w *WorkingMem
 	return plan, nil
 }
 
-// wmCapacity 是一次规划"握得住"的要素数上界（WORKMEM-001：容量有界，丢了要留痕）。
+// wmCapacity is  rule "   " need numonboundary(WORKMEM-001:   hasboundary,  need  ). 
 const wmCapacity = 8
 
-// observe 记录本次规划考虑了哪些要素（WM-2/WM-3），并算出可测的 W。
+// observe   base rule     need (WM-2/WM-3), and out    W. 
 func observe(goal string, m Manifest, steps []Step, gaps []string) ([]ConsideredItem, WMStats) {
 	var items []ConsideredItem
 	for _, r := range requirementRules {
@@ -248,7 +248,7 @@ func observe(goal string, m Manifest, steps []Step, gaps []string) ([]Considered
 	wm := WMStats{Max: wmCapacity, ChainLen: len(steps)}
 	if len(items) > wmCapacity {
 		for _, it := range items[wmCapacity:] {
-			wm.DropTrace = append(wm.DropTrace, it.Element) // WM-2：静默丢弃禁止
+			wm.DropTrace = append(wm.DropTrace, it.Element) // WM-2:     forbidstop
 		}
 		items = items[:wmCapacity]
 	}
@@ -257,17 +257,17 @@ func observe(goal string, m Manifest, steps []Step, gaps []string) ([]Considered
 	return items, wm
 }
 
-// Plan 按规则产出一个确定性计划。
+// Plan byruleproduceout    ity  . 
 //
-// 分类（六类）：reachable / self_service / partial / capability_gap / authorization_gap / 未识别。
-// 未识别 ⇒ Refused + **只读探查**（Source=readonly-probe，且不得声称覆盖目标）。
+// classify( class): reachable / self_service / partial / capability_gap / authorization_gap /   diff. 
+//   diff ⇒ Refused + **read-only  **(Source=readonly-probe, and  voicecalledoverwriteobjtgt). 
 func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	g := strings.ToLower(strings.TrimSpace(goal))
 	if g == "" {
 		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: []string{"无外部依赖：目标为空"},
 			Reason: "目标为空，不做任何假设"}, nil
 	}
-	// authorization_gap（F3）：要求绕过确认 + 被保护动作 ⇒ 拒绝并指人。
+	// authorization_gap(F3): needrequire edconfirm + beprotect   ⇒ rejectandrefer . 
 	if containsAny(g, bypassWords...) {
 		if caps := protectedCapsIn(g); len(caps) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
@@ -281,13 +281,13 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 
 	switch {
 	case len(gaps) > 0 && kind == "":
-		// capability_gap：已识别的能力缺口 ⇒ 拒绝 + 指 owner，**不编步骤**
-		//（SC-2/PL-2 要求：拒绝时不得给步骤；只读探查仅用于"未识别"目标，见下）。
+		// capability_gap: already diff      ⇒ reject + refer owner, **    **
+		//(SC-2/PL-2 needrequire: rejecttime  give  ; read-only  onlyuseat"  diff"objtgt, seeunder). 
 		cons, wm := observe(goal, m, nil, gaps)
 		return Plan{Goal: goal, Source: "rule", Refused: true, Missing: gaps, Considered: cons, WM: wm,
 			Reason: "目标需要清单外能力（Manifest 即边界），不编造可执行计划"}, nil
 	case len(gaps) > 0 && kind != "":
-		// partial：只规划可达前缀，尾巴进 Missing（既非整体照做，也非整体拒绝）
+		// partial: onlyrule   before , tail   Missing(   body  , also  bodyreject)
 		if missing := missingTools(m, steps); len(missing) > 0 {
 			return Plan{Goal: goal, Source: "rule", Refused: true,
 				Missing: append(gaps, "网关："+strings.Join(missing, ",")+" 不在能力清单内"), Reason: "可达前缀也需要清单外能力"}, nil
@@ -303,7 +303,7 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 		cons, wm := observe(goal, m, steps, nil)
 		return Plan{Goal: goal, Source: "rule", Steps: steps, Considered: cons, WM: wm}, nil
 	default:
-		// 未识别目标：Refused（拒绝承诺）+ 只读探查（去看看）+ 显式自曝。
+		//   diffobjtgt: Refused(reject  )+ read-only  (   )+  form  . 
 		probe := readonlyProbeSteps()
 		if missing := missingTools(m, probe); len(missing) > 0 {
 			probe = nil
@@ -318,7 +318,7 @@ func (LocalPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	}
 }
 
-// classify 按目标形态返回模板步骤与类别（"" = 未识别）。
+// classify byobjtgt statereturnback    andclassdiff("" =   diff). 
 func classify(g string) ([]Step, string) {
 	switch {
 	case containsAny(g, "todo", "整理", "汇总", "文档"):
@@ -332,7 +332,7 @@ func classify(g string) ([]Step, string) {
 	}
 }
 
-// selfServiceSteps 给出只读自服务模板（SC-1）。
+// selfServiceSteps giveoutread-only serveservice  (SC-1). 
 func selfServiceSteps(g string) []Step {
 	if containsAny(g, "跑", "测试", "go test") {
 		return []Step{{
@@ -348,10 +348,10 @@ func selfServiceSteps(g string) []Step {
 	}}
 }
 
-// gapRequirements 返回目标的缺口条目（C1–C4）：
-//   - 授权类 `人：`；能力类 `网关：`（并标明网关请求类型：工具/模型）；
-//   - 同一目标可同时有两类缺口，**授权在前**（C2）；
-//   - 不可逆/生产影响的动作必须有人工确认指向（C4）。
+// gapRequirements returnbackobjtgt    obj(C1–C4): 
+//   -   class ` : `;   class ` close: `(andtgt  close requireclasstype:   / type); 
+//   - same objtgt sametimehas class  , **   before**(C2); 
+//   -  reversible/occurproduce       hashumanconfirmreferto(C4). 
 func gapRequirements(goal string, m Manifest) []string {
 	have := map[string]bool{}
 	for _, c := range m.Tools {
@@ -374,7 +374,7 @@ func gapRequirements(goal string, m Manifest) []string {
 	return out
 }
 
-// unmetRequirement 报告目标是否要求清单里不具备的能力（保留给模型式复核使用）。
+// unmetRequirement   objtgtis needrequirelist       (keep give typeform   use). 
 func unmetRequirement(goal string, m Manifest) ([]string, bool) {
 	gaps := gapRequirements(goal, m)
 	return gaps, len(gaps) == 0
@@ -449,27 +449,27 @@ func containsAny(s string, words ...string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// 复规（RV-1..RV-4）
+//  rule(RV-1..RV-4)
 // ---------------------------------------------------------------------------
 
-// StepFailure 是一次步骤失败/被拒的描述（RV-1/RV-3 的输入）。
+// StepFailure is      /bereject describe(RV-1/RV-3   in). 
 type StepFailure struct {
 	StepIndex    int      `json:"step_index"`
 	Tool         string   `json:"tool"`
 	Caps         []string `json:"caps,omitempty"`
 	Reason       string   `json:"reason"`
-	DomainDenied bool     `json:"domain_denied,omitempty"` // RV-3：被域门禁拒绝
+	DomainDenied bool     `json:"domain_denied,omitempty"` // RV-3: bedomain forbidreject
 	DeniedDomain string   `json:"denied_domain,omitempty"`
 }
 
-// MaxReplans 是复规次数上限（RV-4：不无限复规）。
+// MaxReplans is rule numonlimit(RV-4:  nolimit rule). 
 const MaxReplans = 3
 
-// Replan 在某步失败后重新规划（规则式、确定性）。
+// Replan      afterheavynewrule (ruleform,   ity). 
 //
-//   - attempt 超 MaxReplans → ErrUnachievable（如实说做不到，RV-4）
-//   - 域门禁拒绝 → 计划作废、移除该步、绝不换说法绕过（RV-3）
-//   - 其它失败 → 移除失败步并插入只读诊断步，Changes 说明变化（RV-1/RV-2）
+//   - attempt   MaxReplans -> ErrUnachievable(e.g.    to, RV-4)
+//   - domain forbidreject ->     ,     ,       ed(RV-3)
+//   - its    ->      and inread-only disconnect , Changes   changeize(RV-1/RV-2)
 func Replan(orig Plan, f StepFailure, m Manifest, attempt int) (Plan, error) {
 	if attempt > MaxReplans {
 		return Plan{}, ErrUnachievable
@@ -519,7 +519,7 @@ func insertAt(steps []Step, idx int, s Step) []Step {
 	return out
 }
 
-// diagnosticStep 选一个**只读**诊断步（优先 git.status，其次 search.text）。
+// diagnosticStep    **read-only** disconnect ( first git.status, its  search.text). 
 func diagnosticStep(m Manifest) (Step, bool) {
 	caps := map[string]map[string]bool{}
 	for _, c := range m.Tools {
@@ -540,7 +540,7 @@ func diagnosticStep(m Manifest) (Step, bool) {
 	return Step{}, false
 }
 
-// ensureNonEmpty 保证复规结果不是空计划（空计划无法执行、也无法审计）。
+// ensureNonEmpty keep  ruleclose  isempty  (empty  no   , alsono   ). 
 func ensureNonEmpty(steps []Step, m Manifest) []Step {
 	if len(steps) > 0 {
 		return steps

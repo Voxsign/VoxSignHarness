@@ -1,15 +1,15 @@
-// model_planner.go —— 模型式规划器：**模型做规划，本机做边界**。
+// model_planner.go --  typeformrule  : ** type rule , base   boundary**. 
 //
-// 对齐架构第一原则：事实在本机（能力清单、域门禁、边界复核），推理在外（模型）。
+// to     origthen:    base (  list, domain forbid,  boundary  ),    out( type). 
 //
-// 硬要求（Lead 裁决）：
-//   - 走 modelcenter 的 `default` 通道（通道名固定，模型从配置读）；
-//   - 模型只产出**候选**计划，边界与拒绝由**本机复核**（PM-1/PM-4）；
-//   - PM-2：模型不可用/超时/格式错/幻觉 → **一律降级**（规则式 → 只读兜底），
-//     不抛错、不卡死，并在计划里标 `Degraded`（默认行为，不是例外路径）；
-//   - PM-5：每步必须带 `Why`（依据），否则视为不可解释 → 降级。
+//  needrequire(Lead  decide): 
+//   -   modelcenter   `default`   (  name  ,  typefrom  read); 
+//   -  typeonlyproduceout**  **  ,  boundaryandrejectby**base   **(PM-1/PM-4); 
+//   - PM-2:  type  use/ time/ form /   -> **    **(ruleform -> read-only bot), 
+//        ,    , and    tgt `Degraded`(default as,  isexampleoutpath); 
+//   - PM-5:       `Why`( data),  then as  resolve  ->   . 
 //
-// 判据在 `plan/model_criteria_test.go`（tag `vhsplanmodel`），**不混进** PL/RV 那 15 条。
+//  data  `plan/model_criteria_test.go`(tag `vhsplanmodel`), **   ** PL/RV   15  . 
 package plan
 
 import (
@@ -20,19 +20,19 @@ import (
 	"time"
 )
 
-// PlanModel 是"候选计划生成器"（模型侧）。本机只把它当建议。
+// PlanModel is"    occurbecome "( typeside). base onlypipe cur  . 
 type PlanModel interface {
 	Propose(ctx context.Context, goal string, m Manifest) (string, error)
 }
 
-// ModelPlanner 组合"模型建议 + 本机边界"。
+// ModelPlanner   " type   + base  boundary". 
 type ModelPlanner struct {
 	Model    PlanModel
-	Fallback Planner       // 默认 LocalPlanner{}
-	Timeout  time.Duration // 默认 3s（需求 Δ7：模型兜底超时）
+	Fallback Planner       // default LocalPlanner{}
+	Timeout  time.Duration // default 3s(needrequire Δ7:  type bot time)
 }
 
-// modelPlanStep 是模型候选计划里的一步。
+// modelPlanStep is type        . 
 type modelPlanStep struct {
 	Tool   string            `json:"tool"`
 	Caps   []string          `json:"caps"`
@@ -50,7 +50,7 @@ type modelPlanJSON struct {
 	Reason  string          `json:"reason"`
 }
 
-// Plan 产出计划。**永不返回错误**：任何模型侧问题都降级（PM-2）。
+// Plan produceout  . **  returnbackerror**:    typeside  all  (PM-2). 
 func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	fb := mp.Fallback
 	if fb == nil {
@@ -75,12 +75,12 @@ func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 		return degrade(goal, m, fb, "模型输出不是合法计划 JSON："+err.Error()), nil
 	}
 
-	// ---- 本机边界复核（模型不得越界）----
+	// ---- base  boundary  ( type  out-of-scope)----
 	steps, violations := reviewStepsFor(cand.Steps, m, goal)
 	if len(violations) > 0 {
 		return degrade(goal, m, fb, "本机复核拒绝模型计划："+strings.Join(violations, "; ")), nil
 	}
-	// 目标本身超出清单能力 → 拒绝（与规则式同源的 PM-1/PL-2 口径）。
+	// objtgtbase  outlist   -> reject(andruleformsame   PM-1/PL-2  path). 
 	if missing, ok := unmetRequirement(strings.ToLower(goal), m); !ok {
 		return Plan{Goal: goal, Source: "model", Refused: true, Missing: missing,
 			Reason: "目标需要清单外能力（本机复核）"}, nil
@@ -92,7 +92,7 @@ func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 	return Plan{Goal: goal, Steps: steps, Source: "model"}, nil
 }
 
-// parseModelPlan 解析模型输出（容忍 ```json 围栏与前后噪声）。
+// parseModelPlan resolve  type out(   ```json   andbeforeafter voice). 
 func parseModelPlan(raw string) (modelPlanJSON, error) {
 	s := strings.TrimSpace(raw)
 	if i := strings.Index(s, "{"); i > 0 {
@@ -111,13 +111,13 @@ func parseModelPlan(raw string) (modelPlanJSON, error) {
 	return out, nil
 }
 
-// reviewSteps 逐条复核：工具在清单内、cap 属于该工具、域在 AllowedSpaces 内、
-// 参数/产出/依据齐备（PM-1/PM-4/PM-5）。任一条不合规即记录 violation。
+// reviewSteps     :    listin, cap  at   , domain  AllowedSpaces in, 
+//  num/produceout/ data  (PM-1/PM-4/PM-5).      rulei.e.   violation. 
 func reviewSteps(in []modelPlanStep, m Manifest) ([]Step, []string) {
-	return reviewStepsFor(in, m, "") // 无目标文本 ⇒ 跳过 PM-6 的目标相关判断
+	return reviewStepsFor(in, m, "") // noobjtgt base ⇒  ed PM-6  objtgt close disconnect
 }
 
-// reviewStepsFor 是 reviewSteps 的完整版：带 goal 时可做 PM-6（最小风险工具优先）。
+// reviewStepsFor is reviewSteps  finish  :   goal time   PM-6(  risk   first). 
 func reviewStepsFor(in []modelPlanStep, m Manifest, goal string) ([]Step, []string) {
 	tools := map[string]Capability{}
 	for _, c := range m.Tools {
@@ -148,12 +148,12 @@ func reviewStepsFor(in []modelPlanStep, m Manifest, goal string) ([]Step, []stri
 		})
 	}
 	if goal != "" {
-		bad = append(bad, reviewMinRisk(goal, out, m)...) // PM-6（本机硬复核）
+		bad = append(bad, reviewMinRisk(goal, out, m)...) // PM-6(base    )
 	}
 	return out, bad
 }
 
-// degrade 走"规则式 → 只读兜底"，并标明降级（PM-2 默认行为）。
+// degrade  "ruleform -> read-only bot", andtgt   (PM-2 default as). 
 func degrade(goal string, m Manifest, fb Planner, reason string) Plan {
 	p, err := fb.Plan(goal, m)
 	if err != nil || (len(p.Steps) == 0 && !p.Refused) {

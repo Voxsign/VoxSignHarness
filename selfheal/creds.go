@@ -9,16 +9,16 @@ import (
 	"voicesign-harness/config"
 )
 
-// modelCenterCredsFile 是模型中心凭证文件（~/.modelcenter/creds.txt）。
-// 文件形态兼容两种：键值对 "MAIN_KEY=sk-mc-xxx" 或裸行 "sk-mc-xxx"；
-// 逐行扫描，跳过 # 注释行，取首个 sk-mc- 开头的 token。
+// modelCenterCredsFile is typein   file(~/.modelcenter/creds.txt). 
+// file statecompat kind:  valueto "MAIN_KEY=sk-mc-xxx" or   "sk-mc-xxx"; 
+//     ,  ed # note  , getfirst  sk-mc- openhead  token. 
 //
-// 安全红线：key 绝不进入代码常量 / 日志 / commit / 错误信息。本函数只返回字符串给
-// provider 传输层塞进 Authorization 头，不做任何打印。
+// safesafety line: key    in code   / day  / commit / error  . base numonlyreturnbackchar  give
+// provider       Authorization head,       . 
 const modelCenterCredsFile = ".modelcenter/creds.txt"
 
-// ReadModelCenterKey 从 ~/.modelcenter/creds.txt 解析模型中心 key。
-// 文件不存在 / 无 sk-mc- token → 返回 ""（调用方据此让诊断层跳过，不报错）。
+// ReadModelCenterKey from ~/.modelcenter/creds.txt resolve  typein  key. 
+// file store  / no sk-mc- token -> returnback ""(calluse data   disconnect  ed,    ). 
 func ReadModelCenterKey() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -36,11 +36,11 @@ func ReadModelCenterKey() string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// 键值对形态：取 '=' 右侧。
+		//  valueto state: get '='  side. 
 		if _, rhs, ok := strings.Cut(line, "="); ok {
 			line = strings.TrimSpace(rhs)
 		}
-		// 行内可能有引号/空格，取首个 sk-mc- 开头 token。
+		//  in  has id/empty , getfirst  sk-mc- openhead token. 
 		for _, tok := range strings.Fields(line) {
 			tok = strings.Trim(tok, `"' `)
 			if strings.HasPrefix(tok, "sk-mc-") {
@@ -51,14 +51,14 @@ func ReadModelCenterKey() string {
 	return ""
 }
 
-// PrepareDiagKey 在 provider.NewRegistry 之前调用，对声明的 diag provider 做两件事：
-//  1. 超时预算：未显式配置 TimeoutMs 时默认 30000ms（避免干等 Global.LLMTimeoutMs=60s）；
-//     超时→传输层返回错误→诊断层优雅跳过，不阻断主链。
-//  2. 凭证：若未显式配置 api_key，从模型中心凭证文件补填。
+// PrepareDiagKey   provider.NewRegistry ofbeforecalluse, tovoice   diag provider     : 
+//  1.  time  :   form   TimeoutMs timedefault 30000ms(   etc Global.LLMTimeoutMs=60s); 
+//      time->   returnbackerror-> disconnect    ed,   disconnect chain. 
+//  2.   : if  form   api_key, from typein   filepatch . 
 //
-// 已显式配置 api_key 的 diag provider【优先用它】，不被覆盖；
-// 凭证缺失 → diag 保持空 key（后续 Chat 401 → 诊断层优雅跳过）。
-// 未声明 diag provider → 零动作（诊断层整体跳过，主链不变）。
+// already form   api_key   diag provider[ firstuse ],  beoverwrite; 
+//      -> diag keepkeepempty key(aftercontinue Chat 401 ->  disconnect    ed). 
+//  voice  diag provider ->    ( disconnect  body ed,  chain change). 
 func PrepareDiagKey(cfg *config.Config) {
 	if cfg == nil {
 		return
@@ -67,7 +67,7 @@ func PrepareDiagKey(cfg *config.Config) {
 	if !ok {
 		return
 	}
-	// ① diag 默认 30s 超时预算（独立于 key 来源；显式配置不覆盖）。
+	// ① diag default 30s  time  (  at key   ;  form   overwrite). 
 	if p.TimeoutMs <= 0 {
 		for i := range cfg.Providers {
 			if cfg.Providers[i].Name == p.Name {
@@ -76,7 +76,7 @@ func PrepareDiagKey(cfg *config.Config) {
 			}
 		}
 	}
-	// ② 凭证补填（显式 api_key 优先）。
+	// ②   patch ( form api_key  first). 
 	if strings.TrimSpace(p.APIKey) != "" {
 		return
 	}
@@ -90,5 +90,5 @@ func PrepareDiagKey(cfg *config.Config) {
 	}
 }
 
-// DiagDefaultTimeoutMs 是 diag provider 未显式配置 TimeoutMs 时的默认超时（30s）。
+// DiagDefaultTimeoutMs is diag provider   form   TimeoutMs time default time(30s). 
 const DiagDefaultTimeoutMs = 30000

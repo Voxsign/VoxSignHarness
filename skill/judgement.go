@@ -1,11 +1,11 @@
-// judgement.go —— SK-5：`knowhow.*` → **可执行判据**（只存文本不算内化）。
+// judgement.go -- SK-5: `knowhow.*` -> **    data**(onlystore base  inize). 
 //
-// ⚠️ 诚实要求：**能自动化的实现 check；暂不能的标 `manual` 并显式列出**（不许假装自动）。
+// ⚠️   needrequire: **   ize  now check;     tgt `manual` and formlistout**( allow    ). 
 package skill
 
 import "strings"
 
-// Knowhow 是服务侧技能 manifest 里的 knowhow 结构。
+// Knowhow isserveserviceside   manifest    knowhow close . 
 type Knowhow struct {
 	Steps    []string `json:"steps"`
 	Cautions []string `json:"cautions"`
@@ -14,18 +14,18 @@ type Knowhow struct {
 	Basis    []string `json:"basis"`
 }
 
-// Criterion 是一条由 knowhow 产出的判据。
+// Criterion is  by knowhow produceout  data. 
 type Criterion struct {
 	ID      string `json:"id"`
 	Skill   string `json:"source_skill"`
 	Version string `json:"source_version"`
 	Field   string `json:"field"` // judging | cautions | basis | style
 	Text    string `json:"text"`
-	Check   string `json:"check"`  // 可执行检查名；manual 表示人工
-	Manual  bool   `json:"manual"` // **显式标注**
+	Check   string `json:"check"`  //      name; manual tableshowhuman
+	Manual  bool   `json:"manual"` // ** formtgtnote**
 }
 
-// Template 是"规划模板"条目（steps 的正确归宿，VHS-SKILL-001 §3：steps → 规划模板）。
+// Template is"rule   " obj(steps  pos   , VHS-SKILL-001 §3: steps -> rule   ). 
 type Template struct {
 	Skill   string `json:"source_skill"`
 	Version string `json:"source_version"`
@@ -33,35 +33,35 @@ type Template struct {
 	Text    string `json:"text"`
 }
 
-// Excluded 显式记录**没有归宿的 knowhow 条目**（SK-11：不许静默丢弃）。
+// Excluded  form  ** has    knowhow  obj**(SK-11:  allow    ). 
 type Excluded struct {
 	Key    string `json:"key"`
 	Text   string `json:"text"`
 	Reason string `json:"reason"`
 }
 
-// Mapping 是 knowhow 的完整映射结果（**守恒**：三类之和 == knowhow 总条数）。
+// Mapping is knowhow  finish   close (**  **:  classofand == knowhow   num). 
 type Mapping struct {
 	Criteria  []Criterion `json:"criteria"`
-	Templates []Template  `json:"templates"` // steps → 规划模板
-	Excluded  []Excluded  `json:"excluded"`  // 显式排除（带理由）
-	Total     int         `json:"total"`     // knowhow 条目总数
+	Templates []Template  `json:"templates"` // steps -> rule   
+	Excluded  []Excluded  `json:"excluded"`  //  form  (  by)
+	Total     int         `json:"total"`     // knowhow  obj num
 }
 
-// KnowhowTotal 数出 knowhow 的全部条目（用于守恒断言）。
+// KnowhowTotal numout knowhow  safety  obj(useat  disconnectlang). 
 func KnowhowTotal(kh Knowhow) int {
 	return len(kh.Steps) + len(kh.Judging) + len(kh.Cautions) + len(kh.Basis) + len(kh.Style)
 }
 
-// MapKnowhow 是**守恒**映射：每条 knowhow 要么成判据、要么成模板、要么显式排除。
+// MapKnowhow is**  **  :    knowhow need become data, need become  , need  form  . 
 func MapKnowhow(skillID, version string, kh Knowhow) Mapping {
 	m := Mapping{Total: KnowhowTotal(kh)}
-	// steps → 规划模板（不是丢弃）
+	// steps -> rule   ( is  )
 	for i, t := range kh.Steps {
 		m.Templates = append(m.Templates, Template{Skill: skillID, Version: version, Index: i + 1, Text: t})
 	}
 	m.Criteria = criteriaOnly(skillID, version, kh)
-	// 守恒检查：任何未进判据也未进模板的条目，必须显式排除（当前映射已覆盖全部键）
+	//     :      dataalso      obj,    form  (curbefore  alreadyoverwritesafety  )
 	sum := len(m.Criteria) + len(m.Templates) + len(m.Excluded)
 	if sum != m.Total {
 		m.Excluded = append(m.Excluded, Excluded{
@@ -71,7 +71,7 @@ func MapKnowhow(skillID, version string, kh Knowhow) Mapping {
 	return m
 }
 
-// CriteriaFromKnowhow 把 knowhow 映射成判据（兼容入口）。
+// CriteriaFromKnowhow pipe knowhow   become data(compatin ). 
 func CriteriaFromKnowhow(skillID, version string, kh Knowhow) []Criterion {
 	return criteriaOnly(skillID, version, kh)
 }
@@ -84,7 +84,7 @@ func criteriaOnly(skillID, version string, kh Knowhow) []Criterion {
 				ID: skillID + "." + field + "." + itoa(i+1), Skill: skillID, Version: version,
 				Field: field, Text: t, Check: "manual", Manual: true,
 			}
-			// **优先自动化**：basis 的"已查证优先于一方称"今天已真实生效过一次，可验。
+			// ** first  ize**: basis  "already   firstat  called" dayalready  occur ed  ,   . 
 			if field == "basis" && strings.Contains(t, "已查证") {
 				c.Check = "checkVerifiedOverHearsay"
 				c.Manual = false
@@ -99,7 +99,7 @@ func criteriaOnly(skillID, version string, kh Knowhow) []Criterion {
 	return out
 }
 
-// AutomatedRatio 返回自动化比例 (automated, total) —— **诚实指标**。
+// AutomatedRatio returnback  ize example (automated, total) -- **  refertgt**. 
 func AutomatedRatio(cs []Criterion) (int, int) {
 	n := 0
 	for _, c := range cs {
@@ -110,14 +110,14 @@ func AutomatedRatio(cs []Criterion) (int, int) {
 	return n, len(cs)
 }
 
-// Evidence 是一条证据（basis 规则用）。
+// Evidence is   data(basis ruleuse). 
 type Evidence struct {
-	Kind   string // verified（已查证）| hearsay（一方称）
+	Kind   string // verified(already  )| hearsay(  called)
 	Detail string
 }
 
-// PreferVerified 实现 basis「**已查证优先于一方称**」；
-// 若**只有一方称**，如实标 degraded（不许当成已核实）。
+// PreferVerified  now basis"**already   firstat  called**"; 
+// if**onlyhas  called**, e.g. tgt degraded( allowcurbecomealready  ). 
 func PreferVerified(ev []Evidence) (Evidence, bool) {
 	for _, e := range ev {
 		if e.Kind == "verified" {

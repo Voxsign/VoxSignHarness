@@ -1,9 +1,9 @@
-// teach.go —— 用户**临时教的词**（VHS-CACHE-001 G2；Peter 原话「最近我说的词」）。
+// teach.go -- useuser** time  word**(VHS-CACHE-001 G2; Peter orig "     word"). 
 //
-// 与"服务别名"的区别：**它不在服务注册表里**，来源是用户本身（user_taught）。
-// 因此：① 必须标来源（可审计）；② 必须能落 L1 持久（否则"教了下次就忘"）；
+// and"serveservicediffname"  diff: **   serveservicenote table **,   isuseuserbase (user_taught). 
+// because : ①   tgt  (   ); ②      L1 keep ( then" under then "); 
 //
-//	③ 必须在纠错路径上**真的改变输出**（照 K9 三条判据）。
+//	③    correctionpathon**  modifychange out**(  K9    data). 
 package hotcache
 
 import (
@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// SourceUserTaught 是用户临时教的词的来源标记（与 remote/local 区分，可审计）。
+// SourceUserTaught isuseuser time  word   tgt (and remote/local  split,    ). 
 const SourceUserTaught = "user_taught"
 
-// Teach 教一个词/说法 → 规范词。空值拒绝（教空词会把缓存污染成"什么都能命中"）。
+// Teach    word/   -> rule word. emptyvaluereject( emptyword pipecache  become"  all  in"). 
 func (c *Cache) Teach(term, canonical string) error {
 	term, canonical = strings.TrimSpace(term), strings.TrimSpace(canonical)
 	if term == "" || canonical == "" {
@@ -27,7 +27,7 @@ func (c *Cache) Teach(term, canonical string) error {
 	return nil
 }
 
-// Taught 返回所有**用户教过**的词（来源可审计）。
+// Taught returnback has**useuser ed** word(     ). 
 func (c *Cache) Taught() []Alias {
 	s := c.state()
 	s.mu.Lock()
@@ -41,9 +41,9 @@ func (c *Cache) Taught() []Alias {
 	return out
 }
 
-// ClearTaught 只清**用户临时教的词**（Source=user_taught），
-// **不得误清服务别名**（那是从 /api/services 拉来的远端真值）。
-// 返回清除条数。
+// ClearTaught only **useuser time  word**(Source=user_taught), 
+// **    serveservicediffname**( isfrom /api/services     end value). 
+// returnback   num. 
 func (c *Cache) ClearTaught() int {
 	s := c.state()
 	s.mu.Lock()

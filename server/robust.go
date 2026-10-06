@@ -1,10 +1,10 @@
-// robust.go — 外部调用健壮性四件套（架构 v1 §7）：
-//   1. 分级超时（fast/mid/long）
-//   2. 熔断（连续失败 N 次 → 打开 30s → 半开探活）
-//   3. 指数退避重试（仅幂等调用，+抖动）
-//   4. 有界并发 bulkhead（外部通道独立信号量，满则快速失败，不阻塞主循环）
+// robust.go — out calluse  ity   (   v1 §7): 
+//   1. split  time(fast/mid/long)
+//   2.  disconnect(linkcontinue   N   ->  open 30s ->  open  )
+//   3. refernum  heavy (only etccalluse, +  )
+//   4. hasboundaryandsend bulkhead(out     signal , fullthenfast   ,       )
 //
-// 设计文档：docs/架构-协议与健壮性-v1.md §7
+//     : docs/  -  and  ity-v1.md §7
 package server
 
 import (
@@ -19,14 +19,14 @@ import (
 	"time"
 )
 
-// 分级超时（架构 v1 §7.1 传输层）。
+// split  time(   v1 §7.1    ). 
 const (
-	tFast = 5 * time.Second   // 快调用：JWKS 等
-	tMid  = 30 * time.Second  // 中调用：ASR 平台转发等
-	tLong = 120 * time.Second // 长调用：模型推理/远端进程
+	tFast = 5 * time.Second   // fastcalluse: JWKS etc
+	tMid  = 30 * time.Second  // incalluse: ASR    sendetc
+	tLong = 120 * time.Second //  calluse:  type  / endprocess
 )
 
-// ---------- 熔断（§7.2） ----------
+// ----------  disconnect(§7.2) ----------
 
 type cbState int
 
@@ -37,12 +37,12 @@ const (
 )
 
 const (
-	cbThreshold = 8                    // 连续失败阈值（平台偶发抖动时不误伤，8 次才熔断）
-	cbCooldown  = 30 * time.Second     // 打开后冷却窗口
-	cbHalfMax   = 1                     // 半开期只放行 1 个探活请求
+	cbThreshold = 8                    // linkcontinue   value(   send  time   , 8  only disconnect)
+	cbCooldown  = 30 * time.Second     //  openafter but  
+	cbHalfMax   = 1                     //  openperiodonly   1     require
 )
 
-// circuitBreaker 单实例保护一条外部通道。非并发安全由调用方持锁或单 goroutine 使用。
+// circuitBreaker   exampleprotect  out   .  andsendsafesafetybycalluse keep or  goroutine  use. 
 type circuitBreaker struct {
 	state    cbState
 	failures int
@@ -50,7 +50,7 @@ type circuitBreaker struct {
 	probes   int
 }
 
-// allow 返回是否放行本次调用；熔断打开且冷却未过则快速失败。
+// allow returnbackis   base calluse;  disconnect openand but edthenfast   . 
 func (cb *circuitBreaker) allow() bool {
 	switch cb.state {
 	case cbClosed:
@@ -72,7 +72,7 @@ func (cb *circuitBreaker) allow() bool {
 	return true
 }
 
-// report 上报一次调用结果：成功复位（回到 closed），失败累计（打开熔断）。
+// report on   calluseclose : become   (backto closed),     ( open disconnect). 
 func (cb *circuitBreaker) report(success bool) {
 	switch cb.state {
 	case cbClosed:
@@ -96,9 +96,9 @@ func (cb *circuitBreaker) report(success bool) {
 	}
 }
 
-// ---------- 退避重试（§7.2） ----------
+// ----------   heavy (§7.2) ----------
 
-// retryBackoff 指数退避 + 抖动：1s → 2s → 4s（上限 3 次重试，共 4 次尝试）。
+// retryBackoff refernum   +   : 1s -> 2s -> 4s(onlimit 3  heavy ,   4    ). 
 func retryBackoff(attempt int) time.Duration {
 	if attempt > 3 {
 		attempt = 3
@@ -108,9 +108,9 @@ func retryBackoff(attempt int) time.Duration {
 	return base + jitter
 }
 
-// ---------- 有界并发 bulkhead（§7.3） ----------
+// ---------- hasboundaryandsend bulkhead(§7.3) ----------
 
-// bulkhead 独立外部通道的有界信号量：满则快速失败（503 语义），绝不排队堆积阻塞主循环。
+// bulkhead   out    hasboundarysignal : fullthenfast   (503 semantic),            . 
 type bulkhead struct {
 	sem chan struct{}
 }
@@ -122,7 +122,7 @@ func newBulkhead(max int) *bulkhead {
 	return &bulkhead{sem: make(chan struct{}, max)}
 }
 
-// acquire 尝试获取一个槽位；等待超过 acquireTimeout 快速失败。
+// acquire    get    ; wait ed acquireTimeout fast   . 
 func (b *bulkhead) acquire(ctx context.Context, acquireTimeout time.Duration) error {
 	select {
 	case b.sem <- struct{}{}:
@@ -136,23 +136,23 @@ func (b *bulkhead) acquire(ctx context.Context, acquireTimeout time.Duration) er
 
 func (b *bulkhead) release() { <-b.sem }
 
-// ---------- 统一外部调用入口 ----------
+// ----------   out callusein  ----------
 
-// robustClient 分级超时的 HTTP client（架构 v1 §7.1）。
+// robustClient split  time  HTTP client(   v1 §7.1). 
 func robustClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
-// robustJSON 执行一次受防护的外部 JSON 调用：
-// bulkhead 有界并发 → 熔断判定 →（幂等）退避重试 → 分级超时。
-// idempotent=true 时在非 2xx/网络错误上重试（上限 3 次）；false 时只做单次 + 熔断累计。
-// 返回最后一次 HTTP 状态码与响应体；网络错误返回 err。
+// robustJSON     acceptpreventprotect out  JSON calluse: 
+// bulkhead hasboundaryandsend ->  disconnect   ->( etc)  heavy  -> split  time. 
+// idempotent=true time   2xx/  erroronheavy (onlimit 3  ); false timeonly    +  disconnect  . 
+// returnback after   HTTP statuscodeand  body;   errorreturnback err. 
 func robustJSON(ctx context.Context, bh *bulkhead, cb *circuitBreaker,
 	method, url string, body []byte, timeout time.Duration, idempotent bool) (int, []byte, error) {
 	return robustJSONHdr(ctx, bh, cb, method, url, body, timeout, idempotent, nil)
 }
 
-// robustJSONHdr 同 robustJSON，额外支持自定义请求头（如 Authorization）。
+// robustJSONHdr same robustJSON,  out keep define requirehead(e.g. Authorization). 
 func robustJSONHdr(ctx context.Context, bh *bulkhead, cb *circuitBreaker,
 	method, url string, body []byte, timeout time.Duration, idempotent bool,
 	hdr map[string]string) (int, []byte, error) {
@@ -168,7 +168,7 @@ func robustJSONHdr(ctx context.Context, bh *bulkhead, cb *circuitBreaker,
 	attempt := 1
 	for {
 		status, respBody, err := doOnceHdr(ctx, method, url, body, timeout, hdr)
-		success := err == nil && status >= 200 && status < 500 // 5xx/网络错误视为失败
+		success := err == nil && status >= 200 && status < 500 // 5xx/  error as  
 		if success {
 			cb.report(true)
 			return status, respBody, nil
@@ -181,9 +181,9 @@ func robustJSONHdr(ctx context.Context, bh *bulkhead, cb *circuitBreaker,
 			}
 			return status, respBody, nil
 		}
-		// 5xx 或网络错误且幂等 → 退避重试。
+		// 5xx or  errorand etc ->   heavy . 
 		if status >= 500 && status < 600 {
-			// 服务端明确 5xx：退避后重试。
+			// serveserviceend   5xx:   afterheavy . 
 			select {
 			case <-time.After(retryBackoff(attempt)):
 			case <-ctx.Done():
@@ -228,17 +228,17 @@ func doOnceHdr(ctx context.Context, method, url string, body []byte, timeout tim
 	return resp.StatusCode, data, nil
 }
 
-// safeGo 启动一个受 panic 保护的后台 goroutine（P0-2）。
+// safeGo start   accept panic protect after  goroutine(P0-2). 
 //
-// 动机：此前业务后台 goroutine 裸 `go func(){...}()`，pipeline.Run 内任意 panic 会
-// 直接 crash 整个 server（一个请求的 bug 拖垮全部在线任务）。safeGo 把单个任务的
-// panic 隔离在它自己的 goroutine 里：打日志+栈、调用 onPanic 做收尾（标记任务 canceled、
-// 写轨迹 error），进程继续存活。
+//   :  before serviceafter  goroutine   `go func(){...}()`, pipeline.Run in   panic  
+//  connect crash    server(   require  bug   safety  linetask). safeGo pipe  task 
+// panic         goroutine  :  day + , calluse onPanic  recvtail(tgt task canceled, 
+// writetrace error), processcontinuecontinuestore . 
 //
-// onPanic 可为 nil；onPanic 自身也被 recover 包裹，绝不因收尾失败二次崩溃。
+// onPanic  as nil; onPanic   alsobe recover   ,   becauserecvtail      . 
 //
-// 注意：调用方若在 goroutine 体内 `defer mu.Unlock()`，该 defer 会在本函数 recover 之前
-// 完成 unwind，故 onPanic 执行时调用方持有的锁通常已释放——可安全重新加锁。
+// note : calluse if  goroutine bodyin `defer mu.Unlock()`,   defer   base num recover ofbefore
+// done unwind, thus onPanic   timecalluse keephas    already  -- safesafetyheavynew  . 
 func safeGo(name string, fn func(), onPanic func(recovered any)) {
 	go func() {
 		defer func() {
@@ -246,7 +246,7 @@ func safeGo(name string, fn func(), onPanic func(recovered any)) {
 				log.Printf("[safeGo] %s: panic recovered: %v\n%s", name, r, debug.Stack())
 				if onPanic != nil {
 					func() {
-						defer func() { _ = recover() }() // onPanic 自身不得再崩
+						defer func() { _ = recover() }() // onPanic     again 
 						onPanic(r)
 					}()
 				}

@@ -10,54 +10,54 @@ import (
 	"voicesign-harness/provider"
 )
 
-// MaxAutoRetries 是同一失败指纹的自动重试轮次上限（防死循环/越权）。
+// MaxAutoRetries issame   refer    heavy   onlimit(prevent   /  ). 
 const MaxAutoRetries = 2
 
-// retryBackoff 是指数退避序列（接口标准 v1：network/transient 类指数退避）。
-// 第 1 轮重试前等 500ms，第 2 轮等 1s；超过 MaxAutoRetries 即停止。
+// retryBackoff isrefernum   list(connect tgtapprove v1: network/transient classrefernum  ). 
+//   1  heavy beforeetc 500ms,   2  etc 1s;  ed MaxAutoRetries i.e.stopstop. 
 var retryBackoff = []time.Duration{500 * time.Millisecond, 1 * time.Second}
 
-// ToolRunner 重放一个只读工具动作（由 pipeline 注入 o.run）。诊断层只在判定安全时调用它。
+// ToolRunner heavy   read-only    (by pipeline notein o.run).  disconnect only   safesafetytimecalluse . 
 type ToolRunner func(tool string, args map[string]any) contract.Receipt
 
-// Attempt 是一次失败的工具执行（诊断 + 安全重放的输入，带原始 args 以便重放）。
+// Attempt is     tool execution( disconnect + safesafetyheavy   in,  origstart args bythenheavy ). 
 type Attempt struct {
 	Tool      string
 	Args      map[string]any
 	Receipt   contract.Receipt
-	RequestID string // P0-4b 贯通：主链 request_id，带入诊断 trace（日志/轨迹贯通用）
+	RequestID string // P0-4b   :  chain request_id,  in disconnect trace(day /trace  use)
 }
 
-// Service 是三环自愈层的运行时实例：知识库 + 可选问题定位模型 + （可选）工具重放器。
-// 全部方法对"诊断不可用/失败"一律返回 nil，绝不向主链扩散错误。
+// Service is        time example:     +        type + (  )  heavy  . 
+// safety   to" disconnect  use/  "  returnback nil,   to chain  error. 
 type Service struct {
-	KB     *KB               // 异常知识库（① 环，0 模型调用）
-	Diag   provider.Provider // 问题定位模型（② 环）；nil = 未配置，跳过模型诊断
-	Runner ToolRunner        // 只读工具重放器；nil = 只诊断不重放
+	KB     *KB               // error   (①  , 0  typecalluse)
+	Diag   provider.Provider //      type(②  ); nil =    ,  ed type disconnect
+	Runner ToolRunner        // read-only  heavy  ; nil = only disconnect heavy 
 
-	counters map[string]int // fingerprint → 已用自动重试轮次
-	last     *Diagnosis     // 最近一次诊断结论（供归因替换静态建议）
+	counters map[string]int // fingerprint -> alreadyuse  heavy   
+	last     *Diagnosis     //      disconnectclose (provideattribution   state  )
 }
 
-// NewService 装配自愈层。kb 必传；diag/runner 可 nil（nil = 对应环跳过）。
+// NewService      . kb   ; diag/runner   nil(nil = to   ed). 
 func NewService(kb *KB, diag provider.Provider, runner ToolRunner) *Service {
 	if kb == nil {
-		kb = OpenKB("") // 空库兜底，绝不 nil 解引用
+		kb = OpenKB("") // empty  bot,    nil resolve use
 	}
 	return &Service{KB: kb, Diag: diag, Runner: runner, counters: map[string]int{}}
 }
 
-// LastDiagnosis 返回最近一次诊断结论（供归因）；无则 nil。
+// LastDiagnosis returnback     disconnectclose (provideattribution); nothen nil. 
 func (s *Service) LastDiagnosis() *Diagnosis { return s.last }
 
-// ResetLast 清空最近诊断（每次 Run 开头调用，避免跨任务串味）。
+// ResetLast  empty   disconnect(   Run openheadcalluse,    task  ). 
 func (s *Service) ResetLast() { s.last = nil }
 
-// RetryCount 返回某指纹已用的自动重试轮次（测试断言上限用）。
+// RetryCount returnback refer alreadyuse   heavy   (  disconnectlangonlimituse). 
 func (s *Service) RetryCount(fp string) int { return s.counters[fp] }
 
-// BackoffAfter 返回第 round 轮重试前的退避时长（指数退避，限 MaxAutoRetries 轮）。
-// 供 LLM 失败重试路径复用同一套退避节奏。
+// BackoffAfter returnback  round  heavy before   time (refernum  , limit MaxAutoRetries  ). 
+// provide LLM   heavy path usesame    node . 
 func BackoffAfter(round int) time.Duration {
 	if round < 0 {
 		round = 0
@@ -68,8 +68,8 @@ func BackoffAfter(round int) time.Duration {
 	return retryBackoff[round]
 }
 
-// Diagnose 跑 ①→② 环：先查知识库（命中即复用，0 模型调用）；未命中且 diag 可用才调模型。
-// 任何失败（无 failures / 模型未配置 / Chat err / 超时 / JSON 解析失败）→ 返回 nil 跳过。
+// Diagnose   ①->②  : first    ( ini.e. use, 0  typecalluse);   inand diag  useonlycall type. 
+//     (no failures /  type    / Chat err /  time / JSON resolve   )-> returnback nil  ed. 
 func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Trace) *Diagnosis {
 	if len(traces) == 0 {
 		return nil
@@ -77,14 +77,14 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Tr
 	primary := traces[0]
 	fp := Fingerprint(intent, primary.Tool, primary.Raw)
 
-	// ① 知识库命中。
+	// ①     in. 
 	if d, ok := s.KB.Lookup(fp); ok {
 		d.Fingerprint = fp
 		s.last = &d
 		return &d
 	}
 
-	// ② 模型未配置 → 跳过（零开销）。
+	// ②  type    ->  ed( open ). 
 	if s == nil || s.Diag == nil {
 		return nil
 	}
@@ -101,7 +101,7 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Tr
 		MaxTokens: 500,
 	})
 	if err != nil {
-		// 404/5xx/超时/网络：薄降级。错误信息只含状态码+截断响应体（传输层已保证不含 key）。
+		// 404/5xx/ time/  :    . error  only statuscode+ disconnect  body(   alreadykeep    key). 
 		log.Printf("[selfheal] rid=%s diag Chat 失败，跳过诊断（不阻断主链）: %v", primary.RequestID, err)
 		return nil
 	}
@@ -119,7 +119,7 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Tr
 	return &d
 }
 
-// parseDiagnosis 解析模型 JSON 输出（容忍首尾空白）。缺关键字段/非法 JSON → error。
+// parseDiagnosis resolve  type JSON  out(  firsttailempty ).  close charseg/   JSON -> error. 
 func parseDiagnosis(content string) (Diagnosis, error) {
 	var d Diagnosis
 	if err := json.Unmarshal([]byte(content), &d); err != nil {
@@ -131,19 +131,19 @@ func parseDiagnosis(content string) (Diagnosis, error) {
 	return d, nil
 }
 
-// errMissingFields 是诊断 JSON 缺必填字段的哨兵错误。
+// errMissingFields is disconnect JSON    charseg   error. 
 var errMissingFields = &diagError{"诊断 JSON 缺 category/action 字段"}
 
 type diagError struct{ s string }
 
 func (e *diagError) Error() string { return e.s }
 
-// SafeRetry 跑 ③ 环：对一次失败工具执行做诊断 + 安全重放。
-// 返回 (newReceipt, diagnosis)：
-//   - newReceipt 非空 = 安全重放成功（已回写知识库），由主链合并进 Receipts；
-//   - diagnosis 始终返回（含 KB 命中）供归因；不自动重放/诊断失败时为 nil。
+// SafeRetry   ③  : to    tool execution  disconnect + safesafetyheavy . 
+// returnback (newReceipt, diagnosis): 
+//   - newReceipt  empty = safesafetyheavy become (alreadywrite-back   ), by chain and  Receipts; 
+//   - diagnosis startendreturnback(  KB  in)provideattribution;    heavy / disconnect  timeas nil. 
 //
-// 安全不变量：写类/不可逆工具、recoverable=false、超过 2 轮上限、无 Runner → 绝不重放。
+// safesafetyinvariant: writeclass/ reversible  , recoverable=false,  ed 2  onlimit, no Runner ->   heavy . 
 func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attempt) (*contract.Receipt, *Diagnosis) {
 	if s == nil {
 		return nil, nil
@@ -153,7 +153,7 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 		errText = att.Receipt.Stderr
 	}
 	tr := NewTrace(att.Tool, "", att.Args, errText)
-	tr.RequestID = att.RequestID // P0-4b：诊断 trace 带主链 request_id（日志/轨迹贯通）
+	tr.RequestID = att.RequestID // P0-4b:  disconnect trace   chain request_id(day /trace  )
 	d := s.Diagnose(ctx, task, intent, []Trace{tr})
 	if d == nil {
 		return nil, nil
@@ -161,7 +161,7 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 
 	switch d.Action {
 	case ActionRetry, ActionModify:
-		// 只读族才允许自动重放；否则结论只进归因。
+		// read-only only allow  heavy ;  thenclose only attribution. 
 		if !IsReadOnlyTool(att.Tool, att.Args) {
 			return nil, d
 		}
@@ -169,12 +169,12 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 			return nil, d
 		}
 		fp := d.Fingerprint
-		// 轮次上限：硬性 2 轮；retry_params.max_retries 可收紧但不突破上限。
+		//   onlimit:  ity 2  ; retry_params.max_retries  recv but   onlimit. 
 		if s.counters[fp] >= d.effectiveMaxRetries() {
 			return nil, d
 		}
-		// 退避：优先 retry_params.backoff_seconds（指数 base*2^round）+ cooldown_seconds；
-		// 缺省用内置默认退避（500ms/1s）。尊重 ctx 取消。
+		//   :  first retry_params.backoff_seconds(refernum base*2^round)+ cooldown_seconds; 
+		//   usein default  (500ms/1s).  heavy ctx cancel. 
 		wait := waitForRound(d, s.counters[fp])
 		select {
 		case <-ctx.Done():
@@ -188,23 +188,23 @@ func (s *Service) SafeRetry(ctx context.Context, task, intent string, att Attemp
 		s.counters[fp]++
 		nr := s.Runner(att.Tool, args)
 		if nr.OK {
-			// 修复成功 → 学习回写知识库。
+			// fix become  ->   write-back   . 
 			s.KB.Remember(*d)
 			return &nr, d
 		}
-		// 重放失败：不回写 KB（避免把未验证结论固化）。
+		// heavy   :  write-back KB(  pipe   close  ize). 
 		return nil, d
 	default:
-		// fallback / ask / stop：不再执行，结论供归因。
+		// fallback / ask / stop:  again  , close provideattribution. 
 		return nil, d
 	}
 }
 
-// waitForRound 计算第 round 轮重试前等待时长（v2 retry_params）。
+// waitForRound     round  heavy beforewaittime (v2 retry_params). 
 func waitForRound(d *Diagnosis, round int) time.Duration {
 	var w time.Duration
 	if base := d.backoffSeconds(); base > 0 {
-		mult := 1 << round // 指数：第 round 轮 = base * 2^round
+		mult := 1 << round // refernum:   round   = base * 2^round
 		w = time.Duration(base * float64(mult) * float64(time.Second))
 	} else {
 		if round >= len(retryBackoff) {
@@ -218,13 +218,13 @@ func waitForRound(d *Diagnosis, round int) time.Duration {
 	return w
 }
 
-// retryControlKeys 是 v2 retry_params 里的 harness 控制键，不是工具参数，modify 时不得注入工具 args。
+// retryControlKeys is v2 retry_params    harness control ,  is   num, modify time  notein   args. 
 var retryControlKeys = map[string]bool{
 	"backoff_seconds": true, "max_retries": true, "cooldown_seconds": true,
 }
 
-// applyRetryParams 把 retry_params 里的标量修正合并进 args（modify 动作）。
-// 只合入简单标量、且跳过 harness 控制键，防模型注入任意结构；未知 key 忽略。
+// applyRetryParams pipe retry_params   tgt fixpos and  args(modify   ). 
+// only in  tgt , and ed harness control , prevent typenotein  close ;    key   . 
 func applyRetryParams(args map[string]any, params map[string]any) map[string]any {
 	out := make(map[string]any, len(args)+len(params))
 	for k, v := range args {
