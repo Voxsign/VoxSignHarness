@@ -587,17 +587,17 @@ func TestCodexNineRegressions(t *testing.T) {
 		text    string
 		wantAsk string //   disconnectlang; "" tableshowdisconnectlang Ask asempty
 	}{
-		{"1-本实例不弹那个指哪个", "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来", "指的是哪个"},
-		{"2-陈述引用不Ask（断言不含'指的是哪个'）", "我那个前端的问题又不过来", "NOT:指的是哪个"},
-		{"3-操作指代仍Ask", "把那个前端文件改一下", "指的是哪个"},
+		{"1-本实例不弹那个指哪个", "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来", "Which did you mean"},
+		{"2-陈述引用不Ask（断言不含'Which did you mean'）", "我那个前端的问题又不过来", "NOT:Which did you mean"},
+		{"3-操作指代仍Ask", "把那个前端文件改一下", "Which did you mean"},
 		{"4-把上次那个改成蓝色操作指代", "把上次那个改成蓝色", "那个"},
-		{"5-EDIT真歧义候选无固定项", "把那个前端文件改一下", "指的是哪个"},
-		{"6-QUERY裸指代真歧义", "查一下这个", "指的是哪个"},
-		{"7-NOTE真歧义Ask（'记一下 这个'内容歧义）", "记一下 这个", "指的是哪个"},
+		{"5-EDIT真歧义候选无固定项", "把那个前端文件改一下", "Which did you mean"},
+		{"6-QUERY裸指代真歧义", "查一下这个", "Which did you mean"},
+		{"7-NOTE真歧义Ask（'记一下 这个'内容歧义）", "记一下 这个", "Which did you mean"},
 		{"8-元指令控制组不Ask", "我想开始认真测一下，接下来把项目推进起来", ""},
-		{"9a-修那个正例", "修那个", "指的是哪个"},
-		{"9b-改那个文件正例", "改那个文件", "指的是哪个"},
-		{"9c-打开上次那个正例", "打开上次那个", "指的是哪个"},
+		{"9a-修那个正例", "修那个", "Which did you mean"},
+		{"9b-改那个文件正例", "改那个文件", "Which did you mean"},
+		{"9c-打开上次那个正例", "打开上次那个", "Which did you mean"},
 	}
 	for _, c := range cases {
 		o := testOptions(t, nil)
