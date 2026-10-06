@@ -20,7 +20,7 @@ import (
 func (c *Cache) Blacklist(term, note string) error {
 	term = strings.TrimSpace(term)
 	if term == "" {
-		return errors.New("hotcache: Blacklist 需要非空的 term")
+		return errors.New("hotcache: Blacklist requires a non-empty term")
 	}
 	s := c.state()
 	s.mu.Lock()

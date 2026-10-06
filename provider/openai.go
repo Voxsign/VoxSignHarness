@@ -17,7 +17,7 @@ import (
 )
 
 // openaiClient is OpenAI compatendpoint clientuserend(   §14.2): 
-// compat OpenAI / DeepSeek /  typein (model.peterzou.com)/ Gemini compat etc
+// compat OpenAI / DeepSeek /  typein (model.example.com)/ Gemini compat etc
 //   voice  /chat/completions   close. 
 type openaiClient struct {
 	name           string
@@ -168,14 +168,14 @@ type chatCompletionResponse struct {
 func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatResponse, retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
-		return ChatResponse{}, true, fmt.Errorf("构建请求失败: %w", err)
+		return ChatResponse{}, true, fmt.Errorf("failed to build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if c.apiKey != "" {
 		// 2026-10-04 fix : voxsign  close  headis X-AIops-Key(read key),   Authorization Bearer
 		//(    : Bearer 401 "missing or invalid read X-AIops-Key"; curl   X-AIops-Key 200). 
-		if strings.Contains(c.url, "aiops.voxsign.ai") || strings.Contains(c.url, "aiops.peterzou.com") {
+		if strings.Contains(c.url, "aiops.voxsign.ai") {
 			req.Header.Set("X-AIops-Key", c.apiKey)
 		} else {
 			req.Header.Set("Authorization", "Bearer "+c.apiKey)
@@ -188,13 +188,13 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 		if ctx.Err() != nil {
 			return ChatResponse{}, false, ctx.Err()
 		}
-		return ChatResponse{}, true, fmt.Errorf("网络请求失败: %w", err)
+		return ChatResponse{}, true, fmt.Errorf("network request failed: %w", err)
 	}
 	defer raw.Body.Close()
 
 	data, err := io.ReadAll(io.LimitReader(raw.Body, 1<<20))
 	if err != nil {
-		return ChatResponse{}, true, fmt.Errorf("读取响应体失败: %w", err)
+		return ChatResponse{}, true, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if raw.StatusCode < 200 || raw.StatusCode >= 300 {
@@ -207,17 +207,17 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 	var parsed chatCompletionResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		// 200 but   is   JSON: heavy no  ,  connect  ( segthenattraceback   ). 
-		return ChatResponse{}, false, fmt.Errorf("解析响应 JSON 失败: %w; body=%q", err, truncateResp(string(data), 300))
+		return ChatResponse{}, false, fmt.Errorf("failed to parse response JSON: %w; body=%q", err, truncateResp(string(data), 300))
 	}
 	if len(parsed.Choices) == 0 {
-		return ChatResponse{}, false, fmt.Errorf("响应无 choices; body=%q", truncateResp(string(data), 300))
+		return ChatResponse{}, false, fmt.Errorf("response has no choices; body=%q", truncateResp(string(data), 300))
 	}
 	choice := parsed.Choices[0]
 	// content asemptybutoutnow tool_calls:   endpointbe restrict  function-calling  form; 
 	// base harness from send  tools  num,  at  error, need    but   returnbackempty . 
 	if strings.TrimSpace(choice.Message.Content) == "" && len(choice.Message.ToolCalls) > 0 {
 		return ChatResponse{}, false, fmt.Errorf(
-			"端点返回了 tool_calls 而非 content：疑似被强制 function-calling 模式（本 harness 不发送 tools 参数）")
+			"endpoint returned tool_calls instead of content: likely forced function-calling mode (this harness does not send tools param)")
 	}
 
 	return ChatResponse{

@@ -1,6 +1,6 @@
 // cloud.go --    · outizeclientuserend(   v1.0: inize   -> outize   ->"  numdata"). 
 //
-// toconnect end zhiji serveservice(zhiji.peterzou.com: vault     / glossary  nametable / distill   ; 
+// toconnect end zhiji serveservice(vault.example.com: vault     / glossary  nametable / distill   ; 
 // X-API-Key   , key and AIOps  same--env  provide,       ). 
 //   status(VHS-ZHIJI-001): endpoint line,    statealreadyconfirm; vault writeback schema by  asapprove
 // (basefileasclientuserend   +  notein  now, provide Phase 0   andintegrate use). 
@@ -17,7 +17,7 @@ import (
 )
 
 // DefaultVaultEndpoint  end  serveservicedefaultendpoint(task   VHS-ZHIJI-001    line). 
-const DefaultVaultEndpoint = "https://zhiji.peterzou.com"
+const DefaultVaultEndpoint = "https://vault.example.com"
 
 // VaultEntry outize obj( rev /  artifact ->  end"  numdata"). 
 type VaultEntry struct {

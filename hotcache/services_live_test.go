@@ -16,7 +16,7 @@ func TestLiveServicesRefreshAndVariants(t *testing.T) {
 	if os.Getenv("VHS_CACHE_LIVE") != "1" {
 		t.Skip("需要 VHS_CACHE_LIVE=1（默认跳过，避免测试依赖外网）")
 	}
-	endpoint := "https://aiops.peterzou.com/api/services"
+	endpoint := "https://aiops.example.com/api/services"
 	c := New(filepath.Join(t.TempDir(), "cache.json"), time.Hour, HTTPFetcher(endpoint, "", 10*time.Second))
 	snap := c.Refresh(context.Background())
 	if snap.Status != StatusOK {

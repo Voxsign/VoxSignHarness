@@ -24,7 +24,7 @@ func TestLiveZhijiEvents(t *testing.T) {
 	if key == "" {
 		t.Skip("缺 AIOPS_KEY（按纪律跳过）")
 	}
-	c := &ZhijiClient{Endpoint: "https://aiops.peterzou.com/api/zhiji", APIKey: key}
+	c := &ZhijiClient{Endpoint: "https://aiops.example.com/api/zhiji", APIKey: key}
 	evs, err := c.Events(context.Background())
 	if err != nil {
 		t.Fatalf("真调知己失败: %v", err)

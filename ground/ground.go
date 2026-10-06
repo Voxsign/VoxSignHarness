@@ -120,17 +120,17 @@ func (g *Ground) Render() Snapshot {
 
 	//    
 	var sb strings.Builder
-	sb.WriteString("认知切片（最旧已截断）：\n")
+	sb.WriteString("Cognitive slices (oldest truncated):\n")
 	if len(snap.ProjectMap) == 0 {
-		sb.WriteString("  （无注册域）\n")
+		sb.WriteString("  (no registered domain)\n")
 	} else {
 		for _, p := range snap.ProjectMap {
 			sb.WriteString("  " + p + "\n")
 		}
 	}
-	sb.WriteString("近期裁决：\n")
+	sb.WriteString("Recent decisions:\n")
 	if len(snap.Decisions) == 0 {
-		sb.WriteString("  （无）\n")
+		sb.WriteString("  (none)\n")
 	} else {
 		for _, d := range snap.Decisions {
 			fmt.Fprintf(&sb, "  [%s] %s %s/%s：%s\n", d.Ts, d.Intent, d.Decision, d.Confirm, d.Reason)
@@ -205,19 +205,19 @@ func (g *Ground) RecordDecision(d Decision) error {
 		return nil
 	}
 	if err := os.MkdirAll(g.LogDir, 0o700); err != nil {
-		return fmt.Errorf("创建 log_dir 失败: %w", err)
+		return fmt.Errorf("failed to create log_dir: %w", err)
 	}
 	b, err := json.Marshal(d)
 	if err != nil {
-		return fmt.Errorf("序列化裁决失败: %w", err)
+		return fmt.Errorf("failed to serialize decision: %w", err)
 	}
 	f, err := os.OpenFile(filepath.Join(g.LogDir, decisionsFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("打开 decisions.jsonl 失败: %w", err)
+		return fmt.Errorf("failed to open decisions.jsonl: %w", err)
 	}
 	defer f.Close()
 	if _, err := f.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("写裁决失败: %w", err)
+		return fmt.Errorf("failed to write decision: %w", err)
 	}
 	return nil
 }

@@ -33,7 +33,7 @@ type ZhijiSource interface {
 
 // ZhijiClient isread-only HTTP clientuserend. 
 type ZhijiClient struct {
-	Endpoint string // examplee.g. https://aiops.peterzou.com/api/zhiji
+	Endpoint string // examplee.g. https://aiops.example.com/api/zhiji
 	APIKey   string // onlyfrom  /.env read;       
 	HTTP     *http.Client
 }

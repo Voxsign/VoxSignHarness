@@ -67,7 +67,7 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 			prov = newOpenAIClient(p, cfg)
 		default:
 			//   prevent : config.validate alreadyreject   kind,    botpreventstopbe ed. 
-			return nil, fmt.Errorf("provider %q: 不支持的 kind %q（仅 %s/%s）",
+			return nil, fmt.Errorf("provider %q: unsupported kind %q (only %s/%s)",
 				p.Name, p.Kind, config.OpenAIKind, config.MockKind)
 		}
 		r.providers[p.Name] = prov
@@ -80,7 +80,7 @@ func NewRegistry(cfg *config.Config) (*Registry, error) {
 func (r *Registry) Get(name string) (Provider, error) {
 	p, ok := r.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("provider 未注册: %q", name)
+		return nil, fmt.Errorf("provider not registered: %q", name)
 	}
 	return p, nil
 }

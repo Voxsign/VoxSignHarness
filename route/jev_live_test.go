@@ -24,7 +24,7 @@ func TestLiveJEVRouting(t *testing.T) {
 	if key == "" {
 		t.Skip("缺 AIOPS_KEY（按纪律跳过）")
 	}
-	jev := &JEVClient{Endpoint: "https://aiops.peterzou.com/api/decide", APIKey: key, Kind: KindPermission}
+	jev := &JEVClient{Endpoint: "https://aiops.example.com/api/decide", APIKey: key, Kind: KindPermission}
 	r := &Router{Hot: nil, JEV: jev, Timeout: 10 * time.Second}
 
 	//  limitclass: by  close ,   needtable become candidates(constraints   why)

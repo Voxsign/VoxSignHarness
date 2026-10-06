@@ -42,7 +42,7 @@ const cannedBody = `{
 
 func TestNormalizeEndpoint(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"https://model.peterzou.com", "https://model.peterzou.com/chat/completions"}, // base  state
+		{"https://model.example.com", "https://model.example.com/chat/completions"}, // base  state
 		{"https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},   //   /v1
 		{"https://host/v1/chat/completions", "https://host/v1/chat/completions"},      // finish path
 		{"https://host/", "https://host/chat/completions"},                            // tail   base
@@ -284,7 +284,7 @@ func TestIntegrationRealEndpoint(t *testing.T) {
 	}
 	c := &openaiClient{
 		name:           "center",
-		url:            "https://model.peterzou.com/v1/chat/completions",
+		url:            "https://model.example.com/v1/chat/completions",
 		model:          "gpt-4o-mini",
 		apiKey:         key,
 		responseFormat: false, // ping  needrequire json_object,   on  showword end

@@ -31,7 +31,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "git", Version: "1.0", Source: "builtin",
 			Caps:          []string{"status", "diff", "log", "commit", "checkout"},
 			Params:        map[string]string{"args": "[]string,optional"},
-			SideEffects:   []string{"读工作区/索引", "commit 不可逆(本地)"},
+			SideEffects:   []string{"read workspace/index", "commit irreversible (local)"},
 			AllowedSpaces: []string{"project", "sandbox"},
 			Risk: map[string]string{
 				"status": "none", "diff": "none", "log": "none",
@@ -42,7 +42,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "file", Version: "1.0", Source: "builtin",
 			Caps:          []string{"read", "write", "append", "exists"},
 			Params:        map[string]string{"path": "string,required", "content": "string,optional"},
-			SideEffects:   []string{"write/append 修改文件（写前备份到 log_dir/backups）"},
+			SideEffects:   []string{"write/append files (backed up to log_dir/backups before write)"},
 			AllowedSpaces: []string{"project", "sandbox", "vault-notes"},
 			Risk: map[string]string{
 				"read": "none", "exists": "none", "append": "low", "write": "high",
@@ -52,7 +52,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "search", Version: "1.0", Source: "builtin",
 			Caps:          []string{"text", "symbol"},
 			Params:        map[string]string{"pattern": "string,required"},
-			SideEffects:   []string{"只读扫描"},
+			SideEffects:   []string{"read-only scan"},
 			AllowedSpaces: []string{"global", "project", "sandbox", "vault-notes", "vault-creds"},
 			Risk: map[string]string{
 				"text": "none", "symbol": "none",
@@ -62,7 +62,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "test", Version: "1.0", Source: "builtin",
 			Caps:          []string{"run"},
 			Params:        map[string]string{"command": "[]string,required"},
-			SideEffects:   []string{"跑测试（只读为主，可写临时产物）"},
+			SideEffects:   []string{"run tests (mostly read-only; may write temp artifacts)"},
 			AllowedSpaces: []string{"project", "sandbox"},
 			Risk:          map[string]string{"run": "low"},
 		},
@@ -70,7 +70,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "run", Version: "1.0", Source: "builtin",
 			Caps:          []string{"exec"},
 			Params:        map[string]string{"command": "[]string,required"},
-			SideEffects:   []string{"任意命令（高风险，gate 在 pipeline）"},
+			SideEffects:   []string{"arbitrary command (high risk; gate in pipeline)"},
 			AllowedSpaces: []string{"project", "sandbox"},
 			Risk:          map[string]string{"exec": "high"},
 		},
@@ -78,7 +78,7 @@ func builtinContracts() []contract.ToolContract {
 			Name: "verify", Version: "1.0", Source: "builtin",
 			Caps:          []string{"run"},
 			Params:        map[string]string{"kind": "string,required", "args": "[]string,optional"},
-			SideEffects:   []string{"独立只读复核（读 fs/重跑命令，不改状态）"},
+			SideEffects:   []string{"independent read-only review (read fs/re-run commands, no state change)"},
 			AllowedSpaces: []string{"global", "project", "sandbox", "vault-notes", "vault-creds"},
 			Risk:          map[string]string{"run": "none"},
 		},
@@ -97,7 +97,7 @@ func LoadContracts(dir string) (*Registry, error) {
 		if os.IsNotExist(err) {
 			return r, nil
 		}
-		return nil, fmt.Errorf("读取契约目录 %s 失败: %w", dir, err)
+		return nil, fmt.Errorf("failed to read contract dir %s: %w", dir, err)
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".contract.json") {
@@ -105,14 +105,14 @@ func LoadContracts(dir string) (*Registry, error) {
 		}
 		data, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
 		if rerr != nil {
-			return nil, fmt.Errorf("读取契约文件 %s 失败: %w", e.Name(), rerr)
+			return nil, fmt.Errorf("failed to read contract file %s: %w", e.Name(), rerr)
 		}
 		var c contract.ToolContract
 		if jerr := json.Unmarshal(data, &c); jerr != nil {
-			return nil, fmt.Errorf("解析契约文件 %s 失败: %w", e.Name(), jerr)
+			return nil, fmt.Errorf("failed to parse contract file %s: %w", e.Name(), jerr)
 		}
 		if err := ValidateContract(c); err != nil {
-			return nil, fmt.Errorf("契约文件 %s 不合法: %w", e.Name(), err)
+			return nil, fmt.Errorf("contract file %s invalid: %w", e.Name(), err)
 		}
 		r.Contracts[c.Name] = c
 	}
@@ -146,27 +146,27 @@ var validRiskLevels = map[string]bool{
 // ValidateContract verify  charsegfinish ity: name/version/caps/params   , risk overwrite   cap. 
 func ValidateContract(c contract.ToolContract) error {
 	if strings.TrimSpace(c.Name) == "" {
-		return fmt.Errorf("契约 name 必填")
+		return fmt.Errorf("contract name is required")
 	}
 	if strings.TrimSpace(c.Version) == "" {
-		return fmt.Errorf("契约 %q version 必填", c.Name)
+		return fmt.Errorf("contract %q version is required", c.Name)
 	}
 	if len(c.Caps) == 0 {
-		return fmt.Errorf("契约 %q 至少声明一个 cap", c.Name)
+		return fmt.Errorf("contract %q must declare at least one cap", c.Name)
 	}
 	if len(c.Params) == 0 {
-		return fmt.Errorf("契约 %q 至少声明一个 param", c.Name)
+		return fmt.Errorf("contract %q must declare at least one param", c.Name)
 	}
 	if len(c.Risk) == 0 {
-		return fmt.Errorf("契约 %q 必须声明 risk 映射", c.Name)
+		return fmt.Errorf("contract %q must declare a risk mapping", c.Name)
 	}
 	for _, cap := range c.Caps {
 		lvl, ok := c.Risk[cap]
 		if !ok {
-			return fmt.Errorf("契约 %q 的 cap %q 缺少 risk 分级", c.Name, cap)
+			return fmt.Errorf("contract %q cap %q missing risk level", c.Name, cap)
 		}
 		if !validRiskLevels[lvl] {
-			return fmt.Errorf("契约 %q 的 cap %q risk 级别 %q 非法（none|low|medium|high|irreversible）", c.Name, cap, lvl)
+			return fmt.Errorf("contract %q cap %q risk level %q invalid (none|low|medium|high|irreversible)", c.Name, cap, lvl)
 		}
 	}
 	return nil
@@ -203,31 +203,31 @@ func riskGrade(c contract.ToolContract) string {
 //     rejectpath: dir asempty(note table  LoadContracts but )-> reject  ; write    -> rollbackinstore. 
 func (r *Registry) Register(c contract.ToolContract, approved bool) error {
 	if err := ValidateContract(c); err != nil {
-		return fmt.Errorf("契约校验未过，拒绝注册: %w", err)
+		return fmt.Errorf("contract validation failed, refusing to register: %w", err)
 	}
 	grade := riskGrade(c)
 	if !approved {
-		return fmt.Errorf("契约 %q 风险等级 %s 未经人工确认（approved=false），拒绝落盘", c.Name, grade)
+		return fmt.Errorf("contract %q risk level %s not human-approved (approved=false); refusing to persist", c.Name, grade)
 	}
 	if strings.TrimSpace(r.dir) == "" {
-		return fmt.Errorf("注册表未绑定契约目录（非 LoadContracts 装载），无法落盘 %q", c.Name)
+		return fmt.Errorf("registry not bound to a contract dir (not loaded via LoadContracts); cannot persist %q", c.Name)
 	}
 	c.Source = "voice"
 	c.RegisteredAt = time.Now().Format(time.RFC3339)
 	path := filepath.Join(r.dir, c.Name+".contract.json")
 	if err := os.MkdirAll(r.dir, 0o755); err != nil {
-		return fmt.Errorf("创建契约目录失败: %w", err)
+		return fmt.Errorf("failed to create contract dir: %w", err)
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化契约失败: %w", err)
+		return fmt.Errorf("failed to serialize contract: %w", err)
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("写契约临时文件失败: %w", err)
+		return fmt.Errorf("failed to write contract temp file: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("提交契约文件失败: %w", err)
+		return fmt.Errorf("failed to commit contract file: %w", err)
 	}
 	r.Contracts[c.Name] = c
 	return nil

@@ -1,6 +1,6 @@
 // Package world -- out  boundary type: pipe AIOps  closeconnectbecome" dependency  /     /    " numdata . 
 //
-//  data ASR-EXT-005(  +refer ): `aiops.peterzou.com`   `/api/*` is**read-only**  API, 
+//  data ASR-EXT-005(  +refer ): `aiops.example.com`   `/api/*` is**read-only**  API, 
 // in  zone noneed key. this packageread-only,  write,  call type. 
 //
 //  needrequire(ASR-EXT-005 §3.2): 

@@ -24,7 +24,7 @@ type ServiceRoute interface {
 
 // RouteClient is /api/route  read-onlyclientuserend. 
 type RouteClient struct {
-	Endpoint string // examplee.g. https://aiops.peterzou.com/api/route
+	Endpoint string // examplee.g. https://aiops.example.com/api/route
 	APIKey   string // onlyfrom  /.env  in;       
 	HTTP     *http.Client
 }

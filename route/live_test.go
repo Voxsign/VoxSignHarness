@@ -33,7 +33,7 @@ func TestLiveGatewayRoute(t *testing.T) {
 	if os.Getenv("VHS_ROUTE_LIVE") != "1" {
 		t.Skip("需要 VHS_ROUTE_LIVE=1（默认跳过）")
 	}
-	rc := &RouteClient{Endpoint: "https://aiops.peterzou.com/api/route", APIKey: loadEnv(t)}
+	rc := &RouteClient{Endpoint: "https://aiops.example.com/api/route", APIKey: loadEnv(t)}
 	hits := 0
 	for _, q := range []string{"部署到生产", "把这个文件删了", "爱ops", "翻译一下"} {
 		name, ok, err := rc.Lookup(context.Background(), q)

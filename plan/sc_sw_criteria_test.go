@@ -15,7 +15,7 @@
 // owner   (SW-1,     )--  "   " obj  referto   bodyto : 
 //
 //	 : …(oroutnow owner / humanconfirm / human decide)      --    / produce get (SW-2   class)
-//	 close: …(or aiops.peterzou.com)               --   (    ->    close needrequire, ASR-EXT-002/004)
+//	 close: …(or aiops.example.com)               --   (    ->    close needrequire, ASR-EXT-002/004)
 //	 type  : …(default / diagnose / learn)       --  disconnect(ASR-MODEL-02)
 //	noout dependency                                    --   noto  refer( formwriteout ,  allow  )
 //

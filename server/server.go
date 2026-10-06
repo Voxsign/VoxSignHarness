@@ -88,17 +88,17 @@ func roleForStatus(status string) string {
 func stepName(status string) string {
 	switch status {
 	case stRunning:
-		return "执行"
+		return "running"
 	case stNeedAsk:
-		return "回问"
+		return "needs-ask"
 	case stNeedConfirm:
-		return "确认闸"
+		return "confirm-gate"
 	case stDone:
-		return "校验/归因"
+		return "verify/attribution"
 	case stCanceled:
-		return "取消"
+		return "canceled"
 	case stInterrupted:
-		return "中断"
+		return "interrupted"
 	default:
 		return status
 	}
@@ -167,7 +167,7 @@ func (e sseEvent) flattened() map[string]any {
 
 // Server keephas  , pipeline   andtasktable. 
 // platformAIOpsBase     in (and config/model-center.json gateway.base_url   ). 
-//  keep VHS_PLATFORM_BASE overwrite(2026-10-05: peterzou.com domainname SNI/  andserveservice   , already  aiops.voxsign.ai). 
+//  keep VHS_PLATFORM_BASE overwrite(2026-10-05: example.com domainname SNI/  andserveservice   , already  aiops.voxsign.ai). 
 var platformAIOpsBase = func() string {
 	if v := os.Getenv("VHS_PLATFORM_BASE"); v != "" {
 		return v
