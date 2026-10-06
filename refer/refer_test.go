@@ -74,13 +74,13 @@ func TestResolve_PrefersCurrentSpace(t *testing.T) {
 // word   100%  in ->  connect resolve,   onunder . 
 func TestResolve_DictLayer(t *testing.T) {
 	dict := &memory.Dictionary{Terms: []memory.Term{
-		{Term: "Mansour", Variants: []string{"美墅"}, Category: "人名"},
+		{Term: "Report", Variants: []string{"report"}, Category: "entity"},
 	}}
 	r := New(dict)
-	it := &contract.Intent{Intent: contract.IntentNote, CorrectedText: "记一下美墅的报价"}
+	it := &contract.Intent{Intent: contract.IntentNote, CorrectedText: "记一下report的报价"}
 	got, _ := r.Resolve(it, "voicesign-harness")
-	if got.Target == nil || got.Target.Entity != "Mansour" {
-		t.Fatalf("词典层应命中 Mansour: %+v", got.Target)
+	if got.Target == nil || got.Target.Entity != "Report" {
+		t.Fatalf("词典层应命中 Report: %+v", got.Target)
 	}
 	if got.Target.RefType != "dict" {
 		t.Fatalf("RefType=%q 期望 dict", got.Target.RefType)

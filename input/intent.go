@@ -192,7 +192,7 @@ func extractPath(text string) (path string, found bool) {
 	return "", false
 }
 
-// stripPathVerbs     wordfirst  see wordbefore (e.g." openMansour"->"Mansour"). 
+// stripPathVerbs     wordfirst  see wordbefore (e.g." openReport"->"Report"). 
 func stripPathVerbs(w string) string {
 	for changed := true; changed; {
 		changed = false

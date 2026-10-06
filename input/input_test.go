@@ -34,15 +34,15 @@ func TestClean(t *testing.T) {
 	}
 }
 
-// stubCorrecter    memory.Dictionary: pipe"  "->"Mansour". 
+// stubCorrecter    memory.Dictionary: pipe"  "->"Report". 
 type stubCorrecter struct{}
 
 func (stubCorrecter) Correct(text string) (string, []contract.Correction) {
-	if !strings.Contains(text, "美墅") {
+	if !strings.Contains(text, "report") {
 		return text, nil
 	}
-	return strings.ReplaceAll(text, "美墅", "Mansour"),
-		[]contract.Correction{{From: "美墅", To: "Mansour", Rule: "dict"}}
+	return strings.ReplaceAll(text, "report", "Report"),
+		[]contract.Correction{{From: "report", To: "Report", Rule: "dict"}}
 }
 
 func TestClassifyAllSix(t *testing.T) {
@@ -97,12 +97,12 @@ func TestAskNeverForTimeInfo(t *testing.T) {
 	}
 }
 
-//   1back : "file "before  word    wordbefore ( openMansour -> Mansour). 
+//   1back : "file "before  word    wordbefore ( openReport -> Report). 
 func TestExtractPathStripsVerbPrefix(t *testing.T) {
 	cfg := config.Default()
 	p := NewPipeline(&cfg, stubCorrecter{})
 
-	raw := "帮我打开美墅的文件夹看看有什么"
+	raw := "帮我打开report的文件夹看看有什么"
 	res, err := p.Process(raw)
 	if err != nil {
 		t.Fatalf("Process: %v", err)
@@ -111,8 +111,8 @@ func TestExtractPathStripsVerbPrefix(t *testing.T) {
 		t.Fatalf("intent = %q, 期望 FILE_LIST", res.Intent.Intent)
 	}
 	got := res.Intent.Slots["path"]
-	if got != "Mansour" {
-		t.Errorf("path = %q, 期望剥离动词前缀后为 %q", got, "Mansour")
+	if got != "Report" {
+		t.Errorf("path = %q, 期望剥离动词前缀后为 %q", got, "Report")
 	}
 }
 
@@ -121,7 +121,7 @@ func TestPipelineProcess(t *testing.T) {
 	cfg := config.Default()
 	p := NewPipeline(&cfg, stubCorrecter{})
 
-	raw := "帮我打开美墅的文件夹看看有什么"
+	raw := "帮我打开report的文件夹看看有什么"
 	res, err := p.Process(raw)
 	if err != nil {
 		t.Fatalf("Process: %v", err)
@@ -130,13 +130,13 @@ func TestPipelineProcess(t *testing.T) {
 	if res.Raw != raw {
 		t.Errorf("Raw 必须原样保留, 实际 %q", res.Raw)
 	}
-	if !strings.Contains(res.Cleaned, "美墅") {
-		t.Errorf("Cleaned 应保留美墅, 实际 %q", res.Cleaned)
+	if !strings.Contains(res.Cleaned, "report") {
+		t.Errorf("Cleaned 应保留report, 实际 %q", res.Cleaned)
 	}
-	if !strings.Contains(res.Corrected, "Mansour") {
-		t.Errorf("Corrected 应含 Mansour, 实际 %q", res.Corrected)
+	if !strings.Contains(res.Corrected, "Report") {
+		t.Errorf("Corrected 应含 Report, 实际 %q", res.Corrected)
 	}
-	if len(res.Corrections) != 1 || res.Corrections[0].To != "Mansour" {
+	if len(res.Corrections) != 1 || res.Corrections[0].To != "Report" {
 		t.Errorf("Corrections 记录不符: %+v", res.Corrections)
 	}
 	if res.Intent.Intent != contract.IntentFileList {

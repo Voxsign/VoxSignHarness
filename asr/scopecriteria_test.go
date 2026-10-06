@@ -121,15 +121,15 @@ func TestSCOPEDICT01VoiceDictAddDeletePersist(t *testing.T) {
 	}
 	_ = bin
 	// add
-	postJSON(t, base+"/v1/dictionary", `{"text":"记住，冀总是冀中的冀"}`)
-	got := postJSON(t, base+"/v1/correct", `{"text":"季总看一下"}`)
-	if !strings.Contains(toJSON(got), "冀总") {
+	postJSON(t, base+"/v1/dictionary", `{"text":"记住，王总是国王的王"}`)
+	got := postJSON(t, base+"/v1/correct", `{"text":"网总看一下"}`)
+	if !strings.Contains(toJSON(got), "王总") {
 		t.Errorf("[SCOPE-DICT-01] 语音新增词典未生效：%v", got)
 	}
 	// delete(needconfirm)
-	postJSON(t, base+"/v1/dictionary", `{"op":"delete","term":"冀总","confirm":true}`)
-	got2 := postJSON(t, base+"/v1/correct", `{"text":"冀总看一下"}`)
-	if strings.Contains(toJSON(got2), `"季总"`) {
+	postJSON(t, base+"/v1/dictionary", `{"op":"delete","term":"王总","confirm":true}`)
+	got2 := postJSON(t, base+"/v1/correct", `{"text":"王总看一下"}`)
+	if strings.Contains(toJSON(got2), `"网总"`) {
 		t.Errorf("[SCOPE-DICT-01] 删除未生效：%v", got2)
 	}
 }

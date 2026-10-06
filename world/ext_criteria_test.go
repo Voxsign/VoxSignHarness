@@ -20,7 +20,7 @@ import (
 )
 
 const fakeSummary = `{"ok":true,"ts":"2026-10-03T00:00:00Z","zone":"inner","hosts":{
- "trelva":{"hostname":"VM-4-15-ubuntu","purpose":"trelva（生产中枢：研究引擎/Koyee/peterzou.com）","domain":"trelva.ai","status":"OK","cpu":70.8,"mem":17.0,"disk":84,"disk_free":12.4,"ports":[22,443,8080],"services":36,"env":"prod","role":"research","network":{"openai":"ok"}},
+ "demo-host":{"hostname":"demo-vm","purpose":"demo host for integration testing","domain":"demo-host.example.com","status":"OK","cpu":70.8,"mem":17.0,"disk":84,"disk_free":12.4,"ports":[22,443,8080],"services":36,"env":"prod","role":"research","network":{"openai":"ok"}},
  "center":{"hostname":"VM-0-14-ubuntu","purpose":"center（voxsign.net 生产中心，含 deploy 脚本）","domain":"aiops.example.com","status":"OK","cpu":10.0,"mem":30.0,"disk":50,"disk_free":50,"ports":[22,443],"services":12,"env":"prod","role":"center"}}}`
 
 const fakeCICD = `{"ok":true,"zone":"inner","status":"idle","current_tag":"release/runtime-2026-10-02-01","ledger":[{"ts":"2026-10-02T00:00:00Z","tag":"release/runtime-2026-10-01-01","status":"dry-run","note":"build+gate passed"}]}`
@@ -88,7 +88,7 @@ func TestEXT05SummaryBecomesDependenciesWithSource(t *testing.T) {
 		}
 		seen[d.On] = d
 	}
-	for _, want := range []string{"trelva", "center"} {
+	for _, want := range []string{"demo-host", "center"} {
 		if _, ok := seen[want]; !ok {
 			t.Errorf("[EXT-05] 依赖列表缺少实际主机 %q: %v", want, keys(seen))
 		}

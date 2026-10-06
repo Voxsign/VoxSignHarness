@@ -92,7 +92,7 @@ func TestNotePayloadIsJustPronoun(t *testing.T) {
 	}{
 		{"记一下 这个", "这个", true},              // coreferencethenissafety in  ->     
 		{"记一下：这次要修的是报价页那个错别字", "那个", false}, // isin  ->    
-		{"记一下，季总那个厂房下周一出报价", "那个", false},   // isin  ->    
+		{"记一下，网总那个厂房下周一出报价", "那个", false},   // isin  ->    
 	}
 	for _, tc := range cases {
 		if got := notePayloadIsJustPronoun(tc.text, tc.trigger); got != tc.want {

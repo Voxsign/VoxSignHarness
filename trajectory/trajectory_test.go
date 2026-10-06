@@ -40,7 +40,7 @@ func TestWriteAppendsParseableLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries := []Entry{
-		{RequestID: "r1", Kind: KindInputRaw, Content: "帮我打开美墅的文件夹看看有什么"},
+		{RequestID: "r1", Kind: KindInputRaw, Content: "帮我打开report的文件夹看看有什么"},
 		{RequestID: "r1", Turn: 1, Kind: KindIntent, Intent: &contract.Intent{Intent: contract.IntentFileList, Confidence: 0.8}},
 		{RequestID: "r1", Kind: KindReceipts, Receipts: []contract.Receipt{{Seq: 1, Tool: "list_dir", OK: true, Stdout: "x"}}},
 	}
@@ -69,7 +69,7 @@ func TestWriteAppendsParseableLines(t *testing.T) {
 	}
 	var first Entry
 	json.Unmarshal([]byte(lines[0]), &first)
-	if first.Content != "帮我打开美墅的文件夹看看有什么" {
+	if first.Content != "帮我打开report的文件夹看看有什么" {
 		t.Fatalf("raw content mismatch: %q", first.Content)
 	}
 }
