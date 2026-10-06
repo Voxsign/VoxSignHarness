@@ -24,6 +24,9 @@ func TestDetectLang(t *testing.T) {
 		{"chinese punctuation only", "（测试）、。「引号」", LangZH},
 		{"mixed leads with cjk counts zh", "实现 backend API", LangZH},
 		{"ascii slug", "harness-output/impl", LangEN},
+		{"arabic sentence", "جلسة جديدة", LangAR},
+		{"arabic hold-to-talk glossary", "اضغط وتحدث: الجهاز غير متصل", LangAR},
+		{"arabic mixed with latin", "خدمة /v1/process الأساسية", LangAR},
 	}
 	for _, c := range cases {
 		if got := DetectLang(c.text); got != c.want {
@@ -58,6 +61,20 @@ func TestEffectiveLangPriority(t *testing.T) {
 	var nilOpts *Options
 	if got := nilOpts.EffectiveLang("你好"); got != LangZH {
 		t.Errorf("nil Options + cjk = %q, want zh", got)
+	}
+
+	// Arabic: explicit override pins ar, even against CJK input.
+	oAr := &Options{Lang: string(LangAR)}
+	if got := oAr.EffectiveLang("随便一段中文"); got != LangAR {
+		t.Errorf("override %q lost to detection: got %q", LangAR, got)
+	}
+	// Empty Lang + Arabic-script input detects ar.
+	if got := (&Options{}).EffectiveLang("جلسة جديدة"); got != LangAR {
+		t.Errorf("empty Lang + arabic input = %q, want ar", got)
+	}
+	// Empty Lang + plain latin input still falls back to en (regression).
+	if got := (&Options{}).EffectiveLang("just latin words"); got != LangEN {
+		t.Errorf("empty Lang + latin input = %q, want en", got)
 	}
 }
 
@@ -175,6 +192,74 @@ func TestDeterministicSkeletonBilingual(t *testing.T) {
 	}
 }
 
+// TestDeterministicArabicTemplates exercises the arT template set across the
+// three artifact kinds (summary, implementation plan, service skeleton). It also
+// guards against English/Chinese leakage into the Arabic output.
+func TestDeterministicArabicTemplates(t *testing.T) {
+	// --- Summary ---
+	names := []string{"a.md", "b.md"}
+	arSum := deterministicSummary(LangAR, "Demo", names, "merged body")
+	for _, want := range []string{"## نظرة عامة", "المستندات المصدرية", "a.md", "b.md"} {
+		if !strings.Contains(arSum, want) {
+			t.Errorf("ar summary missing %q:\n%s", want, arSum)
+		}
+	}
+	if strings.Contains(arSum, "Overview") {
+		t.Errorf("ar summary leaked English header:\n%s", arSum)
+	}
+	if strings.Contains(arSum, "概览") {
+		t.Errorf("ar summary leaked Chinese header:\n%s", arSum)
+	}
+
+	// --- Implementation plan ---
+	arPlan := deterministicImplementPlan(LangAR, "MyService", sampleDoc)
+	for _, want := range []string{
+		"## هدف التنفيذ",
+		"- المنتج: MyService",
+		"## أبرز المتطلبات (استخلاص حتمي)",
+		"| الوحدة | المسؤولية | الواجهة الرئيسية |",
+		"## مطابقة القبول",
+		"## خطوات التنفيذ (هيكل مبدئي)",
+	} {
+		if !strings.Contains(arPlan, want) {
+			t.Errorf("ar plan missing %q:\n%s", want, arPlan)
+		}
+	}
+	// Doc headings are extracted regardless of render language.
+	if !strings.Contains(arPlan, "需求概览") {
+		t.Errorf("ar plan did not extract doc headings:\n%s", arPlan)
+	}
+	if strings.Contains(arPlan, "Implementation goal") {
+		t.Errorf("ar plan leaked English section:\n%s", arPlan)
+	}
+
+	// --- Service skeleton ---
+	arSkel := deterministicImplementSkeleton(LangAR, "منتج تجريبي", sampleDoc)
+	for _, f := range []string{"main.go", "router.go", "domain.go", "README.md", "go.mod"} {
+		if _, ok := arSkel[f]; !ok {
+			t.Fatalf("ar skeleton missing %s", f)
+		}
+	}
+	if !strings.Contains(arSkel["main.go"], "المنتج المستهدف: منتج تجريبي") {
+		t.Errorf("ar main.go missing target product:\n%s", arSkel["main.go"])
+	}
+	if !strings.Contains(arSkel["main.go"], "دليل البيانات") {
+		t.Errorf("ar main.go missing localized flag usage:\n%s", arSkel["main.go"])
+	}
+	if !strings.Contains(arSkel["router.go"], "الهيكل المبدئي غير منفَّذ") {
+		t.Errorf("ar router.go missing not-implemented literal:\n%s", arSkel["router.go"])
+	}
+	if !strings.Contains(arSkel["README.md"], "هيكل كود يولّده Harness") {
+		t.Errorf("ar README missing title suffix:\n%s", arSkel["README.md"])
+	}
+	if !strings.Contains(arSkel["domain.go"], "TODO(التنفيذ)") {
+		t.Errorf("ar domain.go missing Arabic TODO:\n%s", arSkel["domain.go"])
+	}
+	if strings.Contains(arSkel["domain.go"], "TODO(实现阶段)") {
+		t.Errorf("ar domain.go leaked Chinese TODO:\n%s", arSkel["domain.go"])
+	}
+}
+
 // TestSkeletonGeneratedGoCompiles is the strongest i18n assertion: the generated
 // main.go/router.go/domain.go must build with `go build` in BOTH languages, so a
 // bad interpolation (e.g. an unescaped quote in a localized string) cannot slip
@@ -183,7 +268,7 @@ func TestSkeletonGeneratedGoCompiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go-build of generated skeleton in -short mode")
 	}
-	for _, lang := range []Lang{LangEN, LangZH} {
+	for _, lang := range []Lang{LangEN, LangZH, LangAR} {
 		skel := deterministicImplementSkeleton(lang, "Compile Check", sampleDoc)
 		dir := t.TempDir()
 		for name, body := range skel {
