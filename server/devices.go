@@ -142,7 +142,7 @@ func (s *Server) deviceToken(next http.HandlerFunc) http.HandlerFunc {
 			tok = r.Header.Get("X-Token")
 		}
 		if tok != s.cfg.Server.Token {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token 无效"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 			return
 		}
 		next(w, r)
