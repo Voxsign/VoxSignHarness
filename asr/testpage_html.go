@@ -5,7 +5,7 @@ import "net/http"
 // testPageHTML is dependency   (no  /CDN/npm).  in usetgtapprove <textarea>, 
 // **    block** ⇒ macOS  write(linkby under Fn /     )  connectuse. 
 const testPageHTML = `<!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><title>VoxSign 本地测试页（录音 → 纠错 → 台账）</title>
+<html lang="en"><head><meta charset="utf-8"><title>VoxSign local test page (record -> correct -> ledger)</title>
 <style>
  body{font-family:-apple-system,sans-serif;max-width:820px;margin:24px auto;padding:0 16px}
  textarea{width:100%;height:90px;font-size:18px;padding:10px}
@@ -15,71 +15,71 @@ const testPageHTML = `<!doctype html>
  code{background:#f4f4f4;padding:2px 6px;border-radius:4px}
  table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid #ddd;padding:4px 6px}
 </style></head><body>
-<h2>VoxSign 本地测试页</h2>
+<h2>VoxSign local test page</h2>
 <div id="banner"></div>
-<p style="color:#666">点 <b>〔🎤 说话〕</b> 录音（浏览器内置识别，零后端）；也可粘贴文本或用系统听写（Fn）。说完点「处理」，每次都会记进真实台账。</p>
-<textarea id="t" placeholder="点这里，用〔🎤 说话〕录音，或手动粘贴/系统听写……"></textarea>
+<p style="color:#666">Click <b>[🎤 Speak]</b> to record (browser built-in recognition, zero backend); or paste text / use system dictation (Fn). Click "Process" after speaking; every run is logged to the real ledger.</p>
+<textarea id="t" placeholder="Click here, use [🎤 Speak] to record, or paste / system dictation..."></textarea>
 <div>
- <button id="mic" type="button">🎤 说话</button>
+ <button id="mic" type="button">🎤 Speak</button>
  <span id="michint" style="color:#666;font-size:14px"></span>
 </div>
 <div>
- <button onclick="run()">处理</button>
- <button onclick="teach()">教一个词</button>
- <button onclick="clearTaught()">清空教的词</button>
- <button onclick="log()">看台账</button>
+ <button onclick="run()">Process</button>
+ <button onclick="teach()">Teach a word</button>
+ <button onclick="clearTaught()">Clear taught words</button>
+ <button onclick="log()">View ledger</button>
 </div>
 <div id="out"></div>
 <div id="fbrow" style="margin-top:6px">
- <button id="fbok" type="button" onclick="feedbackOk()">✔ 对</button>
- <button id="fbno" type="button" onclick="showNeg()">✘ 不对</button>
- <button id="fbwrong" type="button" onclick="markWrong()">这个改错了</button>
+ <button id="fbok" type="button" onclick="feedbackOk()">✔ OK</button>
+ <button id="fbno" type="button" onclick="showNeg()">✘ Wrong</button>
+ <button id="fbwrong" type="button" onclick="markWrong()">This correction is wrong</button>
  <span id="fbstatus" style="color:#666;font-size:14px"></span>
 </div>
 <div id="fbneg" hidden>
- <textarea id="fbneg_reason" placeholder="哪里不对？（可留空；留空记 user_marked_wrong）" style="height:40px"></textarea>
- <button type="button" onclick="submitNeg()">提交 ✘ 原因</button>
+ <textarea id="fbneg_reason" placeholder="What is wrong? (optional; blank records user_marked_wrong)" style="height:40px"></textarea>
+ <button type="button" onclick="submitNeg()">Submit ✘ reason</button>
 </div>
 <div id="metrics"></div>
-<h3>丢一个文档 + 一个难任务，看它打算怎么干</h3>
-<p style="color:#666"><b>本轮只规划，不执行</b>（不会真的改你的文件）。document 仅作规划输入、不落盘。</p>
-<textarea id="doc" placeholder="① 粘贴文档内容，或选择文件（本地读取，不上传服务器）……" style="height:120px"></textarea>
-<div><input type="file" id="file" onchange="loadFile()"> <span style="color:#666;font-size:14px">（文件只在浏览器本地读入文本框）</span></div>
-<textarea id="task" placeholder="② 写任务，可以很复杂：例如“把这个文档里的 TODO 整理成一份计划”……" style="height:60px"></textarea>
-<div><button onclick="planTask()">规划（只规划，不执行）</button></div>
+<h3>Drop a document + a hard task and see how it plans</h3>
+<p style="color:#666"><b>This round plans only, no execution</b> (it will not modify your files). The document is plan input only, not written to disk.</p>
+<textarea id="doc" placeholder="1) Paste document content, or choose a file (read locally, not uploaded)..." style="height:120px"></textarea>
+<div><input type="file" id="file" onchange="loadFile()"> <span style="color:#666;font-size:14px">(file is read into the text box locally in the browser)</span></div>
+<textarea id="task" placeholder="2) Write a task, can be complex: e.g. \"turn the TODOs in this doc into a plan\"..." style="height:60px"></textarea>
+<div><button onclick="planTask()">Plan (plan only, no execution)</button></div>
 <div id="planout"></div>
-<h3>最近台账</h3><div id="recent"></div>
+<h3>Recent ledger</h3><div id="recent"></div>
 <script>
-// ---- 浏览器原生语音识别（零后端、零 key、零依赖）----
-// ⚠️ 语音经 Apple/Google 的识别服务，不是本地识别（见文档说明）。
+// ---- browser native speech recognition (zero backend, zero key, zero deps) ----
+// Warning: audio goes through Apple/Google recognition, not on-device (see docs).
 var rec = null;
 function recSupported(){ return typeof window !== 'undefined' && ('webkitSpeechRecognition' in window); }
 function initRec(){
   var btn = document.getElementById('mic');
   var hint = document.getElementById('michint');
   if(!recSupported()){
-    // 优雅降级：置灰 + 明确提示；**不白屏、不静默失败**
+    // graceful fallback: gray out + clear hint; never blank screen or silent failure
     btn.disabled = true;
-    hint.textContent = '此浏览器不支持语音识别，请手动粘贴或使用系统听写（Fn）';
+    hint.textContent = 'Speech recognition not supported in this browser; please paste manually or use system dictation (Fn)';
     return;
   }
   var r = new webkitSpeechRecognition();
   r.lang = 'zh-CN';
   r.continuous = false;
-  r.interimResults = true;   // 边说边出字
+  r.interimResults = true;   // show words while speaking
   r.onresult = function(e){
     var ta = document.getElementById('t');
     var text = '';
     for(var i = e.resultIndex; i < e.results.length; i++){ text += e.results[i][0].transcript; }
-    ta.value = (ta.dataset.recBase || '') + text;   // **只填字，不自动提交**
+    ta.value = (ta.dataset.recBase || '') + text;   // fill text only, no auto-submit
   };
-  r.onend = function(){ document.getElementById('mic').textContent = '🎤 说话'; };
+  r.onend = function(){ document.getElementById('mic').textContent = '🎤 Speak'; };
   rec = r;
   btn.onclick = function(){
     var ta = document.getElementById('t');
-    ta.dataset.recBase = ta.value;        // 以点击时的文本为基底（保留手动编辑）
-    btn.textContent = '⏺ 识别中…';
-    r.start();                             // 唯一动作：开始识别（不发任何请求）
+    ta.dataset.recBase = ta.value;        // base = text at click time (preserve manual edits)
+    btn.textContent = '⏺ Listening...';
+    r.start();                             // only action: start recognition (no requests)
   };
 }
 window.addEventListener('load', initRec);
@@ -89,7 +89,7 @@ async function j(url, body){
   if(!r.ok){ throw new Error('HTTP '+r.status+' '+url); }
   return r.json();
 }
-// ③ 服务可用性自检：不可用 ⇒ 顶部红色横幅（可操作提示）
+// 3) health self-check: unavailable -> red banner with actionable hint
 async function probe(){
   var b = document.getElementById('banner');
   try{
@@ -98,35 +98,35 @@ async function probe(){
     b.innerHTML = '';
   }catch(err){
     b.innerHTML = '<div style="background:#c00;color:#fff;padding:8px;border-radius:4px">'+
-      '<b>服务未运行</b>：请执行 <code>sh scripts/dev.sh</code>（'+esc(String(err))+'）</div>';
+      '<b>Service not running</b>: please run <code>sh scripts/dev.sh</code> ('+esc(String(err))+')</div>';
   }
 }
 function esc(s){return (s||'').replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}
 async function run(){
   const out = document.getElementById('out');
-  // ② 立刻给"处理中"，让用户能区分"在跑"和"死了"
-  out.innerHTML = '<div class="row">处理中…</div>';
+  // 2) immediately show "processing" so users can tell "running" from "dead"
+  out.innerHTML = '<div class="row">Processing...</div>';
   const text = document.getElementById('t').value;
   try{
   const d = await j('/v1/testpage', {text});
-  lastResult = d;   // 供 〔✔/✘/这个改错了〕 指认本次结果
-  let h = '<div class="row"><span class="k">原始：</span><code>'+esc(d.raw)+'</code></div>'+
-          '<div class="row"><span class="k">纠错：</span><code>'+esc(d.corrected)+'</code></div>'+
-          '<div class="row"><span class="k">标点：</span><code>'+esc(d.punctuated)+'</code></div>'+
-          '<div class="row"><span class="k">意图：</span>'+esc(d.intent)+
-          ' ｜ 回问：'+(d.ask_back?'<b style="color:#c60">是</b>':'否')+
-          ' ｜ 降级：'+(d.degraded?'<b style="color:#c60">是</b>':'否')+'</div>'+
-          '<div class="row"><span class="k">层级：</span>'+esc(d.level)+' ｜ 耗时 '+d.ms+' ms ｜ 教的词命中：'+(d.taught_hit?'是':'否')+'</div>';
-  if(d.degraded && d.degraded_reason){h += '<div class="row">降级原因：'+esc(d.degraded_reason)+'</div>';}
-  if(d.ask_back){h += '<div class="row">候选（回问必须给候选）：'+JSON.stringify(d.candidates||[])+'</div>';}
-  if(d.log_error){h += '<div class="row" style="color:#c00">台账写入失败：'+esc(d.log_error)+'</div>';}
+  lastResult = d;   // lets the ✔/✘/correction-wrong buttons target this result
+  let h = '<div class="row"><span class="k">Raw: </span><code>'+esc(d.raw)+'</code></div>'+
+          '<div class="row"><span class="k">Corrected: </span><code>'+esc(d.corrected)+'</code></div>'+
+          '<div class="row"><span class="k">Punctuated: </span><code>'+esc(d.punctuated)+'</code></div>'+
+          '<div class="row"><span class="k">Intent: </span>'+esc(d.intent)+
+          ' | Ask-back: '+(d.ask_back?'<b style="color:#c60">yes</b>':'no')+
+          ' | Degraded: '+(d.degraded?'<b style="color:#c60">yes</b>':'no')+'</div>'+
+          '<div class="row"><span class="k">Level: </span>'+esc(d.level)+' | took '+d.ms+' ms | taught-word hit: '+(d.taught_hit?'yes':'no')+'</div>';
+  if(d.degraded && d.degraded_reason){h += '<div class="row">Degraded reason: '+esc(d.degraded_reason)+'</div>';}
+  if(d.ask_back){h += '<div class="row">Candidates (ask-back must offer candidates): '+JSON.stringify(d.candidates||[])+'</div>';}
+  if(d.log_error){h += '<div class="row" style="color:#c00">Ledger write failed: '+esc(d.log_error)+'</div>';}
   out.innerHTML = h;
   log();
   }catch(err){
-    // ① **失败必须可见**（静默失败是这次要钉住的东西）
-    out.innerHTML = '<div class="row" style="color:#c00"><b>处理失败</b>：'+esc(String(err))+
-      '<br>请求：<code>POST /v1/testpage</code>'+
-      '<br>服务可能已停止，请重新运行 <code>sh scripts/dev.sh</code></div>';
+    // 1) failures must be visible (silent failure is what we are pinning down)
+    out.innerHTML = '<div class="row" style="color:#c00"><b>Processing failed</b>: '+esc(String(err))+
+      '<br>Request: <code>POST /v1/testpage</code>'+
+      '<br>The service may have stopped; please rerun <code>sh scripts/dev.sh</code></div>';
   }
 }
 function loadFile(){
@@ -137,39 +137,39 @@ function loadFile(){
 }
 async function planTask(){
   const out = document.getElementById('planout');
-  out.innerHTML = '<div class="row">规划中…</div>';
+  out.innerHTML = '<div class="row">Planning...</div>';
   try{
     const r = await fetch('/v1/task', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({task: document.getElementById('task').value, document: document.getElementById('doc').value})});
     if(!r.ok){ throw new Error('HTTP '+r.status+' /v1/task'); }
     const d = await r.json();
     const p = d.plan;
-    let h = '<div class="row"><b>'+(d.execute?'':'【只规划，不执行】')+'</b> 目标：<code>'+esc(d.goal)+'</code></div>';
-    h += '<div class="row"><span class="k">来源：</span>'+esc(p.source||'-')+
-         ' ｜ 降级：'+(p.degraded?('是（'+esc(p.degraded_reason||'')+'）'):'否')+
-         ' ｜ 拒绝：'+(p.refused?'<b style="color:#c60">是</b>':'否')+'</div>';
-    if(p.reason){ h += '<div class="row">原因：'+esc(p.reason)+'</div>'; }
-    if(p.missing && p.missing.length){ h += '<div class="row">做不到 / 找谁：<ul>'+p.missing.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>'; }
+    let h = '<div class="row"><b>'+(d.execute?'':'[plan only, no execution]')+'</b> Goal: <code>'+esc(d.goal)+'</code></div>';
+    h += '<div class="row"><span class="k">Source: </span>'+esc(p.source||'-')+
+         ' | Degraded: '+(p.degraded?('yes ('+esc(p.degraded_reason||'')+')'):'no')+
+         ' | Refused: '+(p.refused?'<b style="color:#c60">yes</b>':'no')+'</div>';
+    if(p.reason){ h += '<div class="row">Reason: '+esc(p.reason)+'</div>'; }
+    if(p.missing && p.missing.length){ h += '<div class="row">Cannot do / who to ask: <ul>'+p.missing.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>'; }
     if(p.steps && p.steps.length){
-      h += '<table><tr><th>#</th><th>工具</th><th>cap</th><th>动作</th><th>产出</th><th>域</th></tr>';
+      h += '<table><tr><th>#</th><th>Tool</th><th>cap</th><th>Action</th><th>Output</th><th>Domain</th></tr>';
       p.steps.forEach(s=>{ h += '<tr><td>'+s.index+'</td><td>'+esc(s.tool)+'</td><td>'+esc((s.caps||[]).join(','))+'</td><td>'+esc(s.action)+'</td><td>'+esc(s.output)+'</td><td>'+esc(s.domain||'')+'</td></tr>'; });
       h += '</table>';
-    } else { h += '<div class="row" style="color:#666">没有可执行步骤（见上面的拒绝原因/找谁）。</div>'; }
-    h += '<details><summary>轨迹（考虑了哪些要素 / 工作记忆）</summary><pre style="white-space:pre-wrap">'+
+    } else { h += '<div class="row" style="color:#666">No executable steps (see refusal reason / who to ask above).</div>'; }
+    h += '<details><summary>Trace (factors considered / working memory)</summary><pre style="white-space:pre-wrap">'+
          esc(JSON.stringify({considered:p.considered, wm:p.wm}, null, 1))+'</pre></details>';
     out.innerHTML = h;
   }catch(err){
-    out.innerHTML = '<div class="row" style="color:#c00"><b>规划失败</b>：'+esc(String(err))+
-      '<br>请求：<code>POST /v1/task</code><br>服务可能已停止，请重新运行 <code>sh scripts/dev.sh</code></div>';
+    out.innerHTML = '<div class="row" style="color:#c00"><b>Planning failed</b>: '+esc(String(err))+
+      '<br>Request: <code>POST /v1/task</code><br>The service may have stopped; please rerun <code>sh scripts/dev.sh</code></div>';
   }
 }
 async function teach(){
-  const term = prompt('教哪个词（如 哎欧劈艾斯）？'); if(!term) return;
-  const canonical = prompt('规范化成什么（如 aiops）？'); if(!canonical) return;
+  const term = prompt('Which word to teach (e.g. aiopisi)?'); if(!term) return;
+  const canonical = prompt('Normalize to what (e.g. aiops)?'); if(!canonical) return;
   const r = await j('/v1/observe', {term, canonical});
   alert(JSON.stringify(r));
 }
-// ---- 回馈（✔/✘）与「这个改错了」（A8/A9/A10）----
+// ---- feedback (OK/wrong) and correction-wrong (A8/A9/A10) ----
 var lastResult = null;
 function fbstatus(msg, isErr){
   const el = document.getElementById('fbstatus');
@@ -177,11 +177,11 @@ function fbstatus(msg, isErr){
   el.textContent = msg;
 }
 async function feedbackOk(){
-  if(!lastResult){ fbstatus('先点〔处理〕再给评价', true); return; }
+  if(!lastResult){ fbstatus('Click Process first, then give feedback', true); return; }
   try{
     const d = await j('/v1/feedback', {text_raw: lastResult.raw, text_final: lastResult.corrected, accepted: true, reason: '', source: 'testpage'});
-    fbstatus('✔ 已记录（feedback.jsonl 第 ' + d.feedback.lines + ' 条）' + (d.feedback.log_error?('，落盘失败：'+d.feedback.log_error):''));
-  }catch(err){ fbstatus('✔ 记录失败：'+String(err), true); }
+    fbstatus('✔ recorded (feedback.jsonl line ' + d.feedback.lines + ')' + (d.feedback.log_error?(', write failed: '+d.feedback.log_error):''));
+  }catch(err){ fbstatus('✔ record failed: '+String(err), true); }
 }
 function showNeg(){
   document.getElementById('fbneg').hidden = false;
@@ -189,39 +189,39 @@ function showNeg(){
 }
 async function submitNeg(){
   const reason = document.getElementById('fbneg_reason').value.trim();
-  if(!lastResult){ fbstatus('先点〔处理〕再给评价', true); return; }
+  if(!lastResult){ fbstatus('Click Process first, then give feedback', true); return; }
   try{
     const d = await j('/v1/feedback', {text_raw: lastResult.raw, text_final: lastResult.corrected, accepted: false, reason: reason, source: 'testpage'});
     document.getElementById('fbneg').hidden = true;
-    fbstatus('✘ 已记录（feedback.jsonl 第 ' + d.feedback.lines + ' 条，原因：' + d.feedback.reason + '）');
-  }catch(err){ fbstatus('✘ 记录失败：'+String(err), true); }
+    fbstatus('✘ recorded (feedback.jsonl line ' + d.feedback.lines + ', reason: ' + d.feedback.reason + ')');
+  }catch(err){ fbstatus('✘ record failed: '+String(err), true); }
 }
 async function markWrong(){
-  if(!lastResult){ fbstatus('先点〔处理〕再标记', true); return; }
+  if(!lastResult){ fbstatus('Click Process first, then mark', true); return; }
   const corrs = (lastResult.corrections||[]).filter(c=>c.From && c.To);
   if(corrs.length === 0){
-    fbstatus('本次没有可标记的改写（没有发生 From→To 纠错改写）', true);
+    fbstatus('No correction to mark this run (no From->To rewrite happened)', true);
     return;
   }
   const term = corrs[0].From;
   try{
     const d = await j('/v1/blacklist', {op:'add', term: term, note: lastResult.raw+' → '+lastResult.corrected});
-    fbstatus('已把「'+d.term+'」加入改写黑名单并落盘，重新〔处理〕看效果');
-    run();  // 立即重跑一次，让"生效"可见
-  }catch(err){ fbstatus('黑名单记录失败：'+String(err), true); }
+    fbstatus('Added "'+d.term+'" to the correction blacklist and persisted it; re-run Process to see the effect');
+    run();  // immediately re-run so the effect is visible
+  }catch(err){ fbstatus('Blacklist record failed: '+String(err), true); }
 }
 async function clearTaught(){ alert(JSON.stringify(await j('/v1/lexicon', {op:'clear_taught'}))); }
 async function log(){
   const d = await j('/v1/testlog?n=20');
-  document.getElementById('metrics').innerHTML = '<div class="row"><span class="k">真实样本：</span>'+d.total+
-    ' 条 ｜ L0 比例 '+d.metrics.l0_share.toFixed(2)+' ｜ 回问率 '+d.metrics.ask_back_rate.toFixed(2)+
-    ' ｜ 降级率 '+d.metrics.degraded_rate.toFixed(2)+'</div><div style="color:#666;font-size:14px">'+esc(d.metrics.note)+'<br>台账：'+esc(d.path)+'</div>';
-  let h = '<table><tr><th>时间</th><th>原始</th><th>纠错</th><th>意图</th><th>回问</th><th>层级</th><th>ms</th></tr>';
-  (d.recent||[]).slice().reverse().forEach(r=>{h+='<tr><td>'+esc((r.at||'').slice(11,19))+'</td><td>'+esc(r.raw)+'</td><td>'+esc(r.corrected)+'</td><td>'+esc(r.intent)+'</td><td>'+(r.ask_back?'是':'否')+'</td><td>'+esc(r.level)+'</td><td>'+r.ms+'</td></tr>';});
+  document.getElementById('metrics').innerHTML = '<div class="row"><span class="k">Real samples: </span>'+d.total+
+    ' | L0 share '+d.metrics.l0_share.toFixed(2)+' | ask-back rate '+d.metrics.ask_back_rate.toFixed(2)+
+    ' | degraded rate '+d.metrics.degraded_rate.toFixed(2)+'</div><div style="color:#666;font-size:14px">'+esc(d.metrics.note)+'<br>Ledger: '+esc(d.path)+'</div>';
+  let h = '<table><tr><th>Time</th><th>Raw</th><th>Corrected</th><th>Intent</th><th>Ask-back</th><th>Level</th><th>ms</th></tr>';
+  (d.recent||[]).slice().reverse().forEach(r=>{h+='<tr><td>'+esc((r.at||'').slice(11,19))+'</td><td>'+esc(r.raw)+'</td><td>'+esc(r.corrected)+'</td><td>'+esc(r.intent)+'</td><td>'+(r.ask_back?'yes':'no')+'</td><td>'+esc(r.level)+'</td><td>'+r.ms+'</td></tr>';});
   document.getElementById('recent').innerHTML = h+'</table>';
 }
 log();
-probe();  // 加载后自检服务是否活着
+probe();  // after load, self-check whether the service is alive
 </script></body></html>`
 
 func (s *Server) handleTestPage(w http.ResponseWriter, r *http.Request) {
