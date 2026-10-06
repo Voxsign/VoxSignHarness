@@ -299,8 +299,20 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// QUERY    (>=0.8) "  /  "is   lang word,  edcoreference resolution, 
 	//  then refer   asempty write Ask"   "  "refer is   "-> need_ask(    ). 
 	var referOpts []refer.Option
-	// hasRecent: curbefore  callusenoonunder   ,   false(  connectlinebyon  refer module chainonstartusetimeagain  true). 
-	if o.Refer != nil && shouldResolveRefer(&intent, false) {
+	// F2: wake the dead code path — load recent entities from the session slot
+	// <logDir>/context_slots/<convID>.jsonl, inject them into the resolver, and use
+	// that to decide hasRecent. Previously hasRecent was hardcoded false, so
+	// writeRecentEntities/loadRecentEntities were never called and cross-turn memory was always empty.
+	convID := strings.TrimSpace(o.ConvID)
+	if convID == "" {
+		convID = "default"
+	}
+	recentEnts := loadRecentEntities(o.logDir(), convID)
+	if o.Refer != nil {
+		o.Refer.Recent = recentEnts
+	}
+	hasRecent := len(recentEnts) > 0
+	if o.Refer != nil && shouldResolveRefer(&intent, hasRecent) {
 		resolved, opts, err := o.Refer.ResolveOptions(&intent, intent.Space)
 		if err == nil && resolved != nil {
 			prevAsk := intent.Ask
@@ -448,6 +460,12 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+	// F2: on a successful turn, append the conversation's core entities to the session slot
+	// (waking the writeRecentEntities dead code) so the next turn can resolve anaphora like
+	// "刚才那个/橙子那个" back to this turn's artifact. Only written when no receipt failed.
+	if !hasFailure(receipts) {
+		writeRecentEntities(o.logDir(), convID, extractRecentEntities(text))
+	}
 
 	// ⑨-bis error   (  ): has  back  ->  disconnect + read-onlysafesafetyheavy (limit 2  ). 
 	//  disconnect    /      disconnect; heavy become  newback  and  out.Receipts,  disconnectclose provideattribution. 
@@ -633,6 +651,12 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			"log_dir": logDir,
 		}
 		return []contract.Receipt{o.run("file", args)}
+	case contract.IntentReminder:
+		// Reminder/alarm is not implemented (no cron/scheduler anywhere in the repo).
+		// Report an explicit "not executed" failure — never fall through to NOTE's
+		// append to notes.md (previously "记个提醒…" was silently misrouted to a note).
+		return []contract.Receipt{{Tool: "reminder", OK: false,
+			Err: "提醒/闹钟功能当前未实现（本机无 cron/scheduler），未执行；如需备忘我可以帮你记到笔记里"}}
 	case contract.IntentQuery, contract.IntentAsk:
 		//      seg(2026-10-04): langaudio  note       first  . 
 		//  base inalreadynote   (e.g."  control  ")-> call     ,  againback"no   control". 
@@ -655,9 +679,25 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		args := map[string]any{"pattern": pattern, "kind": "text"}
 		recv := o.run("search", args)
-		// M7 ②: use LLM pipe search close  become howeverlanglanganswer(  back  search stdout). 
-		if answer := o.queryLLMAnswer(context.Background(), it.RawText, recv.Stdout); answer != "" {
+		// M7 ②: use LLM pipe search close  become howeverlanglanganswer(  back  search stdout).
+		answer := o.queryLLMAnswer(ctx, it.RawText, recv.Stdout)
+		// F1: queryLLMAnswer failure returns the degrade phrase (prefix "哎呀，这条我一时没答上来").
+		degraded := strings.HasPrefix(answer, "哎呀，这条我一时没答上来")
+		if answer != "" {
 			recv.Stdout = answer
+		}
+		// F1: when a QUERY ends with no real answer — (a) empty search short-circuit, or
+		// (b) LLM unavailable/degraded (auth/402/timeout) — previously recv.OK stayed true
+		// with an empty/degraded Stdout, and renderView logged a fake "OK (auto-executed)".
+		// Mark it failed and pass the reason through the FAILED branch instead of an OK placeholder.
+		if degraded || strings.TrimSpace(recv.Stdout) == "" {
+			recv.OK = false
+			if degraded {
+				recv.Err = "LLM 服务不可用/降级，QUERY 未获得回答，任务未完成：" +
+					truncateStr(strings.TrimPrefix(answer, "哎呀，这条我一时没答上来"), 80)
+			} else {
+				recv.Err = "检索无结果且 LLM 未给出回答，QUERY 未完成"
+			}
 		}
 		return []contract.Receipt{recv}
 	case contract.IntentEdit:
@@ -1366,6 +1406,13 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 	//  id lang(4-30 char,   bodyname/ hastable )
 	re3 := regexp.MustCompile(`[“"]([^”"]{4,30})[”"]`)
 	for _, m := range re3.FindAllStringSubmatch(text, -1) {
+		add(m[1], "project")
+	}
+	// F2: "项目叫橙子 / 叫<X> / 名为<X>" — a 2-12 char short name after a Chinese naming verb
+	// becomes a project entity; otherwise "记一个想法：项目叫橙子" extracts nothing and the next
+	// turn's "查一下那个" has no candidate to point at.
+	re4 := regexp.MustCompile(`(?:叫做|名为|叫)([一-龥A-Za-z0-9]{2,12})`)
+	for _, m := range re4.FindAllStringSubmatch(text, -1) {
 		add(m[1], "project")
 	}
 	return out

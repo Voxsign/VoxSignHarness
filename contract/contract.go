@@ -143,7 +143,8 @@ const (
 	IntentDeploy       = "DEPLOY"        //   /outsend/occurbecome table: send/online/  
 	IntentAsk          = "ASK"           //    : as  /   /   
 	IntentRegisterTool = "REGISTER_TOOL" // langaudionote new    (  fillsplit  , 8 classofout  define)
-	IntentOrchestrate  = "ORCHESTRATE"   //   orchestrate(  erformrouteby): read    ->  ->occurbecomefile->  
+	IntentOrchestrate  = "ORCHESTRATE"   //   orchestrate(  erformrouteby): read    ->  ->occurbecomefile->
+	IntentReminder     = "REMINDER"      // reminder/alarm: explicit not-implemented branch (no cron/scheduler), no longer misrouted to NOTE
 )
 
 // confirm  etc (Intent.Confirm, risk   decideafterbackfillauthoritative value). 
