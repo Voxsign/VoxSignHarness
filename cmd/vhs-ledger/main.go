@@ -1,4 +1,4 @@
-// vhs-ledger —— 台账聚合报告入口：vhs-ledger <ledger.jsonl>
+// vhs-ledger — ledger aggregation report entrypoint: vhs-ledger <ledger.jsonl>
 package main
 
 import (
@@ -15,7 +15,7 @@ func main() {
 	}
 	out, err := route.Report(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "报告失败:", err)
+		fmt.Fprintln(os.Stderr, "report failed:", err)
 		os.Exit(1)
 	}
 	fmt.Print(out)

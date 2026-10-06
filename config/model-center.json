@@ -52,5 +52,5 @@
     "fast": "deepseek-flash",
     "quality": "deepseek-v4-pro"
   },
-  "_timeout_note": "UNVALIDATED：plan/research/diagnose 原为 60s/60s/30s，而实测强模型一次规划 ≈59.6s ⇒ 余量仅 0.4s ⇒ 时好时坏（Lead 实测定位）。现统一 180s，且必须 > L2PlanTimeout(120s)，否则客户端先于规划器掐断。"
+  "_timeout_note": "UNVALIDATED: plan/research/diagnose were originally 60s/60s/30s, but a single strong-model planning run measured ~59.6s, leaving only 0.4s slack, which caused intermittent failures. Now unified at 180s, and must stay above L2PlanTimeout (120s), otherwise the client times out before the planner finishes."
 }

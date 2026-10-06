@@ -1,1 +1,0 @@
-{"audience":"项目决策者（用户本人）与后续设计评审","reader_task":"理解 Instinct 的设计假设与失败模式，确认哪些可吸收进 VoxSign Harness 设计哲学、哪些冲突，以及 M2 落地调整","genre_contract":null,"adapter":null,"presentation_mode":"rich","visual_plan":{"reason":"用 HTML block 呈现行动范式光谱与事故-闸门映射两类结构化关系；正文+表格承载事实与对照明细","blocks":[{"type":"html5-block","min_count":2,"purpose":"①行动范式光谱：Instinct 在赛道中的位置与三信任路线 ②13起事故→VoxSign四闸门映射"}]}}

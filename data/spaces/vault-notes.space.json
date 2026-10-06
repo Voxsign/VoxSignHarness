@@ -6,7 +6,7 @@
   "tools": ["note", "file-append", "read"],
   "context": ["decisions:*"],
   "perms": { "read": true, "write": true },
-  "acceptance": "想法库仅追加，不改写历史条目",
+  "acceptance": "Notes vault: append-only; never rewrite historical entries.",
   "risk_default": "auto",
   "cross_refs": [],
   "version": 1
