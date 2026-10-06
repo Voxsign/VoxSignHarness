@@ -1,6 +1,6 @@
 //go:build vhsroute
 
-// jev_live_test.go —— 真 JEV 实跑（env 守卫；key 只在进程环境/.env，不打印不落盘）。
+// jev_live_test.go --   JEV   (env   ; key only process  /.env,       ). 
 package route
 
 import (
@@ -27,7 +27,7 @@ func TestLiveJEVRouting(t *testing.T) {
 	jev := &JEVClient{Endpoint: "https://aiops.peterzou.com/api/decide", APIKey: key, Kind: KindPermission}
 	r := &Router{Hot: nil, JEV: jev, Timeout: 10 * time.Second}
 
-	// 权限类：按实测结论，选项要表达成 candidates（constraints 放 why）
+	//  limitclass: by  close ,   needtable become candidates(constraints   why)
 	d := r.Route(context.Background(), "能不能写入 vault-creds",
 		"能否写入 vault-creds？",
 		Situation{

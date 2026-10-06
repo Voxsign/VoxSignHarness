@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// newTestScheduler 建一个隔离测试调度器（exec 注入，已 Start）。
+// newTestScheduler        call  (exec notein, already Start). 
 func newTestScheduler(maxConc, qSize int) *Scheduler {
 	sc := NewScheduler(maxConc, qSize)
 	sc.Start()
@@ -19,7 +19,7 @@ func mkSchedItem(id string, prio int) *schedTask {
 	return &schedTask{ts: &taskState{ID: id, Priority: prio}, ctx: context.Background(), text: "记一下 " + id}
 }
 
-// TestSched_MaxInFlight：sem=1 时任意时刻在跑任务数 ≤1（串行闸由 sem 接管）。
+// TestSched_MaxInFlight: sem=1 time  moment  tasknum <=1(serial gateby sem connectmanage). 
 func TestSched_MaxInFlight(t *testing.T) {
 	sc := newTestScheduler(1, 16)
 	defer sc.Stop()
@@ -45,7 +45,7 @@ func TestSched_MaxInFlight(t *testing.T) {
 	}
 }
 
-// TestSched_Ramp（=并发放宽）：sem=2 时允许 ≥2 并发（>1 路径不被 C0 闸锁死）。
+// TestSched_Ramp(=andsend  ): sem=2 time allow >=2 andsend(>1 path be C0    ). 
 func TestSched_Ramp(t *testing.T) {
 	sc := newTestScheduler(2, 16)
 	defer sc.Stop()
@@ -71,10 +71,10 @@ func TestSched_Ramp(t *testing.T) {
 	}
 }
 
-// TestSched_Priority：priority 降序调度（高优先级先跑）。
-// 先全部入队（dispatch 未启动，队列不被排空）再 Start，使优先级选择可观测。
+// TestSched_Priority: priority   call (  first first ). 
+// firstsafety in (dispatch  start ,  list be empty)again Start,   first      . 
 func TestSched_Priority(t *testing.T) {
-	sc := NewScheduler(1, 16) // sem=1 串行；先不 Start
+	sc := NewScheduler(1, 16) // sem=1 serial; first  Start
 	var mu sync.Mutex
 	var order []string
 	started := make(chan string, 3)
@@ -87,14 +87,14 @@ func TestSched_Priority(t *testing.T) {
 	sc.Enqueue(mkSchedItem("low", 10))
 	sc.Enqueue(mkSchedItem("mid", 50))
 	sc.Enqueue(mkSchedItem("high", 90))
-	sc.Start() // dispatch 现在才从 [low,mid,high] 里挑最高优先
+	sc.Start() // dispatch now onlyfrom [low,mid,high]      first
 	first := <-started
 	mu.Lock()
 	if order[0] != "high" {
 		t.Fatalf("最高优先级应最先跑, got order=%v, first=%s", order, first)
 	}
 	mu.Unlock()
-	// 排空剩余
+	//  empty  
 	go func() {
 		for range started {
 		}
@@ -103,7 +103,7 @@ func TestSched_Priority(t *testing.T) {
 	sc.Stop()
 }
 
-// TestSched_Drain：Drain 等待全部任务跑完。
+// TestSched_Drain: Drain waitsafety task finish. 
 func TestSched_Drain(t *testing.T) {
 	sc := newTestScheduler(2, 16)
 	defer sc.Stop()
@@ -118,19 +118,19 @@ func TestSched_Drain(t *testing.T) {
 	}
 }
 
-// TestSched_Admission429：队列满 → Enqueue 返回 false。
-// 先不 Start（dispatch 不排空队列），使容量上限可确定性观测。
+// TestSched_Admission429:  listfull -> Enqueue returnback false. 
+// first  Start(dispatch   empty list),    onlimit   ity  . 
 func TestSched_Admission429(t *testing.T) {
-	sc := NewScheduler(1, 2) // sem=1, 队列容量 2
+	sc := NewScheduler(1, 2) // sem=1,  list   2
 	sc.exec = func(t *schedTask) {}
-	// dispatch 未启动，入队只累积不消费
+	// dispatch  start , in only     
 	if !sc.Enqueue(mkSchedItem("1", 50)) {
 		t.Fatal("第 1 个应入队成功")
 	}
 	if !sc.Enqueue(mkSchedItem("2", 50)) {
 		t.Fatal("第 2 个应入队成功")
 	}
-	// 队列已满(len=2=maxQ)，第 3 个超出 → 拒绝
+	//  listalreadyfull(len=2=maxQ),   3   out -> reject
 	if sc.Enqueue(mkSchedItem("3", 50)) {
 		t.Fatal("队列已满, 第 3 个应被拒绝(→429)")
 	}

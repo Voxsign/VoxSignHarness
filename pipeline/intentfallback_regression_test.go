@@ -1,26 +1,26 @@
-// 本文件是 builder 的回归保护，不属于 stubsmith 的判据桩；判据桩见 e2e/arch_test.go。
+// basefileis builder  back protect,   at stubsmith   data ;  data see e2e/arch_test.go. 
 //
-// 覆盖对象：pipeline/pipeline.go 的 llmIntentFallback 豁免条件。本轮把它从
-// 白名单 switch（negation/meta/conditional/multi_action）改成结构性条件：
+// overwriteto : pipeline/pipeline.go   llmIntentFallback     . base pipe from
+//  name  switch(negation/meta/conditional/multi_action)modifybecomeclose ity  : 
 //
-//	Conflict != "" && Ask != ""   → 仲裁已发生且落在 Ask 确认态，下游不得覆写。
+//	Conflict != "" && Ask != ""   ->   alreadysendoccurand   Ask confirmstate, under    write. 
 //
-// 为什么必须有本文件（技能 §9「无样本就报绿」）：
+// as    hasbasefile(   §9"nokindbasethen  "): 
 //
-//	这条路径此前**零测试覆盖**。`go test ./...` 全绿，却掩盖了一个功能性失效：
-//	若条件只写 `Ask != ""`，因为 ClassifyTask 初始化即带
-//	`Ask: taskAskTemplate`（UNKNOWN 必然 Ask 非空），回退会**永不触发** ——
-//	M7 ①「规则判 UNKNOWN/低置信且像问句 → 调 fast 补分类」静默死亡。
+//	  path before**   overwrite**. `go test ./...` safety , but      ity  : 
+//	if  onlywrite `Ask != ""`, becauseas ClassifyTask initstartizei.e. 
+//	`Ask: taskAskTemplate`(UNKNOWN  however Ask  empty), back  **  triggersend** --
+//	M7 ①"rule  UNKNOWN/low-confidenceand  sent -> call fast patchclassify"    . 
 //
-// 因此这里按**四类**做双向反例（技能 §3 硬要求 4：至少一个"该收未收"和一个
-// "不该收却收了"）：
+// because   by** class**  torevexample(   §3  needrequire 4:     " recv recv"and  
+// "  recvbutrecv"): 
 //
-//	① 豁免       —— 仲裁 Ask（含原白名单漏收的 debug_plan）绝不被覆写；
-//	② 可回退     —— Conflict 非空但 Ask 为空的合法路径（delete 等）仍能回退；
-//	③ 原本漏收   —— debug_plan 是已存在的真实漏洞，新条件必须补上豁免；
-//	④ 默认 UNKNOWN —— Ask 非空但 Conflict 为空，回退仍必须被调用并救回意图。
+//	①          --    Ask( orig name  recv  debug_plan)  be write; 
+//	②  back      -- Conflict  emptybut Ask asempty   path(delete etc)  back ; 
+//	③ origbase recv   -- debug_plan isalreadystore      , new    patchon  ; 
+//	④ default UNKNOWN -- Ask  emptybut Conflict asempty, back    becalluseand backintent. 
 //
-// 只断言"该拦的拦住了"会漏掉"不该拦的也被拦住了"——这正是本轮事故的形态。
+// onlydisconnectlang"     "   "    alsobe  "-- posisbase  thus  state. 
 package pipeline
 
 import (
@@ -37,11 +37,11 @@ import (
 	"voicesign-harness/provider"
 )
 
-// intentJSONQuery 是 fast provider 固定返回的合法分类 JSON（注意：作为 JSON 字符串
-// 内容嵌入请求响应体，故引号需转义）。
+// intentJSONQuery is fast provider   returnback   classify JSON(note :  as JSON char  
+// in  in require  body, thus idneed  ). 
 const intentJSONQuery = `{\"intent\":\"QUERY\",\"confidence\":0.9}`
 
-// fallbackFixture 构造一个返回固定意图 JSON 的 fast provider，并返回调用计数器。
+// fallbackFixture     returnback  intent JSON   fast provider, andreturnbackcalluse num . 
 func fallbackFixture(t *testing.T) (*Options, *int32) {
 	t.Helper()
 	var calls int32
@@ -70,13 +70,13 @@ func fallbackFixture(t *testing.T) (*Options, *int32) {
 	return &Options{Cfg: &cfg, Providers: reg}, &calls
 }
 
-// TestIntentFallbackExemptsArbitrationAsks 锁住类别 ①/③：
-// 任何"Conflict 非空且 Ask 非空"的仲裁都必须原样返回，且**不得**发起 LLM 调用。
+// TestIntentFallbackExemptsArbitrationAsks   classdiff ①/③: 
+//   "Conflict  emptyand Ask  empty"   all  origkindreturnback, and**  **sendraise LLM calluse. 
 func TestIntentFallbackExemptsArbitrationAsks(t *testing.T) {
 	o, calls := fallbackFixture(t)
 	ctx := context.Background()
-	// 传一个带问句特征的 text，确保"假如没被豁免，回退一定会触发" ——
-	// 否则测试可能因为 hasQ=false 而假绿。
+	//      sent    text,  keep" e.g. be  , back    triggersend" --
+	//  then    becauseas hasQ=false but  . 
 	const questionLike = "这样行吗？"
 
 	cases := []struct {
@@ -91,7 +91,7 @@ func TestIntentFallbackExemptsArbitrationAsks(t *testing.T) {
 			Confidence: 0.9, Ask: "「如果测试通过」是带前提的动作。请先完成前提。"}},
 		{"multi_action", contract.Intent{Intent: contract.IntentAsk, Conflict: contract.ConflictMultiAction,
 			Confidence: 0.9, Ask: "这句里有两件以上的事（查、提交）。请先说先做哪个。"}},
-		// 类别 ③：原白名单**漏收**的 debug_plan（真实漏洞）。
+		// classdiff ③: orig name ** recv**  debug_plan(    ). 
 		{"debug_plan_originally_missed", contract.Intent{Intent: contract.IntentAsk,
 			Conflict: contract.ConflictDebugPlan, Confidence: 0.5,
 			Ask: "你是想让我给修 bug 的思路，还是直接动手修？"}},
@@ -110,8 +110,8 @@ func TestIntentFallbackExemptsArbitrationAsks(t *testing.T) {
 	}
 }
 
-// TestIntentFallbackStillReachableWhenAskEmpty 锁住类别 ②：
-// Conflict 非空但 Ask 为空的**合法可执行路径**不得被结构性条件误伤 —— 回退仍要发生。
+// TestIntentFallbackStillReachableWhenAskEmpty   classdiff ②: 
+// Conflict  emptybut Ask asempty **     path**  beclose ity     -- back  needsendoccur. 
 func TestIntentFallbackStillReachableWhenAskEmpty(t *testing.T) {
 	o, calls := fallbackFixture(t)
 	ctx := context.Background()
@@ -121,7 +121,7 @@ func TestIntentFallbackStillReachableWhenAskEmpty(t *testing.T) {
 		name string
 		it   contract.Intent
 	}{
-		// 删除仲裁：Intent=EDIT + Ask 空，由下游域/风险门禁管，不该在这里被挡。
+		// delete  : Intent=EDIT + Ask empty, byunder domain/risk forbidmanage,      be . 
 		{"delete", contract.Intent{Intent: contract.IntentEdit, Conflict: contract.ConflictDelete,
 			Confidence: 0.9, Ask: ""}},
 		{"note_vs_deploy", contract.Intent{Intent: contract.IntentNote, Conflict: contract.ConflictNoteVsDeploy,
@@ -143,10 +143,10 @@ func TestIntentFallbackStillReachableWhenAskEmpty(t *testing.T) {
 	}
 }
 
-// TestIntentFallbackRescuesDefaultUnknown 锁住类别 ④（本轮事故的直接回归）：
-// 分类器对"嗯那个呃？"的真实输出是 UNKNOWN + **非空 Ask**（默认回问模板）。
-// 它是"默认分类 Ask"而不是"仲裁 Ask"（Conflict 为空），因此**不得**被豁免 ——
-// 回退必须被调用并把意图救回来。这条断言就是防止 `Ask != ""` 那版复辟。
+// TestIntentFallbackRescuesDefaultUnknown   classdiff ④(base  thus  connectback ): 
+// classify to"     "    outis UNKNOWN + ** empty Ask**(defaultclarification  ). 
+//  is"defaultclassify Ask"but is"   Ask"(Conflict asempty), because **  **be   --
+// back   becalluseandpipeintent back .   disconnectlangthenispreventstop `Ask != ""`     . 
 func TestIntentFallbackRescuesDefaultUnknown(t *testing.T) {
 	o, calls := fallbackFixture(t)
 	ctx := context.Background()

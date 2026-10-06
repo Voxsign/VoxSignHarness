@@ -1,4 +1,4 @@
-// cache_test.go —— 默认门禁（无 tag）：三层语义与关联度的单点行为。
+// cache_test.go -- default forbid(no tag):   semanticandclose    pt as. 
 package hotcache
 
 import (

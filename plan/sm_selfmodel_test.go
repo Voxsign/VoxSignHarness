@@ -1,27 +1,27 @@
 //go:build vhsplan
 
-// sm_selfmodel_test.go —— VHS-SELFPROJ-001 §2①：建构模型（SM-1..SM-5）。
+// sm_selfmodel_test.go -- VHS-SELFPROJ-001 §2①:    type(SM-1..SM-5). 
 //
-// 被测物：harness 自己产的项目模型 eval/projmodel/harness-*.json（VHS-PROJMODEL-001 格式）。
+// be  : harness   produce  obj type eval/projmodel/harness-*.json(VHS-PROJMODEL-001  form). 
 //
-// 真值来源（异源：本文件从一级来源**自行重新推导**，不 import eval/projmodel/gen 的结论）：
+//  value  (diff : basefilefrom    **  heavynew  **,   import eval/projmodel/gen  close ): 
 //
-//	工具 ← tools.LoadContracts(dir).All()（契约名 + 逐 cap risk + allowed_spaces）
-//	意图 ← contract/contract.go 的 Intent* 常量 × 生产代码引用
-//	       （口径：非 _test.go、非 contract 包内出现 contract.IntentX；与 SK-5 同源）
-//	域   ← space.Load(dir).List()/Get()（perm/risk_default/词表）
-//	结构 ← 仓库文件系统 / go list / git
+//	   ← tools.LoadContracts(dir).All()(  name +   cap risk + allowed_spaces)
+//	intent ← contract/contract.go   Intent*    × occurproduce code use
+//	       ( path:   _test.go,   contract  inoutnow contract.IntentX; and SK-5 same )
+//	domain   ← space.Load(dir).List()/Get()(perm/risk_default/wordtable)
+//	close  ←   file   / go list / git
 //
-// 判据：
+//  data: 
 //
-//	SM-1 每条陈述都能指到真值（source 必须能落到磁盘上的文件）
-//	SM-2 双向对账：声明−真值=虚报；真值−声明=隐瞒（空模型必须判红，不许空过）
-//	SM-3 三态诚实：verified/inferred/unknown；unknown 要说为什么；全 verified = 宣传
-//	SM-4 verified 的陈述必须仍与代码相符（代码变了模型没变 → 红）
-//	SM-5 生产能力侧（plan.ExportManifest）与模型产物必须给出同一份真值（双实现漂移）
+//	SM-1     all referto value(source     to  on file)
+//	SM-2  toto : voice − value=  ;  value−voice =  (empty type    ,  allowemptyed)
+//	SM-3  state  : verified/inferred/unknown; unknown need as  ; safety verified =   
+//	SM-4 verified       and code  ( codechange type change ->  )
+//	SM-5 occurproduce  side(plan.ExportManifest)and typeartifact  giveoutsame   value(  now  )
 //
-// 每条判据都自带**双向反例自检**：先证明它抓得住注入的错，再看真产物。
-// 运行：go test -tags vhsplan ./plan -run TestSM -v
+//    dataall  ** torevexample  **: first      notein  , again  artifact. 
+//   : go test -tags vhsplan ./plan -run TestSM -v
 package plan
 
 import (
@@ -39,7 +39,7 @@ import (
 	"time"
 )
 
-// ---------- 模型产物的形状（VHS-PROJMODEL-001 §2） ----------
+// ----------  typeartifact  status(VHS-PROJMODEL-001 §2) ----------
 
 type pmSubject struct {
 	Repo         string `json:"repo"`
@@ -131,7 +131,7 @@ type pmModel struct {
 	OpenQuestions []pmQuestion   `json:"open_questions"`
 }
 
-// pmLoad 装载 harness 侧模型产物；找不到就停（缺证据 ≠ 通过）。
+// pmLoad    harness side typeartifact;   tothenstop(  data !=  ed). 
 func pmLoad(t *testing.T) (string, pmModel) {
 	t.Helper()
 	matches, err := filepath.Glob(filepath.Join(scRepoRoot(t), "eval", "projmodel", "harness-*.json"))
@@ -157,7 +157,7 @@ func pmLoad(t *testing.T) (string, pmModel) {
 	return path, m
 }
 
-// ---------- 代码真值（自行推导，不复用导出器的结论） ----------
+// ----------  code value(    ,   use out  close ) ----------
 
 type pmDomainTruth struct {
 	Read        bool
@@ -169,7 +169,7 @@ type pmDomainTruth struct {
 
 type pmTruth struct {
 	ToolNames      map[string]bool
-	ToolCaps       map[string]string // "file.read" → risk
+	ToolCaps       map[string]string // "file.read" -> risk
 	LiveIntents    map[string]bool
 	DormantIntents map[string]bool
 	Domains        map[string]pmDomainTruth
@@ -203,7 +203,7 @@ func pmDeriveTruth(t *testing.T) pmTruth {
 		t.Fatal("[防空过] 真值侧导出为空 → 对账无从判定")
 	}
 
-	// 意图：常量声明 × 生产代码引用（口径同 SK-5）。
+	// intent:   voice  × occurproduce code use( pathsame SK-5). 
 	src, err := os.ReadFile(filepath.Join(root, "contract", "contract.go"))
 	if err != nil {
 		t.Fatalf("[防空过] 读不到 contract/contract.go: %v", err)
@@ -253,7 +253,7 @@ func pmDeriveTruth(t *testing.T) pmTruth {
 		}
 	}
 
-	// 域 + 域级别名（词表里不是契约的名词）。
+	// domain + domain diffname(wordtable  is   nameword). 
 	for _, name := range sr.List() {
 		man, ok := sr.Get(name)
 		if !ok {
@@ -281,7 +281,7 @@ func pmDeriveTruth(t *testing.T) pmTruth {
 	return truth
 }
 
-// ---------- 双向对账（SM-2 的机器形态） ----------
+// ----------  toto (SM-2     state) ----------
 
 func pmLimitRisk(limits []string, capName string) string {
 	prefix := capName + ":"
@@ -309,7 +309,7 @@ func pmSameStrings(a, b []string) bool {
 	return true
 }
 
-// pmReconcile 返回「模型 vs 代码真值」的全部分歧：虚报（声明−真值）与隐瞒（真值−声明）。
+// pmReconcile returnback" type vs  code value" safety split :   (voice − value)and  ( value−voice ). 
 func pmReconcile(m pmModel, truth pmTruth) []string {
 	var out []string
 	if len(m.Capabilities) == 0 {
@@ -355,7 +355,7 @@ func pmReconcile(m pmModel, truth pmTruth) []string {
 		}
 		want, ok := truth.ToolCaps[c.ID]
 		if !ok {
-			continue // 已报虚报
+			continue // already   
 		}
 		i := strings.Index(c.ID, ".")
 		if i <= 0 {
@@ -453,7 +453,7 @@ func pmHasViolation(violations []string, substr string) bool {
 	return false
 }
 
-// ---------- SM-1：真值指针可核 ----------
+// ---------- SM-1:  valuerefer    ----------
 
 var pmPathToken = regexp.MustCompile(`[\p{Han}\w./-]+\.(?:go|md|json|jsonl|mod)`)
 
@@ -468,7 +468,7 @@ func pmSourceTokens(s string) []string {
 	return out
 }
 
-// pmUnresolvableSources 收集「source 指向不存在的文件 / 三态非法 / kind 非法」的问题。
+// pmUnresolvableSources recv "source referto store  file /  state   / kind   "   . 
 func pmUnresolvableSources(root string, m pmModel) []string {
 	var out []string
 	check := func(section, id, source string) {
@@ -508,8 +508,8 @@ func pmUnresolvableSources(root string, m pmModel) []string {
 		check("boundary", b.ID, b.Source)
 	}
 	for _, d := range m.Dependencies {
-		// 依赖允许带 URL/对象型 source（格式样张里 peter(人) 就没有 source）：
-		// 只在给出字符串型 source 时核它的文件指针。
+		// dependency allow  URL/to type source( formkind   peter( ) then has source): 
+		// only giveoutchar  type source time   filerefer . 
 		var s string
 		if len(d.Source) > 0 && json.Unmarshal(d.Source, &s) == nil && strings.TrimSpace(s) != "" {
 			check("dependency", d.On, s)
@@ -525,7 +525,7 @@ func TestSM1EveryClaimHasResolvableSource(t *testing.T) {
 	if claims == 0 {
 		t.Fatalf("[SM-1][防空过] %s 一条可核陈述都没有", path)
 	}
-	// 判据自检：能抓住坏 source，也能放过好 source（双向）。
+	//  data  :      source, also  ed  source( to). 
 	bad := pmModel{Capabilities: []pmCapability{{ID: "x", Kind: "tool", Source: "no/such/file.go", Status: "verified"}}}
 	if len(pmUnresolvableSources(root, bad)) == 0 {
 		t.Error("[SM-1 自检] 指向不存在文件的 source 没被判红 → 判据假绿")
@@ -542,13 +542,13 @@ func TestSM1EveryClaimHasResolvableSource(t *testing.T) {
 	t.Logf("[SM-1] %s：核了 %d 条陈述的 source 指针", path, claims)
 }
 
-// ---------- SM-2：双向对账 ----------
+// ---------- SM-2:  toto  ----------
 
 func TestSM2BidirectionalReconcileWithCode(t *testing.T) {
 	path, m := pmLoad(t)
 	truth := pmDeriveTruth(t)
 
-	// 判据自检：虚报 / 隐瞒 / 空模型 三种注入都必须判红（双向反例 + 防空过）。
+	//  data  :    /    / empty type  kindnoteinall    ( torevexample + preventemptyed). 
 	over := m
 	over.Capabilities = append(append([]pmCapability{}, m.Capabilities...),
 		pmCapability{ID: "deploy.run", Kind: "tool", Source: "tools/registry.go", Status: "verified"})
@@ -572,13 +572,13 @@ func TestSM2BidirectionalReconcileWithCode(t *testing.T) {
 		path, len(truth.ToolCaps), len(truth.LiveIntents), len(truth.DormantIntents), len(truth.Domains), len(truth.AliasUnion))
 }
 
-// ---------- SM-3：三态诚实 ----------
+// ---------- SM-3:  state   ----------
 
 type pmClaim struct {
 	Section string
 	ID      string
 	Status  string
-	Detail  string // unknown 时必须说明为什么
+	Detail  string // unknown time    as  
 	Source  string
 }
 
@@ -611,7 +611,7 @@ func pmClaims(m pmModel) []pmClaim {
 
 var pmThreeStates = map[string]bool{"verified": true, "inferred": true, "unknown": true}
 
-// pmSourceRequiredSections：格式要求带 source 的节（dependencies 允许缺省）。
+// pmSourceRequiredSections:  formneedrequire  source  node(dependencies  allow  ). 
 var pmSourceRequiredSections = map[string]bool{
 	"capability": true, "dormant": true, "unresolved": true, "domain": true, "boundary": true,
 }
@@ -646,7 +646,7 @@ func pmStatusViolations(m pmModel) []string {
 func TestSM3ThreeStatesAndHonestUnknowns(t *testing.T) {
 	path, m := pmLoad(t)
 
-	// 判据自检：非三态值必须判红；全 verified 必须判红（诚实率）。
+	//  data  :   statevalue    ; safety verified     (  rate). 
 	badStatus := pmModel{Capabilities: []pmCapability{{ID: "x", Kind: "tool", Status: "ok", Source: "tools/registry.go"}}}
 	if !pmHasViolation(pmStatusViolations(badStatus), "不在三态内") {
 		t.Error("[SM-3 自检] status=ok 没被判红 → 判据假绿")
@@ -667,7 +667,7 @@ func TestSM3ThreeStatesAndHonestUnknowns(t *testing.T) {
 	t.Logf("[SM-3] %s：%d 条陈述的三态已核", path, len(claims))
 }
 
-// ---------- SM-4：verified 的陈述必须仍与代码相符 ----------
+// ---------- SM-4: verified       and code   ----------
 
 func pmGitAncestor(root, sha string) error {
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", sha, "HEAD")
@@ -679,8 +679,8 @@ func pmGitAncestor(root, sha string) error {
 	return nil
 }
 
-// pmBoundaryCheckers：可机械复核的 boundary 陈述（id → 复核函数）。
-// 复核不过 = 代码变了而模型没跟着变（SM-4 红）。
+// pmBoundaryCheckers:        boundary   (id ->    num). 
+//    ed =  codechangebut type  ingchange(SM-4  ). 
 func pmBoundaryCheckers(root string) map[string]func(t *testing.T) error {
 	return map[string]func(t *testing.T) error{
 		"no-deploy-tool": func(t *testing.T) error {
@@ -796,7 +796,7 @@ func TestSM4VerifiedClaimsStillMatchCode(t *testing.T) {
 		t.Errorf("[SM-4] state.tests 为空 → 「我在哪」缺失")
 	}
 
-	// 判据自检：真陈述必须过，假陈述必须被判红（双向）。
+	//  data  :      ed,      be  ( to). 
 	if err := pmBoundaryCheckers(root)["no-deploy-tool"](t); err != nil {
 		t.Errorf("[SM-4 自检] 现成的真陈述复核不过: %v", err)
 	}
@@ -837,9 +837,9 @@ func TestSM4VerifiedClaimsStillMatchCode(t *testing.T) {
 		path, checked, len(m.Boundaries), m.Subject.Commit[:min(7, len(m.Subject.Commit))])
 }
 
-// ---------- SM-5：生产能力侧与模型产物必须同一份真值 ----------
+// ---------- SM-5: occurproduce  sideand typeartifact  same   value ----------
 
-// pmCompareManifestArtifact 比较 plan.ExportManifest（生产能力）与模型产物（eval 侧导出器）。
+// pmCompareManifestArtifact    plan.ExportManifest(occurproduce  )and typeartifact(eval side out ). 
 func pmCompareManifestArtifact(mm Manifest, art pmModel) []string {
 	var out []string
 	artTools := map[string]bool{}
@@ -949,7 +949,7 @@ func TestSM5ManifestAgreesWithModelArtifact(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	mm := ExportManifest(tr, sr)
 
-	// 判据自检（先证明判据能红，再看产物）：空清单 / 多一条能力 都必须判红。
+	//  data  (first   data  , again artifact): emptylist /       all    . 
 	if !pmHasViolation(pmCompareManifestArtifact(Manifest{}, art), "ExportManifest 少了工具") {
 		t.Error("[SM-5 自检] 空清单没被判红 → 判据假绿")
 	}

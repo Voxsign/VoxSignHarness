@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// loadIsolated 在隔离环境（临时 HOME 无用户配置文件）下 Load。
+// loadIsolated      ( time HOME nouseuser  file)under Load. 
 func loadIsolated(t *testing.T, path string) (Config, error) {
 	t.Helper()
 	t.Setenv("VHS_CONFIG", path)
@@ -162,9 +162,9 @@ func TestEffectiveHelpers(t *testing.T) {
 	}
 }
 
-// TestDerivedDirsFollowLogDirEnv（M3 config bug 回归）：VHS_LOG_DIR 覆盖后，
-// 四个派生目录（memory/spaces/contracts/cache）必须落在该 log_dir 下，
-// 绝不能仍指向旧默认 ~/.voicesign/harness/*。
+// TestDerivedDirsFollowLogDirEnv(M3 config bug back ): VHS_LOG_DIR overwriteafter, 
+//    occurobj (memory/spaces/contracts/cache)      log_dir under, 
+//     referto default ~/.voicesign/harness/*. 
 func TestDerivedDirsFollowLogDirEnv(t *testing.T) {
 	sandbox := t.TempDir()
 	t.Setenv("VHS_LOG_DIR", sandbox)
@@ -197,7 +197,7 @@ func TestDerivedDirsFollowLogDirEnv(t *testing.T) {
 	}
 }
 
-// TestDerivedDirsDefaultWhenNoEnv：无 env 时派生目录仍落默认 ~/.voicesign/harness/*。
+// TestDerivedDirsDefaultWhenNoEnv: no env time occurobj   default ~/.voicesign/harness/*. 
 func TestDerivedDirsDefaultWhenNoEnv(t *testing.T) {
 	t.Setenv("VHS_LOG_DIR", "")
 	t.Setenv("VHS_CONFIG", "")

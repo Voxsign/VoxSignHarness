@@ -429,7 +429,7 @@ func loadASRHotwords(logDir string) []string {
 		}
 	}
 	// kind word(fromuseuser  langaudiorev  get  name/ userefer word). 
-	seeds := []string{"VoxSign", "VoiceSign", "Harness", "aiops", "PeterZou", "季总", "截个图", "远程控制", "查看天气", "校准"}
+	seeds := []string{"VoxSign", "VoiceSign", "Harness", "aiops", "截个图", "远程控制", "查看天气", "校准"}
 	b, _ := json.MarshalIndent(seeds, "", "  ")
 	_ = os.WriteFile(p, b, 0o644)
 	log.Printf("ASR: init personalized hot-word lib %s（%d 词）", p, len(seeds))

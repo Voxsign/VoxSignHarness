@@ -1,34 +1,34 @@
-// learn.go —— 学习调用（`learn`）的**本地触发器**：从真实使用记录里判断"这里值得学"。
+// learn.go --   calluse(`learn`) **baselytriggersend **: from   use    disconnect"  value  ". 
 //
-// 对应 ASR-MODEL-02 / `LEARN-01`：系统**自己**识别值得学习的片段，而不是等人告诉它。
-// 本文件**零模型**：只用本地规则 + 已有能力（引擎/词典是否已覆盖这次纠正）做判断，
-// 因此可以在 model 中心协议与底层模型确定之前先落地。
+// to  ASR-MODEL-02 / `LEARN-01`:   **  ** diffvalue     seg, but isetc    . 
+// basefile**  type**: onlyusebaselyrule + alreadyhas  (  /word is alreadyoverwrite   pos)  disconnect, 
+// because  by  model in   andbot  type  ofbeforefirst ly. 
 //
-// 边界（与提案一致）：
-//   - DetectLearnCandidates 是**纯函数**：只读输入、不写任何文件（R5）；
-//   - 它**不得读取** UsageEvent.LearnLabel（那是语料里的"期望"，不是输入）——R4 由测试保证；
-//   - 触发单位：一个 knowledge_key 一条候选（同 key 事件合并，证据条数有界）；
-//   - 防自训练回路：kind == learn_derived 的事件**永不**触发（E5）。
+//  boundary(and    ): 
+//   - DetectLearnCandidates is**  num**: read-only in,  write  file(R5); 
+//   -  **  readget** UsageEvent.LearnLabel( islang   "period ",  is in)--R4 by  keep ; 
+//   - triggersend  :    knowledge_key     (same key event and,  data numhasboundary); 
+//   - prevent   backroute: kind == learn_derived  event**  **triggersend(E5). 
 //
-// 它只**产出候选**；真正的"调用模型抽取规则 + 写回"属 LEARN-02 之后（等模型与协议）。
+//  only**produceout  **;  pos "calluse type getrule + writeback"  LEARN-02 ofafter(etc typeand  ). 
 package asr
 
 import "strings"
 
-// 事件种类（触发器认识的白名单）。
+// eventkindclass(triggersend     name ). 
 const (
 	eventUserCorrection = "user_correction"
 	eventDictMiss       = "dict_miss"
 	eventRuleOverride   = "rule_override"
 	eventDiagnoseCause  = "diagnose_cause"
-	eventLearnDerived   = "learn_derived" // 禁止再触发（防回路）
+	eventLearnDerived   = "learn_derived" // forbidstopagaintriggersend(preventbackroute)
 )
 
-// learnMaxBatch 是同一 knowledge_key 最多保留的**证据条数**（候选仍有界）。
-// 事件可以来很多条，但候选不会无限增长，证据也不会无界膨胀。
+// learnMaxBatch issame  knowledge_key   keep  ** data num**(   hasboundary). 
+// event by    , but    nolimitadd ,  dataalso  noboundary  . 
 const learnMaxBatch = 8
 
-// UsageEvent 是一次真实使用的记录（append-only 事件源 usage-events.jsonl）。
+// UsageEvent is     use   (append-only event  usage-events.jsonl). 
 type UsageEvent struct {
 	ID         string `json:"id"`
 	At         string `json:"at,omitempty"`
@@ -38,12 +38,12 @@ type UsageEvent struct {
 	Confirmed  bool   `json:"confirmed"`
 	Outcome    string `json:"outcome,omitempty"`
 	TraceRef   string `json:"trace_ref,omitempty"`
-	LearnLabel string `json:"learn_label,omitempty"` // **期望标签**：仅语料/测试使用，Detector 不得读取
+	LearnLabel string `json:"learn_label,omitempty"` // **period tgt **: onlylang /   use, Detector   readget
 	Provenance string `json:"provenance,omitempty"`
 	Note       string `json:"note,omitempty"`
 }
 
-// EvidenceRef 是一条写回证据（L3：无来源不写回）。
+// EvidenceRef is  writeback data(L3: no   writeback). 
 type EvidenceRef struct {
 	EventID  string `json:"event_id"`
 	Kind     string `json:"kind,omitempty"`
@@ -52,30 +52,30 @@ type EvidenceRef struct {
 	At       string `json:"at,omitempty"`
 }
 
-// LearnCandidate 是一条"值得学"的候选。
+// LearnCandidate is  "value  "   . 
 type LearnCandidate struct {
 	KnowledgeKey string        `json:"knowledge_key"`
 	Kind         string        `json:"kind"`    // dictionary | pattern
-	Trigger      string        `json:"trigger"` // 命中的触发规则名
+	Trigger      string        `json:"trigger"` //  in triggersendrulename
 	Reason       string        `json:"reason"`
 	Evidence     []EvidenceRef `json:"evidence"`
 }
 
-// DetectLearnCandidates 扫描使用记录，返回"值得发起一次 learn 调用"的候选。
+// DetectLearnCandidates    use  , returnback"value sendraise   learn calluse"   . 
 //
-// P1 状态：**接口 + 类型先于实现**（判据 LEARN-01 先红）。
-// 实现见 learn_detect.go；本函数只做参数校验后委派。
+// P1 status: **connect  + classtypefirstat now**( data LEARN-01 first ). 
+//  nowsee learn_detect.go; base numonly  numverifyafter  . 
 func DetectLearnCandidates(engine *Personalized, dict *Dictionary, events []UsageEvent) []LearnCandidate {
 	return detectLearnCandidates(engine, dict, events)
 }
 
-// knowledgeKey 是候选的唯一键：同一处纠正（同 raw→final）永远归一到同一个键，
-// 于是重复事件只合并证据，不会重复发起学习。
+// knowledgeKey is   unique : same place pos(same raw->final)    tosame   , 
+// atisheavy eventonly and data,   heavy sendraise  . 
 func knowledgeKey(raw, final string) string {
 	return raw + "=>" + final
 }
 
-// learnableKind 报告事件种类是否属于"可能值得学"的类别（排除噪声/导航/自产物）。
+// learnableKind   eventkindclassis  at"  value  " classdiff(   voice/  / artifact). 
 func learnableKind(kind string) bool {
 	switch kind {
 	case eventUserCorrection, eventDictMiss, eventRuleOverride, eventDiagnoseCause:
@@ -85,5 +85,5 @@ func learnableKind(kind string) bool {
 	}
 }
 
-// normalizeText 去掉首尾空白（事件文本经常带空格）。
+// normalizeText   firsttailempty (event base   empty ). 
 func normalizeText(s string) string { return strings.TrimSpace(s) }

@@ -1,16 +1,16 @@
 //go:build vhs002
 
-// learn_criteria_test.go —— LEARN-01：系统**自己**识别"这里值得学"（先红，零模型）。
+// learn_criteria_test.go -- LEARN-01:   **  ** diff"  value  "(first ,   type). 
 //
-// 对应 ASR-MODEL-02 §3/§4 与提案 §4.2 的 R1–R5：
+// to  ASR-MODEL-02 §3/§4 and   §4.2   R1–R5: 
 //
-//	R1 召回：learn_label=trigger 的事件，至少被一条候选的证据精确指向
-//	R2 精确：learn_label=no_trigger 的事件，任何候选都不得引用
-//	R3 有界：同一 knowledge_key 只产一条候选，且证据条数 ≤ learnMaxBatch
-//	R4 自主：Detector 不读 LearnLabel（把所有标签清空，输出必须不变）
-//	R5 只读：Detector 是纯函数（不改输入、不写文件、可重放）
+//	R1  back: learn_label=trigger  event,   be      data  referto
+//	R2   : learn_label=no_trigger  event,     all   use
+//	R3 hasboundary: same  knowledge_key onlyproduce    , and data num <= learnMaxBatch
+//	R4   : Detector  read LearnLabel(pipe hastgt  empty,  out   change)
+//	R5 read-only: Detector is  num( modify in,  writefile,  heavy )
 //
-// 运行：go test -tags vhs002 ./asr -run TestLEARN01
+//   : go test -tags vhs002 ./asr -run TestLEARN01
 package asr
 
 import (
@@ -58,7 +58,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 	eng := NewEngine()
 	got := DetectLearnCandidates(eng, nil, events)
 
-	// 基本不变量：候选必须带证据（L3）
+	// basebaseinvariant:       data(L3)
 	for i, c := range got {
 		if len(c.Evidence) == 0 {
 			t.Errorf("[LEARN-01] 候选 %d (%s) 没有任何证据 —— 违反 L3", i, c.KnowledgeKey)
@@ -68,7 +68,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 		}
 	}
 
-	// R1 召回
+	// R1  back
 	triggerN, coveredTrigger := 0, 0
 	for _, e := range events {
 		if e.LearnLabel != "trigger" {
@@ -92,7 +92,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 		t.Fatal("[LEARN-01] 语料里没有 trigger 事件，判据形同虚设")
 	}
 
-	// R2 精确：no_trigger 事件不得出现在任何候选证据里
+	// R2   : no_trigger event  outnow      data 
 	for _, e := range events {
 		if e.LearnLabel != "no_trigger" {
 			continue
@@ -104,7 +104,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 		}
 	}
 
-	// R3 有界：同一 knowledge_key 只一条候选；证据 ≤ learnMaxBatch
+	// R3 hasboundary: same  knowledge_key only    ;  data <= learnMaxBatch
 	seen := map[string]int{}
 	for _, c := range got {
 		seen[c.KnowledgeKey]++
@@ -118,7 +118,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 		}
 	}
 
-	// R4 自主：Detector 不得读取 LearnLabel —— 清空标签后输出必须一致
+	// R4   : Detector   readget LearnLabel --  emptytgt after out    
 	blanked := make([]UsageEvent, len(events))
 	copy(blanked, events)
 	for i := range blanked {
@@ -129,7 +129,7 @@ func TestLEARN01DetectorIdentifiesLearnableEvents(t *testing.T) {
 		t.Error("[LEARN-01 R4] 输出随 LearnLabel 变化 —— Detector 读了「期望标签」，不是自主判断")
 	}
 
-	// R5 只读：不修改输入、可重放
+	// R5 read-only:  modify in,  heavy 
 	before := make([]UsageEvent, len(events))
 	copy(before, events)
 	_ = DetectLearnCandidates(eng, nil, events)

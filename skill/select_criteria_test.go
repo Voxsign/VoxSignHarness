@@ -1,4 +1,4 @@
-// select_criteria_test.go —— SK-4 口径：白名单 + 显式记录被过滤项。
+// select_criteria_test.go -- SK-4  path:  name  +  form  beed  . 
 package skill
 
 import "testing"
@@ -27,7 +27,7 @@ func allowlist() map[string]bool {
 	}
 }
 
-// ① 只纳入白名单内且非 deprecated 的技能（4 个）
+// ① only in name inand  deprecated    (4  )
 func TestSelectIncludesOnlyWhitelistedActive(t *testing.T) {
 	sel := Select(fixture(), allowlist())
 	if len(sel.Included) != 4 {
@@ -40,7 +40,7 @@ func TestSelectIncludesOnlyWhitelistedActive(t *testing.T) {
 	}
 }
 
-// ② **被过滤项必须显式记录**，且理由分得清（deprecated vs not_in_whitelist）
+// ② **beed     form  **, and bysplit  (deprecated vs not_in_whitelist)
 func TestSelectRecordsFilteredWithReasons(t *testing.T) {
 	sel := Select(fixture(), allowlist())
 	reasons := map[string]int{}
@@ -50,7 +50,7 @@ func TestSelectRecordsFilteredWithReasons(t *testing.T) {
 		}
 		reasons[f.Reason]++
 	}
-	// SK-9 升版：下线态原因带前缀 `offline:<state>`（不止 deprecated）
+	// SK-9   : underlinestateorigbecause before  `offline:<state>`( stop deprecated)
 	if reasons["offline:deprecated"] != 2 {
 		t.Errorf("[SK] offline:deprecated 应记 2 条，实际 %d（reasons=%v）", reasons["offline:deprecated"], reasons)
 	}
@@ -59,7 +59,7 @@ func TestSelectRecordsFilteredWithReasons(t *testing.T) {
 	}
 }
 
-// ③ 守恒：没有任何技能被静默丢弃（纳入 + 过滤 == 全部）
+// ③   :  has    be    ( in + ed  == safety )
 func TestSelectIsConservativeNoSilentDrop(t *testing.T) {
 	all := fixture()
 	sel := Select(all, allowlist())
@@ -69,7 +69,7 @@ func TestSelectIsConservativeNoSilentDrop(t *testing.T) {
 	}
 }
 
-// ④ 空白名单 ⇒ 一个都不纳入，但**仍逐条记录原因**（不是"什么都没有"）
+// ④ empty name  ⇒   all  in, but**     origbecause**( is"  all has")
 func TestSelectEmptyWhitelistStillRecords(t *testing.T) {
 	all := fixture()
 	sel := Select(all, map[string]bool{})

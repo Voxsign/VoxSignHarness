@@ -1,27 +1,27 @@
 //go:build vhsreal
 
-// l2assemble_criteria_test.go —— L2「真实装配」判据（第六次防复发）
+// l2assemble_criteria_test.go -- L2"    " data(   prevent send)
 //
-// 背景：本项目被同一个洞咬了 5 次 —— **判据测的是"我们搭的那套"，不是"它自己跑起来那套"**：
+//  scenario: base objbesame     5   -- ** data  is"      ",  is"    raise   "**: 
 //
-//	① K9        库层绿        → HTTP 路径没接
-//	② 四块板    建好了        → 只能被喂
-//	③ L2 槽位   函数+桩判据绿 → /v1/task 硬编码走 LocalPlanner
-//	④ 通道配置  配置可解析    → 运行层仍走另一条槽位
-//	⑤ L2 装配   端点级桩判据绿 → 真实启动从不装配模型（PlanModel==nil ⇒ 永远规则式）
+//	① K9                   -> HTTP path connect
+//	②                  -> only be 
+//	③ L2       num+  data  -> /v1/task   code  LocalPlanner
+//	④          resolve     ->           
+//	⑤ L2      endpoint   data  ->   start from    type(PlanModel==nil ⇒   ruleform)
 //
-// 所以本文件的判据**一律起真二进制**（不是 httptest、不注入桩），断言的是
-// **"配了到底生效没有"** 与 **"没生效必须说清"**。
+//  bybasefile  data**  raise   restrict**( is httptest,  notein ), disconnectlang is
+// **" tobotoccur  has"** and **" occur     "**. 
 //
-// 判据：
+//  data: 
 //
-//	R1 L2 关闭（VHS_PLAN_L2_MODEL=off）⇒ /v1/task 的 l2_enabled=false
-//	R2 缺 key ⇒ **L2 关闭但必须说清**（l2_enabled=false 且 l2_note 非空 / 启动日志有原因）
-//	   —— 这条防的是「静默假装启用」与「静默假装没配」
-//	R3 ⭐ **不可能状态必须被禁止**：l2_enabled=true 且 source=rule 且 degraded=false ⇒ 红
-//	   （"装了却没生效"却又不标注 = 假绿本身）
-//	R4 启动日志必须出现 L2 装配记录（装配必须可观测）
-//	R5 反例：L2 关闭时，source 必须是 rule 且不得出现"模型"降级原因
+//	R1 L2 close (VHS_PLAN_L2_MODEL=off)⇒ /v1/task   l2_enabled=false
+//	R2   key ⇒ **L2 close but    **(l2_enabled=false and l2_note  empty / start day hasorigbecause)
+//	   --   prevent is"    startuse"and"      "
+//	R3 ⭐ **   status  beforbidstop**: l2_enabled=true and source=rule and degraded=false ⇒  
+//	   (" but occur "butagain tgtnote =   base )
+//	R4 start day   outnow L2     (       )
+//	R5 revexample: L2 close time, source   is rule and  outnow" type"  origbecause
 package recog
 
 import (
@@ -38,7 +38,7 @@ import (
 	"time"
 )
 
-// taskResp /v1/task 响应中本文件关心的字段（其余忽略）。
+// taskResp /v1/task   inbasefileclose  charseg(its   ). 
 type taskResp struct {
 	Plan struct {
 		Source         string `json:"source"`
@@ -54,7 +54,7 @@ type taskResp struct {
 	L2Note    string `json:"l2_note"`
 }
 
-// startBinaryEnv 编译真二进制并以**指定的额外 env** 启动（其余照 startBinary 的模式）。
+// startBinaryEnv      restrictandby**refer   out env** start (its   startBinary   form). 
 func startBinaryEnv(t *testing.T, extraEnv []string) (string, *bytes.Buffer) {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "vhs-asr")
@@ -72,7 +72,7 @@ func startBinaryEnv(t *testing.T, extraEnv []string) (string, *bytes.Buffer) {
 
 	logs := &bytes.Buffer{}
 	cmd := exec.Command(bin)
-	// 基线 env：**清掉继承来的 AIOPS_KEY / L2 / SERVICES**，保证判据自足可复现。
+	// baseline env: **  continue    AIOPS_KEY / L2 / SERVICES**, keep  data    now. 
 	base := make([]string, 0, len(os.Environ())+8)
 	for _, kv := range os.Environ() {
 		k := strings.SplitN(kv, "=", 2)[0]
@@ -85,11 +85,11 @@ func startBinaryEnv(t *testing.T, extraEnv []string) (string, *bytes.Buffer) {
 	cmd.Env = append(base,
 		"VHS_ASR_ADDR="+addr,
 		"VHS_ASR_DATA="+t.TempDir(),
-		"VHS_SERVICES_URL=http://127.0.0.1:1/api/services", // 死地址：热词刷新失败不影响本判据
+		"VHS_SERVICES_URL=http://127.0.0.1:1/api/services", //  ly :  word new     base data
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
-	// ⚠️ 工作目录必须是仓库根：`config/model-center.json` 是**相对路径**，
-	// 换个 CWD 启动 ⇒ 配置读不到 ⇒ L2 静默不装配（本判据实测发现）。
+	// ⚠️   obj   is  root: `config/model-center.json` is** topath**, 
+	//    CWD start  ⇒   read to ⇒ L2      (base data  sendnow). 
 	cmd.Dir = ".."
 	cmd.Stderr = logs
 	cmd.Stdout = logs
@@ -131,7 +131,7 @@ func postTask(t *testing.T, base, task string) taskResp {
 
 const probeTask = "把这个项目里所有 TODO 整理成一份文档"
 
-// R1 + R5：L2 关闭 ⇒ l2_enabled=false，source=rule，且不得有"模型"降级原因。
+// R1 + R5: L2 close  ⇒ l2_enabled=false, source=rule, and  has" type"  origbecause. 
 func TestL2AssemblyDisabledByOff(t *testing.T) {
 	base, logs := startBinaryEnv(t, []string{"VHS_PLAN_L2_MODEL=off"})
 	got := postTask(t, base, probeTask)
@@ -150,17 +150,17 @@ func TestL2AssemblyDisabledByOff(t *testing.T) {
 	_ = logs
 }
 
-// R2：缺 AIOPS_KEY ⇒ L2 必须关闭，**并且必须说清**（l2_note 或启动日志给原因）。
-// 防"静默假装启用"与"静默假装没配"。
+// R2:   AIOPS_KEY ⇒ L2   close , **andand    **(l2_note orstart day giveorigbecause). 
+// prevent"    startuse"and"      ". 
 func TestL2AssemblyMissingKeyIsExplained(t *testing.T) {
-	// 显式给一个空 key（清 env 已在 helper 里做），并保留默认 L2 模型（非 off）
+	//  formgive  empty key(  env already  helper   ), andkeep default L2  type(  off)
 	base, logs := startBinaryEnv(t, []string{"AIOPS_KEY=", "VHS_PLAN_L2_MODEL=deepseek-v4-pro"})
 	got := postTask(t, base, probeTask)
 
 	if got.Plan.Source != "rule" {
 		t.Errorf("[R2] 缺 key 时不应走到模型，source=%q", got.Plan.Source)
 	}
-	// 说清：要么 l2_note 非空，要么启动日志里有"未装配/缺 key/关闭"之类的明确记录。
+	//   : need  l2_note  empty, need start day  has"   /  key/close "ofclass     . 
 	explained := strings.TrimSpace(got.L2Note) != ""
 	if !explained {
 		low := logs.String()
@@ -179,10 +179,10 @@ func TestL2AssemblyMissingKeyIsExplained(t *testing.T) {
 		got.L2Enabled, got.L2Note, strings.Contains(logs.String(), "L2"))
 }
 
-// R3 ⭐ 禁止不可能状态：l2_enabled=true 且 source=rule 且 degraded=false。
-// "装了却没生效"却又不标注 = 假绿本身（第 5 次那个洞的形状）。
+// R3 ⭐ forbidstop   status: l2_enabled=true and source=rule and degraded=false. 
+// " but occur "butagain tgtnote =   base (  5       status). 
 func TestL2AssemblyNoSilentNonEffect(t *testing.T) {
-	// 真 key 分支：若环境没 key，本判据退化为"L2 未装配 ⇒ 不适用"，此时只断言禁用态自洽。
+	//   key branch: if    key, base data izeas"L2     ⇒   use",  timeonlydisconnectlangforbidusestate  . 
 	key := strings.TrimSpace(os.Getenv("AIOPS_KEY"))
 	if key == "" {
 		t.Skip("跳过：本机无 AIOPS_KEY，无法触发「已装配」分支；" +
@@ -195,18 +195,18 @@ func TestL2AssemblyNoSilentNonEffect(t *testing.T) {
 	})
 	got := postTask(t, base, probeTask)
 
-	// ⚠️ 先确保**真的装配了**：否则本判据会"空过"（l2_enabled=false ⇒ 永不触发不可能状态）
+	// ⚠️ first keep**    **:  thenbase data "emptyed"(l2_enabled=false ⇒   triggersend   status)
 	if !got.L2Enabled {
 		t.Fatalf("[R3] 本判据要求 L2 **已装配**，但 l2_enabled=false（l2_note=%q）——"+
 			"这说明装配路径没走通，判据会空过。**不许把它当成通过**。\n日志:\n%s",
 			got.L2Note, logs.String())
 	}
-	// 不可能状态：说启用了、却走了规则式、又不说为什么
+	//    status:  startuse, but ruleform, again  as  
 	if got.Plan.Source == "rule" && !got.Plan.Degraded {
 		t.Fatalf("[R3] 不可能状态：l2_enabled=true 且 source=rule 且 degraded=false —— "+
 			"「装了却没生效」却不标注（第 5 次那个洞的形状）\n日志:\n%s", logs.String())
 	}
-	// 若走了模型，必须 source=model
+	// if  type,    source=model
 	if got.Plan.Source == "model" && !got.L2Enabled {
 		t.Errorf("[R3] source=model 但 l2_enabled=false，自相矛盾")
 	}
@@ -214,7 +214,7 @@ func TestL2AssemblyNoSilentNonEffect(t *testing.T) {
 		got.L2Enabled, got.Plan.Source, got.Plan.Degraded, got.Plan.DegradedReason, got.L2Model)
 }
 
-// R4：装配必须可观测 —— 启动日志里必须有 L2 装配记录。
+// R4:         -- start day    has L2     . 
 func TestL2AssemblyIsObservableInLogs(t *testing.T) {
 	_, logs := startBinaryEnv(t, []string{"VHS_PLAN_L2_MODEL=deepseek-v4-pro"})
 	deadline := time.Now().Add(3 * time.Second)

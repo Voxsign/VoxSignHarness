@@ -8,7 +8,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// testConfig 构造一个仅含指定 providers 的配置（Global 给个默认超时，避免除零）。
+// testConfig     only refer  providers    (Global give default time,     ). 
 func testConfig(ps ...config.Provider) *config.Config {
 	return &config.Config{
 		Global:    config.Global{LLMTimeoutMs: 10000},
@@ -26,7 +26,7 @@ func TestRegistryMockGetAndIsMock(t *testing.T) {
 		t.Fatalf("NewRegistry 失败: %v", err)
 	}
 
-	// mock 的 Get / IsMock
+	// mock   Get / IsMock
 	p, err := r.Get("mock")
 	if err != nil {
 		t.Fatalf("Get(mock) 失败: %v", err)
@@ -38,13 +38,13 @@ func TestRegistryMockGetAndIsMock(t *testing.T) {
 		t.Error("IsMock(mock) = false, want true")
 	}
 	if !r.IsMock("mock") || r.IsMock("center") {
-		// 上面已断言 mock；这里补断言 openai 不是 mock
+		// onfacealreadydisconnectlang mock;   patchdisconnectlang openai  is mock
 	}
 	if r.IsMock("center") {
 		t.Error("IsMock(center) = true, want false")
 	}
 
-	// mock Chat：固定内容、零用量、不报错
+	// mock Chat:   in ,  use ,    
 	resp, err := p.Chat(context.Background(), ChatRequest{
 		Messages: []contract.Message{{Role: contract.RoleUser, Content: "time"}},
 	})
@@ -60,12 +60,12 @@ func TestRegistryMockGetAndIsMock(t *testing.T) {
 	if resp.FinishReason != "stop" {
 		t.Errorf("mock FinishReason = %q", resp.FinishReason)
 	}
-	// 返回内容必须是合法 ActionPlan JSON
+	// returnbackin   is   ActionPlan JSON
 	if _, err := contract.ParseActionPlan(resp.Content); err != nil {
 		t.Errorf("mock 内容不是合法 ActionPlan: %v", err)
 	}
 
-	// Names 按注册顺序
+	// Names bynote   
 	names := r.Names()
 	if len(names) != 2 || names[0] != "mock" || names[1] != "center" {
 		t.Errorf("Names() = %v", names)
@@ -86,8 +86,8 @@ func TestRegistryUnknownGetError(t *testing.T) {
 }
 
 func TestRegistryInvalidKindDefense(t *testing.T) {
-	// config.validate 正常会拦截未知 kind；这里直接构造一个绕过校验的 Config，
-	// 验证 NewRegistry 的二次防御报错。
+	// config.validate pos  block   kind;    connect     edverify  Config, 
+	//    NewRegistry    prevent   . 
 	bad := testConfig(config.Provider{Name: "weird", Kind: "anthropic"})
 	if _, err := NewRegistry(bad); err == nil {
 		t.Fatal("NewRegistry 对未知 kind 应报错, got nil")
@@ -97,7 +97,7 @@ func TestRegistryInvalidKindDefense(t *testing.T) {
 func TestMockCtxCancel(t *testing.T) {
 	p := &mockProvider{name: "mock"}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // 立即取消
+	cancel() //  i.e.cancel
 	if _, err := p.Chat(ctx, ChatRequest{}); err == nil {
 		t.Error("ctx 已取消时 mock Chat 应返回 ctx.Err(), got nil")
 	}

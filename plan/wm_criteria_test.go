@@ -1,14 +1,14 @@
 //go:build vhswm
 
-// wm_criteria_test.go —— WORKMEM-001 的可测 W 与 WM-1..WM-5。
+// wm_criteria_test.go -- WORKMEM-001     W and WM-1..WM-5. 
 //
-// 现状（先红纪律）：
+// nowstatus(first   ): 
 //
-//	WM-2（丢弃留痕）/ WM-3（每条有 source）= **绿**（观测面已实现）
-//	WM-1（扩记忆→链长变长）/ WM-5（清空记忆→规划质量下降）= **红**（四块板尚未实现）
-//	WM-4（JEV 判断带 judged_by）= **红**（P3 未接）
+//	WM-2(    )/ WM-3(  has source)= ** **(  facealready now)
+//	WM-1(   ->chain change )/ WM-5( empty  ->rule   under )= ** **(      now)
+//	WM-4(JEV  disconnect  judged_by)= ** **(P3  connect)
 //
-// 运行：go test -tags vhswm ./plan
+//   : go test -tags vhswm ./plan
 package plan
 
 import (
@@ -34,7 +34,7 @@ func wmFixture(t *testing.T) Manifest {
 	return ExportManifest(tr, sr)
 }
 
-// WM-3：工作记忆里每条必须有 source（推断的标 inferred）。
+// WM-3:          has source( disconnect tgt inferred). 
 func TestWM3EveryConsideredHasSource(t *testing.T) {
 	m := wmFixture(t)
 	for _, goal := range []string{"把这个项目里所有 TODO 整理成一份文档", "帮我部署到生产服务器", "把这个仓库推到 GitHub 远端分支"} {
@@ -51,7 +51,7 @@ func TestWM3EveryConsideredHasSource(t *testing.T) {
 	}
 }
 
-// WM-2：W_drop 必须可观测——丢弃要留痕，且计数与留痕一致。
+// WM-2: W_drop      --  need  , and numand    . 
 func TestWM2DropIsTracedAndBounded(t *testing.T) {
 	m := wmFixture(t)
 	p, _ := LocalPlanner{}.Plan("帮我部署到生产服务器", m)
@@ -70,18 +70,18 @@ func TestWM2DropIsTracedAndBounded(t *testing.T) {
 	}
 }
 
-// WM-1（新形态，VHS-WMCAP-001）：**熟悉度↑ ⇒ 容量↑ ⇒ 链长↑**。
+// WM-1(new state, VHS-WMCAP-001): **   ↑ ⇒   ↑ ⇒ chain ↑**. 
 //
-// 若此条不成立 ⇒ "容量"这个变量对本系统无用，应砍掉概念而不是调参（如实报告）。
+// if   become  ⇒ "  "  change tobase  nouse,      but iscall (e.g.   ). 
 func TestWM1FamiliarityRaisesCapacityAndChain(t *testing.T) {
 	m := wmFixture(t)
 	const n = 30
 	build := func(familiar bool) *WorkingMemory {
-		w := &WorkingMemory{DemandFloor: 2} // 目标显式提到 2 个实体
+		w := &WorkingMemory{DemandFloor: 2} // objtgt form to 2   body
 		for i := 0; i < n; i++ {
 			src := "session"
 			if familiar {
-				src = "hotcache" // 命中本地缓存 = 熟悉
+				src = "hotcache" //  inbaselycache =   
 			}
 			w.Remember("working_set", BoardItem{Element: "模块" + string(rune('A'+i%26)) + string(rune('a'+i/26)), Source: src})
 		}
@@ -108,7 +108,7 @@ func TestWM1FamiliarityRaisesCapacityAndChain(t *testing.T) {
 	}
 }
 
-// WMC-1：熟悉度 0 → 容量落在 [3,10]。
+// WMC-1:     0 ->      [3,10]. 
 func TestWMC1ColdCapacityInLowBand(t *testing.T) {
 	tr := DefaultWMCap.Capacity(1, 10, 0)
 	if tr.Capacity < 3 || tr.Capacity > 10 {
@@ -116,7 +116,7 @@ func TestWMC1ColdCapacityInLowBand(t *testing.T) {
 	}
 }
 
-// WMC-2：熟悉度↑ ⇒ 容量↑，且不超 max。
+// WMC-2:    ↑ ⇒   ↑, and   max. 
 func TestWMC2CapacityIncreasesWithFamiliarity(t *testing.T) {
 	prev := 0
 	for _, fam := range []int{0, 3, 6, 9, 10} {
@@ -131,7 +131,7 @@ func TestWMC2CapacityIncreasesWithFamiliarity(t *testing.T) {
 	}
 }
 
-// WMC-3（关键）：**熟悉度 ↓ ⇒ 容量必须跟着 ↓**（只涨不跌 = 退化成固定 max）。
+// WMC-3(close ): **    ↓ ⇒      ing ↓**(only    =  izebecome   max). 
 func TestWMC3CapacityDecreasesWhenFamiliarityDrops(t *testing.T) {
 	hot := DefaultWMCap.Capacity(8, 10, 9)
 	cold := DefaultWMCap.Capacity(8, 10, 1)
@@ -140,9 +140,9 @@ func TestWMC3CapacityDecreasesWhenFamiliarityDrops(t *testing.T) {
 	}
 }
 
-// WMC-4：封顶时 capped=true 且 DropTrace 有记录。
+// WMC-4:  toptime capped=true and DropTrace has  . 
 func TestWMC4CappedIsVisibleWithDropTrace(t *testing.T) {
-	tr := DefaultWMCap.Capacity(20, 20, 20) // 需求 20 × (1+1) = 40 > max 20
+	tr := DefaultWMCap.Capacity(20, 20, 20) // needrequire 20 × (1+1) = 40 > max 20
 	if !tr.Capped {
 		t.Errorf("[WMC-4] 封顶未标记: %+v", tr)
 	}
@@ -159,13 +159,13 @@ func TestWMC4CappedIsVisibleWithDropTrace(t *testing.T) {
 	}
 }
 
-// WMC-5：容量变化全部留痕（capacity / 需求下限 / 熟悉度 / 是否封顶）。
+// WMC-5:   changeizesafety   (capacity / needrequireunderlimit /     / is  top). 
 func TestWMC5CapacityTraceIsComplete(t *testing.T) {
 	w := &WorkingMemory{DemandFloor: 4}
 	for i := 0; i < 10; i++ {
 		src, el := "session", "x"+string(rune('a'+i))
 		if i%2 == 0 {
-			src = "manifest" // 一半熟悉
+			src = "manifest" //     
 		}
 		w.Remember("working_set", BoardItem{Element: el, Source: src})
 	}
@@ -182,7 +182,7 @@ func TestWMC5CapacityTraceIsComplete(t *testing.T) {
 	}
 }
 
-// WM-5（关键）：清空工作记忆后**规划质量必须下降**，否则是死代码。
+// WM-5(close ):  empty    after**rule     under **,  thenis  code. 
 func TestWM5ClearMemoryDegradesPlanning(t *testing.T) {
 	m := wmFixture(t)
 	w := &WorkingMemory{}
@@ -207,7 +207,7 @@ func TestWM5ClearMemoryDegradesPlanning(t *testing.T) {
 	}
 }
 
-// WM-4：判断入记忆必须带 judged_by，**不得与事实同形**。
+// WM-4:  disconnectin      judged_by, **  and  same **. 
 func TestWM4JudgementIsMarkedNotFact(t *testing.T) {
 	w := &WorkingMemory{}
 	w.Remember("working_set", BoardItem{Element: "实体:aiops", Source: "services", Inferred: false})

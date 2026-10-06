@@ -1,9 +1,9 @@
-// gateway_route.go —— L0 第二梯队：网关侧 `/api/route`（别名路由，**不调模型**）。
+// gateway_route.go -- L0     :  closeside `/api/route`(diffnamerouteby, ** call type**). 
 //
-// 实测规范（FASTSLOW-001 §1.1）：`GET /api/route?q=<自然语言>` → hits（按 aliases 命中）。
-// 它的 aliases 里含 ASR 变形词（爱ops/研究obc/沃克body/格罗克）⇒ 天然抗识别错误。
+//   rule (FASTSLOW-001 §1.1): `GET /api/route?q=< howeverlanglang>` -> hits(by aliases  in). 
+//    aliases    ASR change word( ops/  obc/  body/   )⇒ dayhowever  differror. 
 //
-// 顺序铁律：**本地别名（第一梯队）→ /api/route（第二梯队）→ 才到 L0.5 JEV**。
+//     : **baselydiffname(    )-> /api/route(    )-> onlyto L0.5 JEV**. 
 package route
 
 import (
@@ -17,19 +17,19 @@ import (
 	"time"
 )
 
-// ServiceRoute 是服务路由的第二梯队（本地未命中时问网关）。
+// ServiceRoute isserveservicerouteby     (basely  intime  close). 
 type ServiceRoute interface {
 	Lookup(ctx context.Context, q string) (service string, ok bool, err error)
 }
 
-// RouteClient 是 /api/route 的只读客户端。
+// RouteClient is /api/route  read-onlyclientuserend. 
 type RouteClient struct {
-	Endpoint string // 例如 https://aiops.peterzou.com/api/route
-	APIKey   string // 只从环境/.env 传入；不打印不落盘
+	Endpoint string // examplee.g. https://aiops.peterzou.com/api/route
+	APIKey   string // onlyfrom  /.env  in;       
 	HTTP     *http.Client
 }
 
-// Lookup 查一次服务路由；**错误一律如实返回**（由上层决定是否继续走 L0.5，不静默当"没有"）。
+// Lookup    serveservicerouteby; **error  e.g. returnback**(byon decide is continuecontinue  L0.5,    cur" has"). 
 func (c *RouteClient) Lookup(ctx context.Context, q string) (string, bool, error) {
 	hc := c.HTTP
 	if hc == nil {
@@ -55,21 +55,21 @@ func (c *RouteClient) Lookup(ctx context.Context, q string) (string, bool, error
 	var out struct {
 		Hits []json.RawMessage `json:"hits"`
 	}
-	// 容错：网关响应可能带尾随内容（实测 {"q":…,"hits":[…]} 后还有字节）⇒ 只解第一个 JSON 值。
+	//   :  close     tail in (   {"q":…,"hits":[…]} afteralsohascharnode)⇒ onlyresolve    JSON value. 
 	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&out); err != nil {
 		return "", false, fmt.Errorf("解析失败（按不可用处理）: %w", err)
 	}
 	if len(out.Hits) == 0 {
-		return "", false, nil // 真的没命中（与"不可用"区分开）
+		return "", false, nil //     in(and"  use" splitopen)
 	}
 	if len(out.Hits) > 1 {
-		// 多命中 ⇒ 不给唯一答案（不猜），交给 L0.5
+		//   in ⇒  giveunique  (  ),  give L0.5
 		return "", false, nil
 	}
 	return hitName(out.Hits[0]), true, nil
 }
 
-// hitName 从 hit 里取名字（容忍字符串 / {name|service|id} 两种形态）。
+// hitName from hit  getnamechar(  char   / {name|service|id}  kind state). 
 func hitName(raw json.RawMessage) string {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {

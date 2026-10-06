@@ -63,7 +63,7 @@ func wavDataLen(wav []byte) int {
 }
 
 func TestTrimWAVSilence(t *testing.T) {
-	// 1s 音频：0.3-0.7s 语音，前后 0.3s 静音 → 应裁到约 0.4s
+	// 1s audiofreq: 0.3-0.7s langaudio, beforeafter 0.3s  audio ->   to  0.4s
 	wav := mkWAV16(16000, 1, 0.3, 0.7)
 	before := wavDataLen(wav)
 	out := trimWAVSilence(wav)
@@ -71,28 +71,28 @@ func TestTrimWAVSilence(t *testing.T) {
 	if after <= 0 || after >= before {
 		t.Fatalf("trim 无效: before=%d after=%d", before, after)
 	}
-	// 期望裁剪后 ~0.4s = 6400B（±0.1s 容差）
+	// period   after ~0.4s = 6400B(±0.1s  diff)
 	exp := int(16000 * 0.4 * 2)
 	lo, hi := exp-3200, exp+3200
 	if after < lo || after > hi {
 		t.Fatalf("trim 结果异常: after=%d want≈%d", after, exp)
 	}
-	// RIFF 大小与文件一致
+	// RIFF   andfile  
 	if got := int(binary.LittleEndian.Uint32(out[4:8])); got != len(out)-8 {
 		t.Fatalf("RIFF 大小错误: %d != %d", got, len(out)-8)
 	}
-	// data chunk 大小字段与真实数据一致（44 字节处是 data 长度字段）
+	// data chunk   charsegand  numdata  (44 charnodeplaceis data   charseg)
 	if int(binary.LittleEndian.Uint32(out[40:44])) != after {
 		t.Fatalf("data chunk 大小字段与数据不一致: %d != %d",
 			int(binary.LittleEndian.Uint32(out[40:44])), after)
 	}
-	// 全静音音频：不裁剪（原样返回）
-	silent := mkWAV16(16000, 1, 0, 0) // voiceStart==voiceEnd → 全静音
+	// safety audioaudiofreq:    (origkindreturnback)
+	silent := mkWAV16(16000, 1, 0, 0) // voiceStart==voiceEnd -> safety audio
 	s2 := trimWAVSilence(silent)
 	if wavDataLen(s2) != wavDataLen(silent) {
 		t.Fatalf("全静音不应裁剪: %d != %d", wavDataLen(s2), wavDataLen(silent))
 	}
-	// 垃圾数据：原样返回
+	//   numdata: origkindreturnback
 	if got := trimWAVSilence([]byte("short")); string(got) != "short" {
 		t.Fatalf("垃圾数据不应处理")
 	}

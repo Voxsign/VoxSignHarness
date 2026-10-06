@@ -1,12 +1,12 @@
-// 否定仲裁的回归测试（缺口 G1）。
+//      back   (   G1). 
 //
-// G1 的真实危害：`不要删除那个文件` 被判成 EDIT(action=delete) —— 目标一旦可解析就会真的删。
-// 修法是把"否定词直接支配动作"转为 ASK 确认（Ask != ” → 绝不执行）。
+// G1      : ` needdelete  file` be become EDIT(action=delete) -- objtgt   resolve then    . 
+// fix ispipe"  word connect    " as ASK confirm(Ask != ” ->     ). 
 //
-// 但否定词识别极易误伤，本文件把三类边界钉死：
-//  1. 「能不能」不是否定 —— 它是否定词"不能"的常见载体，收了会把可行性问句判错；
-//  2. 「特别/别的/告别」不是否定 —— 裸"别"会命中词的一部分；
-//  3. 无动作的寒暄不该变成决策点 —— 「不用担心」不该弹确认。
+// but  word diff    , basefilepipe class boundary  : 
+//  1. "   " is   --  is  word"  "  see body, recv pipe  ity sent  ; 
+//  2. " diff/diff / diff" is   --  "diff"  inword   split; 
+//  3. no       changebecomedecision point -- " use  "   confirm. 
 package input
 
 import (
@@ -15,7 +15,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestNegationBecomesAskNotExecute G1 主线：否定 + 动作 → ASK 确认，绝不落成可执行删除。
+// TestNegationBecomesAskNotExecute G1  line:    +    -> ASK confirm,    become   delete. 
 func TestNegationBecomesAskNotExecute(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -39,8 +39,8 @@ func TestNegationBecomesAskNotExecute(t *testing.T) {
 	}
 }
 
-// TestFeasibilityQuestionIsNotNegation 「能不能」含"不能"，绝不能被当成否定。
-// 这条是新增否定表时最容易踩的坑。
+// TestFeasibilityQuestionIsNotNegation "   " "  ",    becurbecome  . 
+//   isnewadd  tabletime      . 
 func TestFeasibilityQuestionIsNotNegation(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -59,7 +59,7 @@ func TestFeasibilityQuestionIsNotNegation(t *testing.T) {
 	}
 }
 
-// TestSingleBieNeedsFollowingVerb 裸"别"必须看后随动词，不能命中"特别/别的"。
+// TestSingleBieNeedsFollowingVerb  "diff"   after  word,    in" diff/diff ". 
 func TestSingleBieNeedsFollowingVerb(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	positives := []string{"别删了", "别发了", "别提交了", "别改了"}
@@ -76,7 +76,7 @@ func TestSingleBieNeedsFollowingVerb(t *testing.T) {
 	}
 }
 
-// TestNegationWithoutActionIsNotDecisionPoint 无动作的寒暄不该变成决策点。
+// TestNegationWithoutActionIsNotDecisionPoint no       changebecomedecision point. 
 func TestNegationWithoutActionIsNotDecisionPoint(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{"不用担心", "不用了，谢谢"} {
@@ -87,7 +87,7 @@ func TestNegationWithoutActionIsNotDecisionPoint(t *testing.T) {
 	}
 }
 
-// TestNonNegatedCommandsUnchanged 防回归：不带否定的正常指令不被打扰。
+// TestNonNegatedCommandsUnchanged preventback :      pos refer  be  . 
 func TestNonNegatedCommandsUnchanged(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -108,7 +108,7 @@ func TestNonNegatedCommandsUnchanged(t *testing.T) {
 	}
 }
 
-// TestHasNegationUnit 直接锁 hasNegation 的行为。
+// TestHasNegationUnit  connect  hasNegation   as. 
 func TestHasNegationUnit(t *testing.T) {
 	cases := []struct {
 		text string

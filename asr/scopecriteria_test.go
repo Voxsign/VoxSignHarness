@@ -1,16 +1,16 @@
 //go:build vhs002
 
-// scopecriteria_test.go —— §4 新范围判据骨架（**先红**，RC6：判据先于实现）。
+// scopecriteria_test.go -- §4 new   data  (**first **, RC6:  datafirstat now). 
 //
-// 运行：go test -tags vhs002 ./asr
+//   : go test -tags vhs002 ./asr
 //
-// 覆盖：意图 JSON / 指代消解三层 / L3 画像注入 / 词典语音增删改 /
-// JSON 热加载（明令不用 YAML）/ 轨迹 JSONL / 模型兜底 3s 降级 / control 语义 / 学习可审计。
+// overwrite: intent JSON / coreference resolution   / L3   notein / word langaudioadd modify /
+// JSON    (   use YAML)/ trace JSONL /  type bot 3s    / control semantic /      . 
 //
-// 这些能力**当前一行都没实现**（本轮刻意不写，RC2/RC6），所以现在全红。
-// 默认 `go test ./...` 不带 vhs002 tag，不受影响。
+//     **curbefore  all  now**(base    write, RC2/RC6),  bynow safety . 
+// default `go test ./...`    vhs002 tag,  accept  . 
 //
-// 标点恢复（SCOPE-PUNCT）不在这里：它已实现，结构判据在 punct_test.go 的默认套件里（绿）。
+// tgtpt  (SCOPE-PUNCT)    :  already now, close  data  punct_test.go  default   ( ). 
 package asr
 
 import (
@@ -22,13 +22,13 @@ import (
 	"time"
 )
 
-// 8 类 + ORCHESTRATE（需求 4.6 / 验收 #2）。
+// 8 class + ORCHESTRATE(needrequire 4.6 /  recv #2). 
 var vhsIntentTypes = map[string]bool{
 	"EDIT": true, "DEBUG": true, "QUERY": true, "TEST": true,
 	"COMMIT": true, "DEPLOY": true, "NOTE": true, "ASK": true, "ORCHESTRATE": true,
 }
 
-// SCOPE-INTENT-01：输入转写文本 → 标准化意图 JSON，9 类全部兼容。
+// SCOPE-INTENT-01:  in write base -> tgtapproveizeintent JSON, 9 classsafety compat. 
 func TestSCOPEINTENT01NineIntentTypes(t *testing.T) {
 	base := serviceBase(t)
 	samples := map[string]string{
@@ -55,14 +55,14 @@ func TestSCOPEINTENT01NineIntentTypes(t *testing.T) {
 	}
 }
 
-// SCOPE-REF-01/02：指代消解三层 + 低置信 need_disambiguate 回问。
+// SCOPE-REF-01/02: coreference resolution   + low-confidence need_disambiguate clarification. 
 func TestSCOPEREF01ThreeLayerDisambiguation(t *testing.T) {
 	base := serviceBase(t)
 	got := postJSON(t, base+"/v1/process", `{"text":"把那个文档改了","session_id":"ref-probe"}`)
 	if got["need_disambiguate"] != true {
 		t.Errorf("[SCOPE-REF-01] 无上下文指代低置信时应 need_disambiguate：%v", got)
 	}
-	// 第二层：带上下文应能确定指代对象
+	//    :  onunder     coreferenceto 
 	got2 := postJSON(t, base+"/v1/process",
 		`{"text":"把那个文档改了","session_id":"ref-probe","context":["打开 modules/quote"]}`)
 	if got2["path"] == nil || got2["path"] == "" {
@@ -71,11 +71,11 @@ func TestSCOPEREF01ThreeLayerDisambiguation(t *testing.T) {
 }
 
 func TestSCOPEREF02ConfirmationIsReused(t *testing.T) {
-	// **v2（VHS-DECIDE-001 选项 C，Lead 发起的 v1→v2）**：
-	// 服务**不记得**任何会话态；确认结构由调用方带回。旧版 v1（"服务自己记得"）已废弃。
+	// **v2(VHS-DECIDE-001    C, Lead sendraise  v1->v2)**: 
+	// serveservice**   **    state; confirmclose bycalluse  back.    v1("serveservice    ")alreadydeprecated. 
 	base := serviceBase(t)
 
-	// ① 第一次：确认请求 → 必须返回**可携带的确认结构**
+	// ①    : confirm require ->   returnback**    confirmclose **
 	first := postJSON(t, base+"/v1/process", `{"text":"确认，就是报价模块","session_id":"ref-probe-2"}`)
 	conf, ok := first["confirmable"].(map[string]any)
 	if !ok || conf["canonical"] == nil || conf["canonical"] == "" {
@@ -83,7 +83,7 @@ func TestSCOPEREF02ConfirmationIsReused(t *testing.T) {
 	}
 	canon, _ := conf["canonical"].(string)
 
-	// ② 第二次：**调用方带回 confirmed** → 复用（不再回问）
+	// ②    : **calluse  back confirmed** ->  use( againclarification)
 	got := postJSON(t, base+"/v1/process",
 		`{"text":"把那个模块改了","session_id":"ref-probe-2","confirmed":{"mention":"那个模块","canonical":"`+canon+`"}}`)
 	if got["need_disambiguate"] == true {
@@ -93,14 +93,14 @@ func TestSCOPEREF02ConfirmationIsReused(t *testing.T) {
 		t.Errorf("[SCOPE-REF-02 v2] 带回 confirmed 后未消解出 path：%v", got)
 	}
 
-	// ③ **反例：不带 confirmed ⇒ 必须回问** —— 证明服务是"真无状态"，而不是"偷偷记了"
+	// ③ **revexample:    confirmed ⇒   clarification** --   serveserviceis" nostatus", but is"   "
 	again := postJSON(t, base+"/v1/process", `{"text":"把那个模块改了","session_id":"ref-probe-2"}`)
 	if again["need_disambiguate"] != true {
 		t.Errorf("[SCOPE-REF-02 v2] 不带 confirmed 却未回问 ⇒ 服务偷偷记住了会话态：%v", again)
 	}
 }
 
-// SCOPE-PROFILE-01：L3 只注入相关片段，输出带来源，不改写原文。
+// SCOPE-PROFILE-01: L3 onlynotein close seg,  out   ,  modifywriteorig . 
 func TestSCOPEPROFILE01RelevantContextOnly(t *testing.T) {
 	base := serviceBase(t)
 	got := postJSON(t, base+"/v1/process", `{"text":"按上次的偏好处理这个报价","session_id":"p1"}`)
@@ -112,7 +112,7 @@ func TestSCOPEPROFILE01RelevantContextOnly(t *testing.T) {
 	}
 }
 
-// SCOPE-DICT-01：词典支持语音指令增删改，立即生效、持久化、重启不丢。
+// SCOPE-DICT-01: word  keeplangaudiorefer add modify,  i.e.occur , keep ize, heavystart  . 
 func TestSCOPEDICT01VoiceDictAddDeletePersist(t *testing.T) {
 	base := serviceBase(t)
 	bin := os.Getenv("VHS_ASR_BIN")
@@ -126,7 +126,7 @@ func TestSCOPEDICT01VoiceDictAddDeletePersist(t *testing.T) {
 	if !strings.Contains(toJSON(got), "冀总") {
 		t.Errorf("[SCOPE-DICT-01] 语音新增词典未生效：%v", got)
 	}
-	// delete（需确认）
+	// delete(needconfirm)
 	postJSON(t, base+"/v1/dictionary", `{"op":"delete","term":"冀总","confirm":true}`)
 	got2 := postJSON(t, base+"/v1/correct", `{"text":"冀总看一下"}`)
 	if strings.Contains(toJSON(got2), `"季总"`) {
@@ -134,22 +134,22 @@ func TestSCOPEDICT01VoiceDictAddDeletePersist(t *testing.T) {
 	}
 }
 
-// SCOPE-CONF-01：配置全部 JSON（**不用 YAML**），支持热加载。
+// SCOPE-CONF-01:   safety  JSON(** use YAML**),  keep   . 
 func TestSCOPECONF01JSONHotReloadNotYAML(t *testing.T) {
 	base := serviceBase(t)
-	// 不得有 YAML 配置
+	//   has YAML   
 	for _, pat := range []string{"*.yaml", "*.yml"} {
 		m, _ := filepath.Glob(filepath.Join(vhsServiceDir, pat))
-		// 判据路径修正（2026-10-03）：vhsServiceDir 是 "../cmd/vhs-asr"，
-		// 所以 vhsServiceDir/../config = "../cmd/config" —— 错。
-		// 从 asr/（测试工作目录）到仓库根的 config/ 应为 "../config"。
-		// 由实现方上报、DSH 复核确认后修正（判据归 DSH）。
+		//  datapathfixpos(2026-10-03): vhsServiceDir is "../cmd/vhs-asr", 
+		//  by vhsServiceDir/../config = "../cmd/config" --  . 
+		// from asr/(    obj )to  root  config/  as "../config". 
+		// by now on , DSH   confirmafterfixpos( data  DSH). 
 		m2, _ := filepath.Glob(filepath.Join("..", "config", pat))
 		if len(m)+len(m2) > 0 {
 			t.Errorf("[SCOPE-CONF-01] 发现 YAML 配置 %v %v —— 需求明令不用 YAML", m, m2)
 		}
 	}
-	// 热加载：改词典文件后 N 秒内生效
+	//    : modifyword fileafter N secinoccur 
 	dict := os.Getenv("VHS_ASR_DICT")
 	if dict == "" {
 		t.Fatalf("[criterion] 需要 VHS_ASR_DICT 做热加载测试（未配置 → 先红）")
@@ -168,7 +168,7 @@ func TestSCOPECONF01JSONHotReloadNotYAML(t *testing.T) {
 	t.Errorf("[SCOPE-CONF-01] 词典热加载 2s 内未生效")
 }
 
-// SCOPE-TRACE-01：全链路轨迹 JSONL，每步带耗时与命中来源。
+// SCOPE-TRACE-01: safetychainroutetrace JSONL,     timeand in  . 
 func TestSCOPETRACE01TrajectoryJSONL(t *testing.T) {
 	base := serviceBase(t)
 	traces := os.Getenv("VHS_ASR_TRACES")
@@ -196,7 +196,7 @@ func TestSCOPETRACE01TrajectoryJSONL(t *testing.T) {
 	}
 }
 
-// SCOPE-FALLBACK-01：模型兜底超时 → fail-open + degraded，不阻塞。
+// SCOPE-FALLBACK-01:  type bot time -> fail-open + degraded,    . 
 func TestSCOPEFALLBACK01ModelTimeoutDegraded(t *testing.T) {
 	base := serviceBase(t)
 	if os.Getenv("VHS_ASR_FORCE_MODEL_TIMEOUT") == "" {
@@ -212,10 +212,10 @@ func TestSCOPEFALLBACK01ModelTimeoutDegraded(t *testing.T) {
 	}
 }
 
-// SCOPE-CONTROL-01：控制语义是交互层语义，不得进入业务执行路由。
+// SCOPE-CONTROL-01: controlsemanticis   semantic,    in service  routeby. 
 //
-// 保守解释登记：需求原文未写明"撤销"的范围，本实现取「撤销上一轮输入/清空待确认」，
-// 不解释为"撤销业务操作"，且 control 与业务 type 互斥。
+// keep resolve   : needrequireorig  write "  "   , base nowget"  on   in/ empty confirm", 
+//  resolve as"   service  ", and control and service type mutex. 
 func TestSCOPECONTROL01InterruptPauseUndoAreInteractionOnly(t *testing.T) {
 	base := serviceBase(t)
 	for _, text := range []string{"暂停", "停一下", "撤销"} {
@@ -231,7 +231,7 @@ func TestSCOPECONTROL01InterruptPauseUndoAreInteractionOnly(t *testing.T) {
 	}
 }
 
-// SCOPE-AUDIT-01：学习动作可审计（来源/时间/影响条目）。
+// SCOPE-AUDIT-01:        (  /timetime/   obj). 
 func TestSCOPEAUDIT01LearningAuditable(t *testing.T) {
 	base := serviceBase(t)
 	postJSON(t, base+"/v1/feedback", `{"text_raw":"哈牛斯","text_final":"harness","accepted":true,"source":"user_edit"}`)
@@ -249,14 +249,14 @@ func toJSON(v any) string {
 	return string(b)
 }
 
-// SCOPE-PROFILE-01b（Lead 裁决）：`none` 与其它来源**互斥** —— 互相矛盾的值不该能写出来。
+// SCOPE-PROFILE-01b(Lead  decide): `none` andits   **mutex** --      value   writeout . 
 //
-// ⚠️ 判据标记：**forward-guard（前瞻守卫）** —— 当前无数据可触发
-// （服务恒返回单值来源；zhiji/learned 尚未接入）。它只证明"禁止逻辑存在"，
-// **不证明"真实并存场景会被拦下"**。待 zhiji/learned 接入后，须补真实并存场景的判据。
+// ⚠️  datatgt : **forward-guard(before   )** -- curbeforenonumdata triggersend
+// (serveservice returnback value  ; zhiji/learned   connectin).  only  "forbidstop  store ", 
+// **   "  andstore scenario be under"**.   zhiji/learned connectinafter,  patch  andstore scenario  data. 
 //
-// `none` 的语义是「一个来源都没有」；若 handwritten 存在，那就不是"没有来源"。
-// 若将来需要"部分来源缺失"，那是**新枚举成员**，不是复用 none。
+// `none`  semanticis"    all has"; if handwritten store ,  then is" has  ". 
+// ifwill needneed" split    ",  is**new  become **,  is use none. 
 func TestSCOPEProfileSourcesAreExclusiveWithNone(t *testing.T) {
 	base := serviceBase(t)
 	got := postJSON(t, base+"/v1/process", `{"text":"按上次的偏好处理这个报价","session_id":"p-excl"}`)

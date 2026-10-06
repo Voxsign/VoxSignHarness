@@ -1,10 +1,10 @@
-// punct_test.go —— 标点恢复的结构判据（SCOPE-PUNCT，需求 4.3 / C1 v2）。
+// punct_test.go -- tgtpt   close  data(SCOPE-PUNCT, needrequire 4.3 / C1 v2). 
 //
-// 不带 build tag：这是**已实现能力**的结构判据，随默认门禁常跑。
-// 它只断言三件可机械判定的事，不假装评价"标点是否自然"（质量 unverified，RC7）：
-//  1. 标点绝不触碰正文（去标点后 Text/Punctuated 逐字相等；保真类还与 Raw 相等）；
-//  2. 有恢复就必须有留痕（PunctuationCorrections 非空、Kind/Confidence/Evidence 齐备）；
-//  3. Corrections 的语义不变（只记对 Text 的改动；Text 未改则必须为空）。
+//    build tag:  is**already now  ** close  data,  default forbid  . 
+//  onlydisconnectlang         ,      "tgtptis  however"(   unverified, RC7): 
+//  1. tgtpt  trigger pos ( tgtptafter Text/Punctuated  char etc; keep classalsoand Raw  etc); 
+//  2. has  then  has  (PunctuationCorrections  empty, Kind/Confidence/Evidence   ); 
+//  3. Corrections  semantic change(only to Text  change; Text  modifythen  asempty). 
 package asr
 
 import (
@@ -13,7 +13,7 @@ import (
 	"unicode"
 )
 
-// stripPunct 去掉标点与空白，只留正文字符。
+// stripPunct   tgtptandempty , only pos char . 
 func stripPunct(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -25,7 +25,7 @@ func stripPunct(s string) string {
 	return b.String()
 }
 
-// TestSCOPEPUNCT01PunctuationNeverTouchesBody 是 C1 v2 的安全侧。
+// TestSCOPEPUNCT01PunctuationNeverTouchesBody is C1 v2  safesafetyside. 
 func TestSCOPEPUNCT01PunctuationNeverTouchesBody(t *testing.T) {
 	eng := NewEngine()
 	for _, c := range loadCorpusFile(t) {
@@ -44,7 +44,7 @@ func TestSCOPEPUNCT01PunctuationNeverTouchesBody(t *testing.T) {
 	}
 }
 
-// TestSCOPEPUNCT02PunctuationObservable 是 C1 v2 的可观测侧。
+// TestSCOPEPUNCT02PunctuationObservable is C1 v2     side. 
 func TestSCOPEPUNCT02PunctuationObservable(t *testing.T) {
 	eng := NewEngine()
 	seen := 0
@@ -88,20 +88,20 @@ func TestSCOPEPUNCT02PunctuationObservable(t *testing.T) {
 	t.Logf("标点恢复覆盖 %d 条（共 %d 条）", seen, len(loadCorpusFile(t)))
 }
 
-// TestSCOPEPUNCT03ExistingPunctuationPreserved：已存在的标点一律保留，不擅自改/删。
+// TestSCOPEPUNCT03ExistingPunctuationPreserved: alreadystore  tgtpt  keep ,    modify/ . 
 func TestSCOPEPUNCT03ExistingPunctuationPreserved(t *testing.T) {
 	eng := NewEngine()
 	raw := "做的另外一个地方开发嘛，开发在哪里嘛？这个只是在哪里跑的问题嘛"
 	got := eng.Correct(CorrectRequest{Raw: raw})
-	// 已有的标点片段原样在结果里（没有被改写）
+	// alreadyhas tgtpt segorigkind close  ( hasbemodifywrite)
 	if !strings.Contains(got.Punctuated, "嘛，开发在哪里嘛？") {
 		t.Errorf("已有标点被改写：%q → %q", raw, got.Punctuated)
 	}
-	// 正文不变
+	// pos  change
 	if stripPunct(got.Punctuated) != stripPunct(raw) {
 		t.Errorf("正文被改动：%q → %q", raw, got.Punctuated)
 	}
-	// 已有标点一个都没被删（只允许追加）
+	// alreadyhastgtpt  all be (only allow  )
 	if countPunct(got.Punctuated) < countPunct(raw) {
 		t.Errorf("已有标点被删除：raw=%d → out=%d", countPunct(raw), countPunct(got.Punctuated))
 	}
@@ -117,7 +117,7 @@ func countPunct(s string) int {
 	return n
 }
 
-// TestSCOPEPUNCT04Deterministic：标点恢复可回放（纯函数）。
+// TestSCOPEPUNCT04Deterministic: tgtpt   back (  num). 
 func TestSCOPEPUNCT04Deterministic(t *testing.T) {
 	eng := NewEngine()
 	for _, c := range loadCorpusFile(t) {
@@ -129,7 +129,7 @@ func TestSCOPEPUNCT04Deterministic(t *testing.T) {
 	}
 }
 
-// TestSCOPEPUNCT05CorrectionsSemanticsUnchanged：标点不得混进 Corrections（C4 不变式）。
+// TestSCOPEPUNCT05CorrectionsSemanticsUnchanged: tgtpt     Corrections(C4  changeform). 
 func TestSCOPEPUNCT05CorrectionsSemanticsUnchanged(t *testing.T) {
 	eng := NewEngine()
 	for _, c := range loadCorpusFile(t) {
@@ -145,9 +145,9 @@ func TestSCOPEPUNCT05CorrectionsSemanticsUnchanged(t *testing.T) {
 	}
 }
 
-// TestSCOPEPUNCT06ClauseSplitInsidePunctuated：从句断句**只发生在 punctuated 内**，
-// corrected 不许动（§5.1 第 6 件：标点断句）。这条判据钉住"断句已实现"：
-// 连接词前补逗号 + 句末补句号，正文逐字不变。
+// TestSCOPEPUNCT06ClauseSplitInsidePunctuated: fromsentdisconnectsent**onlysendoccur  punctuated in**, 
+// corrected  allow (§5.1   6  : tgtptdisconnectsent).    data  "disconnectsentalready now": 
+// linkconnectwordbeforepatch id + sentendpatchsentid, pos  char change. 
 func TestSCOPEPUNCT06ClauseSplitInsidePunctuated(t *testing.T) {
 	eng := NewEngine()
 	cases := []struct{ raw, wantPunct string }{

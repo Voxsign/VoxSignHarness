@@ -1,8 +1,8 @@
-// voice_criteria_test.go —— /v1/voice 常驻判据。
+// voice_criteria_test.go -- /v1/voice    data. 
 //
-// ⚠️ 层次标签（诚实）：本判据走 **Server.Handler()（与 Start 同一份装配）**，
-// 但用 **httptest**（进程内），**不是"起真进程"的真装配级**。
-// 真装配级证据见 Issue #4 的手工真跑（起 `serve` + 桩 ASR：202 / 503+degraded / ASK 不执行）。
+// ⚠️   tgt (  ): base data  **Server.Handler()(and Start same    )**, 
+// butuse **httptest**(processin), ** is"raise process"     **. 
+//      datasee Issue #4      (raise `serve` +   ASR: 202 / 503+degraded / ASK    ). 
 package server
 
 import (
@@ -19,7 +19,7 @@ import (
 
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	cfg := &config.Config{} // token 空 ⇒ 仅回环可访问（httptest 即回环）
+	cfg := &config.Config{} // token empty ⇒ onlyback    (httptest i.e.back )
 	srv := New(cfg, &pipeline.Options{})
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -47,14 +47,14 @@ func postVoice(t *testing.T, base, body string) (int, map[string]any) {
 	return resp.StatusCode, out
 }
 
-// ① 「ASR 在 + 意图可执行 ⇒ 202 + task_id」**不在此常驻判据中**：
-// 它需要 main.go 同款的完整 pipeline.Options（空 Options 会让 pipeline.Run 在后台 goroutine 空指针）。
-// 该路径的证据是 **真装配级手工真跑**（起 serve + 桩 ASR ⇒ 202 + task_id，见 Issue #4）。
+// ① "ASR   + intent    ⇒ 202 + task_id"**      datain**: 
+//  needneed main.go same  finish  pipeline.Options(empty Options    pipeline.Run  after  goroutine emptyrefer ). 
+//  path  datais **        **(raise serve +   ASR ⇒ 202 + task_id, see Issue #4). 
 
-// ② 线 B 不可达 ⇒ 503 + degraded，且**不创建任务**（不许静默降级）
+// ② line B     ⇒ 503 + degraded, and**   task**( allow    )
 func TestVoiceASRUnreachableIsExplicit(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	dead.Close() // 立刻关 ⇒ 不可达
+	dead.Close() //   close ⇒    
 	t.Setenv("VHS_ASR_ENDPOINT", dead.URL)
 	code, out := postVoice(t, testServer(t).URL, `{"text":"查一下库存"}`)
 	if code != http.StatusServiceUnavailable {
@@ -68,7 +68,7 @@ func TestVoiceASRUnreachableIsExplicit(t *testing.T) {
 	}
 }
 
-// ③ 红线：ASK / need_disambiguate / ask 非空 ⇒ **绝不执行**
+// ③  line: ASK / need_disambiguate / ask  empty ⇒ **    **
 func TestVoiceAskNeverExecutes(t *testing.T) {
 	for i, resp := range []map[string]any{
 		{"type": "ASK", "need_disambiguate": true},

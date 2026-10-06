@@ -1,9 +1,9 @@
 //go:build vhs002
 
-// vhs002_persist_test.go —— 第 1 批新增的判据（不改动已有判据，只补强）。
+// vhs002_persist_test.go --   1 approvenewadd  data( changealreadyhas data, onlypatch ). 
 //
-// 已有 SCOPE-DICT-01 只要求 VHS_ASR_BIN 非空、并不真的验证"重启不丢"；
-// 这里补一条**真的**重启等价判据，以及一条轨迹可复现判据。
+// alreadyhas SCOPE-DICT-01 onlyneedrequire VHS_ASR_BIN  empty, and     "heavystart  "; 
+//   patch  **  **heavystartetc  data, byand  trace  now data. 
 package asr
 
 import (
@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// SCOPE-DICT-02：词典落盘后，用同一个文件新建运行时可完整恢复（等价重启）。
+// SCOPE-DICT-02: word   after, usesame  filenew   time finish   (etc heavystart). 
 func TestSCOPEDICT02RestartPersists(t *testing.T) {
 	base := serviceBase(t)
 	dictPath := os.Getenv("VHS_ASR_DICT")
@@ -22,7 +22,7 @@ func TestSCOPEDICT02RestartPersists(t *testing.T) {
 	}
 	postJSON(t, base+"/v1/dictionary", `{"op":"add","raw_speech":"哈牛斯","target":"harness","priority":7,"source":"user_edit"}`)
 
-	// 模拟进程重启：同一文件重新加载。
+	//   processheavystart: same fileheavynew  . 
 	restarted, err := NewDictionary(dictPath)
 	if err != nil {
 		t.Fatalf("[SCOPE-DICT-02] 重启加载失败: %v", err)
@@ -48,7 +48,7 @@ func TestSCOPEDICT02RestartPersists(t *testing.T) {
 	}
 }
 
-// SCOPE-TRACE-02：同一输入重放，轨迹的**步骤与来源序列**必须一致（可复现）。
+// SCOPE-TRACE-02: same  inheavy , trace **  and   list**    (  now). 
 func TestSCOPETRACE02Replayable(t *testing.T) {
 	base := serviceBase(t)
 	tracePath := os.Getenv("VHS_ASR_TRACES")
@@ -63,7 +63,7 @@ func TestSCOPETRACE02Replayable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[SCOPE-TRACE-02] 读轨迹失败: %v", err)
 	}
-	// 按 request_id 分组，取最后两次请求。
+	// by request_id split , get after   require. 
 	var order []string
 	groups := map[string][]TraceRecord{}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {

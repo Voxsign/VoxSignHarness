@@ -1,9 +1,9 @@
 //go:build vhs002
 
-// restart_criteria_test.go —— SCOPE-REF-02 的**行为证据**：服务真无状态。
+// restart_criteria_test.go -- SCOPE-REF-02  ** as data**: serveservice nostatus. 
 //
-// 代码审查结论"没有全局 map"*不是*证据；**重启后仍然回问**才是。
-// 真二进制：带 confirmed → 杀进程 → 重启（同一 dataDir）→ 不带 confirmed ⇒ 必须回问。
+//  code  close " hasglobal map"* is* data; **heavystartafter howeverclarification**onlyis. 
+//    restrict:   confirmed ->  process -> heavystart(same  dataDir)->    confirmed ⇒   clarification. 
 package asr
 
 import (
@@ -73,10 +73,10 @@ func TestSCOPEREF02StatelessAcrossRestart(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("编译真二进制失败: %v\n%s", err, out)
 	}
-	dataDir := t.TempDir() // **同一 dataDir 跨重启**：若服务把会话态落盘，这里就会复用
+	dataDir := t.TempDir() // **same  dataDir  heavystart**: ifserveservicepipe  state  ,   then  use
 	addr := freePort(t)
 
-	// 第一次：确认请求 ⇒ 拿到可携带结构
+	//    : confirm require ⇒  to   close 
 	cmd1 := startRealServer(t, bin, addr, dataDir)
 	first := postProcess(t, "http://"+addr, `{"text":"确认，就是报价模块","session_id":"restart-probe"}`)
 	conf, ok := first["confirmable"].(map[string]any)
@@ -86,14 +86,14 @@ func TestSCOPEREF02StatelessAcrossRestart(t *testing.T) {
 	}
 	canon, _ := conf["canonical"].(string)
 
-	// 带回 confirmed 的同进程请求 ⇒ 复用（基线）
+	//  back confirmed  sameprocess require ⇒  use(baseline)
 	got := postProcess(t, "http://"+addr, `{"text":"把那个模块改了","session_id":"restart-probe","confirmed":{"mention":"那个模块","canonical":"`+canon+`"}}`)
 	if got["need_disambiguate"] == true {
 		_ = cmd1.Process.Kill()
 		t.Fatalf("[重启] 同进程带 confirmed 未复用: %v", got)
 	}
 
-	// 杀进程 → 重启（同一 dataDir）
+	//  process -> heavystart(same  dataDir)
 	if err := cmd1.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestSCOPEREF02StatelessAcrossRestart(t *testing.T) {
 	cmd2 := startRealServer(t, bin, addr2, dataDir)
 	defer func() { _ = cmd2.Process.Kill() }()
 
-	// **不带 confirmed** ⇒ 必须回问：证明重启前那次"确认"没有被服务记住（也没落盘）
+	// **   confirmed** ⇒   clarification:   heavystartbefore  "confirm" hasbeserveservice  (also   )
 	after := postProcess(t, "http://"+addr2, `{"text":"把那个模块改了","session_id":"restart-probe"}`)
 	if after["need_disambiguate"] != true {
 		t.Fatalf("[重启] 重启后不带 confirmed 却未回问 ⇒ 服务记住了会话态（行为证据证伪）: %v", after)

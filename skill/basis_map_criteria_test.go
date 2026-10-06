@@ -1,9 +1,9 @@
-// basis_map_criteria_test.go —— basis→族规则映射（含**防硬凑**反例）。
+// basis_map_criteria_test.go -- basis-> rule  ( **prevent  **revexample). 
 package skill
 
 import "testing"
 
-// ① 真实 8 条 basis：守恒（映射 + 不能映射 == 总数），并报自动化比例
+// ①    8   basis:   (   +      ==  num), and   ize example
 func TestBasisMapIsConservativeOnRealKnowhow(t *testing.T) {
 	var ms []BasisMapping
 	for id, kh := range realKnowhow() {
@@ -37,13 +37,13 @@ func TestBasisMapIsConservativeOnRealKnowhow(t *testing.T) {
 	}
 }
 
-// ② **防硬凑反例**：明显不属于证据优先级的文本 ⇒ **必须拒绝映射**
+// ② **prevent  revexample**:     at data first   base ⇒ **  reject  **
 func TestBasisMapRejectsUnrelatedText(t *testing.T) {
 	for _, bad := range []string{
 		"结论先行",                  // style
-		"图示优先 Mermaid 格式",       // 交付规范
-		"用脚手架 python scripts/x", // 工具用法
-		"一页以内",                  // 篇幅
+		"图示优先 Mermaid 格式",       // deliverrule 
+		"用脚手架 python scripts/x", //   use 
+		"一页以内",                  //   
 	} {
 		if rule, ok, _ := RuleOfBasis(bad); ok {
 			t.Errorf("[basis 映射 反例] 明显不相关的文本被硬凑进族规则 %q: %q", rule, bad)
@@ -51,7 +51,7 @@ func TestBasisMapRejectsUnrelatedText(t *testing.T) {
 	}
 }
 
-// ③ 正例：四条规则各自能被真实文本命中
+// ③ posexample:   rule   be   base in
 func TestBasisMapHitsAllFourRules(t *testing.T) {
 	cases := map[string]string{
 		"已查证优先于一方称":       RuleVerified,

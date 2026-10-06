@@ -1,12 +1,12 @@
 //go:build vhsreal
 
-// realbinary_criteria_test.go —— K9 **真二进制**端到端（第四次"真跑"）：
+// realbinary_criteria_test.go -- K9 **   restrict**endtoend(   "  "): 
 //
-//	① 编译并启动真进程（非 httptest），POST /v1/correct 的输出必须因热词而改变
-//	② 反例：L2 无别名 → 输出与基线一致
-//	③ 启动日志必须能看到 L2 刷新（别名条数/来源/状态）
+//	①   andstart  process(  httptest), POST /v1/correct   out  because wordbutmodifychange
+//	② revexample: L2 nodiffname ->  outandbaseline  
+//	③ start day     to L2  new(diffname num/  /status)
 //
-// L2 用**本机假 /api/services**（deterministic，不依赖外网）；真端点另有人工实跑记录。
+// L2 use**base   /api/services**(deterministic,  dependencyout );  endpoint hashuman    . 
 package recog
 
 import (
@@ -55,7 +55,7 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// startBinary 编译真二进制并以给定 L2 端点启动；返回 baseURL 与日志缓冲。
+// startBinary      restrictandbygive  L2 endpointstart ; returnback baseURL andday   . 
 func startBinary(t *testing.T, servicesURL string) (string, *bytes.Buffer) {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "vhs-asr")
@@ -113,7 +113,7 @@ func postText(t *testing.T, base, text string) string {
 	return out.Text
 }
 
-// ① 真二进制：热词改变输出 + ③ 启动日志可见 L2 刷新
+// ①    restrict:  wordmodifychange out + ③ start day  see L2  new
 func TestK9RealBinaryHotwordChangesOutput(t *testing.T) {
 	l2 := fakeServices(t, map[string]string{"爱ops": "aiops-portal"})
 	base, logs := startBinary(t, l2.URL+"/api/services")
@@ -130,7 +130,7 @@ func TestK9RealBinaryHotwordChangesOutput(t *testing.T) {
 	t.Logf("启动日志: %s", strings.TrimSpace(logs.String()))
 }
 
-// ② 反例：L2 无别名 → 输出与基线一致
+// ② revexample: L2 nodiffname ->  outandbaseline  
 func TestK9RealBinaryEmptyRegistryUnchanged(t *testing.T) {
 	l2 := fakeServices(t, map[string]string{})
 	base, _ := startBinary(t, l2.URL+"/api/services")

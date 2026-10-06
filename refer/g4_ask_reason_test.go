@@ -1,10 +1,10 @@
-// 缺口 G4 的回归测试：UNKNOWN 的澄清原因不得被指代回问覆写。
+//    G4  back   : UNKNOWN    origbecause  becoreferenceclarification write. 
 //
-// 但也不能一刀切——既有回归 pipeline.TestCodexNineRegressions#1 要求
-// 「我现在想认真开始测…把这个哈…推进起来…」这一句**必须**保留 refer 的指代回问。
-// 区分标准是"是不是操作指代"：
-//   - 「把 这个…」是操作对象，refer 的澄清有价值；
-//   - 「嗯 那个 呃 记一下」里的"那个"只是语气词，不是操作对象。
+// butalso     -- hasback  pipeline.TestCodexNineRegressions#1 needrequire
+// " now    openstart …pipe   …  raise …"  sent**  **keep  refer  coreferenceclarification. 
+//  splittgtapproveis"is is  coreference": 
+//   - "pipe   …"is  to , refer    has value; 
+//   - "         under"  "  "onlyislang word,  is  to . 
 package refer
 
 import (
@@ -20,11 +20,11 @@ func TestOperationAnaphora(t *testing.T) {
 		trigger string
 		want    bool
 	}{
-		{"把这个改一下", "这个", true},    // 前一字是"把"
-		{"那个文件改一下", "那个文件", true}, // 后一字是动词"改"
-		{"嗯那个呃记一下", "那个", false},  // 前后都不是操作语境
-		{"我那个前端的问题", "那个", false}, // 只是叙述
-		{"打开它", "它", true},        // 后一字是动词"打"（打开）
+		{"把这个改一下", "这个", true},    // before charis"pipe"
+		{"那个文件改一下", "那个文件", true}, // after charis word"modify"
+		{"嗯那个呃记一下", "那个", false},  // beforeafterall is  lang 
+		{"我那个前端的问题", "那个", false}, // onlyis  
+		{"打开它", "它", true},        // after charis word" "( open)
 	}
 	for _, tc := range cases {
 		if got := operationAnaphora(tc.text, tc.trigger); got != tc.want {
@@ -33,8 +33,8 @@ func TestOperationAnaphora(t *testing.T) {
 	}
 }
 
-// TestAnyOperationAnaphoraScansAll 必须遍历全部候选：词表顺序与出现位置无关，
-// 长句里可能先命中语气词"那个"，却漏掉更早的操作指代"把这个"。
+// TestAnyOperationAnaphoraScansAll     safety   : wordtable  andoutnow  noclose, 
+//  sent   first inlang word"  ", but  change    coreference"pipe  ". 
 func TestAnyOperationAnaphoraScansAll(t *testing.T) {
 	long := "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来"
 	if !anyOperationAnaphora(long) {
@@ -45,7 +45,7 @@ func TestAnyOperationAnaphoraScansAll(t *testing.T) {
 	}
 }
 
-// TestUnknownKeepsClassifierAsk G4 主线：UNKNOWN + 非操作指代 → 保留分类器的澄清原因。
+// TestUnknownKeepsClassifierAsk G4  line: UNKNOWN +    coreference -> keep classify    origbecause. 
 func TestUnknownKeepsClassifierAsk(t *testing.T) {
 	r := New(nil)
 	classifierAsk := "你是想让我做什么？请再说清楚一点"
@@ -64,7 +64,7 @@ func TestUnknownKeepsClassifierAsk(t *testing.T) {
 	}
 }
 
-// TestUnknownWithOperationAnaphoraStillAsks 有操作指代时仍应让 refer 提问（既有回归）。
+// TestUnknownWithOperationAnaphoraStillAsks has  coreferencetime    refer   ( hasback ). 
 func TestUnknownWithOperationAnaphoraStillAsks(t *testing.T) {
 	r := New(nil)
 	long := "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来"
@@ -83,16 +83,16 @@ func TestUnknownWithOperationAnaphoraStillAsks(t *testing.T) {
 	}
 }
 
-// TestNotePayloadIsJustPronoun 缺口 G9 的边界：NOTE 的内容指代 vs 全部内容。
+// TestNotePayloadIsJustPronoun    G9   boundary: NOTE  in coreference vs safety in . 
 func TestNotePayloadIsJustPronoun(t *testing.T) {
 	cases := []struct {
 		text    string
 		trigger string
 		want    bool
 	}{
-		{"记一下 这个", "这个", true},              // 指代就是全部内容 → 必须追问
-		{"记一下：这次要修的是报价页那个错别字", "那个", false}, // 是内容 → 不追问
-		{"记一下，季总那个厂房下周一出报价", "那个", false},   // 是内容 → 不追问
+		{"记一下 这个", "这个", true},              // coreferencethenissafety in  ->     
+		{"记一下：这次要修的是报价页那个错别字", "那个", false}, // isin  ->    
+		{"记一下，季总那个厂房下周一出报价", "那个", false},   // isin  ->    
 	}
 	for _, tc := range cases {
 		if got := notePayloadIsJustPronoun(tc.text, tc.trigger); got != tc.want {
@@ -101,7 +101,7 @@ func TestNotePayloadIsJustPronoun(t *testing.T) {
 	}
 }
 
-// TestNoteContentAnaphoraDoesNotAsk G9 主线（refer 层）。
+// TestNoteContentAnaphoraDoesNotAsk G9  line(refer  ). 
 func TestNoteContentAnaphoraDoesNotAsk(t *testing.T) {
 	r := New(nil)
 	it := &contract.Intent{
@@ -116,7 +116,7 @@ func TestNoteContentAnaphoraDoesNotAsk(t *testing.T) {
 	if strings.Contains(got.Ask, "指的是哪个") {
 		t.Errorf("G9: NOTE 的内容指代仍被追问：Ask=%q", got.Ask)
 	}
-	// 边界：指代就是全部内容时必须追问
+	//  boundary: coreferencethenissafety in time    
 	it2 := &contract.Intent{Intent: contract.IntentNote, Confidence: 0.85, CorrectedText: "记一下 这个"}
 	got2, _, _ := r.ResolveOptions(it2, "")
 	if !strings.Contains(got2.Ask, "指的是哪个") {

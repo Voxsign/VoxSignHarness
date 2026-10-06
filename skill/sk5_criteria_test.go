@@ -1,4 +1,4 @@
-// sk5_criteria_test.go —— SK-5：内化必须产出**可执行**判据（防"囤积"）。
+// sk5_criteria_test.go -- SK-5: inize  produceout**   ** data(prevent"  "). 
 package skill
 
 import "testing"

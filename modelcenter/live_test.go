@@ -1,6 +1,6 @@
-// live_test.go —— 真网关冒烟（默认跳过；VHS_MODEL_LIVE=1 且 .env 存在时才跑）。
+// live_test.go --   close  (default ed; VHS_MODEL_LIVE=1 and .env store timeonly ). 
 //
-// 纪律：key 只从 .env / 环境变量读，测试里不出现任何 key 字面量；失败信息不回显 key。
+//   : key onlyfrom .env /   change read,     outnow   key charface ;      back  key. 
 package modelcenter
 
 import (

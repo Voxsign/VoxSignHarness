@@ -15,7 +15,7 @@ func TestNewNilDictOK(t *testing.T) {
 	}
 }
 
-// 用例 4：「它」指上一条回执文件 → 上下文命中，不再回问。
+// useexample 4: " "referon  back file -> onunder  in,  againclarification. 
 func TestResolve_AnaphoraToRecentFile(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
@@ -40,7 +40,7 @@ func TestResolve_AnaphoraToRecentFile(t *testing.T) {
 	}
 }
 
-// 用例 3：跨域歧义指代 → 显式回问"哪个域？"，不猜。
+// useexample 3:  domain  coreference ->  formclarification"  domain ",   . 
 func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
@@ -48,7 +48,7 @@ func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 		{Space: "vault-notes", Entity: "idea-12.md", Kind: "file", Ts: "2026-10-02T11:00:00"},
 	}
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "改一下它"}
-	got, _ := r.Resolve(it, "voicesign-harness") // 当前域两个候选都不命中
+	got, _ := r.Resolve(it, "voicesign-harness") // curbeforedomain    all  in
 	if got.Ask == "" || !strings.Contains(got.Ask, "哪个域") {
 		t.Fatalf("用例3: 应回问「哪个域？」, Ask=%q", got.Ask)
 	}
@@ -57,7 +57,7 @@ func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 	}
 }
 
-// 当前域有最近文件 → 即便别处也有，优先当前域，不回问。
+// curbeforedomainhas  file -> i.e.thendiffplacealsohas,  firstcurbeforedomain,  clarification. 
 func TestResolve_PrefersCurrentSpace(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
@@ -71,7 +71,7 @@ func TestResolve_PrefersCurrentSpace(t *testing.T) {
 	}
 }
 
-// 词典层 100% 命中 → 直接消解，不查上下文。
+// word   100%  in ->  connect resolve,   onunder . 
 func TestResolve_DictLayer(t *testing.T) {
 	dict := &memory.Dictionary{Terms: []memory.Term{
 		{Term: "Mansour", Variants: []string{"美墅"}, Category: "人名"},
@@ -87,7 +87,7 @@ func TestResolve_DictLayer(t *testing.T) {
 	}
 }
 
-// 无指代词 → 原样返回，不动 Target。
+// nocoreferenceword -> origkindreturnback,    Target. 
 func TestResolve_NoAnaphora(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{{Space: "x", Entity: "a.go", Kind: "file", Ts: "t1"}}
@@ -98,7 +98,7 @@ func TestResolve_NoAnaphora(t *testing.T) {
 	}
 }
 
-// 规则层无候选 + ModelFn 高置信 → 语言层消解。
+// rule no   + ModelFn     -> langlang  resolve. 
 func TestResolve_ModelLayer(t *testing.T) {
 	r := New(nil)
 	r.ModelFn = func(q string, cands []string) (string, float64) {
@@ -111,9 +111,9 @@ func TestResolve_ModelLayer(t *testing.T) {
 	}
 }
 
-// 无候选 + ModelFn nil + 有指代 → 必须 Ask（不许静默吃掉）。
+// no   + ModelFn nil + hascoreference ->    Ask( allow    ). 
 func TestResolve_LowConfAsks(t *testing.T) {
-	r := New(nil) // 无 Recent、无 ModelFn
+	r := New(nil) // no Recent, no ModelFn
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "把它改一下"}
 	got, _ := r.Resolve(it, "voicesign-harness")
 	if got.Ask == "" {
@@ -121,7 +121,7 @@ func TestResolve_LowConfAsks(t *testing.T) {
 	}
 }
 
-// 已显式目标 → 词典规范化后直接返回。
+// already formobjtgt -> word rule izeafter connectreturnback. 
 func TestResolve_ExplicitTargetUntouched(t *testing.T) {
 	dict := &memory.Dictionary{Terms: []memory.Term{
 		{Term: "VoxSign", Variants: []string{"voxsign"}},
@@ -138,7 +138,7 @@ func TestResolve_ExplicitTargetUntouched(t *testing.T) {
 	}
 }
 
-// Solidify 把确认别名写进词典（内存词典 Path 空 → 仅追加内存）。
+// Solidify pipeconfirmdiffnamewrite word (instoreword  Path empty -> only  instore). 
 func TestSolidify(t *testing.T) {
 	dict := &memory.Dictionary{}
 	r := New(dict)
@@ -150,9 +150,9 @@ func TestSolidify(t *testing.T) {
 	}
 }
 
-// ---- M4 选项按钮化：歧义回问产出结构化候选 ----
+// ---- M4   by ize:   clarificationproduceoutclose ize   ----
 
-// 歧义输入（"帮我看看那个文件"）+ 跨域多个最近文件 → 返回 2-4 个 id/label 候选且不重复。
+//    in("      file")+  domain    file -> returnback 2-4   id/label   and heavy . 
 func TestResolveOptionsStructured(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
@@ -161,7 +161,7 @@ func TestResolveOptionsStructured(t *testing.T) {
 		{Space: "voicesign-harness", Entity: "space/space.go", Kind: "file", Ts: "2026-10-02T10:00:00"},
 	}
 	it := &contract.Intent{Intent: contract.IntentQuery, CorrectedText: "帮我看看那个文件"}
-	// 当前 spaceID 不在任何最近候选的域里 → 跨域歧义 → 回问 + 结构化候选
+	// curbefore spaceID          domain  ->  domain   -> clarification + close ize  
 	got, opts, err := r.ResolveOptions(it, "medsupply")
 	if err != nil {
 		t.Fatalf("ResolveOptions: %v", err)
@@ -187,7 +187,7 @@ func TestResolveOptionsStructured(t *testing.T) {
 	}
 }
 
-// 无候选场景（无 Recent、无词典命中、有指代词）→ Options 为空，仅 Ask 文本。
+// no   scenario(no Recent, noword  in, hascoreferenceword)-> Options asempty, only Ask  base. 
 func TestResolveOptionsEmptyWhenNoCandidates(t *testing.T) {
 	r := New(nil)
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "把它改一下"}
@@ -203,7 +203,7 @@ func TestResolveOptionsEmptyWhenNoCandidates(t *testing.T) {
 	}
 }
 
-// Resolve（冻结签名）仍可用且不破坏分层。
+// Resolve(frozen signature)  useand   split . 
 func TestResolveBackwardsCompatible(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{{Space: "x", Entity: "a.go", Kind: "file", Ts: "t1"}}

@@ -1,14 +1,14 @@
-// intent.go —— 本地意图解析（核心路径本地规则，红线 #6）+ 模型兜底降级。
+// intent.go -- baselyintentresolve (  pathbaselyrule,  line #6)+  type bot  . 
 //
-// 契约 v1 的声明式字段；控制语义与业务 type 互斥（control 只表示交互层语义）。
-// 模型只做兜底：本地低置信时才有机会调用；超时/失败一律 fail-open 返回本地结果并标 degraded。
+//    v1  voice formcharseg; controlsemanticand service type mutex(control onlytableshow   semantic). 
+//  typeonly  bot: baselylow-confidencetimeonlyhas  calluse;  time/     fail-open returnbackbaselyclose andtgt degraded. 
 package asr
 
 import (
 	"strings"
 )
 
-// IntentResult 是意图解析结果（映射到契约 v1）。
+// IntentResult isintentresolve close (  to   v1). 
 type IntentResult struct {
 	Type             string
 	Confidence       float64
@@ -19,7 +19,7 @@ type IntentResult struct {
 	DegradedReason   string
 }
 
-// 控制语义（交互层；与业务 type 互斥，需求 4.4/4.6）。
+// controlsemantic(   ; and service type mutex, needrequire 4.4/4.6). 
 var controlWords = []struct {
 	control string
 	words   []string
@@ -29,7 +29,7 @@ var controlWords = []struct {
 	{"interrupt", []string{"打断", "别说了", "停止说话"}},
 }
 
-// controlOf 识别交互层控制语义。
+// controlOf  diff   controlsemantic. 
 func controlOf(t string) string {
 	for _, c := range controlWords {
 		for _, w := range c.words {
@@ -41,7 +41,7 @@ func controlOf(t string) string {
 	return ""
 }
 
-// localClassify 规则式意图分类（离线、确定性）。
+// localClassify ruleformintentclassify( line,   ity). 
 func localClassify(text string) (typ string, conf float64, control string) {
 	t := strings.ToLower(strings.TrimSpace(text))
 	if t == "" {
@@ -50,7 +50,7 @@ func localClassify(text string) (typ string, conf float64, control string) {
 	if c := controlOf(t); c != "" {
 		return "ASK", 0.90, c
 	}
-	// 多步编排：有"先…再…/最后"这类连接
+	//   orchestrate: has"first…again…/ after" classlinkconnect
 	if strings.Contains(t, "先") && (strings.Contains(t, "再") || strings.Contains(t, "最后")) {
 		return "ORCHESTRATE", 0.80, ""
 	}
@@ -76,13 +76,13 @@ func localClassify(text string) (typ string, conf float64, control string) {
 	}
 }
 
-// ClassifyIntent 产出意图结果：本地优先，低置信才走模型兜底；任何失败都降级。
+// ClassifyIntent produceoutintentclose : basely first, low-confidenceonly  type bot;     all  . 
 func ClassifyIntent(text string) IntentResult {
 	typ, conf, ctrl := localClassify(text)
 	ir := IntentResult{
 		Type: typ, Confidence: conf, Control: ctrl,
 		NeedDisambiguate: conf < 0.70,
-		DomainSuggestion: []string{}, // 默认拒绝：不给高权限域建议
+		DomainSuggestion: []string{}, // defaultreject:  give  limitdomain  
 	}
 	return ir
 }

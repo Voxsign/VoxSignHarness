@@ -6,8 +6,8 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestDetectImplDispatch（2026-10-04 洞2 分发级验证）：实现类长任务必须由 Detect 分发
-// 到 ORCHESTRATE(kind=implement)，而不是被 2b 的 commitTriggers 截成单动作 COMMIT。
+// TestDetectImplDispatch(2026-10-04  2 splitsend   ):  nowclass task  by Detect splitsend
+// to ORCHESTRATE(kind=implement), but isbe 2b   commitTriggers  become    COMMIT. 
 func TestDetectImplDispatch(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	text := "把这份需求文档实现出来，生成可运行的 Go 后台服务并提交到仓库"
@@ -21,7 +21,7 @@ func TestDetectImplDispatch(t *testing.T) {
 	t.Logf("PASS：%q → ORCHESTRATE(kind=implement)", text)
 }
 
-// TestDetectImplNotCommit：纯提交指令仍走 COMMIT，不被实现类抢走。
+// TestDetectImplNotCommit:    refer    COMMIT,  be nowclass  . 
 func TestDetectImplNotCommit(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("把这份文档提交到仓库")

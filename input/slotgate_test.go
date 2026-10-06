@@ -1,12 +1,12 @@
-// 槽位闸（缺口 G2）的边界测试。
+//    (   G2)  boundary  . 
 //
-// G2 的真实危害：「改一下」「修」「查」这类**零信息**句子被判 0.85 高置信、
-// Ask 为空，直接进入执行通道 —— 系统会在完全不知道对象的情况下动手。
+// G2      : "modify under""fix"" " class**   **sent be  0.85    , 
+// Ask asempty,  connect in     --     finishsafety   to  case under  . 
 //
-// 根因是单类触发恒 0.85，恒高于默认阈值 0.6，于是"低置信回问"分支在默认配置下
-// 几乎不可达。修法是把"缺必需槽位"与"低置信"拆成两条独立路径。
+// rootbecauseis classtriggersend  0.85,   atdefault value 0.6, atis"low-confidenceclarification"branch default  under
+//      . fix ispipe"  need  "and"low-confidence" become    path. 
 //
-// 本文件把边界钉死：**有信息就不能回问**，否则会把正常指令变成无谓的决策点。
+// basefilepipe boundary  : **has  then  clarification**,  then pipepos refer changebecomeno  decision point. 
 package input
 
 import (
@@ -15,7 +15,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestSlotGateAsksOnZeroInformation G2 主线：零信息句子必须回问。
+// TestSlotGateAsksOnZeroInformation G2  line:    sent   clarification. 
 func TestSlotGateAsksOnZeroInformation(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -40,7 +40,7 @@ func TestSlotGateAsksOnZeroInformation(t *testing.T) {
 	}
 }
 
-// TestSlotGateDoesNotFireOnInformativeText 有信息就不该回问 —— 否则正常指令被拖成决策点。
+// TestSlotGateDoesNotFireOnInformativeText has  then  clarification --  thenpos refer be becomedecision point. 
 func TestSlotGateDoesNotFireOnInformativeText(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -60,8 +60,8 @@ func TestSlotGateDoesNotFireOnInformativeText(t *testing.T) {
 	}
 }
 
-// TestSlotGateScopeIsLimited 槽位闸只应对 EDIT/DEBUG/QUERY 生效。
-// TEST/COMMIT/DEPLOY/NOTE/ASK 有默认值或本就不需要对象。
+// TestSlotGateScopeIsLimited    only to EDIT/DEBUG/QUERY occur . 
+// TEST/COMMIT/DEPLOY/NOTE/ASK hasdefaultvalueorbasethen needneedto . 
 func TestSlotGateScopeIsLimited(t *testing.T) {
 	for _, kind := range []string{
 		contract.IntentTest, contract.IntentCommit, contract.IntentDeploy,
@@ -71,7 +71,7 @@ func TestSlotGateScopeIsLimited(t *testing.T) {
 			t.Errorf("%s 不在槽位闸范围内，不应触发", kind)
 		}
 	}
-	// 三类在范围内
+	//  class   in
 	for _, kind := range []string{contract.IntentEdit, contract.IntentDebug, contract.IntentQuery} {
 		if !slotGateTrips(kind, "改一下") && !slotGateTrips(kind, "修") && !slotGateTrips(kind, "查") {
 			t.Errorf("%s 应在槽位闸范围内", kind)
@@ -79,7 +79,7 @@ func TestSlotGateScopeIsLimited(t *testing.T) {
 	}
 }
 
-// TestSlotGateTripsUnit 是函数级单测：剥除触发词与虚词后的残留长度判定。
+// TestSlotGateTripsUnit is num   :   triggersendwordand wordafter       . 
 func TestSlotGateTripsUnit(t *testing.T) {
 	cases := []struct {
 		kind string

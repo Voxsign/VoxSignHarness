@@ -1,11 +1,11 @@
-// l1.go —— L1 慢通道客户端（deepseek-flash），**唯一升级目标**。
+// l1.go -- L1 slow  clientuserend(deepseek-flash), **unique  objtgt**. 
 //
-// 升级触发器只有两个（VHS-FASTSLOW-001 修订后）：
+//   triggersend onlyhas  (VHS-FASTSLOW-001 fix after): 
 //
-//	① JEV **不可用**（超时/非 200/格式错 —— 技术失败，不是"判了但说不清"）
-//	② 调用方声明**需要多步推理**
+//	① JEV **  use**( time/  200/ form  --     ,  is" but   ")
+//	② calluse voice **needneed    **
 //
-// `choice=ambiguous` **不在此列**：那是 JEV 给出的正确答案"说不清" ⇒ 回问用户。
+// `choice=ambiguous` **   list**:  is JEV giveout pos   "   " ⇒ clarificationuseuser. 
 package route
 
 import (
@@ -14,13 +14,13 @@ import (
 	"voicesign-harness/modelcenter"
 )
 
-// L1Client 用 modelcenter 的 default 通道（deepseek-flash）实现慢通道。
+// L1Client use modelcenter   default   (deepseek-flash) nowslow  . 
 type L1Client struct {
 	Registry *modelcenter.Registry
 	Channel  modelcenter.Channel
 }
 
-// Complete 调一次慢通道。
+// Complete call  slow  . 
 func (c *L1Client) Complete(ctx context.Context, prompt string) (string, error) {
 	ch := c.Channel
 	if ch == "" {

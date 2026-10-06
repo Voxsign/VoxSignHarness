@@ -1,6 +1,6 @@
 //go:build vhsui
 
-// mic_criteria_test.go —— 录音按钮的判据（结构断言 + node 行为断言）。
+// mic_criteria_test.go --  audioby   data(close disconnectlang + node  asdisconnectlang). 
 package asr
 
 import (
@@ -28,7 +28,7 @@ func fetchPage(t *testing.T) string {
 	return string(b)
 }
 
-// ① 结构：有录音按钮 + 有降级分支 + 有 rec.start() + onresult 写入 textarea。
+// ① close : has audioby  + has  branch + has rec.start() + onresult write textarea. 
 func TestMicPageStructure(t *testing.T) {
 	page := fetchPage(t)
 	for _, want := range []string{
@@ -39,7 +39,7 @@ func TestMicPageStructure(t *testing.T) {
 			t.Errorf("[mic] 页面缺少 %q", want)
 		}
 	}
-	// **不自动提交**：onresult 里不得出现 run() / fetch( / testpage
+	// **     **: onresult    outnow run() / fetch( / testpage
 	seg := page[strings.Index(page, "r.onresult"):]
 	seg = seg[:strings.Index(seg, "r.onend")]
 	for _, bad := range []string{"run()", "fetch(", "/v1/testpage"} {
@@ -49,7 +49,7 @@ func TestMicPageStructure(t *testing.T) {
 	}
 }
 
-// ② 行为（node 桩）：点击 ⇒ rec.start()；onresult ⇒ 填入 textarea；不自动提交；不支持 ⇒ 置灰+提示。
+// ②  as(node  ): pt  ⇒ rec.start(); onresult ⇒  in textarea;      ;   keep ⇒   + show. 
 func TestMicBehaviorWithNodeStub(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("无 node，跳过行为断言（结构断言仍然生效）")

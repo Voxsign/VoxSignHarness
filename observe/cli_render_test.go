@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// 非 quiet：滚动事件覆写当前行；Finish 后清行回行首——外层 REPL 的 "> " 提示符
-// 从干净行首打印，不被残留滚动字符污染。
+//   quiet:   event writecurbefore ; Finish after  back first--out  REPL   "> "  show 
+// from   first  ,  be    char   . 
 func TestCliRenderer_KeepsPrompt(t *testing.T) {
 	var buf strings.Builder
 	r := NewCliRenderer(&buf, false)
@@ -19,19 +19,19 @@ func TestCliRenderer_KeepsPrompt(t *testing.T) {
 	}
 	r.Finish()
 
-	// Finish 必须以清行序列结尾 → 外层提示符干净起行
+	// Finish   by   listclosetail -> out  show   raise 
 	got := buf.String()
 	if !strings.HasSuffix(got, "\r\x1b[2K") {
 		t.Fatalf("Finish 应清行回行首, 输出后缀=%q", got[len(got)-10:])
 	}
-	// 模拟外层 REPL 随后打印提示符，应落在干净行首（无残留滚动字符）
+	//   out  REPL  after   show ,       first(no    char )
 	buf.WriteString("> ")
 	if !strings.Contains(buf.String(), "\r\x1b[2K> ") {
 		t.Fatal("提示符应紧跟清行序列（不被滚动行污染）")
 	}
 }
 
-// quiet（-q）：零执行期输出，OnEvent/Finish 全部静默（退回一次性四行回执）。
+// quiet(-q):    period out, OnEvent/Finish safety   ( back  ityfour-line receipt). 
 func TestCliRenderer_Quiet(t *testing.T) {
 	var buf strings.Builder
 	r := NewCliRenderer(&buf, true)

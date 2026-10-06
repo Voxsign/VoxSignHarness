@@ -1,9 +1,9 @@
 //go:build vhsext
 
-// ext_criteria_test.go —— ASR-EXT-005 §3.3 的四条判据（先红）+ A5 的机械验证。
+// ext_criteria_test.go -- ASR-EXT-005 §3.3     data(first )+ A5      . 
 //
-// 运行：go test -tags vhsext ./world
-// 先用**本地假网关**（httptest）跑判据；真网关另有 env 守卫的集成测试（见文件末）。
+//   : go test -tags vhsext ./world
+// firstuse**basely  close**(httptest)  data;   close has env    integrate  (seefileend). 
 package world
 
 import (
@@ -27,7 +27,7 @@ const fakeCICD = `{"ok":true,"zone":"inner","status":"idle","current_tag":"relea
 
 const fakePage = `<html><script>fetch('/api/summary');fetch("/api/cicd/status");fetch('/api/email/config')</script></html>`
 
-// fakeGateway 起一个可控的假网关；fail=true 时所有 /api/* 返回 500。
+// fakeGateway raise       close; fail=true time has /api/* returnback 500. 
 type fakeGateway struct {
 	srv   *httptest.Server
 	hits  int64
@@ -56,7 +56,7 @@ func newFakeGateway(t *testing.T, fail bool) *fakeGateway {
 		case "/":
 			_, _ = w.Write([]byte(fakePage))
 		default:
-			_, _ = w.Write([]byte(fakePage)) // SPA 兜底页：与真实网关一致
+			_, _ = w.Write([]byte(fakePage)) // SPA  bot : and   close  
 		}
 	})
 	fg.srv = httptest.NewServer(mux)
@@ -71,7 +71,7 @@ func gw(t *testing.T, fg *fakeGateway) *Gateway {
 	return NewGateway(fg.srv.URL, WithHTTPClient(fg.srv.Client()), WithClock(fixedClock))
 }
 
-// EXT-05：summary 解析成功时，dependencies 必须含实际 host 列表且每条带 source。
+// EXT-05: summary resolve become time, dependencies       host listtableand    source. 
 func TestEXT05SummaryBecomesDependenciesWithSource(t *testing.T) {
 	fg := newFakeGateway(t, false)
 	deps := gw(t, fg).Dependencies(context.Background())
@@ -95,7 +95,7 @@ func TestEXT05SummaryBecomesDependenciesWithSource(t *testing.T) {
 	}
 }
 
-// EXT-06：端点不可达时不得标"不存在"，必须标 unknown（A3）。
+// EXT-06: endpoint   time  tgt" store ",   tgt unknown(A3). 
 func TestEXT06UnreachableIsUnknownNotAbsent(t *testing.T) {
 	fg := newFakeGateway(t, true)
 	g := gw(t, fg)
@@ -125,7 +125,7 @@ func TestEXT06UnreachableIsUnknownNotAbsent(t *testing.T) {
 	}
 }
 
-// EXT-07：读接口 200 不得被解释为"我可以部署/写"（A4）。
+// EXT-07: readconnect  200   beresolve as"  by  /write"(A4). 
 func TestEXT07ReadSuccessIsNotWritePermission(t *testing.T) {
 	fg := newFakeGateway(t, false)
 	g := gw(t, fg)
@@ -152,7 +152,7 @@ func TestEXT07ReadSuccessIsNotWritePermission(t *testing.T) {
 	}
 }
 
-// EXT-08：缓存可删可重建，重建后结果一致（A1）。
+// EXT-08: cache   heavy , heavy afterclose   (A1). 
 func TestEXT08CacheClearableAndRebuildable(t *testing.T) {
 	fg := newFakeGateway(t, false)
 	g := gw(t, fg)
@@ -180,7 +180,7 @@ func TestEXT08CacheClearableAndRebuildable(t *testing.T) {
 	}
 }
 
-// A5：不猜路径 —— 从页面里发现真实 /api/* 路径。
+// A5:   path -- from face sendnow   /api/* path. 
 func TestA5DiscoverEndpointsFromPage(t *testing.T) {
 	fg := newFakeGateway(t, false)
 	eps, err := gw(t, fg).DiscoverEndpoints(context.Background())
@@ -195,7 +195,7 @@ func TestA5DiscoverEndpointsFromPage(t *testing.T) {
 	}
 }
 
-// 真网关集成（默认跳过；VHS_AIOPS_LIVE=1 才跑）。
+//   closeintegrate(default ed; VHS_AIOPS_LIVE=1 only ). 
 func TestLiveGatewayOptional(t *testing.T) {
 	if os.Getenv("VHS_AIOPS_LIVE") != "1" {
 		t.Skip("需要 VHS_AIOPS_LIVE=1 才跑真网关（默认跳过，避免测试依赖外网）")
@@ -230,7 +230,7 @@ func keysB(m map[string]Boundary) []string {
 	return out
 }
 
-// EXT-09：HTTP 200 + 载荷内 ok:false 不得被当成成功（评审 §1.1 缺陷 A3-2）。
+// EXT-09: HTTP 200 +   in ok:false   becurbecomebecome (   §1.1    A3-2). 
 func TestEXT09PayloadOkFalseIsNotSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -252,8 +252,8 @@ func TestEXT09PayloadOkFalseIsNotSuccess(t *testing.T) {
 	}
 }
 
-// EXT-10：单台 host 解析失败必须以 unknown 出现在依赖里，且说明少了谁
-// （评审 §1.1 缺陷 A3-1：不得静默当"没有"）。
+// EXT-10:    host resolve     by unknown outnow dependency , and    
+// (   §1.1    A3-1:     cur" has"). 
 func TestEXT10BadHostNotSilentlyDropped(t *testing.T) {
 	payload := `{"ok":true,"zone":"inner","hosts":{"good":{"hostname":"VM-1","purpose":"正常机器"},"broken":{"hostname":12345,"purpose":{"x":1}}}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,11 +288,11 @@ func TestEXT10BadHostNotSilentlyDropped(t *testing.T) {
 	}
 }
 
-// EXT-11：远端"声称"的能力不得映射为本机授权（A4 必须**可证伪**）。
+// EXT-11:  end"voicecalled"       asbase   (A4   **   **). 
 //
-// 评审指出 Grants() 恒 nil 使 A4 判据永远不会红 = 假的安全感。
-// 这里给出一条**有可失败路径**的映射 API：任何远端声称（即使是真实存在的本地工具名）
-// 都不得产生授权；一个"朴素映射"实现会在这里红。
+//   referout Grants()   nil   A4  data      =   safesafety . 
+//   giveout  **has   path**    API:    endvoicecalled(i.e. is  store  basely  name)
+// all  produceoccur  ;   "    " now     . 
 func TestEXT11RemoteClaimNeverGrants(t *testing.T) {
 	for _, remote := range []string{"deploy", "http", "admin", "run", "git", "file", "search", "test", "verify", "*"} {
 		if local, ok := MapRemoteCapability(remote); ok || local != "" {

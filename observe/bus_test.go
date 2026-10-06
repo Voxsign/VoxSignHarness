@@ -9,7 +9,7 @@ func ev(trace, stage string) LineEvent {
 	return LineEvent{Time: time.Now(), TraceID: trace, Stage: stage, Status: "ok"}
 }
 
-// 多订阅者按 filter 扇出，各收各的匹配事件。
+//    erby filter  out,  recv    event. 
 func TestBus_PublishSubscribeFanout(t *testing.T) {
 	b := NewBus("m1", 64)
 	chA := b.Subscribe(Filter{TraceID: "tA"})
@@ -19,7 +19,7 @@ func TestBus_PublishSubscribeFanout(t *testing.T) {
 	b.Publish(ev("tB", "stage-b1"))
 	b.Publish(ev("tA", "stage-a2"))
 
-	// A 收 2 条 tA，B 收 1 条 tB（给足读取时间）
+	// A recv 2   tA, B recv 1   tB(give readgettimetime)
 	gotA := readN(t, chA, 2, time.Second)
 	gotB := readN(t, chB, 1, time.Second)
 	if len(gotA) != 2 || gotA[0].Stage != "stage-a1" || gotA[1].Stage != "stage-a2" {
@@ -33,7 +33,7 @@ func TestBus_PublishSubscribeFanout(t *testing.T) {
 	}
 }
 
-// Replay 对同一 trace 不重不丢、按序。
+// Replay tosame  trace  heavy  , by . 
 func TestBus_ReplayNoDupLoss(t *testing.T) {
 	b := NewBus("m1", 64)
 	for i := 0; i < 10; i++ {
@@ -48,10 +48,10 @@ func TestBus_ReplayNoDupLoss(t *testing.T) {
 	}
 }
 
-// 慢消费者（无人读 best-effort 通道）不得反向阻塞 Publish。
+// slow  er(no read best-effort   )  revto   Publish. 
 func TestBus_NeverBlocksRunner(t *testing.T) {
 	b := NewBus("m1", 64)
-	ch := b.Subscribe(Filter{}) // 通配，但绝不读 → 缓冲(16)很快满
+	ch := b.Subscribe(Filter{}) //   , but  read ->   (16) fastfull
 	_ = ch
 
 	done := make(chan struct{})
@@ -71,7 +71,7 @@ func TestBus_NeverBlocksRunner(t *testing.T) {
 	}
 }
 
-// 可靠订阅：消费者先慢后追，全部事件一条不丢。
+//     :   erfirstslowafter , safety event    . 
 func TestBus_ReliableNoDrop(t *testing.T) {
 	b := NewBus("m1", 64)
 	ch := b.SubscribeReliable(Filter{TraceID: "tr"})
@@ -80,7 +80,7 @@ func TestBus_ReliableNoDrop(t *testing.T) {
 	for i := 0; i < n; i++ {
 		b.Publish(ev("tr", "stage"))
 	}
-	// 全部收齐（给足时间让泵排空内存队列）
+	// safety recv (give timetime   emptyinstore list)
 	got := readN(t, ch, n, 3*time.Second)
 	if len(got) != n {
 		t.Fatalf("可靠订阅应收到全部 %d 条, got %d", n, len(got))

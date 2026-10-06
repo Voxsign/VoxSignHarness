@@ -1,7 +1,7 @@
-// Package memory 是个人上下文沉淀层（架构 §7）。
-// V0 阶段本包仅实现「个人词典」：归记忆层管理，输入容错层做变体纠错、
-// 模型提示词注入做术语校正，双向复用（架构 §5.4）。
-// 本包只依赖标准库（os/json）+ contract，不依赖 config/input/router。
+// Package memory is  onunder    (   §7). 
+// V0 stagethis packageonly now"  word ":     manage ,  in    changebodycorrection, 
+//  type showwordnotein  lang pos,  to use(   §5.4). 
+// this packageonlydependencytgtapprove (os/json)+ contract,  dependency config/input/router. 
 package memory
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// Term 是一条词典条目：正确写法 Term + 常见误识别变体 Variants。
+// Term is  word  obj: pos write  Term +  see  diffchangebody Variants. 
 type Term struct {
 	Term     string   `json:"term"`
 	Variants []string `json:"variants"`
@@ -23,30 +23,27 @@ type Term struct {
 	LastUsed string   `json:"last_used,omitempty"`
 }
 
-// Dictionary 是个人词典。Path 为加载来源；AddTerm 时写回该路径。
+// Dictionary is  word . Path as    ; AddTerm timewriteback path. 
 type Dictionary struct {
-	Path    string `json:"-"` // 加载来源；AddTerm 时写回
+	Path    string `json:"-"` //     ; AddTerm timewriteback
 	Terms   []Term `json:"terms"`
 	Version int    `json:"version"`
 }
 
-// builtinDictionary 返回架构 §5.4 的五条内置默认词典（source=builtin，不落盘）。
-// 注意：同一 Term 的变体按「长变体在前」排列，避免「曼苏」抢先匹配「曼苏尔」。
+// builtinDictionary returnback   §5.4    in defaultword (source=builtin,    ). 
+// note : same  Term  changebodyby" changebody before" list,   "  " first  "   ". 
 func builtinDictionary() *Dictionary {
 	return &Dictionary{
 		Version: 1,
 		Terms: []Term{
-			{Term: "Mansour", Variants: []string{"美墅", "曼苏尔", "曼苏"}, Category: "人名", Source: "builtin"},
-			{Term: "冀总", Variants: []string{"季总"}, Category: "称呼", Source: "builtin"},
-			{Term: "model.peterzou.com", Variants: []string{"彼得周点com", "model彼得周"}, Category: "域名", Source: "builtin"},
 			{Term: "VoxSign", Variants: []string{"voxsign", "沃克斯赛因"}, Category: "产品名", Source: "builtin"},
 			{Term: "center", Variants: []string{"中枢", "森特"}, Category: "架构名", Source: "builtin"},
 		},
 	}
 }
 
-// LoadDictionary 从 path 加载词典。文件不存在时返回内置默认词典（不落盘）；
-// 文件存在但 JSON 损坏则报错。
+// LoadDictionary from path   word . file store timereturnbackin defaultword (   ); 
+// filestore but JSON   then  . 
 func LoadDictionary(path string) (*Dictionary, error) {
 	d := builtinDictionary()
 	d.Path = path
@@ -54,7 +51,7 @@ func LoadDictionary(path string) (*Dictionary, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// 文件不存在 → 内置默认词典，不创建文件。
+			// file store  -> in defaultword ,    file. 
 			return d, nil
 		}
 		return nil, fmt.Errorf("读取词典 %s 失败: %w", path, err)
@@ -66,12 +63,12 @@ func LoadDictionary(path string) (*Dictionary, error) {
 	return d, nil
 }
 
-// Correct 逐条目逐变体做大小写不敏感替换：
-//   - 含中文的变体：直接子串替换（中文无词边界）；
-//   - 纯英文/数字/域名变体：按完整 token 边界替换，避免误匹配子串（如 xvoxsigny）。
+// Correct   obj changebody   write     : 
+//   -  in  changebody:  connect    (in noword boundary); 
+//   -    /numchar/domainnamechangebody: byfinish  token  boundary  ,        (e.g. xvoxsigny). 
 //
-// 每条真正发生变化的替换记录一条 contract.Correction{From,To,Rule:"dict"}，
-// From 取文本中实际出现的写法。返回修正后文本与纠错记录。
+//    possendoccurchangeize        contract.Correction{From,To,Rule:"dict"}, 
+// From get basein  outnow write . returnbackfixposafter baseandcorrection  . 
 func (d *Dictionary) Correct(text string) (string, []contract.Correction) {
 	var corrections []contract.Correction
 	cur := text
@@ -80,7 +77,7 @@ func (d *Dictionary) Correct(text string) (string, []contract.Correction) {
 			if variant == "" {
 				continue
 			}
-			boundary := !hasCJK(variant) // 纯 ASCII 变体按 token 边界替换
+			boundary := !hasCJK(variant) //   ASCII changebodyby token  boundary  
 			var froms []string
 			cur, froms = replaceCI(cur, variant, term.Term, boundary)
 			for _, from := range froms {
@@ -95,8 +92,8 @@ func (d *Dictionary) Correct(text string) (string, []contract.Correction) {
 	return cur, corrections
 }
 
-// Render 渲染提示词注入块（一句话一行，含正确写法与变体），
-// 用于注入模型首条 user 消息前缀（架构 §5.4 双向复用之模型侧）。
+// Render    showwordnotein ( sent   ,  pos write andchangebody), 
+// useatnotein typefirst  user   before (   §5.4  to useof typeside). 
 func (d *Dictionary) Render() string {
 	var sb strings.Builder
 	sb.WriteString("个人词典（输出请使用正确写法）：")
@@ -109,8 +106,8 @@ func (d *Dictionary) Render() string {
 	return sb.String()
 }
 
-// AddTerm 追加一条条目并重写 JSON 到 d.Path（保留 source 标记）。
-// Path 为空（纯内置词典、未指定落盘路径）时仅追加到内存。
+// AddTerm      objandheavywrite JSON to d.Path(keep  source tgt ). 
+// Path asempty( in word ,  refer   path)timeonly  toinstore. 
 func (d *Dictionary) AddTerm(t Term) error {
 	d.Terms = append(d.Terms, t)
 	if d.Path == "" {
@@ -131,7 +128,7 @@ func (d *Dictionary) AddTerm(t Term) error {
 	return nil
 }
 
-// hasCJK 报告字符串是否含中日韩统一表意文字（用于判定走子串还是 token 边界替换）。
+// hasCJK   char  is  inday   table  char(useat     alsois token  boundary  ). 
 func hasCJK(s string) bool {
 	for _, r := range s {
 		if r >= 0x4E00 && r <= 0x9FFF {
@@ -141,15 +138,15 @@ func hasCJK(s string) bool {
 	return false
 }
 
-// isASCIIAlnum 报告字节是否为 ASCII 单词字符（字母/数字/下划线），用于 token 边界判定。
+// isASCIIAlnum   charnodeis as ASCII  wordchar (char /numchar/under line), useat token  boundary  . 
 func isASCIIAlnum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
 		(b >= '0' && b <= '9') || b == '_'
 }
 
-// replaceCI 在 text 中大小写不敏感地把 from 替换为 to。
-// boundary=true 时仅当匹配串两侧均非 ASCII 单词字符才替换（完整 token）。
-// 返回替换后的文本与每条实际被替换掉的原文片段（matched != to 才记录）。
+// replaceCI   text in  write   lypipe from   as to. 
+// boundary=true timeonlycur    side   ASCII  wordchar only  (finish  token). 
+// returnback  after  baseand    be    orig  seg(matched != to only  ). 
 func replaceCI(text, from, to string, boundary bool) (string, []string) {
 	if from == "" || len(text) < len(from) {
 		return text, nil
@@ -177,7 +174,7 @@ func replaceCI(text, from, to string, boundary bool) (string, []string) {
 			leftOK := start == 0 || !isASCIIAlnum(text[start-1])
 			rightOK := end >= len(text) || !isASCIIAlnum(text[end])
 			if !leftOK || !rightOK {
-				// 非完整 token：前进一个字节继续找
+				//  finish  token: before   charnodecontinuecontinue 
 				sb.WriteString(text[i : start+1])
 				i = start + 1
 				continue
@@ -190,7 +187,7 @@ func replaceCI(text, from, to string, boundary bool) (string, []string) {
 			sb.WriteString(to)
 			froms = append(froms, matched)
 		} else {
-			// 已经是正确写法，不记录纠错
+			// already ispos write ,    correction
 			sb.WriteString(matched)
 		}
 		i = end

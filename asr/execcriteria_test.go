@@ -1,15 +1,15 @@
 //go:build vhs002
 
-// execcriteria_test.go —— ASR-EXEC-01..06：把「判意图 ≠ 动手」变成**可机械判定的判据**。
+// execcriteria_test.go -- ASR-EXEC-01..06: pipe" intent !=   "changebecome**       data**. 
 //
-// 运行：go test -tags vhs002 ./asr
+//   : go test -tags vhs002 ./asr
 //
-// 现状（先红，故意的）：独立服务（P3）尚未落地，所以这些判据现在**全部为红**。
-// 这不是"实现错了"，是"能力还没有"——判据先于实现（技能文档 §0 / RC6）。
-// 默认门禁 `go test ./...` 不带本 tag，不受影响。
+// nowstatus(first , thus  ):   serveservice(P3)   ly,  by   datanow **safety as **. 
+//   is" now ", is"  also has"-- datafirstat now(     §0 / RC6). 
+// default forbid `go test ./...`   base tag,  accept  . 
 //
-// 为什么放在 asr/：Δ1 要求迁到独立仓库，但迁移需 Peter 拍板（本次不执行）；
-// 在此之前判据寄存在能力代码旁边，随迁移一并搬走。
+// as     asr/: Δ1 needrequire to    , but  need owner   (base    ); 
+//   ofbefore data store    code  ,     and  . 
 package asr
 
 import (
@@ -33,7 +33,7 @@ const (
 	vhsSchemaPath = "../contracts/intent-v1.schema.json"
 )
 
-// postJSON 向服务发一个 JSON 请求（判据只在服务落地后才可能通过）。
+// postJSON toserveservicesend   JSON  require( dataonly serveservice lyafteronly   ed). 
 func postJSON(t *testing.T, url, body string) map[string]any {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
@@ -55,7 +55,7 @@ func postJSON(t *testing.T, url, body string) map[string]any {
 	return out
 }
 
-// serviceBase 返回被测服务地址；未部署即判据先红。
+// serviceBase returnbackbe serveservicely ;    i.e. datafirst . 
 func serviceBase(t *testing.T) string {
 	t.Helper()
 	base := strings.TrimSpace(os.Getenv("VHS_ASR_URL"))
@@ -65,7 +65,7 @@ func serviceBase(t *testing.T) string {
 	return strings.TrimRight(base, "/")
 }
 
-// serviceGoFiles 返回服务源码文件；入口不存在即先红。
+// serviceGoFiles returnbackserveservice codefile; in  store i.e.first . 
 func serviceGoFiles(t *testing.T) []string {
 	t.Helper()
 	info, err := os.Stat(vhsServiceDir)
@@ -91,7 +91,7 @@ func serviceGoFiles(t *testing.T) []string {
 	return files
 }
 
-// ASR-EXEC-01：服务静态无执行副作用（禁止 os/exec、syscall…）。
+// ASR-EXEC-01: serveservice stateno    use(forbidstop os/exec, syscall…). 
 func TestASREXEC01NoExecSideEffects(t *testing.T) {
 	files := serviceGoFiles(t)
 	forbidden := map[string]bool{"os/exec": true, "syscall": true, "plugin": true}
@@ -110,7 +110,7 @@ func TestASREXEC01NoExecSideEffects(t *testing.T) {
 	t.Logf("[ASR-EXEC-01] 扫描 %d 个服务源文件，无执行型 import", len(files))
 }
 
-// ASR-EXEC-02：对外的意图 JSON 只含声明式字段，不得出现执行字段。
+// ASR-EXEC-02: toout intent JSON only voice formcharseg,   outnow  charseg. 
 func TestASREXEC02ResponseIsDeclarative(t *testing.T) {
 	data, err := os.ReadFile(vhsSchemaPath)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestASREXEC02ResponseIsDeclarative(t *testing.T) {
 	}
 }
 
-// ASR-EXEC-03：高风险词典操作（删除）无确认时不得执行，文件必须不变。
+// ASR-EXEC-03:  riskword   (delete)noconfirmtime    , file   change. 
 func TestASREXEC03HighRiskNeedsConfirm(t *testing.T) {
 	base := serviceBase(t)
 	dict := os.Getenv("VHS_ASR_DICT")
@@ -163,9 +163,9 @@ func TestASREXEC03HighRiskNeedsConfirm(t *testing.T) {
 	}
 }
 
-// ASR-EXEC-04：端到端"不动手"探针——判意图 ≠ 执行。
+// ASR-EXEC-04: endtoend"   "  -- intent !=   . 
 //
-// 这是"判意图 ≠ 动手"最强的证据：给一句删除指令，断言目标文件仍在且内容不变。
+//  is" intent !=   "    data: give sentdeleterefer , disconnectlangobjtgtfile  andin  change. 
 func TestASREXEC04EndToEndDoesNotExecute(t *testing.T) {
 	base := serviceBase(t)
 	dir := t.TempDir()
@@ -193,19 +193,19 @@ func TestASREXEC04EndToEndDoesNotExecute(t *testing.T) {
 	}
 }
 
-// ASR-EXEC-05：轨迹里不得出现"执行"步骤。
+// ASR-EXEC-05: trace   outnow"  "  . 
 func TestASREXEC05TraceHasNoExecStep(t *testing.T) {
-	// **v2（Lead 发起 v1→v2）**：
-	// ① 轨迹步骤用**具名类型** `kind`（自由字符串步骤编译期写不出来）——
-	//    不再维护"合法步骤名白名单"（白名单必然漏）；
-	// ② 断言**零副作用**，而不是断言"步骤名合法"。
+	// **v2(Lead sendraise v1->v2)**: 
+	// ① trace  use** nameclasstype** `kind`( bychar      periodwrite out )--
+	//     again protect"    name name "( name  however ); 
+	// ② disconnectlang**   use**, but isdisconnectlang"  name  ". 
 	base := serviceBase(t)
 	traces := os.Getenv("VHS_ASR_TRACES")
 	if traces == "" {
 		t.Fatalf("[criterion] 需要 VHS_ASR_TRACES 指向 traces-asr.jsonl（未配置 → 先红）")
 	}
 
-	// ②-a 处理前后：**cwd 下的文件集合与大小不得变化**（dataDir 之外的副作用检查）
+	// ②-a handlebeforeafter: **cwd under file  and    changeize**(dataDir ofout   use  )
 	before := snapshotTree(t, ".", traces)
 
 	postJSON(t, base+"/v1/process", `{"text":"查一下库存","session_id":"trace-probe"}`)
@@ -224,7 +224,7 @@ func TestASREXEC05TraceHasNoExecStep(t *testing.T) {
 		}
 	}
 
-	// ① 每行轨迹必须带**枚举内**的 kind
+	// ①   trace   **  in**  kind
 	data, err := os.ReadFile(traces)
 	if err != nil {
 		t.Fatalf("[ASR-EXEC-05 v2] 读轨迹失败: %v", err)
@@ -248,14 +248,14 @@ func TestASREXEC05TraceHasNoExecStep(t *testing.T) {
 				"（自由字符串步骤不该写得出来）", rec.Step, rec.Kind)
 		}
 	}
-	// 零副作用 = 三个面，**分别标明覆盖状态**（"零副作用 ✅"太宽，会被读成全都覆盖）：
-	//   ① 文件系统（dataDir 外不被触碰）—— **已断言 ✅**（snapshotTree）
-	//   ② 出网（无未声明调用）            —— **未断言 UNCOVERED**
-	//   ③ 进程（数不增）                  —— **未断言 UNCOVERED**
-	// 注意：②③ 未覆盖不等于无风险；本地路径无出网、唯一声明的出网是 env 守卫的模型兜底。
+	//    use =   face, **splitdifftgt overwritestatus**("   use ✅"  ,  bereadbecomesafetyalloverwrite): 
+	//   ① file  (dataDir out betrigger )-- **alreadydisconnectlang ✅**(snapshotTree)
+	//   ② out (no voice calluse)            -- ** disconnectlang UNCOVERED**
+	//   ③ process(num add)                  -- ** disconnectlang UNCOVERED**
+	// note : ②③  overwrite etcatnorisk; baselypathnoout , uniquevoice  out is env     type bot. 
 }
 
-// snapshotTree 记录 root 下的 路径→大小（排除 exclude 与数据目录），用于副作用比对。
+// snapshotTree    root under  path->  (   exclude andnumdataobj ), useat  use to. 
 func snapshotTree(t *testing.T, root, exclude string) map[string]int64 {
 	t.Helper()
 	out := map[string]int64{}
@@ -285,7 +285,7 @@ func snapshotTree(t *testing.T, root, exclude string) map[string]int64 {
 	return out
 }
 
-// ASR-EXEC-06：域只建议、不授权；默认拒绝，不猜高权限域。
+// ASR-EXEC-06: domainonly  ,    ; defaultreject,     limitdomain. 
 func TestASREXEC06DomainSuggestionNeverGrants(t *testing.T) {
 	base := serviceBase(t)
 	got := postJSON(t, base+"/v1/process", `{"text":"把生产库里的数据都删了","session_id":"domain-probe"}`)

@@ -9,8 +9,8 @@ import (
 	"voicesign-harness/config"
 )
 
-// 控制面（架构 v1 §6）：interrupt 全局急停/指定打断、withdraw 分层撤回。
-// 白盒构造 taskState 状态，避免依赖真实 pipeline 完成时序。
+// controlface(   v1 §6): interrupt global stop/refer  disconnect, withdraw split  back. 
+//      taskState status,   dependency   pipeline donetime . 
 
 func newControlSrv(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
@@ -26,7 +26,7 @@ func newControlSrv(t *testing.T) (*Server, *httptest.Server) {
 	return srv, httptest.NewServer(mux)
 }
 
-// postControl 发控制面 POST（复用 server_test.go 的 postJSON，带 token）。
+// postControl sendcontrolface POST( use server_test.go   postJSON,   token). 
 func postControl(t *testing.T, ts *httptest.Server, path string, body any) (int, map[string]any) {
 	t.Helper()
 	resp := postJSON(t, ts.URL+path, "secret", body)
@@ -40,7 +40,7 @@ func TestInterruptGlobalStopsAllActive(t *testing.T) {
 	srv, ts := newControlSrv(t)
 	defer ts.Close()
 
-	// 两个任务：一个 running（ctx 取消可感知）、一个 waiting_confirm 挂起。
+	//   task:    running(ctx cancel   ),    waiting_confirm  raise. 
 	a := &taskState{ID: "task-a", Status: stRunning, confirmCh: make(chan bool, 1), Priority: 50}
 	b := &taskState{ID: "task-b", Status: stWaiting, confirmCh: make(chan bool, 1), Priority: 80}
 	a.cancel, b.cancel = func() {}, func() {}

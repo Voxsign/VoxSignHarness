@@ -1,9 +1,9 @@
 //go:build vhsg1
 
-// g1_metric_test.go —— G1 命中率**基线度量**（先度量，后归一化）。
+// g1_metric_test.go -- G1  inrate**baseline  **(first  , after  ize). 
 //
-// 纪律：① 只度量，不做归一化；② 输入集标 observed / constructed；
-// ③ 分类统计（精确别名 / 混排 / 纯中文近音 / 拉丁近似）——分类比总分有用。
+//   : ① only  ,     ize; ②  in tgt observed / constructed; 
+// ③ classify  (  diffname /    /  in  audio /     )--classify  splithasuse. 
 package hotcache
 
 import (
@@ -21,7 +21,7 @@ type g1Case struct {
 	Provenance string `json:"provenance"` // observed | constructed
 }
 
-// observed = 本轮真实出现过的变形；constructed = 构造的。
+// observed = base   outnowed change ; constructed =    . 
 var g1Cases = []g1Case{
 	{"爱ops", "aiops-portal", "alias", "observed"},
 	{"研究obc", "research-opc", "alias", "observed"},
@@ -39,14 +39,14 @@ var g1Cases = []g1Case{
 func g1Cache(t *testing.T) *Cache {
 	t.Helper()
 	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
-	// 服务别名（远端真值，来源 remote）
+	// serveservicediffname( end value,    remote)
 	for alias, canon := range map[string]string{
 		"爱ops": "aiops-portal", "研究obc": "research-opc", "沃克body": "workbuddy", "格罗克": "grok-bot",
 		"哈尼斯": "harness", "voise sign": "voice-sign",
 	} {
 		c.PutAlias(alias, canon, "remote:/api/services")
 	}
-	// 规范词（用于混排/拉丁类别的目标）
+	// rule word(useat  /  classdiff objtgt)
 	c.PutAlias("aiops", "aiops", "remote:/api/services")
 	c.PutAlias("DeepSeek", "DeepSeek", "remote:/api/services")
 	c.PutAlias("peterzou.com", "peterzou.com", "remote:/api/services")

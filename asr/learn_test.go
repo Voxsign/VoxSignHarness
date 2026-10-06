@@ -1,7 +1,7 @@
-// learn_test.go —— 学习触发器（LEARN-01）的默认门禁单测（不带 tag）。
+// learn_test.go --   triggersend (LEARN-01) default forbid  (   tag). 
 //
-// 判据本体在 learn_criteria_test.go（vhs002，跑语料）；这里测单点规则，
-// 让默认 `go test ./...` 就能守住"什么该学、什么不该学"。
+//  databody  learn_criteria_test.go(vhs002,  lang );     ptrule, 
+//  default `go test ./...` then   "    ,      ". 
 package asr
 
 import (
@@ -14,7 +14,7 @@ func ev(id, kind, raw, final string, confirmed bool) UsageEvent {
 	return UsageEvent{ID: id, Kind: kind, Raw: raw, Final: final, Confirmed: confirmed, Outcome: "accepted"}
 }
 
-// TestLearnDetectFindsUncoveredCorrection：本地不覆盖的已确认纠正 → 值得学。
+// TestLearnDetectFindsUncoveredCorrection: basely overwrite alreadyconfirm pos -> value  . 
 func TestLearnDetectFindsUncoveredCorrection(t *testing.T) {
 	got := DetectLearnCandidates(NewEngine(), nil, []UsageEvent{
 		ev("e1", eventUserCorrection, "把deept接上", "把DeepSeek接上", true),
@@ -33,12 +33,12 @@ func TestLearnDetectFindsUncoveredCorrection(t *testing.T) {
 	}
 }
 
-// TestLearnDetectCoveredCorrectionNotTriggered：本地规则已覆盖 → 不学。
+// TestLearnDetectCoveredCorrectionNotTriggered: baselyrulealreadyoverwrite ->   . 
 func TestLearnDetectCoveredCorrectionNotTriggered(t *testing.T) {
 	cases := [][2]string{
-		{"嗯那个呃记一下这个想法", "记一下这个想法"},     // 填充词规则
-		{"帮我把这个文件题交一下", "帮我把这个文件提交一下"}, // 近音词表
-		{"报价页那个别字", "报价页那个错别字"},        // 截断还原
+		{"嗯那个呃记一下这个想法", "记一下这个想法"},     //  fillwordrule
+		{"帮我把这个文件题交一下", "帮我把这个文件提交一下"}, //  audiowordtable
+		{"报价页那个别字", "报价页那个错别字"},        //  disconnectalsoorig
 	}
 	for _, c := range cases {
 		got := DetectLearnCandidates(NewEngine(), nil, []UsageEvent{
@@ -50,7 +50,7 @@ func TestLearnDetectCoveredCorrectionNotTriggered(t *testing.T) {
 	}
 }
 
-// TestLearnDetectLearnDerivedNeverTriggers：防自训练回路（E5）。
+// TestLearnDetectLearnDerivedNeverTriggers: prevent   backroute(E5). 
 func TestLearnDetectLearnDerivedNeverTriggers(t *testing.T) {
 	got := DetectLearnCandidates(NewEngine(), nil, []UsageEvent{
 		ev("e", eventLearnDerived, "把哈牛斯接上", "把harness接上", true),
@@ -60,7 +60,7 @@ func TestLearnDetectLearnDerivedNeverTriggers(t *testing.T) {
 	}
 }
 
-// TestLearnDetectRequiresConfirmation：未确认不学（L3）。
+// TestLearnDetectRequiresConfirmation:  confirm  (L3). 
 func TestLearnDetectRequiresConfirmation(t *testing.T) {
 	got := DetectLearnCandidates(NewEngine(), nil, []UsageEvent{
 		ev("e", eventUserCorrection, "把哈牛斯接上", "把harness接上", false),
@@ -70,7 +70,7 @@ func TestLearnDetectRequiresConfirmation(t *testing.T) {
 	}
 }
 
-// TestLearnDetectSkipsNoiseAndNavigation：噪声/导航/无差异不学。
+// TestLearnDetectSkipsNoiseAndNavigation:  voice/  /nodiffdiff  . 
 func TestLearnDetectSkipsNoiseAndNavigation(t *testing.T) {
 	got := DetectLearnCandidates(NewEngine(), nil, []UsageEvent{
 		ev("e1", "noise", "呃呃呃", "呃呃呃", true),
@@ -82,7 +82,7 @@ func TestLearnDetectSkipsNoiseAndNavigation(t *testing.T) {
 	}
 }
 
-// TestLearnDetectDedupAndBounded：同 key 重复事件 → 1 条候选，证据有界。
+// TestLearnDetectDedupAndBounded: same key heavy event -> 1    ,  datahasboundary. 
 func TestLearnDetectDedupAndBounded(t *testing.T) {
 	var events []UsageEvent
 	for i := 0; i < 20; i++ {
@@ -97,7 +97,7 @@ func TestLearnDetectDedupAndBounded(t *testing.T) {
 	}
 }
 
-// TestLearnDetectDictionaryCoverage：词典已覆盖 → 不学。
+// TestLearnDetectDictionaryCoverage: word alreadyoverwrite ->   . 
 func TestLearnDetectDictionaryCoverage(t *testing.T) {
 	d, err := NewDictionary(filepath.Join(t.TempDir(), "d.json"))
 	if err != nil {
@@ -113,7 +113,7 @@ func TestLearnDetectDictionaryCoverage(t *testing.T) {
 	}
 }
 
-// TestLearnDetectPureAndDeterministic：纯函数——不改输入、可重放。
+// TestLearnDetectPureAndDeterministic:   num-- modify in,  heavy . 
 func TestLearnDetectPureAndDeterministic(t *testing.T) {
 	events := []UsageEvent{
 		ev("e1", eventUserCorrection, "把deept接上", "把DeepSeek接上", true),

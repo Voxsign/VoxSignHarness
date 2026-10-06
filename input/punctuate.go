@@ -5,68 +5,68 @@ import (
 	"unicode"
 )
 
-// punctuate.go —— M7 server 端标点后处理兜底（备路径，零用户配置）。
+// punctuate.go -- M7 server endtgtptafterhandle bot( path,  useuser  ). 
 //
-// 背景：ASR 标点全自动，iOS 侧 addsPunctuation=true 为主路径（并行实施中）。
-// 本文件实现 server 端兜底：若系统开关/locale 实测影响识别标点，文本进意图分类前
-// 自动补句末标点，用户完全无感。**当前不接线 pipeline**——备路径，由组织者在 iOS
-// 侧验证结果出来后决定是否在 Clean→Correct→Classify 之间插入本函数。
+//  scenario: ASR tgtptsafety  , iOS side addsPunctuation=true as path(and   in). 
+// basefile now server end bot: if  openclose/locale      difftgtpt,  base intentclassifybefore
+//   patchsentendtgtpt, useuserfinishsafetyno . **curbefore connectline pipeline**-- path, by  er  iOS
+// side  close out afterdecide is   Clean->Correct->Classify oftime inbase num. 
 //
-// 设计：
-//   - 规则优先（纯中文标点，无外部依赖）；
-//   - LLM 精修仅预留接口（LMRefiner，未配 key 恒为 nil → 纯规则）；
-//   - 幂等：对标点已完整的文本不加改，重复调用结果一致。
+//   : 
+//   - rule first( in tgtpt, noout dependency); 
+//   - LLM  fixonly  connect (LMRefiner,    key  as nil ->  rule); 
+//   -  etc: totgtptalreadyfinish   base  modify, heavy calluseclose   . 
 
-// questionWords 是中文疑问触发词（命中即在句末落「？」）。
+// questionWords isin   triggersendword( ini.e. sentend " "). 
 var questionWords = []string{"谁", "什么", "为什么", "怎么", "哪", "吗", "呢", "能不能", "可不可以", "是否", "多少", "几"}
 
-// sentenceEndPunct 是视为「句末已有标点」的字符（中英文句读）。
+// sentenceEndPunct is as"sentendalreadyhastgtpt" char (in  sentread). 
 var sentenceEndPunct = map[rune]bool{
 	'。': true, '？': true, '！': true, '；': true, '…': true,
 	'.': true, '?': true, '!': true, ';': true,
 }
 
-// LMRefiner 是可选 LLM 精修接口预留。
+// LMRefiner is   LLM  fixconnect   . 
 //
-// 【预留，本任务不实配】：provider 未配 key 时全局 LMRefiner 恒为 nil，Punctuate 纯规则；
-// 将来配 key 后由组织者注入一个实现，Punctuate 在规则落标点后可选调用它精修内部停顿。
-// 接口签名冻结：输入待修文本，返回精修后文本（出错时返回原文，不得阻断主流程）。
+// [  , basetask   ]: provider    key timeglobal LMRefiner  as nil, Punctuate  rule; 
+// will   key afterby  ernotein   now, Punctuate  rule tgtptafter  calluse  fixin stop . 
+// connect signaturefrozen:  in fix base, returnback fixafter base(out timereturnbackorig ,    disconnect flow). 
 type LMRefiner interface {
 	RefinePunctuation(text string) (string, error)
 }
 
-// lmRefiner 是 LLM 精修的全局注入点；nil = 纯规则（默认）。
+// lmRefiner is LLM  fix globalnoteinpt; nil =  rule(default). 
 var lmRefiner LMRefiner = nil
 
-// SetLMRefiner 注入 LLM 精修器（可选；传 nil 回到纯规则）。
-// 由组织者在接线 M7 时调用；未调用前 Punctuate 完全是规则函数。
+// SetLMRefiner notein LLM  fix (  ;   nil backto rule). 
+// by  er connectline M7 timecalluse;  callusebefore Punctuate finishsafetyisrule num. 
 func SetLMRefiner(r LMRefiner) { lmRefiner = r }
 
-// Punctuate 对 ASR 文本做句末标点兜底（中文为主）：
-//   - 已有句末标点（。！？.!? 等）→ 原样返回（幂等）；
-//   - 纯代码/数字/英文/URL/路径（无中文字符）→ 原样返回，不加标点；
-//   - 陈述句末 → 补「。」；命中疑问词（谁/什么/为什么/吗/呢/能不能/可不可以…）→ 补「？」。
+// Punctuate to ASR  base sentendtgtpt bot(in as ): 
+//   - alreadyhassentendtgtpt(.   .!? etc)-> origkindreturnback( etc); 
+//   -   code/numchar/  /URL/path(noin char )-> origkindreturnback,   tgtpt; 
+//   -   sentend -> patch". ";  in  word( /  /as  / / /   /   by…)-> patch" ". 
 //
-// 内部停顿/列表的逗号插入**刻意保持保守**（本版不做激进切分），避免将来接线后扰动
-// 下游触发词子串匹配；内部停顿交由 LMRefiner 预留接口或 iOS 主路径处理。
+// in stop /listtable  id in**  keepkeepkeep **(base      split),   will connectlineafter  
+// under triggersendword    ; in stop  by LMRefiner   connect or iOS  pathhandle. 
 func Punctuate(text string) string {
 	s := strings.TrimSpace(text)
 	if s == "" {
 		return ""
 	}
 
-	// 幂等：句末已是句读标点 → 不动。
+	//  etc: sentendalreadyissentreadtgtpt ->   . 
 	runes := []rune(s)
 	if sentenceEndPunct[runes[len(runes)-1]] {
 		return s
 	}
 
-	// 无中文字符 → 视为代码/数字/英文/URL/路径，不加标点。
+	// noin char  ->  as code/numchar/  /URL/path,   tgtpt. 
 	if !hasChinese(runes) {
 		return s
 	}
 
-	// 规则：疑问词 → ？，否则 → 。
+	// rule:   word ->  ,  then -> . 
 	var end string
 	if containsAny(s, questionWords) {
 		end = "？"
@@ -75,7 +75,7 @@ func Punctuate(text string) string {
 	}
 	out := s + end
 
-	// LLM 精修预留（未配 key 时跳过；出错回退规则结果）。
+	// LLM  fix  (   key time ed; out back ruleclose ). 
 	if lmRefiner != nil {
 		if refined, err := lmRefiner.RefinePunctuation(out); err == nil && strings.TrimSpace(refined) != "" {
 			return strings.TrimSpace(refined)
@@ -84,7 +84,7 @@ func Punctuate(text string) string {
 	return out
 }
 
-// hasChinese 报告 rune 序列是否含至少一个 CJK 统一表意文字。
+// hasChinese    rune  listis       CJK   table  char. 
 func hasChinese(runes []rune) bool {
 	for _, r := range runes {
 		if unicode.Is(unicode.Han, r) {

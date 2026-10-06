@@ -1,10 +1,10 @@
-// engine_test.go —— 实现方补充的测试（不带 asrharness 标签，随 `go test ./...` 常跑）。
+// engine_test.go --  now patchfill   (   asrharness tgt ,   `go test ./...`   ). 
 //
-// 定位：harness_test.go 是**判据**（规格，不许改）；本文件是**实现方的安全网**，
-// 把同一批语料的安全侧不变量放进默认门禁，并覆盖判据没写的边界：
-// 守卫、区间精度、候选支路、在线学习、并发纯函数性。
+//   : harness_test.go is** data**(rule ,  allowmodify); basefileis** now  safesafety **, 
+// pipesame approvelang  safesafetysideinvariant  default forbid, andoverwrite data write  boundary: 
+//   ,  time  ,    route,  line  , andsend  numity. 
 //
-// 判据文件不带标签时不参与编译，所以这里的语料加载与断言是独立实现，不是抄判据。
+//  datafile  tgt time  and  ,  by   lang   anddisconnectlangis   now,  is  data. 
 package asr
 
 import (
@@ -64,7 +64,7 @@ func tagged(c corpusCase, tag string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// 填充词守卫：单点行为
+//  fillword  :  pt as
 // ---------------------------------------------------------------------------
 
 func TestFillerGuardTable(t *testing.T) {
@@ -90,7 +90,7 @@ func TestFillerGuardTable(t *testing.T) {
 	}
 }
 
-// TestTruncationGuard 防止截断还原套娃：「错别字」不能再被还原一次。
+// TestTruncationGuard preventstop disconnectalsoorig  : " diffchar"  againbealsoorig  . 
 func TestTruncationGuard(t *testing.T) {
 	eng := NewEngine()
 	for _, raw := range []string{"错别字", "这个是错别字", "别字"} {
@@ -108,7 +108,7 @@ func TestTruncationGuard(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 可观测：区间必须精确落在原文的字节区间上
+//    :  time      orig  charnode timeon
 // ---------------------------------------------------------------------------
 
 func TestCorrectionSpansExact(t *testing.T) {
@@ -152,7 +152,7 @@ func TestCorrectionSpansNeverEscapeRaw(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 候选支路：只建议、绝不改文本
+//    route: only  ,   modify base
 // ---------------------------------------------------------------------------
 
 func TestPinyinCandidateSurfaces(t *testing.T) {
@@ -164,7 +164,7 @@ func TestPinyinCandidateSurfaces(t *testing.T) {
 	if !hasCandidate(got, "提交") {
 		t.Fatalf("拼音近音未召回 提交: %+v", got.Candidates)
 	}
-	// 上下文命中应上调置信度
+	// onunder  in oncall   
 	plain := eng.Correct(CorrectRequest{Raw: "提胶一下"})
 	boosted := eng.Correct(CorrectRequest{Raw: "提胶一下", Context: []string{"提交这个文件"}})
 	if confOf(boosted, "提交") <= confOf(plain, "提交") {
@@ -189,7 +189,7 @@ func TestProperNounsOnlyCandidate(t *testing.T) {
 			t.Errorf("专名未给候选 %q: %+v", want, got.Candidates)
 		}
 	}
-	// AAAR 里的 AR 不得命中（拉丁词边界守卫）
+	// AAAR    AR    in(  word boundary  )
 	got := eng.Correct(CorrectRequest{Raw: "不是让deep sick去改那个AAAR的代码"})
 	for _, c := range got.Candidates {
 		if c.Text == "ASR" {
@@ -199,7 +199,7 @@ func TestProperNounsOnlyCandidate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Observe 只记证据、不写回（ASR-MODEL-02 L2）；写回只走 learn
+// Observe only  data,  writeback(ASR-MODEL-02 L2); writebackonly  learn
 // ---------------------------------------------------------------------------
 
 func TestObserveRecordsEvidenceOnly(t *testing.T) {
@@ -214,13 +214,13 @@ func TestObserveRecordsEvidenceOnly(t *testing.T) {
 		t.Fatal("Observe 未产生新版本（热词审计应更新）")
 	}
 
-	// 证据必须被记下（这是 learn 的输入）
+	//  data  be under( is learn   in)
 	ev := eng.Evidence()
 	if len(ev) != 1 || ev[0].Raw != "哈牛斯" || ev[0].Corrected != "harness" || !ev[0].Accepted || ev[0].Source != "user_edit" || ev[0].At == "" {
 		t.Fatalf("证据记录不完整: %+v", ev)
 	}
 
-	// 但**不得写回知识**：既不改文本，也不产生候选
+	// but**  writeback  **:   modify base, also produceoccur  
 	got := eng.Correct(CorrectRequest{Raw: "把哈牛斯接上"})
 	if got.Text != "把哈牛斯接上" {
 		t.Fatalf("Observe 不得自动改写: %q", got.Text)
@@ -253,7 +253,7 @@ func TestObserveEvidenceKeepsBothOutcomes(t *testing.T) {
 	if len(ev) != 2 || !ev[0].Accepted || ev[1].Accepted {
 		t.Fatalf("证据应保留接受/否认两次记录: %+v", ev)
 	}
-	// 无论接受与否，都不写回知识
+	// no connectacceptand , all writeback  
 	got := eng.Correct(CorrectRequest{Raw: "把哈牛斯接上"})
 	if hasCandidate(got, "harness") {
 		t.Fatalf("Observe 不得写回候选: %+v", got.Candidates)
@@ -268,7 +268,7 @@ func TestObserveRejectsEmptyFeedback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Correct 的纯函数性：可并发、可回放
+// Correct    numity:  andsend,  back 
 // ---------------------------------------------------------------------------
 
 func TestCorrectConcurrentAndReplayable(t *testing.T) {
@@ -302,7 +302,7 @@ func TestCorrectConcurrentAndReplayable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 语料级不变量（与 harness_test.go 同源语料，但它不带标签也跑）
+// lang  invariant(and harness_test.go same lang , but   tgt also )
 // ---------------------------------------------------------------------------
 
 func TestCorpusSafetyInvariants(t *testing.T) {
@@ -323,11 +323,11 @@ func TestCorpusSafetyInvariants(t *testing.T) {
 				t.Errorf("噪声被唯一改写且无候选 [%s]: %q", c.ID, got.Text)
 			}
 		}
-		// C3 的"该回问"必须可观测：噪声 → Candidates 非空且带 ask:noise 前缀。
+		// C3  " clarification"     :  voice -> Candidates  emptyand  ask:noise before . 
 		if c.Expect.AskNonempty && len(got.Candidates) == 0 {
 			t.Errorf("ask_nonempty 未交付 [%s]: 噪声没有发出任何回问信号", c.ID)
 		}
-		// 反向：有实义的句子不得被当成噪声（不得乱回问）。
+		// revto: has   sent   becurbecome voice(   clarification). 
 		if c.Expect.AskEmpty && len(got.Candidates) != 0 {
 			t.Errorf("ask_empty 被破 [%s]: 正常句却给了候选 %+v", c.ID, got.Candidates)
 		}
@@ -349,7 +349,7 @@ func TestCorpusSafetyInvariants(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 性能：判据只断言**平均** < 1ms，验收标准写的是 p99，这里补上
+// ity :  dataonlydisconnectlang**  ** < 1ms,  recvtgtapprovewrite is p99,   patchon
 // ---------------------------------------------------------------------------
 
 func TestPerformanceP99(t *testing.T) {
@@ -368,8 +368,8 @@ func TestPerformanceP99(t *testing.T) {
 	t.Logf("快路 p50=%v p99=%v（%d 次，含 Latency 计时开销）", p50, p99, n)
 }
 
-// TestMemoryFootprint 编码验收标准「常驻内存 < 50 MB」。
-// 度量方式刻意宽松：引擎构造 + 100 次快路调用后的堆增量（含运行时噪声）。
+// TestMemoryFootprint  code recvtgtapprove"  instore < 50 MB". 
+//    form    :      + 100  fastroutecalluseafter  add (   time voice). 
 func TestMemoryFootprint(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
@@ -390,7 +390,7 @@ func TestMemoryFootprint(t *testing.T) {
 	t.Logf("引擎堆增量 %d KB（含一次构造 + 100 次快路）", used/1024)
 }
 
-// TestPinyinTableDeterministic 钉住"可回放"：拼音表不得依赖 Go map 迭代顺序。
+// TestPinyinTableDeterministic   " back ":  audiotable  dependency Go map     . 
 func TestPinyinTableDeterministic(t *testing.T) {
 	a, b := buildPinyinTable(), buildPinyinTable()
 	if len(a) != len(b) {
@@ -401,7 +401,7 @@ func TestPinyinTableDeterministic(t *testing.T) {
 			t.Fatalf("两次构建不一致: %q → %q vs %q", r, syl, b[r])
 		}
 	}
-	// 表存在且关键字的读音符合预期（防呆）。
+	// tablestore andclose char readaudio   period(prevent ). 
 	for r, want := range map[rune]string{'题': "ti", '提': "ti", '交': "jiao", '报': "bao", '存': "cun"} {
 		if got := a[r]; got != want {
 			t.Errorf("%q → %q，期望 %q", r, got, want)
@@ -409,9 +409,9 @@ func TestPinyinTableDeterministic(t *testing.T) {
 	}
 }
 
-// TestPinyinTableHasNoCrossGroupDuplicate 钉住"多音字不入表"：
-// 同字跨音节组会让 buildPinyinTable 的"先到先得"依赖组顺序，
-// 是 P1 评审指出的潜伏缺陷。要么删掉重复，要么显式决定读音。
+// TestPinyinTableHasNoCrossGroupDuplicate   " audiochar intable": 
+// samechar audionode    buildPinyinTable  "firsttofirst "dependency   , 
+// is P1   referout     . need   heavy , need  formdecide readaudio. 
 func TestPinyinTableHasNoCrossGroupDuplicate(t *testing.T) {
 	seen := make(map[rune]string)
 	for _, g := range pinyinGroups {
@@ -425,8 +425,8 @@ func TestPinyinTableHasNoCrossGroupDuplicate(t *testing.T) {
 	}
 }
 
-// TestNoiseEmitsAskSignal 是 P2 评审的直接判据：噪声必须发出可观测的回问信号。
-// 约定：Candidates 恰有一条，Text==Raw、Confidence==0、Reason 以 ask:noise 开头。
+// TestNoiseEmitsAskSignal is P2     connect data:  voice  sendout    clarificationsignal. 
+//   : Candidates  has  , Text==Raw, Confidence==0, Reason by ask:noise openhead. 
 func TestNoiseEmitsAskSignal(t *testing.T) {
 	eng := NewEngine()
 	for _, raw := range []string{"呃呃呃", "那个那个那个", "嗯，那个呃，嗯", "这个"} {
@@ -445,7 +445,7 @@ func TestNoiseEmitsAskSignal(t *testing.T) {
 			t.Errorf("回问信号约定不符 [%q]: %+v", raw, c)
 		}
 	}
-	// 反向：有实义的句子不得触发回问信号。
+	// revto: has   sent   triggersendclarificationsignal. 
 	for _, raw := range []string{"查一下库存", "把报价单改成中文", "开始测试"} {
 		got := eng.Correct(CorrectRequest{Raw: raw})
 		for _, c := range got.Candidates {
@@ -456,8 +456,8 @@ func TestNoiseEmitsAskSignal(t *testing.T) {
 	}
 }
 
-// TestConcurrentCorrectAndObserve 是 P4 评审要求的交叉并发：
-// 读者（Correct/Lexicon）与写者（Observe）同时进行，配合 `go test -race` 使用。
+// TestConcurrentCorrectAndObserve is P4   needrequire   andsend: 
+// reader(Correct/Lexicon)andwriteer(Observe)sametime  ,    `go test -race`  use. 
 func TestConcurrentCorrectAndObserve(t *testing.T) {
 	eng := NewEngine()
 	raw := "嗯那个呃记一下这个想法"
@@ -510,7 +510,7 @@ func TestConcurrentCorrectAndObserve(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 小工具
+//    
 // ---------------------------------------------------------------------------
 
 func hasCandidate(r CorrectResult, text string) bool {

@@ -1,9 +1,9 @@
-// sk11_fourskills_criteria_test.go —— 4 技能守恒（**56**）+ basis 族四处点亮。
+// sk11_fourskills_criteria_test.go -- 4     (**56**)+ basis   placept . 
 package skill
 
 import "testing"
 
-// Lead 真值：每技能的 knowhow 条数（与我自测拉取**逐项一致**）
+// Lead  value:      knowhow  num(and    get**    **)
 var expectedTotals = map[string]int{
 	"ai-native-architecture-design": 30,
 	"arch-guardian":                 11,
@@ -11,7 +11,7 @@ var expectedTotals = map[string]int{
 	"arch-review":                   6,
 }
 
-// ① 单技能守恒 + 合计 **56**
+// ①       +    **56**
 func TestSK11FourSkillsConservation(t *testing.T) {
 	khs := realKnowhow()
 	if len(khs) != 4 {
@@ -36,7 +36,7 @@ func TestSK11FourSkillsConservation(t *testing.T) {
 	}
 }
 
-// ② basis 族**四处点亮**：每个技能的 basis 都进了判据（不再只有 1/4）
+// ② basis  ** placept **:       basis all  data( againonlyhas 1/4)
 func TestBasisFamilyAppliesToAllFourSkills(t *testing.T) {
 	khs := realKnowhow()
 	basisCounts := map[string]int{}
@@ -61,7 +61,7 @@ func TestBasisFamilyAppliesToAllFourSkills(t *testing.T) {
 	}
 }
 
-// ③ 覆盖率：全部 knowhow 条目都有归宿（判据 or 模板），守恒口径下 100%
+// ③ overwriterate: safety  knowhow  objallhas  ( data or   ),    pathunder 100%
 func TestSK11CoverageIsTotal(t *testing.T) {
 	covered, total := 0, 0
 	for id, kh := range realKnowhow() {

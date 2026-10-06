@@ -1,4 +1,4 @@
-// teach.go -- useuser** time  word**(VHS-CACHE-001 G2; Peter orig "     word"). 
+// teach.go -- useuser** time  word**(VHS-CACHE-001 G2; owner orig "     word"). 
 //
 // and"serveservicediffname"  diff: **   serveservicenote table **,   isuseuserbase (user_taught). 
 // because : ①   tgt  (   ); ②      L1 keep ( then" under then "); 

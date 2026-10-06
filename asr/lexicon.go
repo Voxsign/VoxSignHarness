@@ -1,19 +1,19 @@
-// lexicon.go —— 词表目录（人工审定）+ 匹配 + 在线学习的状态容器。
+// lexicon.go -- wordtableobj (human  )+    +  line   status  . 
 //
-// 词条分两类，**安全等级不同**：
+// word split class, **safesafetyetc  same**: 
 //
-//	auto = true   **自动改写**。只允许人工审定、有明确语料依据、且不涉及专名的
-//	              低风险条目（多字触发词近音、截断还原）。当前只有两条。
-//	auto = false  **只出候选**（Candidate）。高风险条目一律走这条路：
-//	              专名/英文/域名被 ASR 撕碎（deept→DeepSeek、哈尼斯→harness…），
-//	              以及拼音近音索引给出的建议。原因：改错比不改糟（任务书 §5.2）。
+//	auto = true   **  modifywrite**. only allowhuman  , has  lang  data, and  and name 
+//	               risk obj( chartriggersendword audio,  disconnectalsoorig). curbeforeonlyhas  . 
+//	auto = false  **onlyout  **(Candidate).  risk obj     route: 
+//	               name/  /domainnamebe ASR   (deept->DeepSeek,    ->harness…), 
+//	              byand audio audio  giveout   . origbecause: modify   modify (task  §5.2). 
 //
-// 为什么专名只给候选而不自动纠：
-//   - 语料里同一专名一次发言内有多种错法（obs-03 deept / deep sick），
-//     选定一个唯一答案的证据不足；
-//   - C1 保真要求这些 **observed** 长句一个字不得动。
+// as   nameonlygive  but    : 
+//   - lang  same  name  sendlanginhas kind  (obs-03 deept / deep sick), 
+//         unique    data  ; 
+//   - C1 keep needrequire   **observed**  sent  char   . 
 //
-// 学习策略同样保守：Observe 学到的映射只登记为候选词条，绝不自动改写。
+//     samekindkeep : Observe  to   only  as  word ,     modifywrite. 
 package asr
 
 import (
@@ -24,22 +24,22 @@ import (
 
 var errEmptyFeedback = errors.New("asr: feedback 既无 raw 也无 corrected，无法学习")
 
-// maxCandidates 是一次 Correct 最多给出的候选数，避免把噪音全倒给上层。
+// maxCandidates is   Correct   giveout   num,   pipe audiosafety giveon . 
 const maxCandidates = 3
 
-// entry 是一条词表条目。
+// entry is  wordtable obj. 
 type entry struct {
 	from, to string
 	kind     string
 	conf     float64
 	evidence string
-	auto     bool // true = 自动改写；false = 只出候选
+	auto     bool // true =   modifywrite; false = onlyout  
 
-	// 以下由 compile 依 from 推导，用于拉丁词边界判定。
+	// byunderby compile   from   , useat  word boundary  . 
 	latinStart, latinEnd bool
 }
 
-// catalog 是内置目录：词条 + 拼音热词 + 音节表 + 审定热词。
+// catalog isin obj : word  +  audio word + audionodetable +    word. 
 type catalog struct {
 	entries  []entry
 	terms    []pinyinTerm
@@ -47,7 +47,7 @@ type catalog struct {
 	hotwords []Hotword
 }
 
-// defaultCatalog 返回内置目录（人工审定，非学习所得）。
+// defaultCatalog returnbackin obj (human  ,      ). 
 func defaultCatalog() catalog {
 	return catalog{
 		entries:  defaultEntries(),
@@ -57,10 +57,10 @@ func defaultCatalog() catalog {
 	}
 }
 
-// defaultEntries 是人工审定的词表。每条都要能回答"语料里哪一句支撑它"。
+// defaultEntries ishuman   wordtable.   allneed answer"lang    sent   ". 
 func defaultEntries() []entry {
 	return []entry{
-		// ---- 自动改写（低风险、有语料依据）----------------------------------
+		// ----   modifywrite( risk, haslang  data)----------------------------------
 		{
 			from: "题交", to: "提交", kind: "homophone", auto: true, conf: 0.92,
 			evidence: "近音词表命中：题交(tí jiāo) → 提交(tí jiāo)；多字触发词，还原后整条链路才通（real-02）",
@@ -70,7 +70,7 @@ func defaultEntries() []entry {
 			evidence: "截断还原：别字 → 错别字（ASR 漏掉前字「错」）（real-03）；守卫见 truncationGuard",
 		},
 
-		// ---- 只出候选（高风险专名/英文，绝不自动改写）-----------------------
+		// ---- onlyout  ( risk name/  ,     modifywrite)-----------------------
 		{
 			from: "deept", to: "DeepSeek", kind: "hotword", conf: 0.62,
 			evidence: "专名候选：deept ≈ DeepSeek（obs-03；同一专名的另一种错法见 deep sick）",
@@ -106,8 +106,8 @@ func defaultEntries() []entry {
 	}
 }
 
-// defaultPinyinTerms 是参与拼音近音索引的正确写法。
-// 这些条目**只产出候选**——拼音匹配能召回，但不足以直接改写。
+// defaultPinyinTerms is and audio audio   pos write . 
+//    obj**onlyproduceout  **-- audio    back, but  by connectmodifywrite. 
 func defaultPinyinTerms() []pinyinTerm {
 	return []pinyinTerm{
 		{canonical: "提交", syllables: []string{"ti", "jiao"}, conf: 0.55, note: "多字触发词"},
@@ -118,7 +118,7 @@ func defaultPinyinTerms() []pinyinTerm {
 	}
 }
 
-// defaultHotwords 是内置热词（人工审定，不是学习所得；SeenCnt 无统计意义，固定 1）。
+// defaultHotwords isin  word(human  ,  is    ; SeenCnt no    ,    1). 
 func defaultHotwords() []Hotword {
 	return []Hotword{
 		{Term: "voice-sign harness", Kind: "project", Weight: 1.0, SeenCnt: 1},
@@ -130,7 +130,7 @@ func defaultHotwords() []Hotword {
 	}
 }
 
-// compile 把词条编译成只读匹配器集合。
+// compile pipeword   becomeread-only     . 
 func compile(entries []entry, c catalog) *compiled {
 	es := make([]entry, len(entries))
 	for i, e := range entries {
@@ -148,7 +148,7 @@ func compile(entries []entry, c catalog) *compiled {
 	}
 }
 
-// detectAuto 找出可**自动改写**的区间。每个位置取最长且通过守卫的 auto 条目。
+// detectAuto  out **  modifywrite**  time.     get  and ed    auto  obj. 
 func (c *compiled) detectAuto(runes []rune) []span {
 	var out []span
 	for i := 0; i < len(runes); i++ {
@@ -186,8 +186,8 @@ func (c *compiled) detectAuto(runes []rune) []span {
 	return out
 }
 
-// truncationGuard 是截断还原的守卫：不把已经是完整正确词的片段再套一层
-// （否则「错别字」→「错错别字」）。
+// truncationGuard is disconnectalsoorig   :  pipealready isfinish pos word  segagain   
+// ( then" diffchar"->"  diffchar"). 
 func truncationGuard(runes []rune, i int, e entry) bool {
 	if i > 0 && runes[i-1] == '错' {
 		return false
@@ -199,9 +199,9 @@ func truncationGuard(runes []rune, i int, e entry) bool {
 	return true
 }
 
-// detectCandidates 产出**不改文本**的候选：高风险专名 + 拼音近音索引。
+// detectCandidates produceout** modify base**   :  risk name +  audio audio  . 
 //
-// 候选非空 = 本层明确表示"该问人/该问外部"，这是 C4 可观测的另一半。
+//    empty = this layer  tableshow"   /  out ",  is C4        . 
 func (c *compiled) detectCandidates(runes []rune, ctx []string) []Candidate {
 	best := make(map[string]Candidate)
 	add := func(text, reason string, conf float64) {
@@ -214,7 +214,7 @@ func (c *compiled) detectCandidates(runes []rune, ctx []string) []Candidate {
 		best[text] = Candidate{Text: text, Confidence: conf, Reason: reason}
 	}
 
-	// 1) 静态候选词表（专名/英文/域名）。
+	// 1)  state  wordtable( name/  /domainname). 
 	for i := 0; i < len(runes); i++ {
 		for _, k := range c.trie.matchAt(runes, i) {
 			e := c.entries[k]
@@ -233,7 +233,7 @@ func (c *compiled) detectCandidates(runes []rune, ctx []string) []Candidate {
 		}
 	}
 
-	// 2) 拼音近音索引：定长滑窗，窗口全字可查且音节命中才产出候选。
+	// 2)  audio audio  :     ,   safetychar  andaudionode inonlyproduceout  . 
 	if c.py != nil {
 		for i := 0; i < len(runes); i++ {
 			for _, l := range c.py.lens {
@@ -247,7 +247,7 @@ func (c *compiled) detectCandidates(runes []rune, ctx []string) []Candidate {
 				w := string(runes[i : i+l])
 				for _, t := range c.py.byKey[key] {
 					if w == t.canonical {
-						continue // 已经是正确写法，不该出候选
+						continue // already ispos write ,   out  
 					}
 					reason := "拼音近音候选：" + w + "（" + strings.Join(t.syllables, " ") + "）≈ " + t.canonical
 					if t.note != "" {
@@ -279,7 +279,7 @@ func (c *compiled) detectCandidates(runes []rune, ctx []string) []Candidate {
 	return out
 }
 
-// contextHas 报告近期上下文里是否出现过某词（用于候选排序，不改变文本）。
+// contextHas    periodonunder  is outnowed word(useat    ,  modifychange base). 
 func contextHas(ctx []string, term string) bool {
 	for _, s := range ctx {
 		if strings.Contains(s, term) {

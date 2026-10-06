@@ -25,7 +25,7 @@ func TestStaticImpact(t *testing.T) {
 	}
 }
 
-// 用例 9：不可逆 → human（硬门禁，无视机械信号）。
+// useexample 9:  reversible -> human(  forbid, no   signal). 
 func TestEvaluate_IrreversibleHuman(t *testing.T) {
 	for _, it := range []contract.Intent{
 		{Intent: contract.IntentCommit, Risk: &contract.RiskBaseline{Reversible: true, Impact: contract.ImpactSmall}},
@@ -40,7 +40,7 @@ func TestEvaluate_IrreversibleHuman(t *testing.T) {
 	}
 }
 
-// 用例 8：可逆 + 小影响 + 高置信 → auto。
+// useexample 8: reversible +     +     -> auto. 
 func TestEvaluate_AutoSmallHigh(t *testing.T) {
 	it := contract.Intent{
 		Intent:     contract.IntentNote,
@@ -95,7 +95,7 @@ func TestGuard_DowngradeAfterThree(t *testing.T) {
 			t.Fatalf("第 %d 次强确认不应降级", i)
 		}
 	}
-	if !g.ShouldDowngrade("foo.go") { // 第 4 次
+	if !g.ShouldDowngrade("foo.go") { //   4  
 		t.Fatal("第 4 次同路径强确认应降级")
 	}
 }
@@ -104,11 +104,11 @@ func TestGuard_ResetsOnDifferentPath(t *testing.T) {
 	g := NewGuard()
 	g.ShouldDowngrade("a.go")
 	g.ShouldDowngrade("a.go")
-	g.ShouldDowngrade("b.go") // 换路径，计数重置
+	g.ShouldDowngrade("b.go") //  path,  numheavy 
 	if g.ShouldDowngrade("b.go") {
 		t.Fatal("换路径后不应立即降级")
 	}
 	if !g.ShouldDowngrade("b.go") {
-		// b.go 连续第 3 次仍未到 >3
+		// b.go linkcontinue  3    to >3
 	}
 }

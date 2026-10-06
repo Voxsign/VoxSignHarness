@@ -1,11 +1,11 @@
-// 多动作检测的边界测试（缺口 G5，最后一条）。
+//        boundary  (   G5,  after  ). 
 //
-// G5 的真实危害：「查一下库存，然后记一下结果，最后提交」只执行第一个命中的意图，
-// 其余动作**既不执行也不提示**，用户以为三件事都做了。
+// G5      : "  under store, howeverafter  underclose ,  after  "only      in intent, 
+// its   **    also  show**, useuserbyas   all . 
 //
-// 判据刻意用**顺序连接词**（然后/接着/最后…）而不是"句子里出现两个动作词"——
-// M7 真机长句同时含 TEST 与 QUERY 词却是一段口语独白，必须保持不 Ask
-// （既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+//  data  use**  linkconnectword**(howeverafter/connecting/ after…)but is"sent  outnow    word"--
+// M7    sentsametime  TEST and QUERY wordbutis seg lang  ,   keepkeep  Ask
+// ( hasback  pipeline.TestColloquialQuestionNoReferAsk). 
 package input
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestMultiActionAsksForOrder G5 主线：一句话多件事 → 回问先做哪个，不静默丢弃。
+// TestMultiActionAsksForOrder G5  line:  sent     -> clarificationfirst   ,      . 
 func TestMultiActionAsksForOrder(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -34,7 +34,7 @@ func TestMultiActionAsksForOrder(t *testing.T) {
 	}
 }
 
-// TestMultiActionLongStatementExempt M7 真机口语长句不得被判多动作。
+// TestMultiActionLongStatementExempt M7    lang sent  be    . 
 func TestMultiActionLongStatementExempt(t *testing.T) {
 	m7 := "我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进，就是重点是把这个能力建立起来"
 	c := NewTaskClassifier(0.6, nil)
@@ -50,7 +50,7 @@ func TestMultiActionLongStatementExempt(t *testing.T) {
 	}
 }
 
-// TestSingleActionUnchanged 单动作句子不受影响。
+// TestSingleActionUnchanged    sent  accept  . 
 func TestSingleActionUnchanged(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -71,7 +71,7 @@ func TestSingleActionUnchanged(t *testing.T) {
 	}
 }
 
-// TestMultiActionIntentsUnit 函数级单测：按连接词切分后数不同动作。
+// TestMultiActionIntentsUnit  num   : bylinkconnectword splitafternum same  . 
 func TestMultiActionIntentsUnit(t *testing.T) {
 	cases := []struct {
 		text string
@@ -91,7 +91,7 @@ func TestMultiActionIntentsUnit(t *testing.T) {
 	}
 }
 
-// TestMultiActionDoesNotShadowOrchestrate 编排任务本身是多动作，已由计划承载，不该再问。
+// TestMultiActionDoesNotShadowOrchestrate orchestratetaskbase is   , alreadyby    ,   again . 
 func TestMultiActionDoesNotShadowOrchestrate(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	text := "把全部沟通记录和设计文档整理成《全景开发文档》并保存提交"
@@ -102,11 +102,11 @@ func TestMultiActionDoesNotShadowOrchestrate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 评审 G5-P0-2 / P1-3 / P1-4 的反例回归。
+//    G5-P0-2 / P1-3 / P1-4  revexampleback . 
 // ---------------------------------------------------------------------------
 
-// TestMultiActionSameIntentStillAsks 评审 P0-2：**同一个意图出现两次**也是多动作。
-// 「先查 A 再查 B」若按"不同意图数"去重会算成 1 → 不 Ask → 第二个查询静默消失。
+// TestMultiActionSameIntentStillAsks    P0-2: **same  intentoutnow  **alsois   . 
+// "first  A again  B"ifby" sameintentnum" heavy  become 1 ->   Ask ->          . 
 func TestMultiActionSameIntentStillAsks(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -125,8 +125,8 @@ func TestMultiActionSameIntentStillAsks(t *testing.T) {
 	}
 }
 
-// TestOrchestrateNotInterceptedByMultiAction 评审 P1-3：编排任务**必须**豁免多动作检测。
-// 原实现靠"恰好没有连接词"才没被抢走 —— 加个"然后再"就会绕过编排。
+// TestOrchestrateNotInterceptedByMultiAction    P1-3: orchestratetask**  **       . 
+// orig now "   haslinkconnectword"only be   --   "howeverafteragain"then  edorchestrate. 
 func TestOrchestrateNotInterceptedByMultiAction(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -140,8 +140,8 @@ func TestOrchestrateNotInterceptedByMultiAction(t *testing.T) {
 	}
 }
 
-// TestClauseActionsNoMasking 评审 P1-4：一个分句命中的**全部**动作都要计入。
-// 原实现按词表顺序只取第一个，而 queryTriggers 含单字"看/查/找"且排在 Debug/Edit 之前。
+// TestClauseActionsNoMasking    P1-4:   splitsent in **safety **  allneed in. 
+// orig nowbywordtable  onlyget   , but queryTriggers   char" / / "and   Debug/Edit ofbefore. 
 func TestClauseActionsNoMasking(t *testing.T) {
 	acts := clauseActions("查一下这个报错")
 	has := func(want string) bool {
@@ -155,18 +155,18 @@ func TestClauseActionsNoMasking(t *testing.T) {
 	if !has(contract.IntentQuery) || !has(contract.IntentDebug) {
 		t.Errorf("P1-4: 「查一下这个报错」应同时含 QUERY 与 DEBUG，实际 %v（DEBUG 被 QUERY 吞掉）", acts)
 	}
-	// 计数不该被 masking 低估
+	//  num  be masking   
 	if n, _, _ := multiActionClauses("改一下顺便查一下，然后再看看"); n < 2 {
 		t.Errorf("P1-4: 三个分句（改/查/看）应计为 ≥2，实际 %d", n)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 评审 G5-P2-5 / P2-6 的反例回归。
+//    G5-P2-5 / P2-6  revexampleback . 
 // ---------------------------------------------------------------------------
 
-// TestMultiActionNoConnectorReviewP2_5 评审 P2-5：无连接词的口语并列。
-// ASR 常把连接词吞掉，只靠逗号分层时要求 ≥3 段（以保住 M7 口语长句）。
+// TestMultiActionNoConnectorReviewP2_5    P2-5: nolinkconnectword  langandlist. 
+// ASR  pipelinkconnectword  , only  idsplit timeneedrequire >=3 seg(bykeep  M7  lang sent). 
 func TestMultiActionNoConnectorReviewP2_5(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("查一下库存，记一下结果，提交")
@@ -179,7 +179,7 @@ func TestMultiActionNoConnectorReviewP2_5(t *testing.T) {
 	}
 }
 
-// TestQuotedSpanNotSplitReviewP2_6 评审 P2-6：引号里的"然后"是被引用的文本，不是连接词。
+// TestQuotedSpanNotSplitReviewP2_6    P2-6:  id  "howeverafter"isbe use  base,  islinkconnectword. 
 func TestQuotedSpanNotSplitReviewP2_6(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("把提示语改成「然后提交」")
@@ -191,7 +191,7 @@ func TestQuotedSpanNotSplitReviewP2_6(t *testing.T) {
 	}
 }
 
-// TestSelfCorrectionIsNotMultiAction 自我修正链不是多动作（它被反复修正，不是多件事）。
+// TestSelfCorrectionIsNotMultiAction   fixposchain is   ( berev fixpos,  is   ). 
 func TestSelfCorrectionIsNotMultiAction(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	text := "把标题改成中文，不对，改成英文，说错了，改成阿拉伯语"
@@ -205,16 +205,16 @@ func TestSelfCorrectionIsNotMultiAction(t *testing.T) {
 	}
 }
 
-// TestMultiActionTripsUnit 测量与决策分离后的阈值单测。
+// TestMultiActionTripsUnit   anddecide split after  value  . 
 func TestMultiActionTripsUnit(t *testing.T) {
 	cases := []struct {
 		n       int
 		hadConn bool
 		want    bool
 	}{
-		{2, true, true},   // 有连接词，2 段即可
-		{2, false, false}, // 纯标点，2 段不够（保住 M7 长句）
-		{3, false, true},  // 纯标点，3 段算多动作
+		{2, true, true},   // haslinkconnectword, 2 segi.e. 
+		{2, false, false}, //  tgtpt, 2 seg  (keep  M7  sent)
+		{3, false, true},  //  tgtpt, 3 seg    
 		{1, false, false},
 	}
 	for _, tc := range cases {

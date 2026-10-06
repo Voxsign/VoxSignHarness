@@ -1,16 +1,16 @@
-// sk11_criteria_test.go —— knowhow 映射必须**守恒**（OOB：7 + 0 != 11 就是静默丢弃）。
+// sk11_criteria_test.go -- knowhow     **  **(OOB: 7 + 0 != 11 thenis    ). 
 package skill
 
 import "testing"
 
-// 真服务实测的 arch-guardian knowhow（Lead 已复核，含 steps 4 条 ⇒ 合计 11）
+//  serveservice    arch-guardian knowhow(Lead already  ,   steps 4   ⇒    11)
 func archGuardianFull() Knowhow {
 	kh := archGuardianKnowhow()
 	kh.Steps = []string{"澄清目标与边界", "提取质量属性并排序", "给出候选方案", "权衡后记录决策"}
 	return kh
 }
 
-// ① 守恒：判据 + 模板 + 显式排除 == knowhow 总条数（当前应为 7 + 4 + 0 == 11）
+// ①   :  data +    +  form   == knowhow   num(curbefore as 7 + 4 + 0 == 11)
 func TestSK11MappingIsConservative(t *testing.T) {
 	kh := archGuardianFull()
 	m := MapKnowhow("arch-guardian", "v0.1.0", kh)
@@ -24,7 +24,7 @@ func TestSK11MappingIsConservative(t *testing.T) {
 	}
 }
 
-// ② steps 的归宿是**规划模板**（不是"被判据排除"）
+// ② steps    is**rule   **( is"be data  ")
 func TestSK11StepsBecomeTemplates(t *testing.T) {
 	m := MapKnowhow("arch-guardian", "v0.1.0", archGuardianFull())
 	if len(m.Templates) != 4 {
@@ -35,7 +35,7 @@ func TestSK11StepsBecomeTemplates(t *testing.T) {
 			t.Errorf("[SK-11] 模板字段不全: %+v", tm)
 		}
 	}
-	// 且它们**不得**同时出现在判据里（避免重复计入而"看起来守恒"）
+	// and  **  **sametimeoutnow  data (  heavy  inbut" raise   ")
 	for _, c := range m.Criteria {
 		for _, tm := range m.Templates {
 			if c.Text == tm.Text {
@@ -45,7 +45,7 @@ func TestSK11StepsBecomeTemplates(t *testing.T) {
 	}
 }
 
-// ③ 排除项必须**带上理由**（有归宿的排除才允许；当前应为空）
+// ③      ** on by**(has     only allow; curbefore asempty)
 func TestSK11ExcludedMustCarryReason(t *testing.T) {
 	m := MapKnowhow("arch-guardian", "v0.1.0", archGuardianFull())
 	for _, e := range m.Excluded {

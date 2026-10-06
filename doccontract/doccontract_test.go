@@ -1,10 +1,10 @@
-// Package doccontract 是 L0「契约一致性」层：检查**规范文档承诺的东西，代码里是否真的有**。
+// Package doccontract is L0"    ity" :   **rule        ,  code is   has**. 
 //
-// 依据：docs/VSL-共识-未来开发规范五原则.md:19「规范条目 = 声明 + 可执行断言；无验证器的条目 = 未完成」。
-// 本包把这句话变成可执行的检查，而不是口号。
+//  data: docs/VSL-  -  opensendrule  origthen.md:19"rule  obj = voice  +    disconnectlang; no     obj =  done". 
+// this packagepipe sent changebecome      , but is id. 
 //
-// 只扫「规范性文档」——只有规格/冻结/交互契约才会**钉死**验证器名；
-// 报告类、记录类文档里出现的 TestXxx 只是叙述，不构成契约。
+// only "rule ity  "--onlyhasrule /frozen/    only **  **   name; 
+//   class,   class   outnow  TestXxx onlyis  ,   become  . 
 package doccontract
 
 import (
@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-// normativeDocs 是"会钉死验证器名"的规范性文档（相对模块根）。
+// normativeDocs is"      name" rule ity  ( tomoduleroot). 
 var normativeDocs = []string{
 	"docs/SPEC-v1-可执行规格书.md",
 	"docs/SPEC-v2-可执行规格书.md",
@@ -29,13 +29,13 @@ var normativeDocs = []string{
 }
 
 var (
-	// testFuncRe 抓源码里真实存在的测试函数名。
+	// testFuncRe   code   store     numname. 
 	testFuncRe = regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)`)
-	// pinnedRe 抓文档里被引用的验证器名（通配写法 TestFoo_* 会被抓成 TestFoo_）。
+	// pinnedRe     be use    name(  write  TestFoo_*  be become TestFoo_). 
 	pinnedRe = regexp.MustCompile(`Test[A-Za-z][A-Za-z0-9_]*`)
 )
 
-// moduleRoot 返回模块根目录：go test 以包目录为工作目录，故根目录是其父目录。
+// moduleRoot returnbackmodulerootobj : go test by obj as  obj , thusrootobj isits obj . 
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("..")
@@ -48,7 +48,7 @@ func moduleRoot(t *testing.T) string {
 	return root
 }
 
-// collectTestFuncs 扫描全仓 *Test 函数名（跳过 dist/ 产物目录）。
+// collectTestFuncs   safety  *Test  numname( ed dist/ artifactobj ). 
 func collectTestFuncs(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	got := map[string]bool{}
@@ -81,7 +81,7 @@ func collectTestFuncs(t *testing.T, root string) map[string]bool {
 	return got
 }
 
-// collectPinned 从规范性文档里抽验证器引用，返回 name → 出处列表。
+// collectPinned fromrule ity        use, returnback name -> outplacelisttable. 
 func collectPinned(t *testing.T, root string) map[string][]string {
 	t.Helper()
 	pinned := map[string][]string{}
@@ -123,7 +123,7 @@ func appendUnique(xs []string, v string) []string {
 	return append(xs, v)
 }
 
-// satisfied 判定一个钉名是否被满足：精确命中，或作为前缀命中（文档通配写法 TestFoo_*）。
+// satisfied      nameis befull :    in, or asbefore  in(    write  TestFoo_*). 
 func satisfied(pinned string, actual map[string]bool) bool {
 	if actual[pinned] {
 		return true
@@ -136,10 +136,10 @@ func satisfied(pinned string, actual map[string]bool) bool {
 	return false
 }
 
-// TestNormativeDocsPinnedValidatorsExist 规范文档钉死的每个验证器，代码里必须存在。
+// TestNormativeDocsPinnedValidatorsExist rule           ,  code   store . 
 //
-// 这条守的是「无验证器的条目 = 未完成」：文档写了验证器名却没实现，或者实现被改名/删除，
-// 都必须立刻暴露，而不是等到某天有人发现"这功能其实没测"。
+//     is"no     obj =  done":   write   namebut  now, orer nowbemodifyname/delete, 
+// all      , but isetcto dayhas sendnow"   its   ". 
 func TestNormativeDocsPinnedValidatorsExist(t *testing.T) {
 	root := moduleRoot(t)
 	actual := collectTestFuncs(t, root)
@@ -164,8 +164,8 @@ func TestNormativeDocsPinnedValidatorsExist(t *testing.T) {
 	}
 }
 
-// TestNormativeDocsArePresent 规范文档本身必须存在且非空。
-// 防止"文档被删/被改名"导致上面的检查静默变成空集（假绿）。
+// TestNormativeDocsArePresent rule   base   store and empty. 
+// preventstop"  be /bemodifyname"  onface     changebecomeempty (  ). 
 func TestNormativeDocsArePresent(t *testing.T) {
 	root := moduleRoot(t)
 	for _, rel := range normativeDocs {

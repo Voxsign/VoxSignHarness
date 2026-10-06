@@ -1,7 +1,7 @@
-// aiops_test.go —— world 包的默认门禁单测（不带 tag，随 `go test ./...` 常跑）。
+// aiops_test.go -- world   default forbid  (   tag,   `go test ./...`   ). 
 //
-// 判据本体在 ext_criteria_test.go（vhsext）；这里守住单点行为：
-// fail-open、unknown 不等于「没有」、只读、不猜路径、注册表容错。
+//  databody  ext_criteria_test.go(vhsext);      pt as: 
+// fail-open, unknown  etcat" has", read-only,   path, note table  . 
 package world
 
 import (
@@ -70,7 +70,7 @@ func TestDependenciesFailOpenKeepsUnknownEntry(t *testing.T) {
 	}
 }
 
-// TestWhoHandlesUnknownNotAbsent：匹配不到时必须 unknown，且不得说"不存在"。
+// TestWhoHandlesUnknownNotAbsent:    totime   unknown, and   " store ". 
 func TestWhoHandlesUnknownNotAbsent(t *testing.T) {
 	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"hosts":{"trelva":{"purpose":"生产中枢"}}}`))
@@ -87,14 +87,14 @@ func TestWhoHandlesUnknownNotAbsent(t *testing.T) {
 			t.Errorf("把未匹配表述成「%s」: %s", banned, got[0].Note)
 		}
 	}
-	// 命中时应返回主机
+	//  intime returnback  
 	hit := g.WhoHandles(context.Background(), "生产")
 	if len(hit) == 0 || hit[0].Kind != "host" {
 		t.Errorf("命中主机失败: %+v", hit)
 	}
 }
 
-// TestServiceRegistryFailOpen：注册表缺失/坏格式不改变已有状态、不 panic。
+// TestServiceRegistryFailOpen: note table  /  form modifychangealreadyhasstatus,   panic. 
 func TestServiceRegistryFailOpen(t *testing.T) {
 	g := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"hosts":{}}`))

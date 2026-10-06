@@ -1,9 +1,9 @@
 //go:build vhsplan
 
-// pl_criteria_test.go —— VHS-PLAN-001 §4：PL-1..PL-5（先红）。
+// pl_criteria_test.go -- VHS-PLAN-001 §4: PL-1..PL-5(first ). 
 //
-// 样本直接取 PLAN-001 §7 的真实材料（不造题）。
-// 判据不依赖模型：只对 Plan 的结构做机械检查，所以可在模型选型未定时先立先红。
+// kindbase connectget PLAN-001 §7      (   ). 
+//  data dependency type: onlyto Plan  close      ,  by   type type  timefirst first . 
 package plan
 
 import (
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// 空泛动作词：出现即说明这一步无法执行（PL-3）。
+// empty   word: outnowi.e.     no   (PL-3). 
 var vagueActions = []string{"分析", "优化一下", "处理一下", "看看", "研究一下"}
 
 func plannerFixture(t *testing.T) (LocalPlanner, Manifest) {
@@ -20,7 +20,7 @@ func plannerFixture(t *testing.T) (LocalPlanner, Manifest) {
 	return LocalPlanner{}, ExportManifest(tr, sr)
 }
 
-// PL-1 只用真实能力：每一步都必须映射到清单内的工具。
+// PL-1 onlyuse    :    all    tolistin   . 
 func TestPL1OnlyRealCapabilities(t *testing.T) {
 	p, m := plannerFixture(t)
 	got, err := p.Plan("把这个项目里所有 TODO 整理成一份文档", m)
@@ -42,7 +42,7 @@ func TestPL1OnlyRealCapabilities(t *testing.T) {
 	}
 }
 
-// PL-2 做不到就说做不到（反幻觉，最重要的一条）。
+// PL-2   tothen   to(rev  ,  heavyneed   ). 
 func TestPL2RefusesUnreachable(t *testing.T) {
 	p, m := plannerFixture(t)
 	got, err := p.Plan("帮我部署到生产服务器", m)
@@ -60,7 +60,7 @@ func TestPL2RefusesUnreachable(t *testing.T) {
 	}
 }
 
-// PL-3 步骤可执行：有明确参数与产出，不得出现"分析一下"这类空话。
+// PL-3      : has   numandproduceout,   outnow"split  under" classempty . 
 func TestPL3StepsExecutable(t *testing.T) {
 	p, m := plannerFixture(t)
 	got, err := p.Plan("先改这个文件，再提交", m)
@@ -82,7 +82,7 @@ func TestPL3StepsExecutable(t *testing.T) {
 	}
 }
 
-// PL-4 顺序正确：先改后提交。
+// PL-4   pos : firstmodifyafter  . 
 func TestPL4Ordering(t *testing.T) {
 	p, m := plannerFixture(t)
 	got, err := p.Plan("先改这个文件，再提交", m)
@@ -106,7 +106,7 @@ func TestPL4Ordering(t *testing.T) {
 	}
 }
 
-// PL-5 不长于必要：一步能做的不要拆成十步。
+// PL-5   at need:       need become  . 
 func TestPL5NotLongerThanNecessary(t *testing.T) {
 	p, m := plannerFixture(t)
 	got, err := p.Plan("找到这个项目里的 TODO 文件", m)

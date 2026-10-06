@@ -66,7 +66,7 @@ func TestTruncateOldestDecisions(t *testing.T) {
 	if len(snap.Decisions) != 3 {
 		t.Fatalf("应截断到 3 条, got %d", len(snap.Decisions))
 	}
-	// 最旧两条被截断，保留最近三条
+	//     be disconnect, keep     
 	if strings.Contains(snap.Block, "10:00") || strings.Contains(snap.Block, "10:01") {
 		t.Fatalf("最旧裁决应被截断: %q", snap.Block)
 	}
@@ -78,7 +78,7 @@ func TestByteCap(t *testing.T) {
 	g.MaxBytes = 50
 	_ = g.RecordDecision(Decision{Ts: "2026-10-02T10:00:00+03:00", TaskID: strings.Repeat("a", 200), Reason: strings.Repeat("x", 200)})
 	snap := g.Render()
-	if len(snap.Block) > 120 { // 截断标记留余量
+	if len(snap.Block) > 120 { //  disconnecttgt    
 		t.Fatalf("块应按字节截断: len=%d", len(snap.Block))
 	}
 }

@@ -1,6 +1,6 @@
-// kinds_parser_reverse_criteria_test.go —— ⑪a 的反例：**未登记的 Kind 常量必须被抓住**。
+// kinds_parser_reverse_criteria_test.go -- ⑪a  revexample: **     Kind     be  **. 
 //
-// 做法：把"新增常量但忘记登记"的形态直接喂给同一套机械提取逻辑（在临时源码上）。
+//   : pipe"newadd  but    "  state connect givesame     get  (  time codeon). 
 package trajectory
 
 import (
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// extractKindConsts 与主判据同一逻辑（提取 Kind* 常量的字符串值）。
+// extractKindConsts and  datasame   ( get Kind*    char  value). 
 func extractKindConsts(t *testing.T, src string) map[string]string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -44,9 +44,9 @@ func extractKindConsts(t *testing.T, src string) map[string]string {
 	return out
 }
 
-// ⑪a 反例：**故意加一个未登记的 KindFoo ⇒ 必须被检出**
+// ⑪a revexample: **thus         KindFoo ⇒   be out**
 func TestUnregisteredKindConstIsDetected(t *testing.T) {
-	// fixture 里用**真实已登记的值**（intent_source），否则"正例"本身就不成立
+	// fixture  use**  already   value**(intent_source),  then"posexample"base then become 
 	src := "package p\n\nconst (\n\tKindReal = \"" + KindIntentSource + "\"\n\tKindFoo  = \"foo_unregistered\"\n)\n"
 	got := extractKindConsts(t, src)
 	if _, ok := got["KindFoo"]; !ok {
@@ -55,7 +55,7 @@ func TestUnregisteredKindConstIsDetected(t *testing.T) {
 	if KnownKind(got["KindFoo"]) {
 		t.Error("[⑪ 反例] KindFoo 竟被当作已登记 —— 反例无效")
 	}
-	// 正例：已登记的 kind 必须为 true
+	// posexample: already    kind   as true
 	if !KnownKind(got["KindReal"]) {
 		t.Errorf("[⑪] 已登记 kind（%q）被判未登记", got["KindReal"])
 	}

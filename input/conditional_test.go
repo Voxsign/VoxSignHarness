@@ -1,11 +1,11 @@
-// 条件句仲裁的边界测试（缺口 G6）。
+//   sent    boundary  (   G6). 
 //
-// G6 的真实危害：「如果测试通过就提交」被判 TEST 直接执行 —— **前提被完全忽略**。
-// 系统替用户做了他还没同意的事。
+// G6      : "e.g.    edthen  "be  TEST  connect   -- **before befinishsafety  **. 
+//    useuser  also same   . 
 //
-// 边界的关键在"条件 + 紧跟其后的动作"这个窗口：
-// M7 真机长句「我现在测试一下…如果这个效果好，我们就继续推进…」同时含"如果""就"和动作词，
-// 却是一段口语陈述，必须保持 Ask 为空（既有回归 pipeline.TestColloquialQuestionNoReferAsk）。
+//  boundary close  "   +   itsafter   "    : 
+// M7    sent" now    under…e.g.      ,   thencontinuecontinue  …"sametime "e.g. ""then"and  word, 
+// butis seg lang  ,   keepkeep Ask asempty( hasback  pipeline.TestColloquialQuestionNoReferAsk). 
 package input
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestConditionalAsksInsteadOfExecuting G6 主线：条件句不得无条件执行。
+// TestConditionalAsksInsteadOfExecuting G6  line:   sent  no    . 
 func TestConditionalAsksInsteadOfExecuting(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -36,7 +36,7 @@ func TestConditionalAsksInsteadOfExecuting(t *testing.T) {
 	}
 }
 
-// TestConditionalLongStatementExempt M7 真机长句不得被判条件句。
+// TestConditionalLongStatementExempt M7    sent  be   sent. 
 func TestConditionalLongStatementExempt(t *testing.T) {
 	m7 := "我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进，就是重点是把这个能力建立起来"
 	c := NewTaskClassifier(0.6, nil)
@@ -49,7 +49,7 @@ func TestConditionalLongStatementExempt(t *testing.T) {
 	}
 }
 
-// TestConditionalDoesNotBreakNormalCommands 正常指令不受影响。
+// TestConditionalDoesNotBreakNormalCommands pos refer  accept  . 
 func TestConditionalDoesNotBreakNormalCommands(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -69,7 +69,7 @@ func TestConditionalDoesNotBreakNormalCommands(t *testing.T) {
 	}
 }
 
-// TestConditionalClauseUnit 函数级单测。
+// TestConditionalClauseUnit  num   . 
 func TestConditionalClauseUnit(t *testing.T) {
 	cases := []struct {
 		text string
@@ -78,7 +78,7 @@ func TestConditionalClauseUnit(t *testing.T) {
 		{"如果测试通过就提交", true},
 		{"测试过了就部署", true},
 		{"只要全绿就发布", true},
-		{"把报价模块改成中文", false}, // "改成"里有"改"，但没有条件标记
+		{"把报价模块改成中文", false}, // "modifybecome" has"modify", but has  tgt 
 		{"提交这批改动", false},
 		{"", false},
 	}
@@ -89,11 +89,11 @@ func TestConditionalClauseUnit(t *testing.T) {
 	}
 }
 
-// TestNegationBeatsConditional 否定优先于条件。
+// TestNegationBeatsConditional    firstat  . 
 func TestNegationBeatsConditional(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("如果测试通过就不要提交")
-	// 两句都该拦住；这里只断言"不得进入可执行路径"，并记录实际命中的是哪一条
+	//  sentall   ;   onlydisconnectlang"   in   path", and     in is   
 	if got.Ask == "" {
 		t.Fatalf("既含否定又含条件，Ask 却为空（intent=%s）", got.Intent)
 	}

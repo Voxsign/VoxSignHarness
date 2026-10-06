@@ -1,10 +1,10 @@
 //go:build vhsrecog
 
-// service_criteria_test.go —— K9 **端到端**（HTTP 路径）三条，与库层三条同构：
+// service_criteria_test.go -- K9 **endtoend**(HTTP path)  , and    same : 
 //
-//	① POST /v1/correct 的输出必须因热词而改变
-//	② 热词空 → 输出与基线一致
-//	③ 清空后 → 输出回退
+//	① POST /v1/correct   out  because wordbutmodifychange
+//	②  wordempty ->  outandbaseline  
+//	③  emptyafter ->  outback 
 package recog
 
 import (

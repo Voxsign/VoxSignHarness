@@ -1,6 +1,6 @@
 //go:build vhsref
 
-// resolver_criteria_test.go —— 代指三层硬判据（VHS-ZHIJI-001 R1–R8，先红纪律）。
+// resolver_criteria_test.go --  refer    data(VHS-ZHIJI-001 R1–R8, first   ). 
 package ref
 
 import (
@@ -17,7 +17,7 @@ type fakeZhiji struct {
 
 func (f *fakeZhiji) Events(ctx context.Context) ([]Event, error) { return f.events, f.err }
 
-// ① 会话内唯一 ⇒ 消解，并留依据。
+// ①   inunique ⇒  resolve, and  data. 
 func TestR1SessionUniqueResolves(t *testing.T) {
 	s := &SessionMemory{}
 	s.Mention("那个模块", "报价模块")
@@ -31,7 +31,7 @@ func TestR1SessionUniqueResolves(t *testing.T) {
 	}
 }
 
-// ② 多候选 ⇒ 回问，且**必须给候选**。
+// ②     ⇒ clarification, and**  give  **. 
 func TestR2MultiCandidateAsksBackWithCandidates(t *testing.T) {
 	s := &SessionMemory{}
 	s.Mention("那个模块", "报价模块")
@@ -49,7 +49,7 @@ func TestR2MultiCandidateAsksBackWithCandidates(t *testing.T) {
 	}
 }
 
-// ③ 无候选 ⇒ 回问（不脑补），不编造候选。
+// ③ no   ⇒ clarification(  patch),      . 
 func TestR3NoCandidateAsksBack(t *testing.T) {
 	r := &Resolver{Session: &SessionMemory{}}
 	res := r.Resolve(context.Background(), "那个东西")
@@ -61,7 +61,7 @@ func TestR3NoCandidateAsksBack(t *testing.T) {
 	}
 }
 
-// ④ 工作记忆层：唯一 ⇒ 消解，依据标 working_memory。
+// ④      : unique ⇒  resolve,  datatgt working_memory. 
 func TestR4WorkingMemoryLayer(t *testing.T) {
 	w := &plan.WorkingMemory{}
 	w.Remember("working_set", plan.BoardItem{Element: "模块:报价模块", Source: "session"})
@@ -75,7 +75,7 @@ func TestR4WorkingMemoryLayer(t *testing.T) {
 	}
 }
 
-// ⑤ 知己层（只读）：会话/记忆都空时用它，依据标 zhiji。
+// ⑤    (read-only):   /  allemptytimeuse ,  datatgt zhiji. 
 func TestR5ZhijiLayerReadOnly(t *testing.T) {
 	r := &Resolver{Session: &SessionMemory{}, Zhiji: &fakeZhiji{events: []Event{
 		{ID: "1", Source: "thread-a", Text: "上次说要把那个报表改成中文"},
@@ -89,7 +89,7 @@ func TestR5ZhijiLayerReadOnly(t *testing.T) {
 	}
 }
 
-// ⑥ 来源冲突 ⇒ 中断（不自行裁决）。
+// ⑥      ⇒ interrupt(    decide). 
 func TestR6SourceConflictInterrupts(t *testing.T) {
 	s := &SessionMemory{}
 	s.Mention("那个报表", "报表A")

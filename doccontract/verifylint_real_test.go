@@ -1,19 +1,19 @@
-// VSL-v3 验证标准层的**真实产物**扫描（闭环 G-A 的最后一块）。
+// VSL-v3   tgtapprove  **  artifact**  (   G-A   after  ). 
 //
-// 背景（一条真实发现）：`doccontract/verifylint.go` 实现了 V3-01…V3-08 八条规则，
-// 但**真实仓库里没有任何定义块使用 `verify:` 字段** —— 唯一的例子在规范文档自己身上，
-// 且 verifylint 此前只被它自己的测试调用。
+//  scenario(    sendnow): `doccontract/verifylint.go`  now V3-01…V3-08   rule, 
+// but**      has  define  use `verify:` charseg** -- unique example  rule      on, 
+// and verifylint  beforeonlybe      calluse. 
 //
-// 也就是说，「8/8 通过」当时只说明**没有样本**，不说明标准被遵守。
-// 这正是 CICD-BOUNDARY-001:389 那句：
+// alsothenis , "8/8  ed"curtimeonly  ** haskindbase**,    tgtapprovebe  . 
+//  posis CICD-BOUNDARY-001:389  sent: 
 //
-//	低流量下"没有错误"可能只是没有样本。观察不足应暂停扩量，不能写成统计验证通过。
+//	   under" haserror"  onlyis haskindbase.       stop  ,   writebecome     ed. 
 //
-// 本文件把"空转"本身变成一条**红的断言**：
-//   - 扫不到任何真实验证标准块 → 失败（不许把"没样本"当"通过"）
-//   - 扫到的每一块 → 必须 8/8 通过
+// basefilepipe"empty "base changebecome  **  disconnectlang**: 
+//   -   to      tgtapprove  ->   ( allowpipe" kindbase"cur" ed")
+//   -  to     ->    8/8  ed
 //
-// 于是校验器要么有真实输入，要么显式报"没有样本"。
+// atisverify need has   in, need  form " haskindbase". 
 package doccontract
 
 import (
@@ -23,10 +23,10 @@ import (
 	"testing"
 )
 
-// verifyBlockRe 抓 verify.md 里的 ```yaml 围栏块。
+// verifyBlockRe   verify.md    ```yaml    . 
 var verifyBlockRe = regexp.MustCompile("(?s)```ya?ml\\s*\\n(.*?)```")
 
-// realVerifyDocs 返回仓库内所有**真实产物**的验证标准文件（相对模块根）。
+// realVerifyDocs returnback  in has**  artifact**   tgtapprovefile( tomoduleroot). 
 func realVerifyDocs(t *testing.T, root string) []string {
 	t.Helper()
 	var found []string
@@ -55,9 +55,9 @@ func realVerifyDocs(t *testing.T, root string) []string {
 	return found
 }
 
-// TestRealVerificationBlocksExistAndAreLintClean 真实验证标准块必须存在，且 8/8 通过。
+// TestRealVerificationBlocksExistAndAreLintClean     tgtapprove   store , and 8/8  ed. 
 //
-// 第一条断言（存在性）是**反空转**：它让"没有样本"变成失败，而不是默认通过。
+//    disconnectlang(store ity)is**revempty **:   " haskindbase"changebecome  , but isdefault ed. 
 func TestRealVerificationBlocksExistAndAreLintClean(t *testing.T) {
 	root := moduleRoot(t)
 	docs := realVerifyDocs(t, root)

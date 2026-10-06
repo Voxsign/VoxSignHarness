@@ -1,9 +1,9 @@
 //go:build vhsplan
 
-// rv_criteria_test.go —— VHS-PLAN-001 §5：RV-1..RV-4（先红）。
+// rv_criteria_test.go -- VHS-PLAN-001 §5: RV-1..RV-4(first ). 
 //
-// RV 测"规划完了之后再怎么改"：失败→复规、复规要说明变化、域门禁优先、不无限复规。
-// 用一份**固定计划夹具**隔离 RV（不让 PL 未实现掩盖 RV 的结论）。
+// RV  "rule finishofafteragain  modify":   -> rule,  ruleneed  changeize, domain forbid first,  nolimit rule. 
+// use  **      **   RV(   PL   now   RV  close ). 
 package plan
 
 import (
@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// rvFixturePlan 是一份结构合法的原计划（读 → 改 → 提交）。
+// rvFixturePlan is  close    orig  (read -> modify ->   ). 
 func rvFixturePlan() Plan {
 	return Plan{
 		Goal: "先改这个文件，再提交",
@@ -30,7 +30,7 @@ func rvManifest(t *testing.T) Manifest {
 	return ExportManifest(tr, sr)
 }
 
-// RV-1 失败触发复规（不是盲重试同一步）。
+// RV-1   triggersend rule( is heavy same  ). 
 func TestRV1FailureTriggersReplan(t *testing.T) {
 	m := rvManifest(t)
 	orig := rvFixturePlan()
@@ -47,7 +47,7 @@ func TestRV1FailureTriggersReplan(t *testing.T) {
 	}
 }
 
-// RV-2 复规要说明变了什么（不得悄悄换一个计划）。
+// RV-2  ruleneed  change  (         ). 
 func TestRV2ReplanExplainsChanges(t *testing.T) {
 	m := rvManifest(t)
 	got, err := Replan(rvFixturePlan(), StepFailure{StepIndex: 2, Tool: "git", Caps: []string{"commit"}, Reason: "冲突"}, m, 1)
@@ -59,7 +59,7 @@ func TestRV2ReplanExplainsChanges(t *testing.T) {
 	}
 }
 
-// RV-3 域门禁优先：被域拒绝 → 计划作废，不得换说法绕过。
+// RV-3 domain forbid first: bedomainreject ->     ,       ed. 
 func TestRV3DomainDenialVoidsPlan(t *testing.T) {
 	m := rvManifest(t)
 	orig := rvFixturePlan()
@@ -78,7 +78,7 @@ func TestRV3DomainDenialVoidsPlan(t *testing.T) {
 	}
 }
 
-// RV-4 不无限复规：超限必须如实报"做不到"。
+// RV-4  nolimit rule:  limit  e.g.  "  to". 
 func TestRV4BoundedReplans(t *testing.T) {
 	m := rvManifest(t)
 	f := StepFailure{StepIndex: 2, Tool: "git", Caps: []string{"commit"}, Reason: "一直失败"}

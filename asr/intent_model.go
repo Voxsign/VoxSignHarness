@@ -1,7 +1,7 @@
-// intent_model.go —— 模型兜底（**例外路径**）：只有本地低置信时才调用。
+// intent_model.go --  type bot(**exampleoutpath**): onlyhasbaselylow-confidencetimeonlycalluse. 
 //
-// 红线 #6：核心路径必须本地规则完成 —— 高置信**绝不**调模型。
-// 需求 Δ7/4.9：超时/失败一律 fail-open，返回本地结果并标 degraded，不阻塞链路。
+//  line #6:   path  baselyruledone --    **  **call type. 
+// needrequire Δ7/4.9:  time/     fail-open, returnbackbaselyclose andtgt degraded,    chainroute. 
 package asr
 
 import (
@@ -11,42 +11,42 @@ import (
 	"time"
 )
 
-// 判据⑫：**同一个阈值常数不得表达两个不同语义**。
+//  data⑫: **same   value num  table    samesemantic**. 
 //
-// ⚠️ 这两个语义**共用同一个值是有意的**（都是在"足够高置信"这条线上分岔）：
-//   - ConfidenceThresholdAsk   ：是否回问（NeedDisambiguate = Confidence < 此值）
-//   - ConfidenceThresholdModel ：是否调用模型（Confidence >= 此值 走规则路径）
+// ⚠️    semantic** usesame  valueishas  **(allis "     "  lineonsplit ): 
+//   - ConfidenceThresholdAsk   : is clarification(NeedDisambiguate = Confidence <  value)
+//   - ConfidenceThresholdModel : is calluse type(Confidence >=  value  rulepath)
 //
-// **值相同，但名字不同** ⇒ 将来若要单独调整任一条，改一处即可，且**影响面清晰**。
-// 反例判据：源码里**不得再出现字面量 0.70**（两处必须用具名常量）。
+// **value same, butnamechar same** ⇒ will ifneed  call    , modify placei.e. , and**  face  **. 
+// revexample data:  code **  againoutnowcharface  0.70**( place  use name  ). 
 const (
 	ConfidenceThresholdAsk   = 0.70
 	ConfidenceThresholdModel = 0.70
 )
 
-// IntentModel 是"意图兜底模型"的最小接口。
-// 由 modelcenter.Registry 结构化实现（本包不依赖 modelcenter，保持单向/解耦）。
+// IntentModel is"intent bot type"   connect . 
+// by modelcenter.Registry close ize now(this package dependency modelcenter, keepkeep to/resolve ). 
 type IntentModel interface {
 	ClassifyIntent(ctx context.Context, text string) (typ string, confidence float64, err error)
 }
 
-// DefaultIntentTimeout 是模型兜底超时（需求 Δ7：3s）。
+// DefaultIntentTimeout is type bot time(needrequire Δ7: 3s). 
 const DefaultIntentTimeout = 3 * time.Second
 
-// knownIntents 是合法的 9 类意图（控制语义另有 control 字段）。
+// knownIntents is    9 classintent(controlsemantic has control charseg). 
 var knownIntents = map[string]bool{
 	"EDIT": true, "DEBUG": true, "QUERY": true, "TEST": true, "COMMIT": true,
 	"DEPLOY": true, "NOTE": true, "ASK": true, "ORCHESTRATE": true,
 }
 
-// ClassifyIntentWith 本地优先；仅在低置信时走模型兜底，任何失败都降级。
+// ClassifyIntentWith basely first; only low-confidencetime  type bot,     all  . 
 func ClassifyIntentWith(ctx context.Context, text string, model IntentModel, timeout time.Duration) IntentResult {
 	ir := ClassifyIntent(text)
 	if ir.Confidence >= ConfidenceThresholdModel {
-		return ir // 高置信：核心路径本地，绝不调模型（红线 #6）
+		return ir //    :   pathbasely,   call type( line #6)
 	}
 	if model == nil {
-		// 没有可用兜底模型时不静默：若处于"超时注入"场景，如实标降级（链路无兜底）。
+		//  has use bot typetime   : ifplaceat" timenotein" scenario, e.g. tgt  (chainrouteno bot). 
 		if os.Getenv("VHS_ASR_FORCE_MODEL_TIMEOUT") == "1" {
 			ir.Degraded = true
 			ir.DegradedReason = "模型兜底不可用/超时（fail-open，返回本地结果）"
@@ -58,7 +58,7 @@ func ClassifyIntentWith(ctx context.Context, text string, model IntentModel, tim
 		timeout = DefaultIntentTimeout
 	}
 	if os.Getenv("VHS_ASR_FORCE_MODEL_TIMEOUT") == "1" {
-		timeout = 20 * time.Millisecond // 注入场景：让**真实**调用超时（不是跳过调用）
+		timeout = 20 * time.Millisecond // notein scenario:  **  **calluse time( is edcalluse)
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
