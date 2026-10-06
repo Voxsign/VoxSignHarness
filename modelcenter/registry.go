@@ -95,7 +95,7 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 	req.Header.Set("Authorization", "Bearer "+c.key) //      char  
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return Response{}, fmt.Errorf("模型调用失败: %w", err)
+		return Response{}, fmt.Errorf("model call failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -108,17 +108,17 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}
-		return Response{}, fmt.Errorf("模型调用 HTTP %d: %s", resp.StatusCode, snippet)
+		return Response{}, fmt.Errorf("model call HTTP %d: %s", resp.StatusCode, snippet)
 	}
 	var cr chatResponse
 	if err := json.Unmarshal(data, &cr); err != nil {
-		return Response{}, fmt.Errorf("响应不是 OpenAI 兼容 JSON: %w", err)
+		return Response{}, fmt.Errorf("response is not OpenAI-compatible JSON: %w", err)
 	}
 	// ⚠️ ** type    **(Lead 2026-10-03   :  require deepseek-reasoner,    model=deepseek-flash). 
 	//   ifonly "  require  type", model_id thenis   ⇒ ASR-MODEL-01  attribution  . 
 	substituted := cr.Model != "" && !strings.EqualFold(cr.Model, c.model)
 	if substituted {
-		log.Printf("模型替换：请求 %s，响应 %s（model_substituted=true）", c.model, cr.Model)
+		log.Printf("model substitution: requested %s, responded %s (model_substituted=true)", c.model, cr.Model)
 	}
 	out := Response{ModelID: cr.Model, RequestedModel: c.model, ActualModel: cr.Model,
 		Substituted: substituted, FinishReason: "", TotalTokens: cr.Usage.TotalTokens,
@@ -148,7 +148,7 @@ func NewRegistry(cfg Config) (*Registry, error) {
 	}
 	key := strings.TrimSpace(os.Getenv(cfg.Gateway.APIKeyEnv))
 	if key == "" {
-		return nil, fmt.Errorf("缺少 %s：请通过环境变量或 .env 提供（本包不读取、不内置任何密钥）", cfg.Gateway.APIKeyEnv)
+		return nil, fmt.Errorf("missing %s: provide it via environment variable or .env (this package reads no built-in keys)", cfg.Gateway.APIKeyEnv)
 	}
 	endpoint := strings.TrimRight(cfg.Gateway.BaseURL, "/") + cfg.Gateway.ChatPath
 	r := &Registry{cfg: cfg, clients: map[Channel]*chatClient{}, tokens: map[Channel]WriteToken{}}
@@ -165,7 +165,7 @@ func NewRegistry(cfg Config) (*Registry, error) {
 		// read-only cc.ModelID    tier-only   sendout **model:""** ⇒ on  502(base   rootbecause). 
 		model, err := r.cfg.ResolveModel(ch)
 		if err != nil {
-			return nil, fmt.Errorf("通道 %q 模型解析失败（fail-closed）: %w", ch, err)
+			return nil, fmt.Errorf("channel %q model resolution failed (fail-closed): %w", ch, err)
 		}
 		r.clients[ch] = &chatClient{endpoint: endpoint, key: key, model: model, timeout: timeout, hc: &http.Client{Transport: modelcenterTransport()}}
 	}
@@ -183,7 +183,7 @@ func (r *Registry) Enabled(ch Channel) bool {
 func (r *Registry) Invoke(ctx context.Context, ch Channel, prompt string) (Response, error) {
 	client, ok := r.clients[ch]
 	if !ok {
-		return Response{}, fmt.Errorf("通道 %q 未启用（enabled:false）—— 不自动改用其它通道", ch)
+		return Response{}, fmt.Errorf("channel %q not enabled (enabled:false) -- no automatic fallback to other channels", ch)
 	}
 	resp, err := client.chat(ctx, prompt)
 	if err != nil {

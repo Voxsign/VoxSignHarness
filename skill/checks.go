@@ -46,7 +46,7 @@ var checkRegistry = map[string]CheckRunner{
 func RunCheck(name, root string, extra map[string]string) (CheckResult, error) {
 	r, ok := checkRegistry[name]
 	if !ok {
-		return CheckResult{}, fmt.Errorf("skill: 判定器 %q **未实现**（已登记 %d 个）⇒ 不许当通过", name, len(checkRegistry))
+		return CheckResult{}, fmt.Errorf("skill: checker %q **not implemented** (%d registered) -> must not count as pass", name, len(checkRegistry))
 	}
 	return r(root, extra)
 }
@@ -73,7 +73,7 @@ func IsCheckImplemented(name string) bool {
 //	⇒  ** is    **, is**produce   ADR   ** --   izepipe"human   has"changebecome"     ". 
 func checkADRExists(root string, _ map[string]string) (CheckResult, error) {
 	if strings.TrimSpace(root) == "" {
-		return CheckResult{}, fmt.Errorf("checkADRExists: 需要仓库根路径（**判不了，不是通过**）")
+		return CheckResult{}, fmt.Errorf("checkADRExists: repo root path required (**cannot judge, not a pass**)")
 	}
 	var found []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -108,17 +108,17 @@ func checkADRExists(root string, _ map[string]string) (CheckResult, error) {
 		return nil
 	})
 	if err != nil {
-		return CheckResult{}, fmt.Errorf("checkADRExists: 遍历仓库失败: %w", err)
+		return CheckResult{}, fmt.Errorf("checkADRExists: failed to walk repo: %w", err)
 	}
 	if len(found) == 0 {
 		return CheckResult{
 			Passed: false,
-			Detail: "仓库里**没有** ADR 文件（口径：路径含 adr/ 目录段，或 docs/ 下 ADR-* / NNNN-*.md）",
+			Detail: "no ADR files in repo (rule: path contains adr/ segment, or ADR-* / NNNN-*.md under docs/)",
 		}, nil
 	}
 	return CheckResult{
 		Passed: true,
-		Detail: fmt.Sprintf("找到 %d 个 ADR 文件，例如 %s", len(found), strings.Join(head(found, 3), " · ")),
+		Detail: fmt.Sprintf("found %d ADR files, e.g. %s", len(found), strings.Join(head(found, 3), " · ")),
 	}, nil
 }
 
@@ -132,18 +132,18 @@ func checkWithinBoundary(_ string, extra map[string]string) (CheckResult, error)
 	v, ok := extra["gate_allowed"]
 	if !ok {
 		return CheckResult{}, fmt.Errorf(
-			"checkWithinBoundary: 未提供域门禁结果（extra[gate_allowed]）⇒ **判不了，不是通过**；" +
-				"域门禁裁决在 pipeline（verdict.Allowed / BOUNDARY_VIOLATION）")
+			"checkWithinBoundary: no domain-guard result provided (extra[gate_allowed]) -> **cannot judge, not a pass**; " +
+				"the guard decision is in pipeline (verdict.Allowed / BOUNDARY_VIOLATION)")
 	}
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "true", "1", "yes", "allowed":
 		reason := extra["gate_reason"]
-		return CheckResult{Passed: true, Detail: "域门禁裁决 = 放行（verdict.Allowed）" + suffix(reason)}, nil
+		return CheckResult{Passed: true, Detail: "domain-guard verdict = allowed (verdict.Allowed)" + suffix(reason)}, nil
 	case "false", "0", "no", "denied":
 		reason := extra["gate_reason"]
-		return CheckResult{Passed: false, Detail: "域门禁裁决 = **BOUNDARY_VIOLATION**" + suffix(reason)}, nil
+		return CheckResult{Passed: false, Detail: "domain-guard verdict = **BOUNDARY_VIOLATION**" + suffix(reason)}, nil
 	default:
-		return CheckResult{}, fmt.Errorf("checkWithinBoundary: 门禁结果 %q 无法解读 ⇒ **判不了，不是通过**", v)
+		return CheckResult{}, fmt.Errorf("checkWithinBoundary: unparseable guard result %q -> **cannot judge, not a pass**", v)
 	}
 }
 
@@ -153,15 +153,15 @@ func checkWithinBoundary(_ string, extra map[string]string) (CheckResult, error)
 func checkVerifiedOverHearsay(_ string, extra map[string]string) (CheckResult, error) {
 	k, ok := extra["evidence_kind"]
 	if !ok {
-		return CheckResult{}, fmt.Errorf("checkVerifiedOverHearsay: 未提供证据类别（extra[evidence_kind]）⇒ **判不了，不是通过**")
+		return CheckResult{}, fmt.Errorf("checkVerifiedOverHearsay: no evidence kind provided (extra[evidence_kind]) -> **cannot judge, not a pass**")
 	}
 	switch strings.ToLower(strings.TrimSpace(k)) {
 	case "verified":
-		return CheckResult{Passed: true, Detail: "证据来自**已执行 check**（ExecutedCheck）"}, nil
+		return CheckResult{Passed: true, Detail: "evidence comes from an **executed check** (ExecutedCheck)"}, nil
 	case "hearsay":
-		return CheckResult{Passed: false, Detail: "证据仅是**一方称**（hearsay）⇒ 不足以支撑该判据"}, nil
+		return CheckResult{Passed: false, Detail: "evidence is **hearsay only** -> insufficient for this criterion"}, nil
 	default:
-		return CheckResult{}, fmt.Errorf("checkVerifiedOverHearsay: 证据类别 %q 无法解读 ⇒ **判不了，不是通过**", k)
+		return CheckResult{}, fmt.Errorf("checkVerifiedOverHearsay: unparseable evidence kind %q -> **cannot judge, not a pass**", k)
 	}
 }
 

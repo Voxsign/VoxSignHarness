@@ -106,7 +106,7 @@ func irreversible(it *contract.Intent) bool {
 func Evaluate(it contract.Intent, imp ImpactInput) Decision {
 	// 1.  reversible  forbid
 	if irreversible(&it) {
-		return Decision{Level: contract.ConfirmHuman, Reason: "不可逆动作（提交/部署/删除/外发/凭证）→ 永远人工确认"}
+		return Decision{Level: contract.ConfirmHuman, Reason: "irreversible action (commit/deploy/delete/exfiltrate/credentials) -> always human-approved"}
 	}
 	// 2. reversibleity(baselinetgt reversiblesamekind  forbid)
 	reversible := true
@@ -118,19 +118,19 @@ func Evaluate(it contract.Intent, imp ImpactInput) Decision {
 		}
 	}
 	if !reversible {
-		return Decision{Level: contract.ConfirmHuman, Reason: "意图基线标不可逆 → 永远人工确认"}
+		return Decision{Level: contract.ConfirmHuman, Reason: "intent baseline marked irreversible -> always human-approved"}
 	}
 	// 3.     face + 5. decide   
 	switch StaticImpact(imp) {
 	case contract.ImpactMedium:
-		return Decision{Level: contract.ConfirmLight, Reason: "可逆+中影响：展示 diff 摘要 → 轻确认"}
+		return Decision{Level: contract.ConfirmLight, Reason: "reversible + medium impact: show diff summary -> light confirm"}
 	case contract.ImpactHigh:
-		return Decision{Level: contract.ConfirmStrong, Reason: "可逆+高影响：diff 预览+影响分析 → 强确认"}
+		return Decision{Level: contract.ConfirmStrong, Reason: "reversible + high impact: diff preview + impact analysis -> strong confirm"}
 	default: // small
 		if conf >= confHigh {
-			return Decision{Level: contract.ConfirmAuto, Reason: "可逆+小+高置信：自动执行 + 标待抽查"}
+			return Decision{Level: contract.ConfirmAuto, Reason: "reversible + small + high confidence: auto-execute + flag for spot-check"}
 		}
-		return Decision{Level: contract.ConfirmAuto, Reason: "可逆+小+低置信：自动执行 + 待抽查 + 回执高亮"}
+		return Decision{Level: contract.ConfirmAuto, Reason: "reversible + small + low confidence: auto-execute + spot-check + highlighted receipt"}
 	}
 }
 
