@@ -22,11 +22,14 @@ final class SessionStore: ObservableObject {
 
     private let defaults: UserDefaults
     private let key = "vhs-ios-sessions"
+    private let containerKey = "vhs-ios-containers"
 
     /// 会话列表（顺序即创建顺序；列表排序由视图按 updatedAt 决定）。
     @Published var sessions: [ChatSession] = []
     /// 当前会话 id。
     @Published var currentSessionID: String = ""
+    /// V6.2 容器（角色/域）列表。
+    @Published var containers: [ContainerItem] = []
 
     /// - Parameter defaults: 注入便于单测隔离（默认 .standard）。
     init(defaults: UserDefaults = .standard) {
@@ -40,6 +43,11 @@ final class SessionStore: ObservableObject {
             } else {
                 currentSessionID = sessions.first?.id ?? ""
             }
+        }
+        // V6.2 容器独立持久化（key 分开，不动旧 sessions 载荷）。
+        if let cdata = defaults.data(forKey: containerKey),
+           let cs = try? JSONDecoder().decode([ContainerItem].self, from: cdata) {
+            containers = cs
         }
     }
 
@@ -64,6 +72,56 @@ final class SessionStore: ObservableObject {
         return s
     }
 
+    /// V6.2 新建归属会话：挂到指定容器（角色/域）之下。
+    @discardableResult
+    func createSession(title: String = "新会话",
+                       containerKind: ContainerKind,
+                       containerID: String) -> ChatSession {
+        let s = makeSession(title: title,
+                            containerKind: containerKind,
+                            containerID: containerID)
+        sessions.append(s)
+        currentSessionID = s.id
+        persist()
+        return s
+    }
+
+    // MARK: - V6.2 容器（角色/域）
+
+    /// 容器列表按 kind 过滤。
+    func containers(of kind: ContainerKind) -> [ContainerItem] {
+        containers.filter { $0.kind == kind }
+    }
+
+    /// 创建或复用容器（同名同 kind 幂等返回已有）。持久化。
+    @discardableResult
+    func upsertContainer(kind: ContainerKind, name: String) -> ContainerItem {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmed.isEmpty ? (kind == .role ? "新角色" : "新域") : trimmed
+        if let hit = containers.first(where: { $0.kind == kind && $0.name == finalName }) {
+            return hit
+        }
+        let c = ContainerItem(id: UUID().uuidString, kind: kind, name: finalName)
+        containers.append(c)
+        persistContainers()
+        return c
+    }
+
+    /// 删除容器（其下会话同时删除；至少保留一个会话时允许删除容器）。
+    @discardableResult
+    func deleteContainer(id: String) -> Bool {
+        guard let c = containers.first(where: { $0.id == id }) else { return false }
+        let childIDs = sessions.filter { $0.containerID == id }.map { $0.id }
+        containers.removeAll { $0.id == id }
+        sessions.removeAll { $0.containerID == id }
+        if childIDs.contains(currentSessionID) {
+            currentSessionID = sessions.first?.id ?? ""
+        }
+        persistContainers()
+        persist()
+        return true
+    }
+
     /// 删除会话；sessions.count <= 1 时拒绝（返回 false）。
     @discardableResult
     func deleteSession(id: String) -> Bool {
@@ -80,6 +138,26 @@ final class SessionStore: ObservableObject {
     func renameSession(id: String, title: String) {
         guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[idx].title = title
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
+    // MARK: - V6.3 先聊后归：会话归类/移回
+
+    /// 把会话归入指定容器（角色/域）。
+    func setContainer(sessionID: String, kind: ContainerKind, containerID: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        sessions[idx].containerKind = kind
+        sessions[idx].containerID = containerID
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
+    /// 移回未分组（清空归属）。
+    func clearContainer(sessionID: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        sessions[idx].containerKind = nil
+        sessions[idx].containerID = nil
         sessions[idx].updatedAt = Date()
         persist()
     }
@@ -128,10 +206,28 @@ final class SessionStore: ObservableObject {
                     messages: [])
     }
 
+    private func makeSession(title: String,
+                             containerKind: ContainerKind,
+                             containerID: String) -> ChatSession {
+        ChatSession(id: UUID().uuidString,
+                    title: title,
+                    createdAt: Date(),
+                    updatedAt: Date(),
+                    messages: [],
+                    containerKind: containerKind,
+                    containerID: containerID)
+    }
+
     private func persist() {
         let state = PersistedState(sessions: sessions, currentID: currentSessionID)
         if let data = try? JSONEncoder().encode(state) {
             defaults.set(data, forKey: key)
+        }
+    }
+
+    private func persistContainers() {
+        if let data = try? JSONEncoder().encode(containers) {
+            defaults.set(data, forKey: containerKey)
         }
     }
 }

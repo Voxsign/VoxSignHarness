@@ -36,8 +36,16 @@ struct InputBarView: View {
     // 【加固1】本轮按压是否由本视图手势发起：快速连按/双宿主重复按压时据此挡住二次 start，
     // 堵住 SpeechRecognizer 异步重入窗口被 start() 内 defer 架空的竞态（R2）。
     @State private var holdInitiated: Bool = false
+    // V6.4 即时视觉态：按下立刻显示按住态（不等语音引擎异步启动）。
+    // 视觉先于引擎——"一按下去马上反应"，波形呼吸动画立即出现，meterLevel 随后接入。
+    @State private var pressActive: Bool = false
 
     private var isTyping: Bool { !model.inputText.isEmpty }
+
+    /// V6：连接在线才可输入（顶栏红点=离线 → 输入条禁用并提示切换机器）。
+    private var isConnected: Bool {
+        ConnectivityService.shared.state == .online
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +54,11 @@ struct InputBarView: View {
             voiceStatusSection
             #endif
 
-            inputRow
+            if isConnected {
+                inputRow
+            } else {
+                offlineBar
+            }
         }
         .background(.ultraThinMaterial)
         // 输入条顶部 0.5pt 极淡描边（豆包式）。
@@ -61,6 +73,24 @@ struct InputBarView: View {
         }
     }
 
+    /// V6 离线提示条：顶栏红点（未连接）时不可输入，提示点上方机器名切换机器。
+    private var offlineBar: some View {
+        HStack {
+            Spacer()
+            Label("未连接 · 点上方机器名切换", systemImage: "wifi.slash")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer()
+        }
+        .frame(height: 56)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(Capsule())
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .accessibilityIdentifier("vhs.offline")
+    }
+
     // MARK: - 输入行（方案B：语音大按钮 / 文字模式 / 录音态满底波形）
 
     private var inputRow: some View {
@@ -70,9 +100,9 @@ struct InputBarView: View {
         // onEnded 必然触发 → stopHold/cancelHold 执行 → isRecording 复位，绝不冻结。
         ZStack {
             normalInputRow
-                .opacity(speechRecording ? 0.0 : 1.0)
+                .opacity((speechRecording || pressActive) ? 0.0 : 1.0)
 
-            if speechRecording {
+            if speechRecording || pressActive {
                 recordingHoldView
                     .transition(.opacity)
             }
@@ -104,8 +134,10 @@ struct InputBarView: View {
                         .allowsHitTesting(!speechRecording)
                 }
             } else {
-                // 语音大按钮：永不禁用 hit-testing（手势宿主，录音中透明命中维持拖拽连续）
+                // 语音大按钮：永不禁用 hit-testing（手势宿主，录音中透明命中维持拖拽连续）。
+                // 录音进行中断线时按钮灰化（0.35）但手势宿主保留，松手仍能复位。
                 voiceMainButton
+                    .opacity(isConnected ? 1.0 : 0.35)
                 keyboardToggleButton
                     .allowsHitTesting(!speechRecording)
             }
@@ -183,38 +215,36 @@ struct InputBarView: View {
     // MARK: - 按住态：满底波形界面（方案B 用户确认稿）
 
     /// 几何（硬性）：矩形填满宽度、四角无圆角无弧线；背景 .ignoresSafeArea(edges:.bottom)
-    /// 向下延展贴屏幕底沿（沉到 home indicator 之下）；总高 160pt；条组高 70pt；
-    /// 条组下方留 ~22pt 再放底部文案；底色 #1a1a1a，红条/红字突出。
+    /// 向下延展贴屏幕底沿（沉到 home indicator 之下）；总高 260pt（V6：更高更满，不再"只显示一半"）；
+    /// 条组高 110pt；条组下方留 ~26pt 再放底部文案；底色 #1a1a1a，红条/红字突出。
     /// 结构：① 顶部小字「正在听…」② 中部 20 根 #ff3b30 竖形声波条 ③ 底部加粗「松手发送 · 上移取消」。
     /// 【卡死修复-双宿主】整块波形区域即录音态手势宿主（.gesture(holdGesture)）：
     /// 松手/上滑/滑回落在任意处都触发 onEnded（cancelling→cancelHold 否则 stopHold），isRecording 必然复位。
     private var recordingHoldView: some View {
         VStack(spacing: 0) {
-            Text(holdTopText)
-                .font(.system(size: 13))
-                .foregroundColor(Color.white.opacity(0.75))
-                .padding(.top, 10)
+            // V6.4 去掉顶部「正在听…」提示：按住态只有波形，识别过程不需要文字（机器转一转即可）。
 
             #if canImport(Speech)
             HoldWaveBars(meterLevel: speech.meterLevel)
-                .frame(height: 70)
-                .padding(.top, 8)
+                .frame(height: 55)
+                .padding(.top, 10)
             #else
             HoldWaveBars(meterLevel: 0)
-                .frame(height: 70)
-                .padding(.top, 8)
+                .frame(height: 55)
+                .padding(.top, 10)
             #endif
 
             Text(holdBarText)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(HoldWaveBars.barRed)
-                .padding(.top, 22)          // 条组下方留 ~22pt 再放底部文案
-                .padding(.bottom, 14)
+                .padding(.top, 12)          // 条组下方留 ~12pt 再放底部文案
+                .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 160)
-        // 深色矩形：无圆角/无弧线，四角都是直角
-        .background(HoldWaveBars.panelDark)
+        .frame(height: 130)
+        // V6.7 更透明：极浅半透明白（0.15）几乎全透但保留层次，不发雾；红波形对比不受影响。
+        // （真机若显雾可降到 0.10——本参数为微调项）。
+        .background(Color.white.opacity(0.15))
         // 向下延展：背景沉到 home indicator 之下，整体贴底不留空隙
         .ignoresSafeArea(edges: .bottom)
         .animation(.easeOut(duration: 0.12), value: cancelling)
@@ -256,10 +286,10 @@ struct InputBarView: View {
 
     /// 20 根细竖条（宽 5pt、圆角 2pt、#ff3b30），参差基准高度形成自然声波轮廓。
     /// TimelineView(.animation) 每帧重算：
-    ///   条高[i] = 基准[i] × (0.35 + 0.65 × 当帧系数[i])
-    ///   当帧系数[i] = meterLevel(0~1)×0.7 + 每根独立相位呼吸 sin(t×4 + i×0.55)×0.3
-    /// 低电平时系数 ≈ 0~0.3 → 条高保持基准的 35%~55% 轻微呼吸（不至于静止）；
-    /// 说话时 meterLevel→1 → 条高冲到接近基准（上限对齐条组 70pt）。
+    ///   条高[i] = 基准[i] × (0.30 + 0.70 × 当帧系数[i])
+    ///   当帧系数[i] = meterLevel(0~1)×0.75 + 每根独立相位呼吸 sin(t×4 + i×0.55)×0.25
+    /// 低电平时系数 ≈ 0~0.25 → 条高保持基准的 30%~47% 轻微呼吸（不至于静止）；
+    /// 说话时 meterLevel→1 → 条高冲到接近基准（上限对齐条组 70pt），起伏明显跟嘴型走。
     private struct HoldWaveBars: View {
         var meterLevel: Float
 
@@ -268,25 +298,25 @@ struct InputBarView: View {
         /// #1a1a1a 深色面板底（与主胶囊一致）。
         static let panelDark = Color(red: 0.102, green: 0.102, blue: 0.102)
 
-        /// 20 个参差基准高度（pt）：中间高两侧低的自然声波轮廓，峰值 64pt 对齐条组 70pt。
+        /// 20 个参差基准高度（pt）：中间高两侧低的自然声波轮廓，峰值 48pt 对齐条组 55pt（V6.7 面板减半，基线同步 ×0.5）。
         private static let baselines: [CGFloat] = [
-            14, 26, 40, 54, 36, 58, 44, 64, 30, 48,
-            48, 30, 64, 44, 58, 36, 54, 40, 26, 14
+            10.5, 19.5, 30, 40.5, 27, 43.5, 33, 48, 22.5, 36,
+            36, 22.5, 48, 33, 43.5, 27, 40.5, 30, 19.5, 10.5
         ]
 
         var body: some View {
             TimelineView(.animation) { timeline in
                 let t = timeline.date.timeIntervalSinceReferenceDate
                 let lvl = Double(meterLevel)
-                HStack(alignment: .center, spacing: 3) {
+                HStack(alignment: .center, spacing: 4) {
                     ForEach(Array(Self.baselines.enumerated()), id: \.offset) { i, base in
                         // 每根条独立相位：sin(t×速率 + i×相位差) → [0,1] 呼吸值
                         let breath = 0.5 + 0.5 * sin(t * 4.0 + Double(i) * 0.55)
-                        let coeff = min(1.0, lvl * 0.7 + breath * 0.3)
-                        let h = base * (0.35 + 0.65 * coeff)
-                        RoundedRectangle(cornerRadius: 2)
+                        let coeff = min(1.0, lvl * 0.75 + breath * 0.25)
+                        let h = base * (0.30 + 0.70 * coeff)
+                        RoundedRectangle(cornerRadius: 3)
                             .fill(Self.barRed)
-                            .frame(width: 5, height: h)
+                            .frame(width: 6, height: h)
                     }
                 }
             }
@@ -297,9 +327,8 @@ struct InputBarView: View {
 
     @ViewBuilder
     private var voiceStatusSection: some View {
-        if speech.calibrating {
-            voiceStatusBar(kind: .calibrating, primary: "正在校准…", secondary: "识别完成后自动发送")
-        } else if speech.emptyRecording {
+        // V6.5 去掉「正在校准…」提示（无意义）；只保留有实际反馈价值的态：
+        if speech.emptyRecording {
             voiceStatusBar(kind: .silent, primary: "没录到声音，请重说", secondary: "录音是空的，这次没有发送")
         } else if speech.asrFailed {
             voiceStatusBar(kind: .failed, primary: "识别失败，请再按一次", secondary: "没有听清，这次没有发送")
@@ -410,17 +439,30 @@ struct InputBarView: View {
     private var holdGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
+                // LAT：手指落下瞬间打点（主线程，最近于 touch down）。
+                SpeechRecognizer.markTouch()
+                // 【按住延迟修复】轻触觉反馈：手指一落下立刻震动，视觉/听觉之前先有"按到了"的
+                // 触感，不等引擎/波形，按压感知 <0.1s。
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                // V6.4 按下立刻进入按住态（视觉先行，不等语音引擎异步启动）。
+                pressActive = true
                 // 【加固1】仅在本轮尚无发起者时 start 一次；录音中或已发起过不重复 start（R2）。
                 if !speech.isRecording && !holdInitiated {
                     holdInitiated = true
                     cancelling = false
-                    speech.startHold()
+                    // V6.5 异步启动语音引擎：波形先渲染，不被引擎初始化（音频会话/授权等）阻塞首帧——
+                    // 按下去→弹出波形应在 0.1 秒内完成。
+                    DispatchQueue.main.async {
+                        speech.startHold()
+                    }
                 }
                 // 上滑 -80pt → 取消态；滑回 -80pt 以上 → 恢复录音（豆包同款可逆手感）。
                 let c = v.translation.height < -80
                 if c != cancelling { cancelling = c }
             }
             .onEnded { v in
+                // V6.4 松手立即复位视觉态。
+                pressActive = false
                 // 【加固1/2】先记下本轮是否发起者，再复位标记。
                 let wasInitiator = holdInitiated
                 holdInitiated = false

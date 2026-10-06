@@ -98,6 +98,8 @@ final class AppModel: ObservableObject {
 
     // 设置
     @Published var showSettings: Bool = false
+    /// V6：点顶栏机器名打开的"切换机器"面板。
+    @Published var showMachinePicker: Bool = false
     @Published var statusLine: String = ""
     @Published var inputText: String = ""
 
@@ -105,6 +107,10 @@ final class AppModel: ObservableObject {
     @Published var showSessions: Bool = false
     @Published var currentSessionID: String = ""
     var sessions: [ChatSession] { SessionStore.shared.sessions }
+
+    /// V6.3 顶栏副信息：当前**实际连接**的机器名（跟随连接状态；非在线显示"未连接"）。
+    @Published var machineLabel: String = "VoxSign 云端"
+    private var machineLabelSub: AnyCancellable?
 
     // v2.4 附件（资料）：输入条待提交的附件
     @Published var pendingAttachments: [Attachment] = []
@@ -151,6 +157,16 @@ final class AppModel: ObservableObject {
             guard let self = self else { return }
             Task { await self.flushQueue() }
         }
+
+        // V6.3 顶栏机器名：跟随"连接状态 + 模式 + 活动服务器"刷新——
+        // 机器名必须与实际连接目标一致（只有真正切过去名字才变，默认=云端）。
+        let store = SettingsStore.shared
+        machineLabelSub = Publishers.CombineLatest3(store.$mode,
+                                                   store.$activeServerID,
+                                                   ConnectivityService.shared.$state)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshMachineLabel() }
+        refreshMachineLabel()
         // T2 豆包式交互：常听语音识别到完整一句话 → 自动提交（开口即达，无需按按钮）。
         #if canImport(Speech)
         SpeechRecognizer.shared.onFinalSegment = { [weak self] text in
@@ -674,6 +690,7 @@ final class AppModel: ObservableObject {
     // MARK: - 对话流渲染助手
 
     private func appendUser(_ text: String, fromVoice: Bool, attachments: [Attachment] = []) {
+        autoNameIfNeeded(text)
         var bubble = Bubble(text: text, fromVoice: fromVoice, attachments: attachments)
         #if canImport(Speech)
         if fromVoice, SpeechRecognizer.shared.lastHoldSeconds > 0 {
@@ -682,6 +699,15 @@ final class AppModel: ObservableObject {
         #endif
         rows.append(.user(bubble))
         scrollTick += 1
+    }
+
+    /// V6.2 自动命名：当前会话还是默认名（"新会话"/空）时，用首条用户内容生成标题。
+    /// 本地规则（VSLogic.autoTitle）：取内容前 12 字 + "…"；后续 harness 可用后升级 AI 命名。
+    private func autoNameIfNeeded(_ text: String) {
+        guard let s = SessionStore.shared.currentSession,
+              s.title == "新会话" || s.title.isEmpty else { return }
+        let name = VSLogic.autoTitle(from: text)
+        SessionStore.shared.renameSession(id: s.id, title: name)
     }
 
     /// T3 豆包式：Harness 的"真回复"（完成/回执/决策点）朗读；系统提示不读。
@@ -815,6 +841,69 @@ final class AppModel: ObservableObject {
         currentSessionID = s.id
         loadCurrentRows()
         resetTransientState()
+    }
+
+    // MARK: - V6.2 角色/域容器会话
+
+    /// 进入某容器的新会话（在角色中新建 / 在域中新建）。
+    func enterContainerSession(kind: ContainerKind, containerID: String) {
+        persistCurrentRows()
+        let s = SessionStore.shared.createSession(title: "新会话",
+                                                  containerKind: kind,
+                                                  containerID: containerID)
+        currentSessionID = s.id
+        loadCurrentRows()
+        resetTransientState()
+    }
+
+    /// 创建（或复用同名）容器并进入其新会话。
+    func createContainerAndEnter(kind: ContainerKind, name: String) {
+        let c = SessionStore.shared.upsertContainer(kind: kind, name: name)
+        enterContainerSession(kind: kind, containerID: c.id)
+    }
+
+    /// V6.3 先聊后归：把已有会话归入容器（角色/域）。
+    func classifySession(_ id: String, kind: ContainerKind, containerID: String) {
+        SessionStore.shared.setContainer(sessionID: id, kind: kind, containerID: containerID)
+    }
+
+    /// 新建（或复用同名）容器并把会话归入。
+    func createContainerAndClassify(_ id: String, kind: ContainerKind, name: String) {
+        let c = SessionStore.shared.upsertContainer(kind: kind, name: name)
+        classifySession(id, kind: kind, containerID: c.id)
+    }
+
+    /// 移回未分组。
+    func unclassifySession(_ id: String) {
+        SessionStore.shared.clearContainer(sessionID: id)
+    }
+
+    /// V6.3 顶栏归属标签：当前会话所属容器名（无 → 未分组）。
+    var currentContainerLabel: String {
+        guard let s = SessionStore.shared.currentSession,
+              let cid = s.containerID,
+              let c = SessionStore.shared.containers.first(where: { $0.id == cid }) else {
+            return "未分组"
+        }
+        return c.name
+    }
+
+    /// V6.3 机器名 = 实际连接目标：
+    /// - online：连的是谁显示谁（自建=服务器名；无自建/云道=「VoxSign 云端」，云端为默认主机）
+    /// - 非 online（offline/reconnecting/unknown）：显示「未连接」（与红点、禁用输入一致）
+    func refreshMachineLabel() {
+        let store = SettingsStore.shared
+        let conn = ConnectivityService.shared.state
+        switch conn {
+        case .online:
+            if store.mode == .selfHosted, let cfg = store.activeServerConfig {
+                machineLabel = cfg.name.isEmpty ? "未命名服务器" : cfg.name
+            } else {
+                machineLabel = "VoxSign 云端"
+            }
+        case .offline, .reconnecting, .unknown:
+            machineLabel = "未连接"
+        }
     }
 
     /// 删除会话：先保存当前 rows；删后若删的是当前会话则切到剩余第一个并加载。

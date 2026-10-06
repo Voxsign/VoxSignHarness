@@ -150,6 +150,24 @@ struct ChatSession: Identifiable, Codable, Equatable {
     var updatedAt: Date
     var serverBase: String? = nil
     var messages: [StoredMessage] = []
+    // V6.2 会话归属：每个会话挂在「角色」或「域」之一（nil=未分组，兼容旧数据）。
+    var containerKind: ContainerKind? = nil
+    var containerID: String? = nil
+}
+
+// MARK: - V6.2 角色（Role）/ 域（Domain）容器
+
+/// 容器类型：角色（执行者身份）/ 域（话题·项目·空间）。
+enum ContainerKind: String, Codable {
+    case role, domain
+}
+
+/// 容器（文件夹）：角色或域。会话按 containerID 归入容器；容器可折叠、可内化归档。
+struct ContainerItem: Identifiable, Codable, Equatable {
+    var id: String
+    var kind: ContainerKind
+    var name: String
+    var createdAt: Date = Date()
 }
 
 // MARK: - v2.4 顶栏状态点（纯函数，视图与测试共用）

@@ -344,4 +344,14 @@ enum VSLogic {
         let highRisk: [String] = ["提交", "推送", "push", "commit", "merge", "合并", "部署", "发布", "删除", "清空", "覆盖", "drop", "迁移", "rm"]
         return highRisk.contains { a.contains($0) }
     }
+
+    /// V6.2 自动命名规则：取首条用户内容前 12 字 + "…"（本地兜底；云端可用后升级 AI 命名）。
+    static func autoTitle(from text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return "新会话" }
+        let cleaned = t.replacingOccurrences(of: "\n", with: " ")
+        let maxLen = 12
+        if cleaned.count <= maxLen { return cleaned }
+        return String(cleaned.prefix(maxLen)) + "…"
+    }
 }

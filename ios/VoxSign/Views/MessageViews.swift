@@ -138,14 +138,11 @@ struct UserBubbleView: View {
         }
     }
 
-    /// V4 §3c：用户气泡下方元信息小字（11pt secondary，右对齐）。
+    /// V6.5 用户气泡下方元信息：只留时间（去掉「共用时X秒」——没营养，保持简洁）。
     private var metadataRow: some View {
         HStack(spacing: 4) {
             Spacer()
             Text(Self.timeFormatter.string(from: bubble.timestamp))
-            if bubble.fromVoice, let secs = bubble.voiceSeconds, secs > 0 {
-                Text("· \(voiceDurationCaption(secs))")
-            }
         }
         .font(.system(size: 11))
         .foregroundColor(.secondary)
@@ -197,12 +194,7 @@ struct HarnessBubbleView: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                // V4 §3b：AI 气泡发件人标注（文本上方，11pt secondary）。
-                Text(VSBrand.agentLabel)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .padding(.leading, 6)
-                    .padding(.bottom, 2)
+                // V6.5 去掉「VoxSign·metasystem」发件人标注（无营养信息，保持简洁）。
                 Text(bubble.text)
                     // V4 §3d：消息气泡文本统一 16pt（豆包消息字号）。
                     .font(.system(size: 16))
@@ -353,27 +345,11 @@ struct ReceiptCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // V4 §3b：回执卡上方同款发件人小字（左对齐）。
-            Text(VSBrand.agentLabel)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .padding(.leading, 2)
-                .padding(.bottom, 4)
+            // V6.5 去掉回执卡上方「VoxSign·metasystem」发件人小字（无营养信息）。
 
             VStack(alignment: .leading, spacing: 8) {
-                // 状态行：✅ 已完成 主文案 + · X.X 秒 次要（elapsedSec > 0.01 时显示）。
-                HStack(spacing: 6) {
-                    Text("✅ 已完成")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.black)
-                    if receipt.elapsedSec > 0.01 {
-                        Text("· \(String(format: "%.1f", receipt.elapsedSec)) 秒")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                }
+                // 内容文本（后台人话回复）——V6.4 去掉「✅ 已完成 · X秒」状态行（无营养信息，保持简洁）。
 
-                // 内容文本（后台人话回复）。
                 Text(receipt.result)
                     .font(.system(size: 14))
                     .foregroundColor(.black)
@@ -395,17 +371,7 @@ struct ReceiptCardView: View {
                     }
                 }
 
-                // 撤销按钮行（次要按钮，命中区 ≥44pt）。
-                if undo.show {
-                    Button(action: onRollback) {
-                        Text("撤销")
-                            .font(.system(size: 13))
-                            .foregroundColor(.secondary)
-                            .frame(minHeight: 44)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                }
+                // V6.4 撤销按钮不再展示（界面只留实际内容，保持简洁；撤销能力保留在语音指令链）。
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
