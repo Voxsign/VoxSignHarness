@@ -1,0 +1,6 @@
+# Core engine packages require project owner approval
+/asr/ @smithpeter
+/recog/ @smithpeter
+/pipeline/ @smithpeter
+/contracts/ @smithpeter
+/provider/ @smithpeter
