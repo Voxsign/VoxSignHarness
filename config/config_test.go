@@ -122,10 +122,10 @@ func TestValidationErrors(t *testing.T) {
 		json string
 		want string
 	}{
-		{"重复 provider", `{"providers":[{"name":"a","kind":"mock"},{"name":"a","kind":"mock"}],"routes":[{"name":"default","provider":"a","default":true}]}`, "重复"},
-		{"未知 kind", `{"providers":[{"name":"a","kind":"weird"}],"routes":[{"name":"default","provider":"a","default":true}]}`, "不支持的 kind"},
+		{"duplicate provider", `{"providers":[{"name":"a","kind":"mock"},{"name":"a","kind":"mock"}],"routes":[{"name":"default","provider":"a","default":true}]}`, "duplicate"},
+		{"未知 kind", `{"providers":[{"name":"a","kind":"weird"}],"routes":[{"name":"default","provider":"a","default":true}]}`, "unsupported kind"},
 		{"openai 缺 endpoint", `{"providers":[{"name":"a","kind":"openai","model":"m"}],"routes":[{"name":"default","provider":"a","default":true}]}`, "endpoint"},
-		{"路由引用未知 provider", `{"providers":[{"name":"mock","kind":"mock"}],"routes":[{"name":"default","provider":"ghost","default":true}]}`, "未在 providers 表"},
+		{"路由引用未知 provider", `{"providers":[{"name":"mock","kind":"mock"}],"routes":[{"name":"default","provider":"ghost","default":true}]}`, "not defined in providers table"},
 		{"无 default 路由", `{"providers":[{"name":"mock","kind":"mock"}],"routes":[{"name":"a","provider":"mock"}]}`, "default"},
 	}
 	for _, tc := range cases {
