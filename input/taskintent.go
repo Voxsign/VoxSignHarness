@@ -99,6 +99,10 @@ var (
 	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
 	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
 	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
+	// reminderTriggers: reminder/alarm/timed prompts. Must be matched BEFORE noteTriggers,
+	// otherwise "记个提醒：明天八点开会" trips "记个" and the whole sentence is misrouted to
+	// NOTE (appended verbatim into notes.md) — the repo has no cron/scheduler at all.
+	reminderTriggers = []string{"提醒我", "提醒", "闹钟", "几点叫我", "到点提醒", "定时提醒", "设个时间", "定时叫"}
 	queryTriggers  = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
 		"几点", "几点钟", "什么时间", "几号", "星期几", "周几",
 		// 2026-10-04   control  seg:   formtriggersendword empty , only"   ls/   cat"class in, 
@@ -1025,6 +1029,10 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		// 2026-10-04     R6/R7: writefilerefer (pipe XX writeto/write/keepstoreto /path)
 		// firstat NOTE/TEST   --"pipe        file writeto /tmp" againbe"  " keep. 
 		return c.fill(ti, contract.IntentEdit, 0.85, nil)
+	case containsAny(text, reminderTriggers):
+		// Reminder/alarm must win over noteTriggers: "记个提醒：…" must not be appended to
+		// notes.md. The executor reports REMINDER as explicitly not implemented.
+		return c.fill(ti, contract.IntentReminder, 0.9, nil)
 	case containsAny(text, noteTriggers):
 		return c.fill(ti, contract.IntentNote, 0.85, nil)
 	case containsAny(text, queryTriggers):
