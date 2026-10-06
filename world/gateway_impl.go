@@ -76,7 +76,7 @@ func (g *Gateway) Summary(ctx context.Context) Summary {
 func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 	body, src, err := g.fetch(ctx, pathSummary)
 	if err != nil {
-		return Summary{Status: StatusUnknown, Source: src, Note: "读取失败（不是「没有」）：" + err.Error()}
+		return Summary{Status: StatusUnknown, Source: src, Note: "read failed (does not mean absent): " + err.Error()}
 	}
 	var raw struct {
 		Ok    *bool                      `json:"ok"`
@@ -86,11 +86,11 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 		Hosts map[string]json.RawMessage `json:"hosts"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return Summary{Status: StatusUnknown, Source: src, Note: "解析失败（不是「没有」）：" + err.Error()}
+		return Summary{Status: StatusUnknown, Source: src, Note: "parse failed (does not mean absent): " + err.Error()}
 	}
 	if raw.Ok != nil && !*raw.Ok {
 		return Summary{Status: StatusUnknown, Source: src,
-			Note: "网关自报 ok:false（HTTP 200 不等于成功）：" + raw.Err}
+			Note: "gateway self-reported ok:false (HTTP 200 is not success): " + raw.Err}
 	}
 	out := Summary{Status: StatusOK, Source: src, Zone: raw.Zone, TS: raw.TS}
 	keys := make([]string, 0, len(raw.Hosts))
@@ -110,7 +110,7 @@ func (g *Gateway) fetchSummaryLocked(ctx context.Context) Summary {
 	}
 	if len(unparsed) > 0 {
 		out.UnparsedHosts = unparsed
-		out.Note = "以下主机载荷无法解析，已保留为 unknown（未丢弃）：" + strings.Join(unparsed, ",")
+		out.Note = "The following host payloads could not be parsed and are kept as unknown (not dropped): " + strings.Join(unparsed, ",")
 	}
 	return out
 }
@@ -130,7 +130,7 @@ func (g *Gateway) CICD(ctx context.Context) CICD {
 func (g *Gateway) fetchCICDLocked(ctx context.Context) CICD {
 	body, src, err := g.fetch(ctx, pathCICD)
 	if err != nil {
-		return CICD{Status: StatusUnknown, Source: src, Note: "读取失败（不是「没有」）：" + err.Error()}
+		return CICD{Status: StatusUnknown, Source: src, Note: "read failed (does not mean absent): " + err.Error()}
 	}
 	var raw struct {
 		Ok         *bool    `json:"ok"`
@@ -140,11 +140,11 @@ func (g *Gateway) fetchCICDLocked(ctx context.Context) CICD {
 		Ledger     []Ledger `json:"ledger"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return CICD{Status: StatusUnknown, Source: src, Note: "解析失败（不是「没有」）：" + err.Error()}
+		return CICD{Status: StatusUnknown, Source: src, Note: "parse failed (does not mean absent): " + err.Error()}
 	}
 	if raw.Ok != nil && !*raw.Ok {
 		return CICD{Status: StatusUnknown, Source: src,
-			Note: "网关自报 ok:false（HTTP 200 不等于成功）：" + raw.Err}
+			Note: "gateway self-reported ok:false (HTTP 200 is not success): " + raw.Err}
 	}
 	return CICD{Status: StatusOK, Source: src, CurrentTag: raw.CurrentTag, Ledger: raw.Ledger}
 }
@@ -155,10 +155,10 @@ func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 	if sum.Status != StatusOK || len(sum.Hosts) == 0 {
 		note := sum.Note
 		if note == "" {
-			note = "网关未返回主机清单"
+			note = "gateway returned no host list"
 		}
 		return []Dependency{{
-			On: g.BaseURL, Kind: "gateway", For: "主机 / 服务 / 状态",
+			On: g.BaseURL, Kind: "gateway", For: "host / service / status",
 			Status: StatusUnknown, Note: note, Source: sum.Source,
 		}}
 	}
@@ -170,18 +170,18 @@ func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 		}
 		out = append(out, Dependency{
 			On: h.Key, Kind: "host", For: forWhat, Status: StatusInferred,
-			Note: "网关自报，未独立核实", Source: sum.Source,
+			Note: "gateway self-reported, not independently verified", Source: sum.Source,
 		})
 	}
 	for _, k := range sum.UnparsedHosts {
 		out = append(out, Dependency{
-			On: k, Kind: "host", For: "（载荷无法解析）", Status: StatusUnknown,
-			Note: "该主机载荷解析失败，已保留为 unknown（不是「没有」）", Source: sum.Source,
+			On: k, Kind: "host", For: "(payload unparseable)", Status: StatusUnknown,
+			Note: "host payload parse failed; kept as unknown (does not mean absent)", Source: sum.Source,
 		})
 	}
 	out = append(out, Dependency{
-		On: "aiops 网关（外部世界模型）", Kind: "gateway", For: "机器 / 服务 / 状态的只读真值源",
-		Status: StatusOK, Note: "只读接口，不产生写权限", Source: sum.Source,
+		On: "aiops gateway (external world model)", Kind: "gateway", For: "read-only truth source for machines / services / status",
+		Status: StatusOK, Note: "read-only endpoint, grants no write permission", Source: sum.Source,
 	})
 	return out
 }
@@ -189,8 +189,8 @@ func (g *Gateway) Dependencies(ctx context.Context) []Dependency {
 // Boundaries returnbackand close close   boundary(EXT-07/A4). 
 func (g *Gateway) Boundaries(context.Context) []Boundary {
 	return []Boundary{
-		{ID: "no-deploy", Claim: "本 harness 没有 deploy 工具契约：部署不可执行", Source: "tools/registry.go", Status: "verified"},
-		{ID: "gateway-read-only", Claim: "AIOps 读接口 200 不构成写权限：读 ≠ 授权", Source: "world/gateway_impl.go", Status: "verified"},
+		{ID: "no-deploy", Claim: "this harness has no deploy tool contract: deployment is not executable", Source: "tools/registry.go", Status: "verified"},
+		{ID: "gateway-read-only", Claim: "AIOps read endpoint 200 does not grant write permission: read != authorization", Source: "world/gateway_impl.go", Status: "verified"},
 	}
 }
 
@@ -238,7 +238,7 @@ func (g *Gateway) Services() []Service {
 func (g *Gateway) LoadServiceRegistry(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("读服务注册表失败（fail-open，不是「没有」）: %w", err)
+		return fmt.Errorf("failed to read service registry (fail-open, does not mean absent): %w", err)
 	}
 	//   tail   in : onlyresolve     JSON value. 
 	var raw struct {
@@ -246,10 +246,10 @@ func (g *Gateway) LoadServiceRegistry(path string) error {
 	}
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	if err := dec.Decode(&raw); err != nil {
-		return fmt.Errorf("服务注册表解析失败（fail-open）: %w", err)
+		return fmt.Errorf("service registry parse failed (fail-open): %w", err)
 	}
 	if len(raw.Services) == 0 {
-		return fmt.Errorf("服务注册表里没有 services（fail-open）")
+		return fmt.Errorf("no services in registry (fail-open)")
 	}
 	g.lock.Lock()
 	defer g.lock.Unlock()
@@ -274,7 +274,7 @@ func (g *Gateway) DefaultServiceRegistry() bool {
 func (g *Gateway) WhoHandles(ctx context.Context, query string) []Dependency {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
-		return []Dependency{{On: g.BaseURL, Kind: "gateway", For: "该找谁", Status: StatusUnknown, Note: "查询为空"}}
+		return []Dependency{{On: g.BaseURL, Kind: "gateway", For: "who to ask", Status: StatusUnknown, Note: "query empty"}}
 	}
 	sum := g.Summary(ctx)
 	var out []Dependency
@@ -282,7 +282,7 @@ func (g *Gateway) WhoHandles(ctx context.Context, query string) []Dependency {
 		if strings.Contains(strings.ToLower(h.Purpose), q) || strings.Contains(strings.ToLower(h.Domain), q) {
 			out = append(out, Dependency{
 				On: h.Key, Kind: "host", For: h.Purpose, Status: StatusInferred,
-				Note: "主机 purpose 命中", Source: sum.Source,
+				Note: "matched host purpose", Source: sum.Source,
 			})
 		}
 	}
@@ -297,15 +297,15 @@ func (g *Gateway) WhoHandles(ctx context.Context, query string) []Dependency {
 		if hit {
 			out = append(out, Dependency{
 				On: s.Name, Kind: "service", For: s.Entry, Status: StatusInferred,
-				Note:   "服务注册表命中（本机快照，可能过期）: type=" + s.Type + " status=" + s.Status,
+				Note:   "service registry match (local snapshot, may be stale): type=" + s.Type + " status=" + s.Status,
 				Source: Source{Endpoint: "service-registry:" + DefaultServiceRegistryPath, FetchedAt: g.now().UTC().Format(time.RFC3339)},
 			})
 		}
 	}
 	if len(out) == 0 {
 		return []Dependency{{
-			On: query, Kind: "gateway", For: "该找谁", Status: StatusUnknown,
-			Note:   "未匹配到（这不代表该对象没有）：主机清单 " + fmt.Sprint(len(sum.Hosts)) + " 台、注册表 " + fmt.Sprint(len(g.Services())) + " 条",
+			On: query, Kind: "gateway", For: "who to ask", Status: StatusUnknown,
+			Note:   "no match (does not mean the object is absent): host list " + fmt.Sprint(len(sum.Hosts)) + " hosts, registry " + fmt.Sprint(len(g.Services())) + " entries",
 			Source: sum.Source,
 		}}
 	}
