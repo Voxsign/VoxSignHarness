@@ -7,7 +7,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// 用默认配置（文档 §6.1 路由表）跑各类命中。
+// usedefault  (   §6.1 routebytable)  class in. 
 
 func TestResolveByIntentFileList(t *testing.T) {
 	cfg := config.Default()
@@ -22,7 +22,7 @@ func TestResolveByIntentFileList(t *testing.T) {
 
 func TestResolveByKeywordComplex(t *testing.T) {
 	cfg := config.Default()
-	// 用 UNKNOWN 意图避开 intent 路由，让「代码」关键词命中 complex
+	// use UNKNOWN intent open intent routeby,  " code"close word in complex
 	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentUnknown}, "帮我写段代码")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -65,7 +65,7 @@ func TestResolveForcedRouteMissing(t *testing.T) {
 
 func TestResolveForcedProviderOverride(t *testing.T) {
 	cfg := config.Default()
-	cfg.ForcedProvider = "mock" // 覆盖 file 路由原本的 center
+	cfg.ForcedProvider = "mock" // overwrite file routebyorigbase  center
 	r, err := Resolve(&cfg, contract.Intent{Intent: contract.IntentFileList}, "列出")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -76,7 +76,7 @@ func TestResolveForcedProviderOverride(t *testing.T) {
 }
 
 func TestResolveUnknownProviderErrors(t *testing.T) {
-	// 手工构造一条指向未知 provider 的路由（不走 config.Load 校验，直接测 Resolve）
+	//       referto   provider  routeby(   config.Load verify,  connect  Resolve)
 	cfg := config.Config{
 		Global: config.Global{MaxTurnsDefault: 2},
 		Providers: []config.Provider{

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// 自适应心跳（架构 v1 §5）：服务端窗口化在线判定 + heartbeat 状态/待办更新。
+//      (   v1 §5): serveserviceend  ize line   + heartbeat status/  changenew. 
 
 func TestDeviceOnlineWindowed(t *testing.T) {
 	now := time.Now()
@@ -43,7 +43,7 @@ func TestHeartbeatPeriod(t *testing.T) {
 		{"busy", 15 * time.Second},
 		{"idle", 2 * time.Minute},
 		{"standby", 5 * time.Minute},
-		{"unknown", 2 * time.Minute}, // 未知状态回落 idle
+		{"unknown", 2 * time.Minute}, //   statusback  idle
 	}
 	for _, c := range cases {
 		if got := heartbeatPeriod(c.state); got != c.want {
@@ -56,8 +56,8 @@ func TestHeartbeatUpdatesState(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Global.LogDir = dir
-	cfg.Global.CloudMode = true // devices 注册表仅在云端模式创建
-	cfg.Server.Token = "secret" // register/heartbeat 需 Bearer VHS_TOKEN
+	cfg.Global.CloudMode = true // devices note tableonly  end form  
+	cfg.Server.Token = "secret" // register/heartbeat need Bearer VHS_TOKEN
 	srv := New(&cfg, testOpts(t, dir))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/devices/register", srv.deviceToken(srv.handleDevicesRegister))
@@ -66,21 +66,21 @@ func TestHeartbeatUpdatesState(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	// 注册设备（模拟 harness 注册）。
+	// note   (   harness note ). 
 	status, _ := postControl(t, ts, "/v1/devices/register",
 		map[string]any{"machine_code": "ABCD-EFGH-JKLM", "name": "mac", "base": "http://10.0.0.2:8897"})
 	if status != http.StatusOK {
 		t.Fatalf("注册应 200, got %d", status)
 	}
 
-	// 心跳带 state/pending。
+	//     state/pending. 
 	status, m := postControl(t, ts, "/v1/devices/heartbeat",
 		map[string]any{"machine_code": "ABCD-EFGH-JKLM", "state": "decision", "pending": 1})
 	if status != http.StatusOK {
 		t.Fatalf("心跳应 200, got %d: %v", status, m)
 	}
 
-	// lookup 返回窗口化 online + state + pending。
+	// lookup returnback  ize online + state + pending. 
 	resp := postJSON(t, ts.URL+"/v1/devices/lookup", "secret",
 		map[string]any{"machine_code": "ABCD-EFGH-JKLM"})
 	defer resp.Body.Close()
@@ -99,9 +99,9 @@ func TestHeartbeatUpdatesState(t *testing.T) {
 
 func TestActivityState(t *testing.T) {
 	srv, _ := newControlSrv(t)
-	srv.tasks = map[string]*taskState{} // 清空恢复表，保证空表基线
+	srv.tasks = map[string]*taskState{} //  empty  table, keep emptytablebaseline
 
-	// 空任务表 → idle。
+	// emptytasktable -> idle. 
 	if st, p, _ := srv.ActivityState(); st != "idle" || p != 0 {
 		t.Fatalf("空表应 idle/0, got %s/%d", st, p)
 	}

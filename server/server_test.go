@@ -72,7 +72,7 @@ func TestServerHealthAndAuth(t *testing.T) {
 	})())
 	defer ts.Close()
 
-	// 无 token → 401
+	// no token -> 401
 	resp, err := http.Get(ts.URL + "/v1/health")
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestServerHealthAndAuth(t *testing.T) {
 		t.Fatalf("无 token 应 401, got %d", resp.StatusCode)
 	}
 
-	// 带 token → 200
+	//   token -> 200
 	req, _ := http.NewRequest("GET", ts.URL+"/v1/health", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	resp2, err := http.DefaultClient.Do(req)
@@ -124,7 +124,7 @@ func TestServerRunAndTaskGet(t *testing.T) {
 		t.Fatal("应返回 task_id")
 	}
 
-	// 轮询直到 done
+	// poll to done
 	var state taskState
 	for i := 0; i < 50; i++ {
 		r, _ := http.Get(ts.URL + "/v1/task/" + ack.TaskID)
@@ -143,10 +143,10 @@ func TestServerRunAndTaskGet(t *testing.T) {
 	fmt.Printf("view=%+v\n", state.Outcome.View)
 }
 
-// TestTaskViewConcurrentReadWriteRace 是 -race 回归：
-// 任务后台 goroutine（runPipeline.func2，持 s.mu）写 ts.Outcome/Status/Role 的同时，
-// GET /v1/tasks/{id} 经 writeTaskView 读这些字段。修复前 writeTaskView 无锁读 → -race 必报
-// DATA RACE（实测 TestASRSimPhoneFuzzyNeverBlankOrStuck 即触发）；修复后在 s.mu 内快照 → 绿。
+// TestTaskViewConcurrentReadWriteRace is -race back : 
+// taskafter  goroutine(runPipeline.func2, keep s.mu)write ts.Outcome/Status/Role  sametime, 
+// GET /v1/tasks/{id}   writeTaskView read  charseg. fix before writeTaskView no read -> -race   
+// DATA RACE(   TestASRSimPhoneFuzzyNeverBlankOrStuck i.e.triggersend); fix after  s.mu infast  ->  . 
 func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -155,7 +155,7 @@ func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
 	ts := muxV1(srv)
 	defer ts.Close()
 
-	// 起任务（后台 goroutine 写 ts.Outcome/Status/Role，持 s.mu）
+	// raisetask(after  goroutine write ts.Outcome/Status/Role, keep s.mu)
 	body, _ := json.Marshal(tasksPostReq{Text: "记一下并发竞态回归测试"})
 	resp, err := http.Post(ts.URL+"/v1/tasks", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -170,7 +170,7 @@ func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
 		t.Fatal("应返回 task_id")
 	}
 
-	// 并发轮询 GET（writeTaskView 读路径）——race 检测器捕捉任何与写并发的无锁读
+	// andsendpoll GET(writeTaskView readpath)--race        andwriteandsend no read
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -191,7 +191,7 @@ func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
 		}
 	}()
 
-	// 等任务到终态
+	// etctasktoendstate
 	final := ""
 	for i := 0; i < 100; i++ {
 		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
@@ -213,7 +213,7 @@ func TestTaskViewConcurrentReadWriteRace(t *testing.T) {
 	}
 }
 
-// muxV1 注册 INTERACT-v1 全部正式端点（测试用）。
+// muxV1 note  INTERACT-v1 safety posformendpoint(  use). 
 func muxV1(srv *Server) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/tasks", srv.auth(srv.handleTasksPost))
@@ -238,13 +238,13 @@ func postJSON(t *testing.T, url, token string, body any) *http.Response {
 	return resp
 }
 
-// TestTasksLifecycleConfirm：POST /v1/tasks → need_confirm → answer 执行 → done。
+// TestTasksLifecycleConfirm: POST /v1/tasks -> need_confirm -> answer    -> done. 
 func TestTasksLifecycleConfirm(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Global.LogDir = dir
 	srv := New(&cfg, testOpts(t, dir))
-	// 注册 proj 项目域让 COMMIT 过 space_check
+	// note  proj  objdomain  COMMIT ed space_check
 	_ = srv.tmpl.Spaces.Add(&space.Manifest{
 		Name: "proj", Type: space.TypeProject, Scope: []string{dir},
 		Tools: []string{"git", "read"}, Perms: space.Perms{Read: true, Write: true},
@@ -261,7 +261,7 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	// 轮询到 need_confirm
+	// pollto need_confirm
 	var body map[string]any
 	for i := 0; i < 50; i++ {
 		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
@@ -275,12 +275,12 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 		t.Fatalf("COMMIT 应 need_confirm, got %+v", body)
 	}
 
-	// answer 确认词
+	// answer confirmword
 	ans := postJSON(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/answer", "", map[string]string{"answer": "执行"})
 	if ans.StatusCode != http.StatusOK {
 		t.Fatalf("answer 应 200, got %d", ans.StatusCode)
 	}
-	// 轮询到 done
+	// pollto done
 	for i := 0; i < 50; i++ {
 		r, _ := http.Get(ts.URL + "/v1/tasks/" + ack.TaskID)
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -297,7 +297,7 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	}
 }
 
-// TestAnswerNoPendingConflict：done 后再 answer → 409。
+// TestAnswerNoPendingConflict: done afteragain answer -> 409. 
 func TestAnswerNoPendingConflict(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -326,7 +326,7 @@ func TestAnswerNoPendingConflict(t *testing.T) {
 	}
 }
 
-// TestRollbackNote：NOTE 追加→备份→rollback 还原 notes.md。
+// TestRollbackNote: NOTE   ->  ->rollback alsoorig notes.md. 
 func TestRollbackNote(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -367,7 +367,7 @@ func TestRollbackNote(t *testing.T) {
 	}
 }
 
-// TestRollbackIrreversible409：COMMIT 不可逆 → 409。
+// TestRollbackIrreversible409: COMMIT  reversible -> 409. 
 func TestRollbackIrreversible409(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -394,14 +394,14 @@ func TestRollbackIrreversible409(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// 不 answer，直接 rollback（任务未 done）
+	//   answer,  connect rollback(task  done)
 	rb := postJSON(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/rollback", "", map[string]string{})
 	if rb.StatusCode != http.StatusConflict {
 		t.Fatalf("未完成任务 rollback 应 409, got %d", rb.StatusCode)
 	}
 }
 
-// TestStatusEndpoint：GET /v1/status 返回 version/uptime/ok。
+// TestStatusEndpoint: GET /v1/status returnback version/uptime/ok. 
 func TestStatusEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -411,12 +411,12 @@ func TestStatusEndpoint(t *testing.T) {
 	ts := muxV1(srv)
 	defer ts.Close()
 
-	// 缺 token 401
+	//   token 401
 	r1, _ := http.Get(ts.URL + "/v1/status")
 	if r1.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("缺 token 应 401, got %d", r1.StatusCode)
 	}
-	// 带 token 200
+	//   token 200
 	req, _ := http.NewRequest("GET", ts.URL+"/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	r2, _ := http.DefaultClient.Do(req)
@@ -430,7 +430,7 @@ func TestStatusEndpoint(t *testing.T) {
 	}
 }
 
-// TestRequestIDDedup（M4-1 ①）：同 request_id 重复 POST 返回既有任务，不重复执行。
+// TestRequestIDDedup(M4-1 ①): same request_id heavy  POST returnback hastask,  heavy   . 
 func TestRequestIDDedup(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -449,10 +449,10 @@ func TestRequestIDDedup(t *testing.T) {
 	}
 	_ = json.NewDecoder(r1.Body).Decode(&ack1)
 
-	// 等任务 done
+	// etctask done
 	time.Sleep(200 * time.Millisecond)
 
-	// 同 request_id 再提交
+	// same request_id again  
 	r2 := postJSON(t, ts.URL+"/v1/tasks", "", body)
 	if r2.StatusCode != http.StatusOK {
 		t.Fatalf("重复提交应 200（去重）, got %d", r2.StatusCode)
@@ -470,7 +470,7 @@ func TestRequestIDDedup(t *testing.T) {
 	}
 }
 
-// TestTaskPersistenceRestore（M4-1 ③）：落盘 → 新 Server 恢复 → 历史可查、未完成标 interrupted。
+// TestTaskPersistenceRestore(M4-1 ③):    -> new Server    ->     ,  donetgt interrupted. 
 func TestTaskPersistenceRestore(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -485,7 +485,7 @@ func TestTaskPersistenceRestore(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	ts.Close()
 
-	// 新 Server（同一 log_dir）恢复历史任务
+	// new Server(same  log_dir)    task
 	srv2 := New(&cfg, testOpts(t, dir))
 	if _, ok := srv2.tasks[ack.TaskID]; !ok {
 		t.Fatalf("重启后应恢复任务 %s", ack.TaskID)
@@ -495,12 +495,12 @@ func TestTaskPersistenceRestore(t *testing.T) {
 		t.Fatalf("done 任务恢复后应保持 done, got %q", got.Status)
 	}
 	if got.BackupPath == "" && got.TargetPath == "" {
-		// NOTE 应有 notes.md 目标
+		// NOTE  has notes.md objtgt
 		t.Logf("warn: 无 rollback 元数据")
 	}
 }
 
-// TestAskResumeViaAnswer（M4-1 ②）：need_ask → answer 澄清 → 续跑到 done。
+// TestAskResumeViaAnswer(M4-1 ②): need_ask -> answer    -> continue to done. 
 func TestAskResumeViaAnswer(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -509,9 +509,9 @@ func TestAskResumeViaAnswer(t *testing.T) {
 	ts := muxV1(srv)
 	defer ts.Close()
 
-	// 触发回问：省略域的写意图（落 global 只读 → space_check 拒绝而非 ask；
-	// 用低置信 query 文本触发 ask 出口较难，直接验证状态机：need_ask 时 answer 不 409）。
-	// 先造一个 need_ask 状态任务（直接构造，绕过 pipeline 不确定性）。
+	// triggersendclarification:   domain write intent(  global read-only -> space_check rejectbut  ask; 
+	// uselow-confidence query  basetriggersend ask exit  ,  connect  status : need_ask time answer   409). 
+	// first    need_ask statustask( connect  ,  ed pipeline    ity). 
 	srv.mu.Lock()
 	fake := &taskState{
 		ID: "task-fake-ask", Status: stNeedAsk, Text: "那个东西",
@@ -531,7 +531,7 @@ func TestAskResumeViaAnswer(t *testing.T) {
 	if body["resumed"] != true {
 		t.Fatalf("应返回 resumed=true: %+v", body)
 	}
-	// 续跑已驱动：pipeline 跑完后 Outcome 非空（澄清后仍歧义会再次 need_ask，属正常语义）。
+	// continue already  : pipeline  finishafter Outcome  empty(  after    again  need_ask,  pos semantic). 
 	time.Sleep(200 * time.Millisecond)
 	srv.mu.Lock()
 	got := srv.tasks["task-fake-ask"]
@@ -541,7 +541,7 @@ func TestAskResumeViaAnswer(t *testing.T) {
 	}
 }
 
-// TestAskAnswerByOptionID（M4-3 ①）：answer 传候选 id → 续跑（prefix 强关键词驱动）。
+// TestAskAnswerByOptionID(M4-3 ①): answer     id -> continue (prefix  close word  ). 
 func TestAskAnswerByOptionID(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -577,7 +577,7 @@ func TestAskAnswerByOptionID(t *testing.T) {
 	}
 }
 
-// TestRolesEndpoint（M5-3）：/v1/roles 返回三角色 + 当前任务角色。
+// TestRolesEndpoint(M5-3): /v1/roles returnback    + curbeforetask  . 
 func TestRolesEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -595,7 +595,7 @@ func TestRolesEndpoint(t *testing.T) {
 		return body
 	}
 
-	// 无任务 → 无 role 字段
+	// notask -> no role charseg
 	body := get("/v1/roles")
 	roles, _ := body["roles"].([]any)
 	if len(roles) != 3 {
@@ -605,7 +605,7 @@ func TestRolesEndpoint(t *testing.T) {
 		t.Fatal("无任务时不应返回 role")
 	}
 
-	// 造一个 need_confirm 任务
+	//     need_confirm task
 	srv.mu.Lock()
 	fake := &taskState{
 		ID: "task-role-1", Status: stNeedConfirm, Role: RolePlanner,
@@ -620,7 +620,7 @@ func TestRolesEndpoint(t *testing.T) {
 	}
 }
 
-// TestTaskStatusHasRole（M5-3）：任务状态响应含合法 role。
+// TestTaskStatusHasRole(M5-3): taskstatus      role. 
 func TestTaskStatusHasRole(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -645,7 +645,7 @@ func TestTaskStatusHasRole(t *testing.T) {
 	}
 }
 
-// readSSE 从 resp body 解析事件序列（直到 done/canceled 或超时）。
+// readSSE from resp body resolve event list( to done/canceled or time). 
 func readSSE(t *testing.T, resp *http.Response) []map[string]any {
 	t.Helper()
 	defer resp.Body.Close()
@@ -681,7 +681,7 @@ func getSSE(t *testing.T, url, token string) *http.Response {
 	return r
 }
 
-// TestSSEEventSequence（M6-1）：NOTE 任务 SSE 序列有序、seq 递增、终态 done。
+// TestSSEEventSequence(M6-1): NOTE task SSE  listhas , seq  add, endstate done. 
 func TestSSEEventSequence(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -702,7 +702,7 @@ func TestSSEEventSequence(t *testing.T) {
 	if len(events) < 2 {
 		t.Fatalf("应至少 2 个事件, got %d: %+v", len(events), events)
 	}
-	// seq 递增
+	// seq  add
 	prev := 0
 	for _, ev := range events {
 		seq, _ := ev["seq"].(float64)
@@ -711,14 +711,14 @@ func TestSSEEventSequence(t *testing.T) {
 		}
 		prev = int(seq)
 	}
-	// 终态含 done
+	// endstate  done
 	last := events[len(events)-1]
 	if last["type"] != "done" {
 		t.Fatalf("终态应为 done, got %v", last["type"])
 	}
 }
 
-// TestSSEReconnectIdempotent（M6-1）：?after 重连只收其后事件。
+// TestSSEReconnectIdempotent(M6-1): ?after heavylinkonlyrecvitsafterevent. 
 func TestSSEReconnectIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -734,10 +734,10 @@ func TestSSEReconnectIdempotent(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	// 等任务完成
+	// etctaskdone
 	time.Sleep(300 * time.Millisecond)
 
-	// 重连 after=1，应只看到 seq>1 的事件
+	// heavylink after=1,  only to seq>1  event
 	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=1", "secret")
 	events := readSSE(t, r)
 	for _, ev := range events {
@@ -748,7 +748,7 @@ func TestSSEReconnectIdempotent(t *testing.T) {
 	}
 }
 
-// TestSSENeedAskDecisionPoint（M6-1）：need_ask 事件到达。
+// TestSSENeedAskDecisionPoint(M6-1): need_ask eventto . 
 func TestSSENeedAskDecisionPoint(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -786,7 +786,7 @@ func TestSSENeedAskDecisionPoint(t *testing.T) {
 	}
 }
 
-// TestSSEInterruptImmediacy（M6-1）：cancel 后 interrupt 事件送达。
+// TestSSEInterruptImmediacy(M6-1): cancel after interrupt event  . 
 func TestSSEInterruptImmediacy(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -805,7 +805,7 @@ func TestSSEInterruptImmediacy(t *testing.T) {
 	srv.tasks[fake.ID] = fake
 	srv.mu.Unlock()
 
-	// 后台 cancel
+	// after  cancel
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		postJSON(t, ts.URL+"/v1/tasks/task-sse-cancel/cancel", "secret", map[string]string{})
@@ -824,7 +824,7 @@ func TestSSEInterruptImmediacy(t *testing.T) {
 	}
 }
 
-// TestCORSOriginAllowed（M7）：带 Origin 请求响应回显 ACAO。
+// TestCORSOriginAllowed(M7):   Origin  require  back  ACAO. 
 func TestCORSOriginAllowed(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -843,7 +843,7 @@ func TestCORSOriginAllowed(t *testing.T) {
 	}
 }
 
-// TestCORSPreflight（M7）：OPTIONS 预检 204 + 头。
+// TestCORSPreflight(M7): OPTIONS    204 + head. 
 func TestCORSPreflight(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -867,7 +867,7 @@ func TestCORSPreflight(t *testing.T) {
 	}
 }
 
-// TestCORSNoOriginUnaffected（M7）：无 Origin 不加头、401 行为不回归。
+// TestCORSNoOriginUnaffected(M7): no Origin   head, 401  as back . 
 func TestCORSNoOriginUnaffected(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -886,8 +886,8 @@ func TestCORSNoOriginUnaffected(t *testing.T) {
 	}
 }
 
-// TestSSEStageSequence（§7.4 S3）：NOTE 任务 SSE 序列应包含一条细粒度 stage 事件
-// （kind:"internal"，stage:"intent"）——pipeline 意图分类发射点经 bridgeFromBus 桥进 SSE。
+// TestSSEStageSequence(§7.4 S3): NOTE task SSE  list         stage event
+// (kind:"internal", stage:"intent")--pipeline intentclassifysend pt  bridgeFromBus    SSE. 
 func TestSSEStageSequence(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -919,7 +919,7 @@ func TestSSEStageSequence(t *testing.T) {
 	}
 }
 
-// TestSSEReplayAfter（§7.4）:?after= 重放能覆盖桥接进 ts.events 的新 stage 事件。
+// TestSSEReplayAfter(§7.4):?after= heavy  overwrite connect  ts.events  new stage event. 
 func TestSSEReplayAfter(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -935,9 +935,9 @@ func TestSSEReplayAfter(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	time.Sleep(300 * time.Millisecond) // 等任务完成，事件全落 ts.events
+	time.Sleep(300 * time.Millisecond) // etctaskdone, eventsafety  ts.events
 
-	// 重放：after=0（从最早起）应能看到 internal stage 事件
+	// heavy : after=0(from  raise)   to internal stage event
 	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events?after=0", "secret")
 	events := readSSE(t, r)
 	var found bool
@@ -951,7 +951,7 @@ func TestSSEReplayAfter(t *testing.T) {
 	}
 }
 
-// TestSSEObserverUnthrottled（§7.4）：观察连接不被执行限流——任务在跑时新 SSE 连接照样能建立并读到事件。
+// TestSSEObserverUnthrottled(§7.4):   linkconnect be  limit --task  timenew SSE linkconnect kind   andreadtoevent. 
 func TestSSEObserverUnthrottled(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -967,7 +967,7 @@ func TestSSEObserverUnthrottled(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&ack)
 
-	// 任务仍在跑时立即建立 SSE 连接（不等终态），应能成功建立并读到 ≥1 事件
+	// task   time i.e.   SSE linkconnect( etcendstate),   become   andreadto >=1 event
 	r := getSSE(t, ts.URL+"/v1/tasks/"+ack.TaskID+"/events", "secret")
 	events := readSSE(t, r)
 	if len(events) < 1 {

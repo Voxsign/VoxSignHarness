@@ -1,8 +1,8 @@
-// feedback.go —— 用户回馈（✔ 对 / ✘ 不对）落盘（§5.1 第 4 件；验收 A8/A9）。
+// feedback.go -- useuserback (✔ to / ✘  to)  (§5.1   4  ;  recv A8/A9). 
 //
-// 与 /v1/feedback 原有"登记为候选词典条目"语义**并行**：
-// 每一次回馈都追加一条 FeedbackRecord 到 data/asr/feedback.jsonl（append-only、可审计）。
-// ✘ 必须带原因（空则记 user_marked_wrong，不许丢字段）。
+// and /v1/feedback orighas"  as  word  obj"semantic**and **: 
+//    back all     FeedbackRecord to data/asr/feedback.jsonl(append-only,    ). 
+// ✘    origbecause(emptythen  user_marked_wrong,  allow charseg). 
 package asr
 
 import (
@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// FeedbackRecord 是一条用户回馈（✔ 对 / ✘ 不对）。
+// FeedbackRecord is  useuserback (✔ to / ✘  to). 
 type FeedbackRecord struct {
 	At        string `json:"at"`
 	Raw       string `json:"raw"`
@@ -24,7 +24,7 @@ type FeedbackRecord struct {
 	Source    string `json:"source"`
 }
 
-// DefaultRejectReason 是 ✘ 未填原因时的默认登记（保证"带原因"字段恒非空）。
+// DefaultRejectReason is ✘   origbecausetime default  (keep " origbecause"charseg  empty). 
 const DefaultRejectReason = "user_marked_wrong"
 
 func (s *Server) feedbackPath() string {
@@ -34,7 +34,7 @@ func (s *Server) feedbackPath() string {
 	return filepath.Join(s.DataDir, "feedback.jsonl")
 }
 
-// appendFeedback 追加一条回馈（append-only；失败不阻断页面，由调用方留 log_error）。
+// appendFeedback     back (append-only;     disconnect face, bycalluse   log_error). 
 func (s *Server) appendFeedback(rec FeedbackRecord) error {
 	p := s.feedbackPath()
 	if p == "" {
@@ -56,7 +56,7 @@ func (s *Server) appendFeedback(rec FeedbackRecord) error {
 	return err
 }
 
-// feedbackLines 返回 feedback.jsonl 当前行数（A8/A9 判据用；0 = 无文件/不可读）。
+// feedbackLines returnback feedback.jsonl curbefore num(A8/A9  datause; 0 = nofile/  read). 
 func (s *Server) feedbackLines() int {
 	p := s.feedbackPath()
 	if p == "" {

@@ -55,7 +55,7 @@ func TestUpsertSelfVersioned(t *testing.T) {
 	if len(active) != 1 || active[0].Version != 2 {
 		t.Fatalf("应只保留最新版本，got %+v", active)
 	}
-	// 旧版标记 superseded，不静默覆盖
+	//   tgt  superseded,    overwrite
 	hist := 0
 	s.mu.RLock()
 	for _, it := range s.selfModel {
@@ -83,7 +83,7 @@ func TestSearchThreeFactor(t *testing.T) {
 func TestDecayRecoverable(t *testing.T) {
 	s := newTestStore(t)
 	_, _ = s.WriteMemory(MemoryItem{Text: "过期事件", Domain: DomainSession, Importance: 1})
-	// 模拟 10 天未访问 → 分数低于阈值
+	//    10 day    -> splitnum at value
 	old := time.Now().Add(-240 * time.Hour)
 	s.mu.Lock()
 	s.ltm[0].LastSeen = old
@@ -150,7 +150,7 @@ func TestContractInjectAndRetrieve(t *testing.T) {
 		t.Fatal("retrieve-context 应非空")
 	}
 
-	// 反馈族
+	// rev  
 	if err := c.LogTrajectory(ctx, CallLog{TaskProfile: "t1", Model: "deepseek-chat", Outcome: "success", Cost: 1.2}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestReflectInputGate(t *testing.T) {
 	r.InputGate = true
 	r.MaxIdle = 3600 * time.Second
 
-	// 节律内有输入活动 → 正常检查（不跳过）
+	// node inhas in   -> pos   (  ed)
 	s.MarkInput()
 	skip, deep, err := r.Tick(context.Background(), time.Now().Add(30*time.Second))
 	if err != nil {
@@ -178,7 +178,7 @@ func TestReflectInputGate(t *testing.T) {
 		t.Fatalf("30s 内有输入应正常检查，got skip=%v deep=%v", skip, deep)
 	}
 
-	// 超过一个节律（90s）无新输入 → 跳过
+	//  ed  node (90s)nonew in ->  ed
 	s.MarkInput()
 	skip, deep, err = r.Tick(context.Background(), time.Now().Add(90*time.Second))
 	if err != nil {
@@ -188,7 +188,7 @@ func TestReflectInputGate(t *testing.T) {
 		t.Fatalf("90s 无输入应跳过，got skip=%v deep=%v", skip, deep)
 	}
 
-	// 超 MaxIdle（2h）→ 保底强制一次（不深反思）
+	//   MaxIdle(2h)-> keepbot restrict  (  rev )
 	s.MarkInput()
 	skip, deep, err = r.Tick(context.Background(), time.Now().Add(2*time.Hour))
 	if err != nil {
@@ -208,7 +208,7 @@ func TestReflectThresholdAndDedup(t *testing.T) {
 	r := NewReflector(s)
 	r.Threshold = 30
 
-	// 重要性累计到阈值（输入活动 → 正常检查 → 深反思）
+	// heavyneedity  to value( in   -> pos    ->  rev )
 	for i := 0; i < 5; i++ {
 		s.TouchSTM(MemoryItem{Text: "沙特客户偏好本地语言回复", Layer: LayerBehavior, Importance: 7}, 10)
 	}
@@ -224,7 +224,7 @@ func TestReflectThresholdAndDedup(t *testing.T) {
 		t.Fatal("深反思应写入记忆")
 	}
 
-	// 再次触发 → 写前验证去重拒绝
+	// again triggersend -> writebefore   heavyreject
 	before := r.Stats().Written
 	for i := 0; i < 5; i++ {
 		s.TouchSTM(MemoryItem{Text: "沙特客户偏好本地语言回复", Layer: LayerBehavior, Importance: 7}, 10)
@@ -268,7 +268,7 @@ func TestRegistryCompressionPolicy(t *testing.T) {
 	if err := r.Register(ModelProfile{ID: "gpt-5", NominalWindow: 400000, EffectiveWindow: 300000, InstructionFollow: 0.95, PriceClass: "premium", Density: DensityAggressive}); err != nil {
 		t.Fatal(err)
 	}
-	// 弱模型默认保守压缩
+	//   typedefaultkeep   
 	p, err := r.CompressionPolicy("deepseek-chat")
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestRegistryCompressionPolicy(t *testing.T) {
 	if p != DensityConservative {
 		t.Fatalf("弱模型应保守压缩，got %v", p)
 	}
-	// 强模型显式激进压缩
+	//   type form    
 	p, _ = r.CompressionPolicy("gpt-5")
 	if p != DensityAggressive {
 		t.Fatalf("强模型应激进压缩，got %v", p)
@@ -300,7 +300,7 @@ func TestRouterRuleTableAndShadow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 线上模式：低复杂度 → cheap
+	// lineon form:      -> cheap
 	d, err := rt.Decide(TaskProfile{Complexity: 0.1})
 	if err != nil {
 		t.Fatal(err)
@@ -308,13 +308,13 @@ func TestRouterRuleTableAndShadow(t *testing.T) {
 	if d.ModelID != "cheap" || d.Shadow {
 		t.Fatalf("低复杂度应路由 cheap，got %+v", d)
 	}
-	// 高复杂度 → premium
+	//      -> premium
 	d, _ = rt.Decide(TaskProfile{Complexity: 0.9})
 	if d.ModelID != "premium" {
 		t.Fatalf("高复杂度应路由 premium，got %+v", d)
 	}
 
-	// 影子模式：推荐 premium，但生产仍走默认 mid
+	//    form:    premium, butoccurproduce  default mid
 	rt.SetShadow(true)
 	d, _ = rt.Decide(TaskProfile{Complexity: 0.9})
 	if d.ModelID != "premium" || d.Production != "mid" || !d.Shadow {
@@ -326,7 +326,7 @@ func TestRouterRuleTableAndShadow(t *testing.T) {
 	if err := rt.FlushShadow(); err != nil {
 		t.Fatal(err)
 	}
-	// 落盘后清空
+	//   after empty
 	if len(rt.ShadowLog()) != 0 {
 		t.Fatal("FlushShadow 后影子日志应清空")
 	}
@@ -390,8 +390,8 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 	_ = z.Registry.Register(ModelProfile{ID: "mid"})
 	_ = z.Registry.Register(ModelProfile{ID: "premium"})
 
-	// 输入 → 决策注入 → 任务结束 → 路由
-	// 基线=目标/规则层常驻自我模型（Baseline()），新 store 为空，先经契约写入一条种子目标。
+	//  in -> decide notein -> taskcloseend -> routeby
+	// baseline=objtgt/rule      type(Baseline()), new store asempty, first   write  kind objtgt. 
 	if _, err := z.Contract.UpdateSelfModel(context.Background(), SelfItem{Layer: LayerGoal, Text: "主目标：沙特市场落地", Confidence: 0.9}); err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +414,7 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 		t.Fatalf("低复杂度应路由 cheap，got %+v", d)
 	}
 
-	// 反思阈值 → 深反思 → 外化
+	// rev  value ->  rev  -> outize
 	for i := 0; i < 5; i++ {
 		z.OnInput("沙特客户偏好本地语言回复", 7)
 	}
@@ -430,7 +430,7 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 		t.Fatal("vault 假实现应收到写入")
 	}
 
-	// 压缩
+	//   
 	out, err := z.Compress(context.Background(), CompressInput{
 		Full: "[goal] 主目标：沙特市场落地\n[rule] 不猜测用户未表达的意图\n中间过程文本",
 	})
@@ -442,7 +442,7 @@ func TestZhijiIntegrationFlow(t *testing.T) {
 	}
 }
 
-// ---- 持久化 ----
+// ---- keep ize ----
 
 func TestStorePersistRoundTrip(t *testing.T) {
 	dir := tmpDir(t)
@@ -462,23 +462,23 @@ func TestStorePersistRoundTrip(t *testing.T) {
 	}
 }
 
-// ---- v1.1 新架构：graph / rawlog / systemone / budget search ----
+// ---- v1.1 new  : graph / rawlog / systemone / budget search ----
 
 func TestGraphAddNeighbors(t *testing.T) {
 	g := NewGraph()
 	g.Add(Edge{From: "mem-1", To: "mem-2", Rel: EdgeRelEntity, Weight: 0.8})
 	g.Add(Edge{From: "mem-1", To: "mem-3", Rel: EdgeRelTemporal, Weight: 0.5})
-	// 同 (From,To,Rel) 重复 → 加权更新不重复追加
+	// same (From,To,Rel) heavy  ->   changenew heavy   
 	g.Add(Edge{From: "mem-1", To: "mem-2", Rel: EdgeRelEntity, Weight: 0.9})
 	if len(g.Edges) != 2 {
 		t.Fatalf("去重后应 2 条边，got %d", len(g.Edges))
 	}
-	// 找 mem-1 的 entity 邻居
+	//   mem-1   entity   
 	nb := g.Neighbors("mem-1", EdgeRelEntity)
 	if len(nb) != 1 || nb[0].To != "mem-2" {
 		t.Fatalf("应命中 1 条 entity 边，got %+v", nb)
 	}
-	// 不过滤 rel 时双向都算
+	//  ed  rel time toall 
 	if all := g.Neighbors("mem-1"); len(all) != 2 {
 		t.Fatalf("不过滤应命中 2 条边，got %+v", all)
 	}
@@ -488,7 +488,7 @@ func TestGraphEmptyBudgetSearchSuperset(t *testing.T) {
 	s := newTestStore(t)
 	_, _ = s.WriteMemory(MemoryItem{Text: "沙特运营商资质办理流程", Layer: LayerMechanism, Domain: DomainAgent, Importance: 8})
 	_, _ = s.WriteMemory(MemoryItem{Text: "普通闲聊记录", Layer: LayerBehavior, Domain: DomainSession, Importance: 1})
-	// 空图 → BudgetSearch 退化为 Search 超集
+	// empty  -> BudgetSearch  izeas Search   
 	got, trace := s.BudgetSearch("沙特 运营商", RetrieveBudget{MaxItems: 24, MaxHops: 3, Deadline: 2 * time.Second, MinScore: 0.1}, time.Now())
 	baseline := s.Search("沙特 运营商", 24, time.Now())
 	if len(got) < len(baseline) {
@@ -515,7 +515,7 @@ func TestRawLogAppendOnly(t *testing.T) {
 	if n := l.Len(); n != 2 {
 		t.Fatalf("应有 2 条 raw，got %d", n)
 	}
-	// 重新打开 → nextRaw 接续，旧行不丢
+	// heavynew open -> nextRaw connectcontinue,     
 	l2 := NewRawLog(path)
 	if err := l2.Append(RawObs{Text: "第三条"}); err != nil {
 		t.Fatal(err)
@@ -542,12 +542,12 @@ func TestDefaultSystemOneClassify(t *testing.T) {
 	if m[MemKindEpisodic] < 0.7 {
 		t.Fatalf("episodic 应 0.7，got %+v", m)
 	}
-	// semantic 兜底
+	// semantic  bot
 	m = d.Classify(MemoryItem{Text: "沙特是中东国家"})
 	if m[MemKindSemantic] < 0.6 {
 		t.Fatalf("semantic 兜底应 0.6，got %+v", m)
 	}
-	// 路由：时间词 + 因果词 → 双视图同时激活
+	// routeby: timetimeword + because word ->    sametime  
 	views, hops := d.Route("为什么昨天签约失败")
 	if hops != 3 {
 		t.Fatalf("hops 应 3，got %d", hops)
@@ -555,7 +555,7 @@ func TestDefaultSystemOneClassify(t *testing.T) {
 	if views[EdgeRelCausal] < 0.7 || views[EdgeRelTemporal] < 0.7 {
 		t.Fatalf("应同时命中 causal+temporal，got %+v", views)
 	}
-	// 默认无信号 → semantic 视图
+	// defaultnosignal -> semantic   
 	views, _ = d.Route("沙特")
 	if views[EdgeRelSemantic] < 0.6 {
 		t.Fatalf("无信号应走 semantic 兜底，got %+v", views)
@@ -567,12 +567,12 @@ func TestBudgetSearchStopReason(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, _ = s.WriteMemory(MemoryItem{Text: "沙特客户偏好本地语言回复", Layer: LayerBehavior, Domain: DomainAgent, Importance: 6})
 	}
-	// 空图 → 退化路径
+	// empty  ->  izepath
 	_, trace := s.BudgetSearch("沙特 偏好", RetrieveBudget{MaxItems: 24, MaxHops: 3, Deadline: 2 * time.Second, MinScore: 0.1}, time.Now())
 	if trace.StopReason != "budget" {
 		t.Fatalf("空图退化路径 StopReason 应为 budget，got %q", trace.StopReason)
 	}
-	// Noul/Choice 有界校验
+	// Noul/Choice hasboundaryverify
 	if !AskNoul(0.5) || AskNoul(-0.1) || AskNoul(1.5) {
 		t.Fatal("AskNoul 边界校验错误")
 	}

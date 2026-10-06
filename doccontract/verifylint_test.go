@@ -1,9 +1,9 @@
-// verifylint_test.go —— V3-01…V3-08 的行为测试。
+// verifylint_test.go -- V3-01…V3-08   as  . 
 //
-// 覆盖：
-//  1. 正例：合规验证标准块 → 8 条全 pass（含规格书 §3 的示例块）。
-//  2. 逐条反例：V3-01…V3-08 每条至少一个 fail 用例，且断言"恰好只有该条失败"。
-//  3. 容忍度：threshold=unset 允许存在（未声称 met 时全过）；一旦声称 met 必 fail。
+// overwrite: 
+//  1. posexample:  rule  tgtapprove  -> 8  safety pass( rule   §3  showexample ). 
+//  2.   revexample: V3-01…V3-08        fail useexample, anddisconnectlang"  onlyhas    ". 
+//  3.    : threshold=unset  allowstore ( voicecalled met timesafetyed);   voicecalled met   fail. 
 package doccontract
 
 import (
@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// vblock 是构造验证标准块的夹具；yaml() 把它渲染成 YAML 风格文本。
+// vblock is    tgtapprove    ; yaml() pipe   become YAML    base. 
 type vblock struct {
 	owner          string
 	claim          string
@@ -27,7 +27,7 @@ type vblock struct {
 	falsifier      string
 }
 
-// validBlock 是一个 8 条规则全过的基线块。
+// validBlock is   8  rulesafetyed baseline . 
 func validBlock() vblock {
 	return vblock{
 		owner:          "builder-agent",
@@ -44,7 +44,7 @@ func validBlock() vblock {
 	}
 }
 
-// yaml 渲染成定义块文本；空字符串会渲染成 "" 或空值，正好用于构造缺失字段的反例。
+// yaml   becomedefine  base; emptychar     become "" oremptyvalue, pos useat    charseg revexample. 
 func (b vblock) yaml() string {
 	return fmt.Sprintf(`owner: %s
 verify:
@@ -63,10 +63,10 @@ verify:
 		b.threshold, b.counterexample, b.verdictStates, b.approver, b.falsifier)
 }
 
-// existsOnly 是测试用的假 resolver：只承认 "go.mod" 存在。
+// existsOnly is  use   resolver: only   "go.mod" store . 
 func existsOnly(ref string) bool { return ref == "go.mod" }
 
-// checkFixture 用测试 resolver 跑一遍 8 条规则。
+// checkFixture use   resolver     8  rule. 
 func checkFixture(t *testing.T, b vblock) *Report {
 	t.Helper()
 	rep, err := VerifyWith(b.yaml(), Options{Exists: existsOnly})
@@ -76,7 +76,7 @@ func checkFixture(t *testing.T, b vblock) *Report {
 	return rep
 }
 
-// TestVerifyCompliantBlockAllPass 正例：合规块 8 条全 pass。
+// TestVerifyCompliantBlockAllPass posexample:  rule  8  safety pass. 
 func TestVerifyCompliantBlockAllPass(t *testing.T) {
 	rep := checkFixture(t, validBlock())
 
@@ -97,8 +97,8 @@ func TestVerifyCompliantBlockAllPass(t *testing.T) {
 	}
 }
 
-// TestVerifySpecExampleBlockAllPass 规格书 §3 的示例块（补上 owner）应 8 条全过。
-// 这条同时压测折行标量（claim / counterexample 跨两行）与带括号注释的 approver。
+// TestVerifySpecExampleBlockAllPass rule   §3  showexample (patchon owner)  8  safetyed. 
+//   sametime    tgt (claim / counterexample    )and  idnote   approver. 
 func TestVerifySpecExampleBlockAllPass(t *testing.T) {
 	rep, err := VerifyWith(specExampleBlock, Options{
 		Exists: func(ref string) bool {
@@ -113,8 +113,8 @@ func TestVerifySpecExampleBlockAllPass(t *testing.T) {
 	}
 }
 
-// specExampleBlock 抄自 docs/VSL-v3-验证标准层.md §3，只在顶部补了 owner 字段
-// （V3-07 需要「同仓库内比对 owner」；规格书示例本身没写 owner）。
+// specExampleBlock    docs/VSL-v3-  tgtapprove .md §3, only top patch owner charseg
+// (V3-07 needneed"same  in to owner"; rule  showexamplebase  write owner). 
 const specExampleBlock = `owner: implementer-agent
 purpose: 防止在模糊输入上猜错执行 —— 追问的代价远小于做错
 priority: P0（安全红线，高于体验）
@@ -140,7 +140,7 @@ verify:
   falsifier: "任何一条 confidence<阈值 且 Ask='' 且产生副作用的用例，即可证伪"
 `
 
-// TestParseVerifyFoldsMultilineScalars 规格书示例的折行标量必须被完整拼接。
+// TestParseVerifyFoldsMultilineScalars rule  showexample   tgt   befinish  connect. 
 func TestParseVerifyFoldsMultilineScalars(t *testing.T) {
 	blk, err := ParseVerify(specExampleBlock)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestParseVerifyFoldsMultilineScalars(t *testing.T) {
 	}
 }
 
-// TestVerifyRuleCounterexamples 逐条反例：每条规则至少一个用例，且断言恰好只有该条失败。
+// TestVerifyRuleCounterexamples   revexample:   rule    useexample, anddisconnectlang  onlyhas    . 
 func TestVerifyRuleCounterexamples(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -234,8 +234,8 @@ func TestVerifyRuleCounterexamples(t *testing.T) {
 	}
 }
 
-// TestVerifyThresholdUnsetTolerance 对应规格书 §4 / §7.2：
-// threshold=unset 允许存在；但一旦同时声称 met 就必须 fail。
+// TestVerifyThresholdUnsetTolerance to rule   §4 / §7.2: 
+// threshold=unset  allowstore ; but  sametimevoicecalled met then   fail. 
 func TestVerifyThresholdUnsetTolerance(t *testing.T) {
 	t.Run("unset 允许存在且不声称 met", func(t *testing.T) {
 		b := validBlock()
@@ -259,7 +259,7 @@ func TestVerifyThresholdUnsetTolerance(t *testing.T) {
 	})
 }
 
-// TestVerifyEvidenceRefAgainstFilesystem V3-04 走真实文件系统（Root 指模块根）。
+// TestVerifyEvidenceRefAgainstFilesystem V3-04    file  (Root refermoduleroot). 
 func TestVerifyEvidenceRefAgainstFilesystem(t *testing.T) {
 	root := moduleRoot(t)
 
@@ -289,7 +289,7 @@ func TestVerifyEvidenceRefAgainstFilesystem(t *testing.T) {
 	})
 }
 
-// TestVerifyMissingVerifyBlock 整段没有 verify 块时，8 条全部 fail（不得静默假绿）。
+// TestVerifyMissingVerifyBlock  seg has verify  time, 8  safety  fail(      ). 
 func TestVerifyMissingVerifyBlock(t *testing.T) {
 	rep, err := VerifyWith("purpose: 只有 v2 字段\npriority: P0\n", Options{Exists: existsOnly})
 	if err != nil {
@@ -300,7 +300,7 @@ func TestVerifyMissingVerifyBlock(t *testing.T) {
 	}
 }
 
-// TestVerifyBareVerifyBlockWithoutWrapper 允许输入本身就是 verify 块（无 verify: 包裹）。
+// TestVerifyBareVerifyBlockWithoutWrapper  allow inbase thenis verify  (no verify:   ). 
 func TestVerifyBareVerifyBlockWithoutWrapper(t *testing.T) {
 	text := `owner: builder-agent
 claim: 对任意 utterance u，若 confidence(u) < c.ConfThreshold，则 outcome.Ask 非空
@@ -324,7 +324,7 @@ falsifier: 任何一条 Ask 为空且产生副作用的用例即可证伪
 	}
 }
 
-// TestVerifyBlockListForm verdict_states 用块列表写法也必须能解析。
+// TestVerifyBlockListForm verdict_states use listtablewrite also   resolve . 
 func TestVerifyBlockListForm(t *testing.T) {
 	text := strings.Replace(
 		validBlock().yaml(),
@@ -348,7 +348,7 @@ func TestVerifyBlockListForm(t *testing.T) {
 	}
 }
 
-// TestParseVerifyRejectsTabIndent 制表符缩进必须报错，而不是静默解析成错结构。
+// TestParseVerifyRejectsTabIndent restricttable       , but is  resolve become close . 
 func TestParseVerifyRejectsTabIndent(t *testing.T) {
 	_, err := ParseVerify("verify:\n\tclaim: x\n")
 	if err == nil {

@@ -1,15 +1,15 @@
-// dictionary.go —— 个性化词典：语音指令增删改 + JSON 持久化 + 热加载（需求 4.2/4.1）。
+// dictionary.go --  ityizeword : langaudiorefer add modify + JSON keep ize +    (needrequire 4.2/4.1). 
 //
-// 定位：**独立结构**，不进入 Engine.Correct。Pipeline 在 Correct 之后调用 Apply，
-// 因此 Correct 的纯函数性与既有 C1–C4 完全不受影响。
+//   : **  close **,   in Engine.Correct. Pipeline   Correct ofaftercalluse Apply, 
+// because  Correct    numityand has C1–C4 finishsafety accept  . 
 //
-// 安全取向（红线 #3/#5）：
-//   - 删除/改偏好属高风险：无确认一律返回 need_confirm，**不落盘**；
-//   - 精确命中高置信（0.95）直接替换；目标近音命中（用户教过的写法）0.85；
-//   - 坏 JSON fail-open：解析失败保留旧快照，不崩、不空转（需求 4.9）。
+// safesafetygetto( line #3/#5): 
+//   - delete/modify    risk: noconfirm  returnback need_confirm, **   **; 
+//   -    in   (0.95) connect  ; objtgt audio in(useuser ed write )0.85; 
+//   -   JSON fail-open: resolve   keep  fast ,   ,  empty (needrequire 4.9). 
 //
-// 持久化：快照 JSON（原子写：临时文件 + rename）+ 操作历史 `<path>.ops.jsonl`（append-only），
-// 于是既能重启恢复，也能做版本回溯（需求 4.2）。
+// keep ize: fast  JSON(orig write:  timefile + rename)+      `<path>.ops.jsonl`(append-only), 
+// atis  heavystart  , also   baseback (needrequire 4.2). 
 package asr
 
 import (
@@ -25,24 +25,24 @@ import (
 	"time"
 )
 
-// DictionaryEntry 是一条词典条目（字段对齐需求 4.2 的结构）。
+// DictionaryEntry is  word  obj(charsegto needrequire 4.2  close ). 
 type DictionaryEntry struct {
-	RawSpeech string `json:"raw_speech"` // 口语/错词；为空表示"只按目标近音匹配"
-	Target    string `json:"target"`     // 标准写法
+	RawSpeech string `json:"raw_speech"` //  lang/ word; asemptytableshow"onlybyobjtgt audio  "
+	Target    string `json:"target"`     // tgtapprovewrite 
 	Scope     string `json:"scope"`      // global | project
-	Priority  int    `json:"priority"`   // 越大越优先
+	Priority  int    `json:"priority"`   //     first
 	Source    string `json:"source"`     // voice | user_edit | reviewer | manual
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
-// dictionaryFile 是持久化快照的磁盘格式。
+// dictionaryFile iskeep izefast     form. 
 type dictionaryFile struct {
 	Version int               `json:"version"`
 	Entries []DictionaryEntry `json:"entries"`
 }
 
-// dictOp 是 append-only 操作历史里的一条。
+// dictOp is append-only         . 
 type dictOp struct {
 	Version int             `json:"version"`
 	Op      string          `json:"op"`
@@ -50,21 +50,21 @@ type dictOp struct {
 	At      string          `json:"at"`
 }
 
-// Dictionary 是词典的运行时状态：快照 + 近音索引 + 热加载水位。
+// Dictionary isword    timestatus: fast  +  audio   +      . 
 type Dictionary struct {
 	mu      sync.Mutex
 	path    string
 	hist    string
 	entries []DictionaryEntry
 	version int
-	hash    string // 文件内容哈希（热加载水位；比 mtime 更可靠）
+	hash    string // filein   (     ;   mtime change  )
 
 	table    map[rune]string
 	byPinyin map[string][]DictionaryEntry
 	pyLens   []int
 }
 
-// NewDictionary 加载（或初始化）词典。文件不存在视为空词典，不报错。
+// NewDictionary   (orinitstartize)word . file store  asemptyword ,    . 
 func NewDictionary(path string) (*Dictionary, error) {
 	d := &Dictionary{
 		path:     path,
@@ -78,8 +78,8 @@ func NewDictionary(path string) (*Dictionary, error) {
 	return d, nil
 }
 
-// Reload 检查文件是否变化并热加载（需求 4.1：JSON 支持热加载）。
-// 返回是否发生了替换。坏 JSON 不覆盖旧快照（fail-open）。
+// Reload   fileis changeizeand   (needrequire 4.1: JSON  keep   ). 
+// returnbackis sendoccur  .   JSON  overwrite fast (fail-open). 
 func (d *Dictionary) Reload() (bool, error) {
 	if d == nil {
 		return false, nil
@@ -93,8 +93,8 @@ func (d *Dictionary) Reload() (bool, error) {
 	return d.hash != before, nil
 }
 
-// reloadLocked 读取文件；force=false 时哈希未变直接返回。
-// 调用者须持锁。构造期可无锁调用。
+// reloadLocked readgetfile; force=false time   change connectreturnback. 
+// calluseer keep .   period no calluse. 
 func (d *Dictionary) reloadLocked(force bool) error {
 	data, err := os.ReadFile(d.path)
 	if err != nil {
@@ -116,7 +116,7 @@ func (d *Dictionary) reloadLocked(force bool) error {
 	}
 	var f dictionaryFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		// fail-open：保留旧快照，把错误交回调用方（不 crash）
+		// fail-open: keep  fast , pipeerror backcalluse (  crash)
 		return fmt.Errorf("asr: 词典 JSON 非法（保留旧快照）: %w", err)
 	}
 	d.entries = f.Entries
@@ -126,7 +126,7 @@ func (d *Dictionary) reloadLocked(force bool) error {
 	return nil
 }
 
-// reindexLocked 重建目标近音索引。调用者须持锁。
+// reindexLocked heavy objtgt audio  . calluseer keep . 
 func (d *Dictionary) reindexLocked() {
 	d.byPinyin = map[string][]DictionaryEntry{}
 	lens := map[int]bool{}
@@ -146,7 +146,7 @@ func (d *Dictionary) reindexLocked() {
 			parts[i] = s
 		}
 		if !ok {
-			continue // 表外字（含多音/生僻）不参与近音匹配
+			continue // tableoutchar(  audio/occur )  and audio  
 		}
 		key := strings.Join(parts, "|")
 		d.byPinyin[key] = append(d.byPinyin[key], e)
@@ -159,7 +159,7 @@ func (d *Dictionary) reindexLocked() {
 	sort.Ints(d.pyLens)
 }
 
-// Add 新增或更新一条词典条目（同 raw_speech+target 视为同一条），并立即落盘。
+// Add newaddorchangenew  word  obj(same raw_speech+target  assame  ), and i.e.  . 
 func (d *Dictionary) Add(e DictionaryEntry) error {
 	if d == nil {
 		return fmt.Errorf("asr: 词典未初始化")
@@ -183,7 +183,7 @@ func (d *Dictionary) Add(e DictionaryEntry) error {
 	replaced := false
 	for i := range d.entries {
 		if d.entries[i].RawSpeech == e.RawSpeech && d.entries[i].Target == e.Target {
-			// 保留首次创建时间；外部导入的条目可能没有 created_at，则补齐。
+			// keep first   timetime; out  in  obj   has created_at, thenpatch . 
 			if d.entries[i].CreatedAt != "" {
 				e.CreatedAt = d.entries[i].CreatedAt
 			}
@@ -200,8 +200,8 @@ func (d *Dictionary) Add(e DictionaryEntry) error {
 	return d.saveLocked("add", e)
 }
 
-// Delete 删除与 term 匹配（raw_speech 或 target）的条目。
-// confirm=false 时**不删除、不落盘**，调用方据此返回 need_confirm（红线 #3）。
+// Delete deleteand term   (raw_speech or target)  obj. 
+// confirm=false time** delete,    **, calluse data returnback need_confirm( line #3). 
 func (d *Dictionary) Delete(term string, confirm bool) (bool, error) {
 	if d == nil {
 		return false, fmt.Errorf("asr: 词典未初始化")
@@ -231,7 +231,7 @@ func (d *Dictionary) Delete(term string, confirm bool) (bool, error) {
 	return true, nil
 }
 
-// List 返回条目快照（按优先级降序）。
+// List returnback objfast (by first   ). 
 func (d *Dictionary) List() []DictionaryEntry {
 	if d == nil {
 		return nil
@@ -249,7 +249,7 @@ func (d *Dictionary) List() []DictionaryEntry {
 	return out
 }
 
-// Version 返回当前快照版本号。
+// Version returnbackcurbeforefast  baseid. 
 func (d *Dictionary) Version() int {
 	if d == nil {
 		return 0
@@ -259,7 +259,7 @@ func (d *Dictionary) Version() int {
 	return d.version
 }
 
-// Path 返回词典文件路径。
+// Path returnbackword filepath. 
 func (d *Dictionary) Path() string {
 	if d == nil {
 		return ""
@@ -267,7 +267,7 @@ func (d *Dictionary) Path() string {
 	return d.path
 }
 
-// saveLocked 原子落盘 + 追加操作历史。调用者须持锁。
+// saveLocked orig    +       . calluseer keep . 
 func (d *Dictionary) saveLocked(op string, e DictionaryEntry) error {
 	d.version++
 	b, err := json.MarshalIndent(dictionaryFile{Version: d.version, Entries: d.entries}, "", "  ")
@@ -299,8 +299,8 @@ func (d *Dictionary) saveLocked(op string, e DictionaryEntry) error {
 	return nil
 }
 
-// Apply 在 text 上应用词典：先精确命中（最长优先），再目标近音命中。
-// 返回纠错后的文本与逐条 Correction（Kind == "dictionary"）。
+// Apply   text on useword : first   in(   first), againobjtgt audio in. 
+// returnbackcorrectionafter  baseand   Correction(Kind == "dictionary"). 
 func (d *Dictionary) Apply(text string) (string, []Correction) {
 	if d == nil || text == "" {
 		return text, nil
@@ -317,7 +317,7 @@ func (d *Dictionary) Apply(text string) (string, []Correction) {
 	runes := []rune(text)
 	var spans []span
 
-	// 1) 精确命中：按 raw_speech 长度降序，最长匹配优先（需求 4.2 匹配策略）。
+	// 1)    in: by raw_speech     ,      first(needrequire 4.2     ). 
 	exact := make([]DictionaryEntry, 0, len(entries))
 	for _, e := range entries {
 		if e.RawSpeech != "" {
@@ -350,7 +350,7 @@ func (d *Dictionary) Apply(text string) (string, []Correction) {
 		}
 	}
 
-	// 2) 目标近音命中：用户教过的写法，任何同音窗口都召回（如 季总 → 冀总）。
+	// 2) objtgt audio in: useuser ed write ,   sameaudio  all back(e.g.    ->   ). 
 	for i := 0; i < len(runes); i++ {
 		for _, l := range lens {
 			if i+l > len(runes) {
@@ -393,21 +393,21 @@ func (d *Dictionary) Apply(text string) (string, []Correction) {
 }
 
 // ---------------------------------------------------------------------------
-// 语音指令解析（需求 4.2：支持语音指令动态增删改）
+// langaudiorefer resolve (needrequire 4.2:  keeplangaudiorefer  stateadd modify)
 // ---------------------------------------------------------------------------
 
 var voiceAddPrefixes = []string{"帮我记住", "记住", "记一下", "记录", "添加到词典", "加到词典"}
 var voiceDeletePrefixes = []string{"删掉", "删除", "忘掉", "忘记", "去掉"}
 
-// ParseVoiceAdd 从"记住，冀总是冀中的冀"这类口语里解析出目标写法。
-// raw_speech 留空：因为用户只说了正确写法，错法由**近音**在 Apply 阶段召回。
+// ParseVoiceAdd from"  ,   is in  " class lang resolve outobjtgtwrite . 
+// raw_speech  empty: becauseasuseuseronly pos write ,   by** audio**  Apply stage back. 
 func ParseVoiceAdd(text string) (DictionaryEntry, bool) {
 	rest, ok := trimVoicePrefix(text, voiceAddPrefixes)
 	if !ok {
 		return DictionaryEntry{}, false
 	}
 	if i := strings.Index(rest, "是"); i > 0 {
-		rest = rest[:i] // "冀总是冀中的冀" → "冀总"
+		rest = rest[:i] // "  is in  " -> "  "
 	}
 	target := strings.Trim(rest, " ，,。.、：:！!？?的了吧啊呀")
 	if !validTerm(target) {
@@ -416,7 +416,7 @@ func ParseVoiceAdd(text string) (DictionaryEntry, bool) {
 	return DictionaryEntry{Target: target, Scope: "global", Priority: 9, Source: "voice"}, true
 }
 
-// ParseVoiceDelete 从"删掉冀总"这类口语里解析出待删词条（仍需用户确认）。
+// ParseVoiceDelete from"    " class lang resolve out  word ( needuseuserconfirm). 
 func ParseVoiceDelete(text string) (string, bool) {
 	rest, ok := trimVoicePrefix(text, voiceDeletePrefixes)
 	if !ok {
@@ -440,7 +440,7 @@ func trimVoicePrefix(text string, prefixes []string) (string, bool) {
 	return "", false
 }
 
-// validTerm 限制词条长度与字符，避免把整句话学成词条（宁漏不错）。
+// validTerm limitrestrictword   andchar ,   pipe sent  becomeword (    ). 
 func validTerm(s string) bool {
 	rs := []rune(s)
 	if len(rs) == 0 || len(rs) > 12 {

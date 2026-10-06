@@ -17,11 +17,11 @@ import (
 	"voicesign-harness/config"
 )
 
-// 架构 v1 §7 健壮性四件套的单元测试：熔断、退避重试、bulkhead、分级超时。
+//    v1 §7   ity        :  disconnect,   heavy , bulkhead, split  time. 
 
 func TestCircuitBreakerOpensAndRecovers(t *testing.T) {
 	cb := &circuitBreaker{}
-	// 连续失败 5 次 → 打开。
+	// linkcontinue   5   ->  open. 
 	for i := 0; i < cbThreshold; i++ {
 		if !cb.allow() {
 			t.Fatalf("closed 阶段第 %d 次应放行", i)
@@ -31,11 +31,11 @@ func TestCircuitBreakerOpensAndRecovers(t *testing.T) {
 	if cb.state != cbOpen {
 		t.Fatalf("应打开熔断，实际 state=%v", cb.state)
 	}
-	// 打开期快速失败。
+	//  openperiodfast   . 
 	if cb.allow() {
 		t.Fatal("open 阶段应拒绝")
 	}
-	// 冷却后半开：放行 1 个探活，成功后关闭。
+	//  butafter open:    1    , become afterclose . 
 	cb.openedAt = time.Now().Add(-cbCooldown - time.Second)
 	if !cb.allow() {
 		t.Fatal("冷却后应半开放行探活")
@@ -61,7 +61,7 @@ func TestCircuitBreakerHalfOpenFailReopens(t *testing.T) {
 }
 
 func TestRetryBackoffMonotonic(t *testing.T) {
-	// 1s→2s→4s 指数退避；attempt≥4 clamp 到 4s（与第 3 次同范围），只断言 1..3 严格递增。
+	// 1s->2s->4s refernum  ; attempt>=4 clamp to 4s(and  3  same  ), onlydisconnectlang 1..3    add. 
 	prev := time.Duration(0)
 	for i := 1; i <= 3; i++ {
 		d := retryBackoff(i)
@@ -70,7 +70,7 @@ func TestRetryBackoffMonotonic(t *testing.T) {
 		}
 		prev = d
 	}
-	// 上限值稳定（clamp 后仍在 4s±2s 内）。
+	// onlimitvalue  (clamp after   4s±2s in). 
 	d4 := retryBackoff(4)
 	if d4 < 4*time.Second || d4 > 6*time.Second {
 		t.Fatalf("clamp 后应在 4~6s，实际 %v", d4)
@@ -82,7 +82,7 @@ func TestBulkheadFullFailsFast(t *testing.T) {
 	if err := bh.acquire(context.Background(), 10*time.Millisecond); err != nil {
 		t.Fatalf("第一个槽位应获取成功: %v", err)
 	}
-	// 第二并发获取应超时快速失败。
+	//   andsend get  timefast   . 
 	if err := bh.acquire(context.Background(), 20*time.Millisecond); err == nil {
 		t.Fatal("池满应快速失败")
 	}
@@ -156,16 +156,16 @@ func TestRobustJSONOpenBreakerFastFails(t *testing.T) {
 	}
 }
 
-// TestSafeGoRecoversTaskPanic（P0-2）：后台任务 goroutine 内 panic 必须被隔离——
+// TestSafeGoRecoversTaskPanic(P0-2): after task goroutine in panic   be  --
 //
-//	① 进程/测试不崩（recover 兜住）；② 任务被标 canceled；③ 轨迹留下 error kind 的 panic 记录。
+//	① process/    (recover   ); ② taskbetgt canceled; ③ trace under error kind   panic   . 
 func TestSafeGoRecoversTaskPanic(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Global.LogDir = dir
 	srv := New(&cfg, testOpts(t, dir))
 
-	o := testOpts(t, dir) // 自带 Trace（落盘 dir，供事后断言 panic 记录）
+	o := testOpts(t, dir) //    Trace(   dir, provide afterdisconnectlang panic   )
 	ts := &taskState{ID: "task-panic", RequestID: "req-panic-xyz", Status: stRunning, confirmCh: make(chan bool, 1)}
 	srv.mu.Lock()
 	srv.tasks[ts.ID] = ts
@@ -173,20 +173,20 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 
 	done := make(chan struct{})
 	safeGo("testpanic:"+ts.ID, func() {
-		panic("boom-in-pipeline") // 模拟 pipeline.Run 内部 panic
+		panic("boom-in-pipeline") //    pipeline.Run in  panic
 	}, func(r any) {
 		srv.onTaskPanic(ts, o, r)
 		close(done)
 	})
 
-	// 等待收尾；超时即视为 panic 已逃逸（进程没兜住）。
+	// waitrecvtail;  timei.e. as panic already  (process   ). 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("safeGo 未 recover：onPanic 没跑，goroutine panic 可能已逃逸到进程")
 	}
 
-	// ② 任务被标 canceled
+	// ② taskbetgt canceled
 	if ts.Status != stCanceled {
 		t.Fatalf("panic 后任务应 canceled, 实际 %q (err=%q)", ts.Status, ts.Err)
 	}
@@ -194,7 +194,7 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 		t.Fatalf("ts.Err 应含 panic, 实际 %q", ts.Err)
 	}
 
-	// ③ 轨迹留下 panic 的 error 记录
+	// ③ trace under panic   error   
 	entries, _ := filepath.Glob(filepath.Join(dir, "trajectory-*.jsonl"))
 	if len(entries) == 0 {
 		t.Fatal("未找到轨迹文件")
@@ -207,7 +207,7 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 		t.Fatalf("轨迹里应留下 panic 记录, 实际:\n%s", data)
 	}
 
-	// ④ S0/P0-4b：panic 轨迹的 request_id 必须与 ts.RequestID 同源（join 请求链），而非退化成 ts.ID
+	// ④ S0/P0-4b: panic trace  request_id   and ts.RequestID same (join  requirechain), but  izebecome ts.ID
 	found := false
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		line = strings.TrimSpace(line)
@@ -230,14 +230,14 @@ func TestSafeGoRecoversTaskPanic(t *testing.T) {
 	}
 }
 
-// TestSafeGoOnPanicSelfIsolation：onPanic 自身再 panic 也不能崩进程（safeGo 二次 recover）。
+// TestSafeGoOnPanicSelfIsolation: onPanic   again panic also   process(safeGo    recover). 
 func TestSafeGoOnPanicSelfIsolation(t *testing.T) {
 	done := make(chan struct{})
 	safeGo("selfpanic", func() { panic("inner") }, func(any) {
-		panic("onPanic-boom") // 收尾自身崩溃
+		panic("onPanic-boom") // recvtail    
 	})
-	// 若二次 recover 失效，这里的 goroutine panic 会直接 crash 整个 test 进程。
-	// 用短暂等待确认 goroutine 已结束且进程存活。
+	// if   recover   ,     goroutine panic   connect crash    test process. 
+	// use  waitconfirm goroutine alreadycloseendandprocessstore . 
 	go func() { close(done) }()
 	<-done
 }

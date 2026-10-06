@@ -1,19 +1,19 @@
-// trie.go —— 自写的多模式匹配器（无第三方依赖）。
+// trie.go --  write   form   (no   dependency). 
 //
-// 用途：一次扫描找出原文中所有命中的词条。当前词表很小，但结构必须能长大——
-// 这里用 rune 为边的 trie（前缀树），每个节点可挂多条词条（同前缀多条时全保留），
-// 匹配成本 O(n · 最长词条长度)，与词表总条数无关。
+// useway:      outorig in has in word . curbeforewordtable  , butclose      --
+//   use rune as   trie(before  ),   nodept    word (samebefore   timesafetykeep ), 
+//   becomebase O(n ·   word   ), andwordtable  numnoclose. 
 //
-// 后续若词表上千，可在此文件内换成 Aho–Corasick（加 fail 指针），接口不变。
+// aftercontinueifwordtableon ,    filein become Aho–Corasick(  fail refer ), connect  change. 
 package asr
 
-// trieNode 是一个前缀节点。
+// trieNode is  before nodept. 
 type trieNode struct {
 	next    map[rune]*trieNode
-	entries []int // 以该节点结尾的词条下标（index into compiled.entries）
+	entries []int // by nodeptclosetail word undertgt(index into compiled.entries)
 }
 
-// trie 是以 rune 为边的前缀树。
+// trie isby rune as  before  . 
 type trie struct {
 	root *trieNode
 }
@@ -41,7 +41,7 @@ func newTrie(entries []entry) *trie {
 	return t
 }
 
-// matchAt 返回从 i 起匹配上的所有词条下标，按匹配长度升序。
+// matchAt returnbackfrom i raise  on  hasword undertgt, by      . 
 func (t *trie) matchAt(runes []rune, i int) []int {
 	var out []int
 	n := t.root
@@ -55,7 +55,7 @@ func (t *trie) matchAt(runes []rune, i int) []int {
 	return out
 }
 
-// isASCIIAlnum 用于拉丁词条的词边界判定：AR 不应命中 AAAR 里的子串。
+// isASCIIAlnum useat  word  word boundary  : AR    in AAAR     . 
 func isASCIIAlnum(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }

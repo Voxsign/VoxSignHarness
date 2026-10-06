@@ -1,10 +1,10 @@
 //go:build vhsrecog
 
-// rewriter_criteria_test.go —— CACHE-001 K9 三条验收（先红 → 绿）：
+// rewriter_criteria_test.go -- CACHE-001 K9    recv(first  ->  ): 
 //
-//	① 含热词的 ASR 变形输入 → 输出**因热词而改变**
-//	② 热词表为空时 → 输出与基线一致（变化确来自热词）
-//	③ 清空热词表后 → 输出回退
+//	①   word  ASR change  in ->  out**because wordbutmodifychange**
+//	②  wordtableasemptytime ->  outandbaseline  (changeize    word)
+//	③  empty wordtableafter ->  outback 
 package recog
 
 import (
@@ -63,9 +63,9 @@ func TestK9ClearRevertsOutput(t *testing.T) {
 	_ = context.Background()
 }
 
-// ---- G2：用户临时教的词必须在纠错路径上真的改变输出（照 K9 三条）----
+// ---- G2: useuser time  word   correctionpathon  modifychange out(  K9   )----
 
-// 正例：教过 ⇒ 输出改变，且来源可审计为 user_taught。
+// posexample:  ed ⇒  outmodifychange, and     as user_taught. 
 func TestG2TaughtWordChangesOutput(t *testing.T) {
 	r, c := newRewriter(t, false)
 	if got, _ := r.Correct("把哎欧劈艾斯接上"); got != "把哎欧劈艾斯接上" {
@@ -83,7 +83,7 @@ func TestG2TaughtWordChangesOutput(t *testing.T) {
 	}
 }
 
-// 反例一：空表 ⇒ 输出与基线一致。
+// revexample : emptytable ⇒  outandbaseline  . 
 func TestG2EmptyTableUnchanged(t *testing.T) {
 	r, _ := newRewriter(t, false)
 	if got, corrs := r.Correct("把哎欧劈艾斯接上"); got != "把哎欧劈艾斯接上" || len(corrs) != 0 {
@@ -91,7 +91,7 @@ func TestG2EmptyTableUnchanged(t *testing.T) {
 	}
 }
 
-// 反例二：清空 ⇒ 输出回退（证明变化真的来自教的词）。
+// revexample :  empty ⇒  outback (  changeize      word). 
 func TestG2ClearRevertsTaughtWord(t *testing.T) {
 	r, c := newRewriter(t, false)
 	if err := c.Teach("哎欧劈艾斯", "aiops"); err != nil {
@@ -106,7 +106,7 @@ func TestG2ClearRevertsTaughtWord(t *testing.T) {
 	}
 }
 
-// 教的词必须能落 L1 持久（否则"教了下次就忘"——这是 Peter 需求的要点）。
+//   word     L1 keep ( then" under then "-- is owner needrequire needpt). 
 func TestG2TaughtWordPersists(t *testing.T) {
 	r, c := newRewriter(t, false)
 	if err := c.Teach("沃克body", "workbuddy"); err != nil {
@@ -125,7 +125,7 @@ func TestG2TaughtWordPersists(t *testing.T) {
 	}
 }
 
-// 教空词必须被拒（否则缓存被污染成"什么都能命中"）。
+//  emptyword  bereject( thencachebe  become"  all  in"). 
 func TestG2TeachRejectsEmpty(t *testing.T) {
 	_, c := newRewriter(t, false)
 	if err := c.Teach("", "aiops"); err == nil {
@@ -139,7 +139,7 @@ func TestG2TeachRejectsEmpty(t *testing.T) {
 	}
 }
 
-// 端到端：正常句子里的通用词**不得被改写**（Lead 最高优先）。
+// endtoend: pos sent    useword**  bemodifywrite**(Lead    first). 
 func TestRewriteDoesNotCorruptOrdinarySentence(t *testing.T) {
 	r, c := newRewriter(t, false)
 	c.PutAlias("文件", "file-store", "remote")

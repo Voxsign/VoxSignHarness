@@ -1,4 +1,4 @@
-// run_nil_criteria_test.go —— Run 入口必填检查（先红→绿）：**不许崩，必须报错**。
+// run_nil_criteria_test.go -- Run in     (first -> ): ** allow ,     **. 
 package pipeline
 
 import (
@@ -10,9 +10,9 @@ import (
 	"voicesign-harness/space"
 )
 
-// runNoPanic 在**独立 goroutine** 里跑 Run，并断言"根本没崩"（而非"我兜住了"）。
+// runNoPanic  **   goroutine**    Run, anddisconnectlang"rootbase  "(but "   "). 
 //
-// 理由：Run 可能在**后台 goroutine** 崩 ⇒ 主 goroutine 的 recover 抓不到。
+//  by: Run    **after  goroutine**   ⇒   goroutine   recover   to. 
 func runNoPanic(t *testing.T, o *Options, text string) (err error) {
 	t.Helper()
 	done := make(chan struct{})
@@ -33,7 +33,7 @@ func runNoPanic(t *testing.T, o *Options, text string) (err error) {
 	return err
 }
 
-// ① nil Options ⇒ 返回 error，不得 panic
+// ① nil Options ⇒ returnback error,    panic
 func TestRunNilOptionsReturnsError(t *testing.T) {
 	err := runNoPanic(t, nil, "查看当前目录")
 	if err == nil {
@@ -44,7 +44,7 @@ func TestRunNilOptionsReturnsError(t *testing.T) {
 	}
 }
 
-// ② 空 Options ⇒ 返回 error，不得 panic
+// ② empty Options ⇒ returnback error,    panic
 func TestRunEmptyOptionsReturnsError(t *testing.T) {
 	err := runNoPanic(t, &Options{}, "查看当前目录")
 	if err == nil {
@@ -52,7 +52,7 @@ func TestRunEmptyOptionsReturnsError(t *testing.T) {
 	}
 }
 
-// ③ 缺 Spaces ⇒ 返回 error 且指明域门禁缺失
+// ③   Spaces ⇒ returnback error andrefer domain forbid  
 func TestRunMissingSpacesReturnsError(t *testing.T) {
 	err := runNoPanic(t, &Options{Providers: nil}, "查看当前目录")
 	if err == nil {
@@ -63,7 +63,7 @@ func TestRunMissingSpacesReturnsError(t *testing.T) {
 	}
 }
 
-// ⑤ 反例：**不许因为加了检查就把一切拒掉** —— 有 Spaces 时不得返回配置类错误
+// ⑤ revexample: ** allowbecauseas   thenpipe  reject ** -- has Spaces time  returnback  classerror
 func TestRunWithSpacesIsNotBlanketRejected(t *testing.T) {
 	reg, err0 := space.Load(t.TempDir())
 	if err0 != nil {

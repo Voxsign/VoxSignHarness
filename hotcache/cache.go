@@ -30,7 +30,7 @@ const (
 	RouteMixed  = "mixed"
 )
 
-// Hotword is wordtable   (K9: Peter ptname"    wordneed   "). 
+// Hotword is wordtable   (K9: owner ptname"    wordneed   "). 
 type Hotword struct {
 	Term      string `json:"term"`
 	Heat      int    `json:"heat"`

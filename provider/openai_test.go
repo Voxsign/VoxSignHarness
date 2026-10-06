@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// newTestClient 基于 httptest 服务器构造一个 openaiClient（endpoint 规范化后指向 ts）。
+// newTestClient baseat httptest serveservice      openaiClient(endpoint rule izeafterreferto ts). 
 func newTestClient(ts *httptest.Server, apiKey string, responseFormat bool, params map[string]any) *openaiClient {
 	return &openaiClient{
 		name:           "test",
@@ -28,7 +28,7 @@ func newTestClient(ts *httptest.Server, apiKey string, responseFormat bool, para
 	}
 }
 
-// cannedBody 是一个合法的 OpenAI 成功响应。
+// cannedBody is      OpenAI become   . 
 const cannedBody = `{
   "choices": [
     {
@@ -42,11 +42,11 @@ const cannedBody = `{
 
 func TestNormalizeEndpoint(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"https://model.peterzou.com", "https://model.peterzou.com/chat/completions"}, // base 形态
-		{"https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},   // 带 /v1
-		{"https://host/v1/chat/completions", "https://host/v1/chat/completions"},      // 完整路径
-		{"https://host/", "https://host/chat/completions"},                            // 尾斜杠 base
-		{"https://host/v1/", "https://host/v1/chat/completions"},                      // 尾斜杠 /v1
+		{"https://model.peterzou.com", "https://model.peterzou.com/chat/completions"}, // base  state
+		{"https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},   //   /v1
+		{"https://host/v1/chat/completions", "https://host/v1/chat/completions"},      // finish path
+		{"https://host/", "https://host/chat/completions"},                            // tail   base
+		{"https://host/v1/", "https://host/v1/chat/completions"},                      // tail   /v1
 	}
 	for _, c := range cases {
 		if got := normalizeEndpoint(c.in); got != c.want {
@@ -76,7 +76,7 @@ func TestOpenAIHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat 报错: %v", err)
 	}
-	// 解析：content / finish_reason / usage
+	// resolve : content / finish_reason / usage
 	if resp.Content != `{"actions":[],"final":"ok"}` {
 		t.Errorf("Content = %q", resp.Content)
 	}
@@ -86,14 +86,14 @@ func TestOpenAIHappyPath(t *testing.T) {
 	if resp.Usage.PromptTokens != 11 || resp.Usage.CompletionTokens != 7 || resp.Usage.TotalTokens != 18 {
 		t.Errorf("Usage = %+v", resp.Usage)
 	}
-	// 鉴权头存在性
+	//   headstore ity
 	if gotAuth != "Bearer secret-key-123" {
 		t.Errorf("Authorization = %q", gotAuth)
 	}
 	if gotCT != "application/json" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
-	// 请求体关键字段
+	//  requirebodyclose charseg
 	if bodyMap["model"] != "gpt-test" {
 		t.Errorf("body.model = %v", bodyMap["model"])
 	}
@@ -123,7 +123,7 @@ func TestOpenAINoAuthHeaderWhenKeyEmpty(t *testing.T) {
 }
 
 func TestOpenAIResponseFormatToggle(t *testing.T) {
-	// 开启：请求体应含 response_format={"type":"json_object"}；关闭则不出现。
+	// openstart:  requirebody   response_format={"type":"json_object"}; close then outnow. 
 	t.Run("on", func(t *testing.T) {
 		var m map[string]any
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +260,7 @@ func TestOpenAIMalformedJSON(t *testing.T) {
 func TestOpenAIToolCallsForcedError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		// content 为空但出现 tool_calls：端点强制了 function-calling 模式
+		// content asemptybutoutnow tool_calls: endpoint restrict function-calling  form
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"x"}]}}],"usage":{}}`))
 	}))
 	defer ts.Close()
@@ -275,8 +275,8 @@ func TestOpenAIToolCallsForcedError(t *testing.T) {
 	}
 }
 
-// TestIntegrationRealEndpoint 是可选集成测试：有 VHS_API_KEY 时向模型中心 ping 一条 max_tokens=5，
-// 证明端点连通；无 key 自动跳过。不访问真实网络的断言见上面各 httptest 用例。
+// TestIntegrationRealEndpoint is  integrate  : has VHS_API_KEY timeto typein  ping    max_tokens=5, 
+//   endpointlink ; no key    ed.         disconnectlangseeonface  httptest useexample. 
 func TestIntegrationRealEndpoint(t *testing.T) {
 	key := os.Getenv("VHS_API_KEY")
 	if key == "" {
@@ -287,7 +287,7 @@ func TestIntegrationRealEndpoint(t *testing.T) {
 		url:            "https://model.peterzou.com/v1/chat/completions",
 		model:          "gpt-4o-mini",
 		apiKey:         key,
-		responseFormat: false, // ping 不要求 json_object，避免上游提示词约束
+		responseFormat: false, // ping  needrequire json_object,   on  showword end
 		timeoutMs:      30000,
 		httpClient:     &http.Client{},
 	}

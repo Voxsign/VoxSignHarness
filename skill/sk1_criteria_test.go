@@ -1,4 +1,4 @@
-// sk1_criteria_test.go —— SK-1「列技能不联网」**双向**判据（防"空过"：照 Lead 的 R3 教训）。
+// sk1_criteria_test.go -- SK-1"list     "** to** data(prevent"emptyed":   Lead   R3   ). 
 package skill
 
 import (
@@ -30,7 +30,7 @@ func fakeSkillService(t *testing.T, calls *int) *httptest.Server {
 	return srv
 }
 
-// ① 内化后列技能 ⇒ **远端调用数 = 0**（且先确保内化文件存在且非空 —— 否则就是空过）
+// ① inizeafterlist   ⇒ ** endcallusenum = 0**(andfirst keepinizefilestore and empty --  thenthenisemptyed)
 func TestSK1ListAfterInternalizeMakesZeroRemoteCalls(t *testing.T) {
 	calls := 0
 	srv := fakeSkillService(t, &calls)
@@ -41,7 +41,7 @@ func TestSK1ListAfterInternalizeMakesZeroRemoteCalls(t *testing.T) {
 	if err != nil || n == 0 {
 		t.Fatalf("[SK-1] 内化失败或为空: n=%d err=%v", n, err)
 	}
-	// **前置：内化文件存在且非空**（防空过）
+	// **before : inizefilestore and empty**(preventemptyed)
 	b, err := os.ReadFile(filepath.Join(st.Dir, "index.json"))
 	if err != nil || len(b) == 0 {
 		t.Fatalf("[SK-1] 内化文件不存在/为空 ⇒ 后面的断言会空过: %v", err)
@@ -56,11 +56,11 @@ func TestSK1ListAfterInternalizeMakesZeroRemoteCalls(t *testing.T) {
 	}
 }
 
-// ② **反例**：删掉内化文件 ⇒ **必须联网**（否则说明它根本不会拉）
+// ② **revexample**:   inizefile ⇒ **    **( then   rootbase   )
 func TestSK1WithoutInternalizeMustFetch(t *testing.T) {
 	calls := 0
 	srv := fakeSkillService(t, &calls)
-	st := NewStore(t.TempDir(), time.Hour) // 空目录 ⇒ 无内化
+	st := NewStore(t.TempDir(), time.Hour) // emptyobj  ⇒ noinize
 	f := &Fetcher{BaseURL: srv.URL, Calls: &calls}
 	got, _, err := ListOffline(context.Background(), st, f)
 	if err != nil {

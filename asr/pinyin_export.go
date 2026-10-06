@@ -1,10 +1,10 @@
-// pinyin_export.go —— 对外暴露无调音节序列（供 hotcache 的近音路由复用同一张表）。
+// pinyin_export.go -- toout  nocallaudionode list(provide hotcache   audiorouteby usesame  table). 
 package asr
 
 import "strings"
 
-// PinyinKey 返回文本的无调音节序列（"|" 连接）。
-// 任一字不在（稀疏）表内即 ok=false —— 宁可不匹配，也不猜读音。
+// PinyinKey returnback base nocallaudionode list("|" linkconnect). 
+//   char  (  )tableini.e. ok=false --      , also  readaudio. 
 func PinyinKey(text string) (string, bool) {
 	table := buildPinyinTable()
 	rs := []rune(text)

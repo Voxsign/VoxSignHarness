@@ -6,7 +6,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestDetectOrchestrate：复合长任务识别 + 不被 NOTE/COMMIT 单类触发压扁。
+// TestDetectOrchestrate:    task diff +  be NOTE/COMMIT  classtriggersend  . 
 func TestDetectOrchestrate(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct {
@@ -16,7 +16,7 @@ func TestDetectOrchestrate(t *testing.T) {
 	}{
 		{"用户原句", "把全部沟通记录和设计文档整理成《VoiceSign Harness 全景开发文档》并保存提交", contract.IntentOrchestrate},
 		{"无书名号", "整理所有设计文档并提交", contract.IntentOrchestrate},
-		{"仅整理无提交", "整理一下会议记录", contract.IntentNote}, // 无保存/提交信号 → 不是编排
+		{"仅整理无提交", "整理一下会议记录", contract.IntentNote}, // nokeepstore/  signal ->  isorchestrate
 		{"普通记录", "记一下设计文档要点", contract.IntentNote},
 		{"纯提交", "提交所有改动", contract.IntentCommit},
 	}
@@ -30,7 +30,7 @@ func TestDetectOrchestrate(t *testing.T) {
 	}
 }
 
-// TestDetectOrchestrateBookTitle：书名号目标文档抽取。
+// TestDetectOrchestrateBookTitle:  nameidobjtgt   get. 
 func TestDetectOrchestrateBookTitle(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	it := c.ClassifyTask("把沟通记录整理成《全景开发文档 v1》并保存提交")
@@ -40,7 +40,7 @@ func TestDetectOrchestrateBookTitle(t *testing.T) {
 	if it.Params["target_doc"] != "全景开发文档 v1" {
 		t.Fatalf("书名号抽取错误: %q", it.Params["target_doc"])
 	}
-	// 编排收尾含提交 → 基线不可逆。
+	// orchestraterecvtail    -> baseline reversible. 
 	if it.Risk == nil || it.Risk.Reversible {
 		t.Fatal("ORCHESTRATE 基线应不可逆（收尾 git commit）")
 	}

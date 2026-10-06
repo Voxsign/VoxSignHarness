@@ -1,6 +1,6 @@
-// report.go —— 用台账回答"这套分层到底有没有用"（VHS-FASTSLOW-001 §3 三个考察点）。
+// report.go -- use  answer"  split tobothas hasuse"(VHS-FASTSLOW-001 §3     pt). 
 //
-// 诚实原则：**样本不足就说"无法判定"**，不拿几条样本编结论。
+//   origthen: **kindbase  then "no   "**,     kindbase close . 
 package route
 
 import (
@@ -8,10 +8,10 @@ import (
 	"strings"
 )
 
-// MinSamplesForVerdict 是给出结论所需的最小样本量（**UNVALIDATED**：我定的经验值）。
+// MinSamplesForVerdict isgiveoutclose  need   kindbase (**UNVALIDATED**:      value). 
 const MinSamplesForVerdict = 10
 
-// Report 输出三个考察点的判定（人可读）。
+// Report  out    pt   (  read). 
 func Report(path string) (string, error) {
 	s, err := Aggregate(path)
 	if err != nil {
@@ -31,7 +31,7 @@ func Report(path string) (string, error) {
 		s.L0Share, s.EscalationRate, s.AskedUserRate, s.DegradedRate)
 	fmt.Fprintf(&b, "kind 落空次数: %d ; 路由多命中/未命中次数: %d\n", s.KindFallbacks, s.RouteAmbiguous)
 
-	// ① 层级分布
+	// ①   split 
 	if s.Total < MinSamplesForVerdict {
 		fmt.Fprintf(&b, "考察点① L0 比例: 样本不足（%d <%d），无法判定\n", s.Total, MinSamplesForVerdict)
 	} else if s.L0Share < 0.5 {
@@ -39,7 +39,7 @@ func Report(path string) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "考察点① L0 比例: %.2f 正常\n", s.L0Share)
 	}
-	// ② 升级率
+	// ②   rate
 	if s.Total < MinSamplesForVerdict {
 		fmt.Fprintf(&b, "考察点② 升级率: 样本不足（%d <%d），无法判定\n", s.Total, MinSamplesForVerdict)
 	} else if s.EscalationRate > 0.5 {
@@ -47,7 +47,7 @@ func Report(path string) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "考察点② 升级率: %.2f 正常\n", s.EscalationRate)
 	}
-	// ③ 升级后是否变好 —— 只用**同时具备前后质量**的条目对比
+	// ③   afteris change  -- onlyuse**sametime  beforeafter  **  objto 
 	fmt.Fprintf(&b, "考察点③ 可比样本: %d（缺前后质量字段的条目: %d —— 按 unknown 计，不当 0）\n",
 		s.ComparableQuality, s.UnknownQuality)
 	switch {

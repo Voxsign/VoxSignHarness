@@ -1,14 +1,14 @@
 //go:build asrharness
 
-// ASR 识别 harness —— C1–C4 判据 + 性能判据。
+// ASR  diff harness -- C1–C4  data + ity  data. 
 //
-// **P1 阶段：本套桩跑在基线 Passthrough 上，应当大量是红的。**
-// 红 = 能力还没做，不是"测试写错了"。判据先于实现（技能文档 §0）。
+// **P1 stage: base    baseline Passthrough on,  cur  is  . **
+//   =   also  ,  is"  write ".  datafirstat now(     §0). 
 //
-// 语料：asr/corpus/real-dialogue.jsonl —— **全部来自 Peter 与 DSH 的真实对话**，
-// 每条带 source 出处。每轮真实对话往里加。
+// lang : asr/corpus/real-dialogue.jsonl -- **safety    owner and DSH    to **, 
+//     source outplace.     to    . 
 //
-// 运行：go test -tags asrharness ./asr -v
+//   : go test -tags asrharness ./asr -v
 package asr
 
 import (
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// Case 是一条语料。字段与 jsonl 对应。
+// Case is  lang . charsegand jsonl to . 
 type Case struct {
 	ID     string   `json:"id"`
 	Raw    string   `json:"raw"`
@@ -38,7 +38,7 @@ type Case struct {
 
 func loadCorpus(t *testing.T) []Case {
 	t.Helper()
-	// 单一权威源：asr/corpus/real-dialogue.jsonl（eval/asr-corpus 副本已撤销）
+	//   authoritative : asr/corpus/real-dialogue.jsonl(eval/asr-corpus  basealready  )
 	for _, p := range []string{
 		filepath.Join("corpus", "real-dialogue.jsonl"),
 	} {
@@ -64,11 +64,11 @@ func loadCorpus(t *testing.T) []Case {
 	return nil
 }
 
-// engine 是本套桩的测试对象（**接线点**，不是判据本身）。
-// P2 起接生产引擎；基线 Passthrough 单独在 TestBaselinePassthrough 里对照。
+// engine isbase     to (**connectlinept**,  is database ). 
+// P2 raiseconnectoccurproduce  ; baseline Passthrough     TestBaselinePassthrough  to . 
 func engine() Engine { return NewEngine() }
 
-// hasTag 报告语料是否带某标签。
+// hasTag   lang is   tgt . 
 func hasTag(c Case, tag string) bool {
 	for _, t := range c.Tags {
 		if t == tag {
@@ -79,15 +79,15 @@ func hasTag(c Case, tag string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// C1 不该纠的不能纠 —— 保真（safety 侧）
+// C1         -- keep (safety side)
 //
-// 反向的那一半：纠错**不得**把否定、条件、长句改掉。
-// 基线 Passthrough 天然通过；实现阶段一旦过度纠正，这条会红。
+// revto    : correction**  **pipe  ,   ,  sentmodify . 
+// baseline Passthrough dayhowever ed;  nowstage  ed  pos,     . 
 // ---------------------------------------------------------------------------
 func TestC1FidelityNeverOverCorrect(t *testing.T) {
 	eng := engine()
 	for _, c := range loadCorpus(t) {
-		// 保真类：correction 必须原样等于 raw
+		// keep class: correction   origkindetcat raw
 		if c.Expect.Fidelity || hasTag(c, "negation") || hasTag(c, "safety") || hasTag(c, "long") {
 			got := eng.Correct(CorrectRequest{Raw: c.Raw})
 			if got.Text != c.Raw {
@@ -99,10 +99,10 @@ func TestC1FidelityNeverOverCorrect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// C2 触发词同音容错 —— 该纠的必须纠
+// C2 triggersendwordsameaudio   --       
 //
-// 反向的那一半：多字触发词被听错后必须能还原意图。
-// 基线 Passthrough 在这条上必然红。
+// revto    :  chartriggersendwordbe  after   alsoorigintent. 
+// baseline Passthrough    on however . 
 // ---------------------------------------------------------------------------
 func TestC2TriggerWordHomophone(t *testing.T) {
 	eng := engine()
@@ -119,9 +119,9 @@ func TestC2TriggerWordHomophone(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// C3 噪声不脑补 —— 纯噪声不得被纠成"看起来合理"的句子
+// C3  voice  patch --   voice  be become" raise   " sent 
 //
-// 双向：①噪声不得产出缩短/改写成命令的文本 ②非噪声不得被判为噪声。
+//  to: ① voice  produceout  /modifywritebecome    base ②  voice  be as voice. 
 // ---------------------------------------------------------------------------
 func TestC3NoiseNeverHallucinated(t *testing.T) {
 	eng := engine()
@@ -130,12 +130,12 @@ func TestC3NoiseNeverHallucinated(t *testing.T) {
 			continue
 		}
 		got := eng.Correct(CorrectRequest{Raw: c.Raw})
-		// 噪声纠正后不得变得更"像命令"（这里用长度做代理：不得凭空变长）
+		//  voice posafter  change change"   "(  use     :    emptychange )
 		if len([]rune(got.Text)) > len([]rune(c.Raw)) {
 			t.Errorf("C3 脑补 [%s] %q → %q（凭空变长 = 在猜）", c.ID, c.Raw, got.Text)
 		}
-		// 若引擎给出候选，说明它知道该问人；这不算红。
-		// 但**不得**给出唯一且高置信的改法去执行。
+		// if  giveout  ,         ;     . 
+		// but**  **giveoutuniqueand    modify    . 
 		if got.Text != c.Raw && len(got.Candidates) == 0 {
 			t.Errorf("C3 脑补 [%s] 噪声被唯一确定地改写为 %q，且无候选供人确认", c.ID, got.Text)
 		}
@@ -143,20 +143,20 @@ func TestC3NoiseNeverHallucinated(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// C4 可观测 —— 每次纠错必须带证据，raw 必须留底
+// C4     --   correction    data, raw    bot
 //
-// 双向：①改了必须记录 ②没改不得凭空记录。
+//  to: ①modify     ② modify   empty  . 
 // ---------------------------------------------------------------------------
 func TestC4CorrectionsAreObservable(t *testing.T) {
 	eng := engine()
 	for _, c := range loadCorpus(t) {
 		got := eng.Correct(CorrectRequest{Raw: c.Raw})
 
-		// 没改就不该有记录
+		//  modifythen  has  
 		if got.Text == c.Raw && len(got.Corrections) > 0 {
 			t.Errorf("C4 凭空记录 [%s] 文本未改却有 %d 条 Correction", c.ID, len(got.Corrections))
 		}
-		// 改了就必须有记录，且区间可回溯
+		// modifythen  has  , and time back 
 		if got.Text != c.Raw {
 			if len(got.Corrections) == 0 {
 				t.Errorf("C4 不可观测 [%s] 改成了 %q 却没有 Correction 记录", c.ID, got.Text)
@@ -171,7 +171,7 @@ func TestC4CorrectionsAreObservable(t *testing.T) {
 				}
 			}
 		}
-		// 期望有纠正的条目，必须真的有纠正记录
+		// period has pos  obj,     has pos  
 		if c.Expect.Corrected != "" && c.Expect.Corrected != c.Raw && len(got.Corrections) == 0 {
 			t.Errorf("C4 未记录 [%s] 期望纠正为 %q 但一条 Correction 都没有", c.ID, c.Expect.Corrected)
 		}
@@ -179,13 +179,13 @@ func TestC4CorrectionsAreObservable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 性能判据 —— "快"必须可测
+// ity  data -- "fast"    
 //
-// 基线 Passthrough 会通过；但实现阶段一旦引入暴力全表扫描，这条会红。
+// baseline Passthrough   ed; but nowstage   in  safetytable  ,     . 
 // ---------------------------------------------------------------------------
 func TestPerfFastPathLatency(t *testing.T) {
 	eng := engine()
-	raw := strings.Repeat("把报价单改成中文", 6) // 约 48 字
+	raw := strings.Repeat("把报价单改成中文", 6) //   48 char
 	if n := len([]rune(raw)); n < 40 {
 		t.Fatalf("测试前提：样本应为 50 字量级，实际 %d 字", n)
 	}
@@ -197,16 +197,16 @@ func TestPerfFastPathLatency(t *testing.T) {
 	}
 	avg := time.Since(start) / N
 
-	// 目标：远低于 1ms（快路必须是微秒级）
+	// objtgt:   at 1ms(fastroute  is sec )
 	if avg > time.Millisecond {
 		t.Errorf("快路过慢：平均 %v/次（目标 < 1ms，实为快路应达微秒级）", avg)
 	}
 	t.Logf("快路平均延迟 %v/次（%d 次）", avg, N)
 }
 
-// TestPerfOfflineCapable 断网可跑：快路不得依赖外部调用。
+// TestPerfOfflineCapable disconnect   : fastroute  dependencyout calluse. 
 //
-// 判据形式：在无网络配置的零值 Engine 上必须仍能 Correct（不 panic、不阻塞）。
+//  data form:  no      value Engine on     Correct(  panic,    ). 
 func TestPerfOfflineCapable(t *testing.T) {
 	eng := engine()
 	done := make(chan struct{})
@@ -222,10 +222,10 @@ func TestPerfOfflineCapable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 自比对：把基线（零纠正）跑一遍，作为「改动前」那条臂。
+//   to: pipebaseline(  pos)   ,  as"changebefore"   . 
 //
-// 这个测试**不断言通过**——它只把基线的得失打印出来，
-// 与 engine() 的结果并排，构成「自己和自己比」。
+//     ** disconnectlang ed**-- onlypipebaseline     out , 
+// and engine()  close and ,  become"  and   ". 
 // ---------------------------------------------------------------------------
 func TestBaselinePassthroughComparison(t *testing.T) {
 	base := Passthrough{}
@@ -250,16 +250,16 @@ func TestBaselinePassthroughComparison(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// C3-bis 噪声必须发出"该问人"的信号（补判据空洞）
+// C3-bis  voice  sendout"   " signal(patch dataempty )
 //
-// 异源盲评指出：原 C3 只测"不变长 + 有候选"，而 Passthrough（零纠正基线）
-// 也能 100% 通过 —— 那条绿对实现质量**零信息量**（技能文档 §9：无样本就报绿）。
-// 且 Case 里的 AskNonempty/AskEmpty/Intent 三个字段**解析了却从无断言**。
+// diff   referout: orig C3 only " change  + has  ", but Passthrough(  posbaseline)
+// also  100%  ed --    to now  **    **(     §9: nokindbasethen  ). 
+// and Case    AskNonempty/AskEmpty/Intent   charseg**resolve butfromnodisconnectlang**. 
 //
-// 本测试补上断言。按 asr.go 的约定：**Candidates 非空 = 该问人/该问外部**。
-// 于是"噪声必须回问"在 ASR 层的可观测形式就是：噪声样本必须给出非空 Candidates。
+// base  patchondisconnectlang. by asr.go    : **Candidates  empty =    /  out **. 
+// atis" voice  clarification"  ASR       formthenis:  voicekindbase  giveout empty Candidates. 
 //
-// 判据先于实现：本测试在实现方给出信号前应当是**红的**。
+//  datafirstat now: base    now giveoutsignalbefore curis**  **. 
 // ---------------------------------------------------------------------------
 func TestC3BisNoiseMustSignalAsk(t *testing.T) {
 	eng := engine()
@@ -270,14 +270,14 @@ func TestC3BisNoiseMustSignalAsk(t *testing.T) {
 		}
 		checked++
 		got := eng.Correct(CorrectRequest{Raw: c.Raw})
-		// 噪声不得被改写成"看起来合理"的文本
+		//  voice  bemodifywritebecome" raise   "  base
 		if got.Text != c.Raw {
 			t.Errorf("C3-bis [%s] 噪声被改写：%q → %q", c.ID, c.Raw, got.Text)
 		}
-		// 必须发出"该问人"的信号 —— 否则上层无从知道这是噪声。
-		// 约定（实现方 2026-10-03 冻结）：噪声返回**恰好一条**候选，
-		// Text == Raw（不给改写建议）、Confidence == 0（没有可信改写）、
-		// Reason 以 "ask:noise" 开头（稳定机器可判前缀）。
+		//   sendout"   " signal --  thenon nofrom   is voice. 
+		//   ( now  2026-10-03 frozen):  voicereturnback**    **  , 
+		// Text == Raw( givemodifywrite  ), Confidence == 0( has  modifywrite), 
+		// Reason by "ask:noise" openhead(      before ). 
 		if len(got.Candidates) == 0 {
 			t.Errorf("C3-bis [%s] 噪声 %q 既未改写**也未给出候选** —— "+
 				"上层拿不到任何「这是噪声、该回问」的信号（判据空洞，Passthrough 也能过）",
@@ -301,7 +301,7 @@ func TestC3BisNoiseMustSignalAsk(t *testing.T) {
 	}
 	t.Logf("C3-bis 覆盖 %d 条噪声样本", checked)
 
-	// ---- 反向：有实义的句子**不得**给出候选（否则就是无谓地打扰用户）----
+	// ---- revto: has   sent **  **giveout  ( thenthenisno ly  useuser)----
 	var reverse int
 	for _, c := range loadCorpus(t) {
 		if !c.Expect.AskEmpty {
@@ -319,10 +319,10 @@ func TestC3BisNoiseMustSignalAsk(t *testing.T) {
 	t.Logf("C3-bis 反向覆盖 %d 条 ask_empty 样本", reverse)
 }
 
-// TestCaseExpectFieldsAllExercised 防止"字段解析了却没人用"再次发生。
+// TestCaseExpectFieldsAllExercised preventstop"charsegresolve but  use"again sendoccur. 
 func TestCaseExpectFieldsAllExercised(t *testing.T) {
-	// 这三个字段在 Case 结构里存在，必须至少各有一条语料在用，
-	// 否则说明判据材料里有"死字段"——被解析但不参与判定。
+	//    charseg  Case close  store ,      has  lang  use, 
+	//  then   data   has" charseg"--beresolve but  and  . 
 	var nIntent, nAskEmpty, nAskNonempty, nCorrected, nFidelity int
 	for _, c := range loadCorpus(t) {
 		if c.Expect.Intent != "" {

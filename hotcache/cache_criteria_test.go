@@ -1,8 +1,8 @@
 //go:build vhscache
 
-// cache_criteria_test.go —— VHS-CACHE-001 K2..K6（先红）。
+// cache_criteria_test.go -- VHS-CACHE-001 K2..K6(first ). 
 //
-// 运行：go test -tags vhscache ./hotcache
+//   : go test -tags vhscache ./hotcache
 package hotcache
 
 import (
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// fetcher 计数：证明"能本地答的绝不外调"（K2）。
+// fetcher  num:   " basely    outcall"(K2). 
 func newTestCache(t *testing.T, fetchOK bool, calls *int) *Cache {
 	t.Helper()
 	fetcher := func(ctx context.Context) (Snapshot, error) {
@@ -35,11 +35,11 @@ func newTestCache(t *testing.T, fetchOK bool, calls *int) *Cache {
 	return New(filepath.Join(t.TempDir(), "cache.json"), time.Minute, fetcher)
 }
 
-// K2：热词/别名能本地答，绝不外调。
+// K2:  word/diffname basely ,   outcall. 
 func TestK2LocalAnswersNeverCallRemote(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, true, &calls)
-	c.Refresh(context.Background()) // 一次刷新（L2）
+	c.Refresh(context.Background()) //    new(L2)
 	base := calls
 	c.Observe("报价单", "user")
 	if r, ok := c.Lookup("报价单"); !ok || r.Route != RouteExact {
@@ -50,7 +50,7 @@ func TestK2LocalAnswersNeverCallRemote(t *testing.T) {
 	}
 }
 
-// K3：关联度四路各有用例（精确/别名/拼音近音/编辑距离）+ 热度加权。
+// K3: close   route hasuseexample(  /diffname/ audio audio/    )+ heat  . 
 func TestK3FourRelevanceRoutes(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, true, &calls)
@@ -64,7 +64,7 @@ func TestK3FourRelevanceRoutes(t *testing.T) {
 	}{
 		{"报价单", "报价单", RouteExact},
 		{"爱ops", "aiops", RouteAlias},
-		{"哈你斯", "harness", RoutePinyin}, // 尼/你 同音（ha ni si）
+		{"哈你斯", "harness", RoutePinyin}, //  /  sameaudio(ha ni si)
 		{"voice-sign", "voice-sign", RouteExact},
 		{"voice-signn", "voice-sign", RouteEdit},
 	}
@@ -81,7 +81,7 @@ func TestK3FourRelevanceRoutes(t *testing.T) {
 			t.Errorf("[K3] %q 命中路径=%s，期望 %s", tc.in, got.Route, tc.route)
 		}
 	}
-	// 热度加权：同分时热度高的优先
+	// heat  : samesplittimeheat   first
 	c.Observe("报价单", "user")
 	c.Observe("报价单", "user")
 	r, _ := c.Lookup("报价单")
@@ -90,13 +90,13 @@ func TestK3FourRelevanceRoutes(t *testing.T) {
 	}
 }
 
-// K4：每条带 fetched_at/source；过期标 stale，**不静默当新鲜**。
+// K4:     fetched_at/source; edperiodtgt stale, **   curnew **. 
 func TestK4StaleIsVisibleNotSilent(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, true, &calls)
 	c.now = func() time.Time { return time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC) }
 	c.Refresh(context.Background())
-	c.now = func() time.Time { return time.Date(2026, 10, 3, 2, 0, 0, 0, time.UTC) } // 2h 后，TTL=1m
+	c.now = func() time.Time { return time.Date(2026, 10, 3, 2, 0, 0, 0, time.UTC) } // 2h after, TTL=1m
 	snap := c.Snapshot()
 	if snap.Status != StatusStale {
 		t.Errorf("[K4] 过期未标 stale: %+v", snap.Status)
@@ -107,7 +107,7 @@ func TestK4StaleIsVisibleNotSilent(t *testing.T) {
 	}
 }
 
-// K5：刷新失败 fail-open 标 unknown，不得当"没有"。
+// K5:  new   fail-open tgt unknown,   cur" has". 
 func TestK5RefreshFailureIsUnknownNotAbsent(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, false, &calls)
@@ -115,7 +115,7 @@ func TestK5RefreshFailureIsUnknownNotAbsent(t *testing.T) {
 	if snap.Status != StatusUnknown || snap.Note == "" {
 		t.Errorf("[K5] 刷新失败未标 unknown+原因: %+v", snap)
 	}
-	// 不得把"远端失败"表达成"别名不存在"
+	//   pipe" end  "table become"diffname store "
 	if _, ok := c.Lookup("爱ops"); ok {
 		t.Log("本地确实无此别名（允许），但状态必须未知")
 	}
@@ -124,7 +124,7 @@ func TestK5RefreshFailureIsUnknownNotAbsent(t *testing.T) {
 	}
 }
 
-// K6：缓存可删可重建，重建一致。
+// K6: cache   heavy , heavy   . 
 func TestK6ClearAndRebuildConsistent(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, true, &calls)
@@ -139,7 +139,7 @@ func TestK6ClearAndRebuildConsistent(t *testing.T) {
 	if first.Status != second.Status || !reflect.DeepEqual(r1, r2) {
 		t.Errorf("[K6] 重建不一致: %+v/%+v vs %+v/%+v", first.Status, r1, second.Status, r2)
 	}
-	// L1 落盘后可重新加载
+	// L1   after heavynew  
 	if err := c.Save(); err != nil {
 		t.Errorf("[K6] Save: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestK6ClearAndRebuildConsistent(t *testing.T) {
 	}
 }
 
-// K7：定期刷新（启动一次 + TTL 周期）；失败保留本地数据并标 unknown。
+// K7:  period new(start    + TTL  period);   keep baselynumdataandtgt unknown. 
 func TestK7ScheduledRefreshAndFailOpen(t *testing.T) {
 	calls := 0
 	c := newTestCache(t, true, &calls)
@@ -167,7 +167,7 @@ func TestK7ScheduledRefreshAndFailOpen(t *testing.T) {
 	if calls < 2 {
 		t.Fatalf("[K7] 定期刷新未生效: calls=%d", calls)
 	}
-	// 失败 fail-open：本地数据保留 + unknown
+	//    fail-open: baselynumdatakeep  + unknown
 	cf := newTestCache(t, false, new(int))
 	cf.PutAlias("爱ops", "aiops", "local")
 	snap := cf.Refresh(context.Background())

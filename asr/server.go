@@ -1,11 +1,11 @@
-// server.go —— 本地 HTTP 服务适配层（需求 §6 对外接口 / 验收 #1）。
+// server.go -- basely HTTP serveservice   (needrequire §6 tooutconnect  /  recv #1). 
 //
-// 定位：**传输适配**，不含任何业务判断。它调用 Pipeline / Dictionary，
-// 把结果序列化成 JSON；不执行任务、不触碰自己数据目录之外的任何文件（红线 #1）。
+//   : **    **,      service disconnect.  calluse Pipeline / Dictionary, 
+// pipeclose  listizebecome JSON;    task,  trigger   numdataobj ofout   file( line #1). 
 //
-// 本轮（第 1 批）只交付：/v1/health、/v1/correct、/v1/dictionary、/v1/process。
-// /v1/process 的意图分类属第 2 批，当前返回**低置信 ASK + need_disambiguate**，
-// 这是需求 4.6 明文的兜底行为（置信度低于阈值 → 回问/转 ASK），不是假装已实现意图解析。
+// base (  1 approve)onlydeliver: /v1/health, /v1/correct, /v1/dictionary, /v1/process. 
+// /v1/process  intentclassify   2 approve, curbeforereturnback**low-confidence ASK + need_disambiguate**, 
+//  isneedrequire 4.6     bot as(    at value -> clarification/  ASK),  is  already nowintentresolve . 
 package asr
 
 import (
@@ -21,40 +21,40 @@ import (
 	"voicesign-harness/plan"
 )
 
-// Server 持有管线，提供 HTTP 处理。
+// Server keephasmanageline,  provide HTTP handle. 
 type Server struct {
 	Pipe *Pipeline
-	// IntentModel 是可选的**兜底**模型（只有本地低置信时才用；nil = 纯本地）。
+	// IntentModel is   ** bot** type(onlyhasbaselylow-confidencetimeonlyuse; nil =  basely). 
 	IntentModel   IntentModel
 	IntentTimeout time.Duration
-	// DataDir 是本机数据目录（画像等；空则视为无画像）。
+	// DataDir isbase numdataobj (  etc; emptythen asno  ). 
 	DataDir string
-	// PlanModel 是 L2 规划用模型（nil ⇒ L2 不生效，行为与纯规则式一致）。
-	// 由外层注入（生产：modelcenter 强模型客户端；测试：桩）。**端点必须真的用它**。
+	// PlanModel is L2 rule use type(nil ⇒ L2  occur ,  asand ruleform  ). 
+	// byout notein(occurproduce: modelcenter   typeclientuserend;   :  ). **endpoint    use **. 
 	PlanModel plan.PlanModel
-	// L2ModelID 是生效的 L2 模型 id（空 ⇒ 从 config/plan.json + env 解析）。
+	// L2ModelID isoccur   L2  type id(empty ⇒ from config/plan.json + env resolve ). 
 	L2ModelID string
-	// L2ConfigPath 是 config/plan.json 路径（空 ⇒ 用默认相对路径）。
+	// L2ConfigPath is config/plan.json path(empty ⇒ usedefault topath). 
 	L2ConfigPath string
-	// Models 是模型中心配置（可选）。非空时**规划走 `plan` 通道**（通道→档位→模型），
-	// 与 L2 槽位**合并为一条路径**（不再两条并存）。解析失败 ⇒ fail-closed 报错。
+	// Models is typein   (  ).  emptytime**rule   `plan`   **(  ->  -> type), 
+	// and L2   ** andas  path**( again  andstore). resolve    ⇒ fail-closed   . 
 	Models *modelcenter.Config
-	// Teach 是"用户教一个词"的后端钩子（CACHE-001 G2）。
-	// 路径用规范里已有的 `/v1/observe`（VHS-ASR-001 P3 端点清单），**不新造路径**。
-	// 为空 ⇒ 该端点返回 503（不假装支持）。
+	// Teach is"useuser   word" afterend  (CACHE-001 G2). 
+	// pathuserule  alreadyhas  `/v1/observe`(VHS-ASR-001 P3 endpointlist), ** new path**. 
+	// asempty ⇒  endpointreturnback 503(    keep). 
 	Teach func(term, canonical string) error
-	// ClearTaught 清空"用户教的词"（**不得误清服务别名**）。
+	// ClearTaught  empty"useuser  word"(**    serveservicediffname**). 
 	ClearTaught func() int
-	// Blacklist 是"这个改错了"的后端钩子（§5.1 第 5 件）：把词加入**改写黑名单**并落盘。
-	// 为空 ⇒ /v1/blacklist 返回 503（不假装支持）。
+	// Blacklist is"  modify " afterend  (§5.1   5  ): pipeword in**modifywrite name **and  . 
+	// asempty ⇒ /v1/blacklist returnback 503(    keep). 
 	Blacklist func(term, note string) error
 }
 
-// NewServer 构造服务。
+// NewServer   serveservice. 
 func NewServer(p *Pipeline) *Server { return &Server{Pipe: p} }
 
-// Handler 返回路由表。
-// loopbackOnly 拒绝非回环来源（NF5：ASR 服务无鉴权，只允许本机调用）。
+// Handler returnbackroutebytable. 
+// loopbackOnly reject back   (NF5: ASR serveserviceno  , only allowbase calluse). 
 func loopbackOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -143,8 +143,8 @@ func (s *Server) handleCorrect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// intentResponse 是**契约 v1** 的响应形状（需求 §6）。
-// 字段集必须与 contracts/intent-v1.schema.json 一致（只增不改）。
+// intentResponse is**   v1**     status(needrequire §6). 
+// charseg   and contracts/intent-v1.schema.json   (onlyadd modify). 
 type intentResponse struct {
 	ContractVersion  string         `json:"contract_version"`
 	Type             string         `json:"type"`
@@ -155,38 +155,38 @@ type intentResponse struct {
 	DomainSuggestion []string       `json:"domain_suggestion"`
 	Control          string         `json:"control"`
 	Confirmable      *confirmedRef  `json:"confirmable,omitempty"`
-	// ContextSources 是**注入来源归因**（SCOPE-PROFILE-01：能否说清从哪来）。
-	// 枚举：handwritten | zhiji | learned | project-map | none —— **none 是正规成员**（可穷举）。
+	// ContextSources is**notein  attribution**(SCOPE-PROFILE-01:     from  ). 
+	//   : handwritten | zhiji | learned | project-map | none -- **none isposrulebecome **(   ). 
 	ContextSources []string `json:"context_sources"`
-	// ContextSourcesDetails 放**原因**（如 no_profile），不塞进枚举值。
+	// ContextSourcesDetails  **origbecause**(e.g. no_profile),      value. 
 	ContextSourcesDetails string `json:"context_sources_details,omitempty"`
-	// ConfirmPatternMiss：确认话术**落空留痕**（匹配不上时必须可见，否则命中率无从得知）。
+	// ConfirmPatternMiss: confirm  ** empty  **(   ontime   see,  then inratenofrom  ). 
 	ConfirmPatternMiss bool   `json:"confirm_pattern_miss,omitempty"`
 	Degraded           bool   `json:"degraded,omitempty"`
 	DegradedReason     string `json:"degraded_reason,omitempty"`
 	Traces             []Step `json:"traces"`
 }
 
-// SourceNone 是 context_sources 的**正规枚举成员**：确实没有来源。
+// SourceNone is context_sources  **posrule  become **:    has  . 
 const SourceNone = "none"
 
 type processRequest struct {
 	Text      string `json:"text"`
 	SessionID string `json:"session_id"`
 	AudioMeta any    `json:"audio_meta"`
-	// Context：**调用方携带的上下文**（选项 C：会话记忆由调用方带回，服务架构不变）。
+	// Context: **calluse    onunder **(   C:     bycalluse  back, serveservice   change). 
 	Context []string `json:"context,omitempty"`
-	// Confirmed：**调用方带回的确认结构**（服务据此复用，但自己不记得）。
+	// Confirmed: **calluse  back confirmclose **(serveservicedata  use, but     ). 
 	Confirmed *confirmedRef `json:"confirmed,omitempty"`
 }
 
-// confirmedRef 是可携带的确认结构（第一次响应给出，第二次由调用方带回）。
+// confirmedRef is    confirmclose (     giveout,    bycalluse  back). 
 type confirmedRef struct {
 	Mention   string `json:"mention"`
 	Canonical string `json:"canonical"`
 }
 
-// pickPathFromContext 从调用方给的上下文里取一个可用的路径（不猜：只认显式形态）。
+// pickPathFromContext fromcalluse give onunder  get   use path(  : only  form state). 
 func pickPathFromContext(ctx []string) string {
 	for _, c := range ctx {
 		c = strings.TrimSpace(c)
@@ -202,15 +202,15 @@ func pickPathFromContext(ctx []string) string {
 	return ""
 }
 
-// profileSources 返回画像注入来源（归因，不保证内容）。
+// profileSources returnback  notein  (attribution,  keep in ). 
 //
-// 要求（SCOPE-PROFILE-01）：**永远非 nil**；无画像文件时给**显式值**（不是缺字段）；
-// 且**绝不做全量历史加载**（需求 4.5）。
-// ⚠️ L3 的 zhiji / learned / project-map 三类**尚未实现**（等真值来源裁决）。
+// needrequire(SCOPE-PROFILE-01): **    nil**; no  filetimegive** formvalue**( is charseg); 
+// and**   safety     **(needrequire 4.5). 
+// ⚠️ L3   zhiji / learned / project-map  class**   now**(etc value   decide). 
 //
-// `none` 是**正规枚举成员**（不是 "none:no_profile" 这种哨兵字符串）——
-// 哨兵在枚举之外，等于"一个表示没有来源的值看起来像一个来源"，按枚举穷举的消费方会漏掉它。
-// **"没有"与"有"必须分列**；原因（no_profile）放 details，不塞进枚举值。
+// `none` is**posrule  become **( is "none:no_profile"  kind  char  )--
+//      ofout, etcat"  tableshow has   value raise      ", by            . 
+// **" has"and"has"  splitlist**; origbecause(no_profile)  details,      value. 
 func profileSources(dataDir string) (sources []string, details string) {
 	if dataDir == "" {
 		return []string{SourceNone}, "no_data_dir"
@@ -222,7 +222,7 @@ func profileSources(dataDir string) (sources []string, details string) {
 	return []string{SourceNone}, "no_profile"
 }
 
-// detectConfirmation 识别"确认，就是 X"形态并给出可携带结构（服务不保存它）。
+// detectConfirmation  diff"confirm, thenis X" stateandgiveout   close (serveservice keepstore ). 
 func detectConfirmation(text string) *confirmedRef {
 	if !strings.Contains(text, "确认") {
 		return nil
@@ -249,14 +249,14 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := s.Pipe.Process(req.Text, req.SessionID)
-	// 本地规则解析意图（红线 #6：核心路径本地）；低置信时才由模型兜底，失败即降级。
+	// baselyruleresolve intent( line #6:   pathbasely); low-confidencetimeonlyby type bot,   i.e.  . 
 	var cs []string
 	var csDetails string
 	cs, csDetails = profileSources(s.DataDir)
 	var confirmable *confirmedRef
 	missConfirm := false
 	ir := ClassifyIntentWith(r.Context(), res.Text, s.IntentModel, s.IntentTimeout)
-	// 选项 C：**服务不持久化会话态**；消解所需的上下文/确认全部由调用方携带。
+	//    C: **serveservice keep ize  state**;  resolve need onunder /confirmsafety bycalluse   . 
 	var path string
 	if req.Confirmed != nil && req.Confirmed.Canonical != "" {
 		path = req.Confirmed.Canonical
@@ -268,7 +268,7 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	if ref := detectConfirmation(res.Text); ref != nil {
 		confirmable = ref
 	} else if strings.Contains(res.Text, "确认") {
-		// 用户想确认，但话术没匹配上 ⇒ **落空留痕**（不静默）。
+		// useuser confirm, but     on ⇒ ** empty  **(   ). 
 		missConfirm = true
 	}
 	writeJSON(w, http.StatusOK, intentResponse{
@@ -290,8 +290,8 @@ func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleObserve 是"用户教一个词"的入口（G2：Peter 原话「最近我说的词」）。
-// 来源固定标 user_taught（可审计）；空词/同值一律拒绝（否则缓存被污染成"什么都能命中"）。
+// handleObserve is"useuser   word" in (G2: owner orig "     word"). 
+//     tgt user_taught(   ); emptyword/samevalue  reject( thencachebe  become"  all  in"). 
 func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -324,8 +324,8 @@ func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "source": "user_taught"})
 }
 
-// handleLexicon 是词表管理入口（路径取自规范 VHS-ASR-001 P3 的端点清单）。
-// 当前支持 {"op":"clear_taught"}：**只清用户教的词**，不碰服务别名。
+// handleLexicon iswordtablemanage in (pathget rule  VHS-ASR-001 P3  endpointlist). 
+// curbefore keep {"op":"clear_taught"}: **only useuser  word**,   serveservicediffname. 
 func (s *Server) handleLexicon(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -351,10 +351,10 @@ func (s *Server) handleLexicon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleFeedback 回传一次反馈：**登记为候选词典条目**（source/created_at 可审计）
-// **并且**追加一条 FeedbackRecord 到 feedback.jsonl（A8/A9：✔/✘ 各多一条、✘ 带原因）。
-// 注意：按 ASR-MODEL-02 L2，用户显式反馈属 user_explicit，不过 learn 通道；
-// 隐式推断才必须过 learn（本轮未实现）。
+// handleFeedback back   rev : **  as  word  obj**(source/created_at    )
+// **andand**     FeedbackRecord to feedback.jsonl(A8/A9: ✔/✘     , ✘  origbecause). 
+// note : by ASR-MODEL-02 L2, useuser formrev   user_explicit,  ed learn   ; 
+//  form disconnectonly  ed learn(base   now). 
 func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -385,7 +385,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// ① 回馈日志：**恒追加**（✔/✘ 都算一次真实使用反馈）；✘ 恒带原因（空则默认）。
+	// ① back day : **   **(✔/✘ all      userev ); ✘   origbecause(emptythendefault). 
 	reason := strings.TrimSpace(fb.Reason)
 	if !fb.Accepted && reason == "" {
 		reason = DefaultRejectReason
@@ -400,7 +400,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	logErr := ""
 	if err := s.appendFeedback(rec); err != nil {
-		logErr = err.Error() // 回馈落盘失败**留痕**，不静默、不阻断
+		logErr = err.Error() // back     **  **,    ,   disconnect
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true,
@@ -411,8 +411,8 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleBlacklist 是「这个改错了」入口：把词加入改写黑名单并落盘（A10）。
-// 校验：非空 term；hook 缺失 ⇒ 503（不假装支持）。
+// handleBlacklist is"  modify "in : pipeword inmodifywrite name and  (A10). 
+// verify:  empty term; hook    ⇒ 503(    keep). 
 func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -448,7 +448,7 @@ func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
 }
 
 type dictionaryRequest struct {
-	Text      string `json:"text"` // 语音指令原文
+	Text      string `json:"text"` // langaudiorefer orig 
 	Op        string `json:"op"`   // add | update | delete | list
 	RawSpeech string `json:"raw_speech"`
 	Target    string `json:"target"`
@@ -474,7 +474,7 @@ func (s *Server) handleDictionary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 语音指令优先：先 Add，再 Delete（都是高风险以外的路径有明确护栏）。
+	// langaudiorefer  first: first Add, again Delete(allis riskbyout pathhas  protect ). 
 	if req.Text != "" {
 		if e, ok := ParseVoiceAdd(req.Text); ok {
 			if err := s.Pipe.Dict.Add(e); err != nil {
@@ -507,7 +507,7 @@ func (s *Server) handleDictionary(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "entry": e, "version": s.Pipe.Dict.Version()})
 	case "delete":
-		// 红线 #3：无确认不执行，且**不落盘**（文件必须原样）。
+		//  line #3: noconfirm   , and**   **(file  origkind). 
 		if !req.Confirm {
 			writeJSON(w, http.StatusOK, map[string]any{"need_confirm": true, "term": req.Term})
 			return

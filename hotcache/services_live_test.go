@@ -1,7 +1,7 @@
 //go:build vhscache
 
-// services_live_test.go —— L2 真实刷新**真跑**（只读 /api/services，无需 key）。
-// 默认跳过；VHS_CACHE_LIVE=1 才跑。
+// services_live_test.go -- L2    new**  **(read-only /api/services, noneed key). 
+// default ed; VHS_CACHE_LIVE=1 only . 
 package hotcache
 
 import (
@@ -38,7 +38,7 @@ func TestLiveServicesRefreshAndVariants(t *testing.T) {
 		t.Error("L1 落盘重载后 aops 丢失")
 	}
 
-	// 逐个验证 Peter 点名的 ASR 变形词
+	//      owner ptname  ASR change word
 	for _, v := range []string{"爱ops", "研究obc", "沃克body", "格罗克"} {
 		r, ok := c.Lookup(v)
 		if !ok {

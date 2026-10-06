@@ -1,11 +1,11 @@
-// pipeline.go —— 本地理解管线的编排层（需求 3.1 的 1→N 步）。
+// pipeline.go -- basely resolvemanageline orchestrate (needrequire 3.1   1->N  ). 
 //
-// 定位：把已有的纯函数（Engine.Correct）、独立结构（Dictionary、Tracer）**编排**起来，
-// 并给每一步打点留痕。**它不修改 Correct 的语义**——Correct 仍是无状态纯函数，
-// 轨迹/词典/热加载全部在它的外层，符合"状态与计算分离"。
+//   : pipealreadyhas   num(Engine.Correct),   close (Dictionary, Tracer)**orchestrate**raise , 
+// andgive    pt  . **  modify Correct  semantic**--Correct  isnostatus  num, 
+// trace/word /   safety    out ,   "statusand  split ". 
 //
-// 步序（对齐需求 3.1）：留底 → 清洗（Correct）→ 词典 → 标点 → 输出。
-// 上下文/指代/意图/域建议属第 2 批，本层暂不实现（保持 unverified）。
+//   (to needrequire 3.1):  bot -> clean(Correct)-> word  -> tgtpt ->  out. 
+// onunder /coreference/intent/domain     2 approve, this layer   now(keepkeep unverified). 
 package asr
 
 import (
@@ -14,32 +14,32 @@ import (
 	"time"
 )
 
-// Step 是管线中一步的运行摘要（同时用于 HTTP 响应与轨迹）。
+// Step ismanagelinein      need(sametimeuseat HTTP   andtrace). 
 type Step struct {
 	Step   string        `json:"step"`
-	Kind   TraceStepKind `json:"kind"` // 具名类型（EXEC-05 v2：自由字符串步骤写不出来）
+	Kind   TraceStepKind `json:"kind"` //  nameclasstype(EXEC-05 v2:  bychar    write out )
 	Ms     float64       `json:"ms"`
 	Source string        `json:"source"`
 	Detail string        `json:"detail,omitempty"`
 }
 
-// Pipeline 是本地理解管线的执行者。
+// Pipeline isbasely resolvemanageline   er. 
 type Pipeline struct {
 	Engine *Personalized
 	Dict   *Dictionary
 	Tracer *Tracer
-	// Hot 是可选的**缓存改写**钩子（热词/别名/近音）。接口定义在本包、实现由外层提供，
-	// 以避免 asr → hotcache 的反向依赖（hotcache 复用 asr 的拼音表）。
+	// Hot is   **cachemodifywrite**  ( word/diffname/ audio). connect define this package,  nowbyout  provide, 
+	// by   asr -> hotcache  revtodependency(hotcache  use asr   audiotable). 
 	Hot TextRewriter
 	now func() time.Time
 }
 
-// TextRewriter 用缓存改写文本（CACHE-001 K9）。实现方：recog.Rewriter。
+// TextRewriter usecachemodifywrite base(CACHE-001 K9).  now : recog.Rewriter. 
 type TextRewriter interface {
 	Rewrite(text string) (string, []Correction)
 }
 
-// NewPipeline 组装管线。Engine 必填；Dict/Tracer 可为 nil（则不启用对应能力）。
+// NewPipeline   manageline. Engine   ; Dict/Tracer  as nil(then startuseto   ). 
 func NewPipeline(engine *Personalized, dict *Dictionary, tracer *Tracer) *Pipeline {
 	if engine == nil {
 		engine = NewEngine()
@@ -47,7 +47,7 @@ func NewPipeline(engine *Personalized, dict *Dictionary, tracer *Tracer) *Pipeli
 	return &Pipeline{Engine: engine, Dict: dict, Tracer: tracer, now: time.Now}
 }
 
-// ProcessResult 是一次管线运行的结果（HTTP 层再决定暴露哪些字段）。
+// ProcessResult is  manageline   close (HTTP  againdecide     charseg). 
 type ProcessResult struct {
 	Raw                    string
 	Text                   string
@@ -59,10 +59,10 @@ type ProcessResult struct {
 	RequestID              string
 }
 
-// Process 跑一遍本地管线，并逐步写入轨迹。
+// Process    baselymanageline, and  writetrace. 
 //
-// 说明：轨迹里 retain 步会带上 input_raw（需求 4.1 的"原始留底"），
-// 这使 traces-asr.jsonl 成为 append-only 的输入留底；原始文本永不因"要好看"而丢弃。
+//   : trace  retain    on input_raw(needrequire 4.1  "origstart bot"), 
+//    traces-asr.jsonl becomeas append-only   in bot; origstart base  because"need  "but  . 
 func (p *Pipeline) Process(raw, session string) ProcessResult {
 	res := ProcessResult{Raw: raw}
 	res.RequestID = p.Tracer.NextRequestID("req")
@@ -78,10 +78,10 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 		}
 	}
 
-	// 1) 留底：input_raw 原样进入轨迹（append-only）。
+	// 1)  bot: input_raw origkind intrace(append-only). 
 	emit("retain", "store", "input_raw="+raw, 0)
 
-	// 2) 热加载：JSON 词典变更即时生效（不依赖 fsnotify，零第三方依赖）。
+	// 2)    : JSON word changechangei.e.timeoccur ( dependency fsnotify,     dependency). 
 	t := p.now()
 	reloaded := false
 	if p.Dict != nil {
@@ -91,7 +91,7 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 	}
 	hotMs := p.now().Sub(t)
 
-	// 3) 清洗：正文纠错（Correct 纯函数）。
+	// 3) clean: pos correction(Correct   num). 
 	t = p.now()
 	cr := p.Engine.Correct(CorrectRequest{Raw: raw})
 	emit("clean", "rule:filler+homophone+truncation", "正文纠错（Correct 纯函数）", p.now().Sub(t))
@@ -99,7 +99,7 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 	res.Corrections = cr.Corrections
 	res.Candidates = cr.Candidates
 
-	// 4) 词典：精确 + 目标近音。
+	// 4) word :    + objtgt audio. 
 	t = p.now()
 	detail := "词典纠错（JSON 快照）"
 	if reloaded {
@@ -112,14 +112,14 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 	}
 	emit("dict", "dictionary", detail, p.now().Sub(t)+hotMs)
 
-	// 4b) 缓存改写（热词/别名/近音，CACHE-001 K9）：**真的改变输出**才算接上。
+	// 4b) cachemodifywrite( word/diffname/ audio, CACHE-001 K9): **  modifychange out**only connecton. 
 	if p.Hot != nil {
 		t = p.now()
 		rewritten, corrs := p.Hot.Rewrite(res.Text)
 		res.Text = rewritten
 		res.Corrections = append(res.Corrections, corrs...)
-		// 改写留痕（§5.1 第 5 件）：detail 里带**具体改了哪些词**（From→To），
-		// 使"这个改错了"能被精确指认；数量有界（前 5 处），防无限长。
+		// modifywrite  (§5.1   5  ): detail   ** bodymodify  word**(From->To), 
+		//  "  modify " be  refer ; num hasboundary(before 5 place), preventnolimit . 
 		detail := "按热词/别名/近音改写（K9）"
 		if tr := rewriteTrace(corrs); tr != "" {
 			detail += "：改写留痕 " + tr
@@ -127,8 +127,8 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 		emit("hotcache", "cache:hotword+alias+edit", detail, p.now().Sub(t))
 	}
 
-	// 5) 标点恢复：只写 Punctuated（正文不动，C1 v2）。
-	//    无内容噪声不恢复标点（与 Engine 的 pureNoise 守卫一致，C3）。
+	// 5) tgtpt  : onlywrite Punctuated(pos   , C1 v2). 
+	//    noin  voice   tgtpt(and Engine   pureNoise     , C3). 
 	t = p.now()
 	punctDetail := "标点恢复（独立字段，不改正文）"
 	if isNoiseResult(res.Candidates) {
@@ -143,7 +143,7 @@ func (p *Pipeline) Process(raw, session string) ProcessResult {
 	return res
 }
 
-// isNoiseResult 报告引擎是否判定"整句无可用内容"（据此不恢复标点）。
+// isNoiseResult     is   " sentno usein "(data    tgtpt). 
 func isNoiseResult(cands []Candidate) bool {
 	for _, c := range cands {
 		if len(c.Reason) >= len(askNoiseReasonPrefix) && c.Reason[:len(askNoiseReasonPrefix)] == askNoiseReasonPrefix {
@@ -153,8 +153,8 @@ func isNoiseResult(cands []Candidate) bool {
 	return false
 }
 
-// rewriteTrace 把一次改写涉及的 From→To 序列化（有界：前 5 处；空 From/To 不参与）。
-// 它是"改写留痕"的正文：之后用户点〔这个改错了〕时，页面用 corrections 指认具体词。
+// rewriteTrace pipe  modifywrite and  From->To  listize(hasboundary: before 5 place; empty From/To   and). 
+//  is"modifywrite  " pos : ofafteruseuserpt   modify  time,  faceuse corrections refer  bodyword. 
 func rewriteTrace(corrs []Correction) string {
 	if len(corrs) == 0 {
 		return ""

@@ -1,7 +1,7 @@
 //go:build vhsref
 
-// zhiji_live_test.go —— 知己客户端**真端点**判据（VHS_ZHIJI_LIVE=1；key 只在环境/.env）。
-// curl 通了 ≠ 客户端代码通了（"看起来等价"第 5 次），所以必须跑这条。
+// zhiji_live_test.go --   clientuserend** endpoint** data(VHS_ZHIJI_LIVE=1; key only   /.env). 
+// curl   != clientuserend code (" raise etc "  5  ),  by     . 
 package ref
 
 import (
@@ -32,7 +32,7 @@ func TestLiveZhijiEvents(t *testing.T) {
 	if len(evs) == 0 {
 		t.Fatalf("知己返回 0 条事件（期望 count>0）")
 	}
-	// 尾随字节是**已知形态**，解析路径已在客户端内走通；这里断言字段可用
+	// tail charnodeis**already  state**, resolve pathalready clientuserendin  ;   disconnectlangcharseg use
 	if evs[0].Text == "" {
 		t.Errorf("首条事件 text 为空: %+v", evs[0])
 	}

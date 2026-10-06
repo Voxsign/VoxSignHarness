@@ -1,4 +1,4 @@
-// attribution_criteria_test.go —— 错误归因必须来自真实错误（先红→绿）。
+// attribution_criteria_test.go -- errorattribution      error(first -> ). 
 package pipeline
 
 import (
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// ① 401 ⇒ 必须说鉴权/API key，且**不得**出现"预算"或"网络"
+// ① 401 ⇒      /API key, and**  **outnow"  "or"  "
 func TestAttribution401IsAuthNotBudgetOrNetwork(t *testing.T) {
 	raw := `模型调用 HTTP 401: {"error":{"code":"invalid_api_key","message":"Invalid API key.","type":"auth_error"}}`
 	got := attributeLLMError(raw)
@@ -20,7 +20,7 @@ func TestAttribution401IsAuthNotBudgetOrNetwork(t *testing.T) {
 	}
 }
 
-// ② 5xx ⇒ 上游；超时 ⇒ 超时
+// ② 5xx ⇒ on ;  time ⇒  time
 func TestAttribution5xxAndTimeout(t *testing.T) {
 	if got := attributeLLMError("模型调用 HTTP 502: bad gateway"); !strings.Contains(got, "上游") {
 		t.Errorf("[归因②] 5xx 未归因到上游: %q", got)
@@ -33,7 +33,7 @@ func TestAttribution5xxAndTimeout(t *testing.T) {
 	}
 }
 
-// ③ 未知错误 ⇒ 必须说"未知" + **原始错误文本**（不许通用话术）
+// ③   error ⇒    "  " + **origstarterror base**( allow use  )
 func TestAttributionUnknownCarriesRawText(t *testing.T) {
 	raw := "some_weird_failure_xyz"
 	got := attributeLLMError(raw)
@@ -45,7 +45,7 @@ func TestAttributionUnknownCarriesRawText(t *testing.T) {
 	}
 }
 
-// ④ 空错误 ⇒ 不得冒充已知原因
+// ④ emptyerror ⇒    fillalready origbecause
 func TestAttributionEmptyIsUnknown(t *testing.T) {
 	got := attributeLLMError("")
 	if strings.Contains(got, "预算") || strings.Contains(got, "网络") {

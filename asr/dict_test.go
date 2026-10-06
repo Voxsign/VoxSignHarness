@@ -1,7 +1,7 @@
-// dict_test.go —— 第 1 批能力的**默认门禁**测试（不带 tag，随 `go test ./...` 常跑）。
+// dict_test.go --   1 approve   **default forbid**  (   tag,   `go test ./...`   ). 
 //
-// 与 `//go:build vhs002` 的判据不同：这里直接测库层（Dictionary/Tracer/Pipeline），
-// 不依赖 HTTP 服务，因此默认门禁就能守住这些新能力。
+// and `//go:build vhs002`   data same:    connect   (Dictionary/Tracer/Pipeline), 
+//  dependency HTTP serveservice, because default forbidthen     new  . 
 package asr
 
 import (
@@ -22,7 +22,7 @@ func newTestDict(t *testing.T) (*Dictionary, string) {
 	return d, path
 }
 
-// TestDictionaryPersistAcrossInstances：落盘后新实例可完整恢复（重启不丢）。
+// TestDictionaryPersistAcrossInstances:   afternew example finish   (heavystart  ). 
 func TestDictionaryPersistAcrossInstances(t *testing.T) {
 	d, path := newTestDict(t)
 	if err := d.Add(DictionaryEntry{RawSpeech: "哈牛斯", Target: "harness", Priority: 7, Source: "user_edit"}); err != nil {
@@ -44,7 +44,7 @@ func TestDictionaryPersistAcrossInstances(t *testing.T) {
 	}
 }
 
-// TestDictionaryVoiceInstructionAddsHomophone：语音指令 → 学会写法 → 近音召回。
+// TestDictionaryVoiceInstructionAddsHomophone: langaudiorefer  ->   write  ->  audio back. 
 func TestDictionaryVoiceInstructionAddsHomophone(t *testing.T) {
 	e, ok := ParseVoiceAdd("记住，冀总是冀中的冀")
 	if !ok || e.Target != "冀总" {
@@ -63,7 +63,7 @@ func TestDictionaryVoiceInstructionAddsHomophone(t *testing.T) {
 	}
 }
 
-// TestDictionaryDeleteNeedsConfirm：无确认不删除、不落盘（红线 #3）。
+// TestDictionaryDeleteNeedsConfirm: noconfirm delete,    ( line #3). 
 func TestDictionaryDeleteNeedsConfirm(t *testing.T) {
 	d, path := newTestDict(t)
 	if err := d.Add(DictionaryEntry{Target: "冀总", Source: "voice"}); err != nil {
@@ -89,7 +89,7 @@ func TestDictionaryDeleteNeedsConfirm(t *testing.T) {
 	}
 }
 
-// TestDictionaryHotReload：外部改 JSON 文件后 Reload 立即生效。
+// TestDictionaryHotReload: out modify JSON fileafter Reload  i.e.occur . 
 func TestDictionaryHotReload(t *testing.T) {
 	d, path := newTestDict(t)
 	if changed, _ := d.Reload(); changed {
@@ -108,7 +108,7 @@ func TestDictionaryHotReload(t *testing.T) {
 	}
 }
 
-// TestDictionaryBadJSONFailsOpen：坏 JSON 不覆盖旧快照、不 panic（需求 4.9）。
+// TestDictionaryBadJSONFailsOpen:   JSON  overwrite fast ,   panic(needrequire 4.9). 
 func TestDictionaryBadJSONFailsOpen(t *testing.T) {
 	d, path := newTestDict(t)
 	if err := d.Add(DictionaryEntry{RawSpeech: "哈牛斯", Target: "harness"}); err != nil {
@@ -125,7 +125,7 @@ func TestDictionaryBadJSONFailsOpen(t *testing.T) {
 	}
 }
 
-// TestTracerAppendOnlyJSONL：轨迹只追加、每行可解析、字段齐全。
+// TestTracerAppendOnlyJSONL: traceonly  ,    resolve , charseg safety. 
 func TestTracerAppendOnlyJSONL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "traces-asr.jsonl")
 	tr, err := NewTracer(path)
@@ -157,7 +157,7 @@ func TestTracerAppendOnlyJSONL(t *testing.T) {
 	}
 }
 
-// TestPipelineStepsAndTrace：管线步序固定、每步都留痕。
+// TestPipelineStepsAndTrace: manageline    ,   all  . 
 func TestPipelineStepsAndTrace(t *testing.T) {
 	d, _ := newTestDict(t)
 	tracePath := filepath.Join(t.TempDir(), "traces-asr.jsonl")
@@ -187,7 +187,7 @@ func TestPipelineStepsAndTrace(t *testing.T) {
 	}
 }
 
-// TestPipelineWithoutDictKeepsEngineSemantics：词典为空/null 时，管线不得改变引擎结果。
+// TestPipelineWithoutDictKeepsEngineSemantics: word asempty/null time, manageline  modifychange  close . 
 func TestPipelineWithoutDictKeepsEngineSemantics(t *testing.T) {
 	eng := NewEngine()
 	pipe := NewPipeline(eng, nil, nil)

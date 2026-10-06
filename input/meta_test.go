@@ -1,11 +1,11 @@
-// 元指令仲裁的边界测试（缺口 G3）。
+//  refer     boundary  (   G3). 
 //
-// G3 的真实危害：「开始测试」被判 TEST 0.85 且 test_kind="go test ./..." —— **真的去跑测试**。
-// 但这句话在对话里说的是"进入测试阶段"，是对话控制，不是执行命令。
+// G3      : "openstart  "be  TEST 0.85 and test_kind="go test ./..." -- **      **. 
+// but sent  to    is" in  stage", isto control,  is    . 
 //
-// 边界的关键是**长句豁免**：M7 真机教训「我想开始认真测一下，接下来把项目推进起来」
-// 曾被系统追问，项目已把它钉成回归用例（pipeline.TestCodexNineRegressions 第 8 条，
-// 断言 Ask 为空）。所以元指令只对**短句**生效 —— 长句里的「开始/推进」是叙述。
+//  boundary close is** sent  **: M7     "  openstart    under, connectunder pipe obj  raise "
+//  be    ,  objalreadypipe  becomeback useexample(pipeline.TestCodexNineRegressions   8  , 
+// disconnectlang Ask asempty).  by refer onlyto** sent**occur  --  sent  "openstart/  "is  . 
 package input
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestMetaInstructionAsksForDisambiguation G3 主线：短句元指令要消歧，且不得判 TEST。
+// TestMetaInstructionAsksForDisambiguation G3  line:  sent refer need  , and    TEST. 
 func TestMetaInstructionAsksForDisambiguation(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{"开始测试", "继续测试", "开始跑测试", "继续部署"} {
@@ -35,7 +35,7 @@ func TestMetaInstructionAsksForDisambiguation(t *testing.T) {
 	}
 }
 
-// TestMetaLongSentenceExempt 长句豁免：长句里的「开始/推进」是叙述，不是控制指令。
+// TestMetaLongSentenceExempt  sent  :  sent  "openstart/  "is  ,  iscontrolrefer . 
 func TestMetaLongSentenceExempt(t *testing.T) {
 	long := "我想开始认真测一下，接下来把项目推进起来"
 	c := NewTaskClassifier(0.6, nil)
@@ -48,14 +48,14 @@ func TestMetaLongSentenceExempt(t *testing.T) {
 	}
 }
 
-// TestMetaRequiresActionWord 纯元指令无动作可误执行，不必多问一句。
+// TestMetaRequiresActionWord   refer no      ,      sent. 
 func TestMetaRequiresActionWord(t *testing.T) {
 	for _, text := range []string{"开始", "继续", "暂停"} {
 		if _, ok := metaInstruction(text); ok {
 			t.Errorf("%q 无动作词，不应判元指令", text)
 		}
 	}
-	// 有动作词才算
+	// has  wordonly 
 	for _, text := range []string{"开始测试", "继续部署"} {
 		if _, ok := metaInstruction(text); !ok {
 			t.Errorf("%q 有动作词，应判元指令", text)
@@ -63,7 +63,7 @@ func TestMetaRequiresActionWord(t *testing.T) {
 	}
 }
 
-// TestMetaDoesNotBreakNormalCommands 正常指令不受影响。
+// TestMetaDoesNotBreakNormalCommands pos refer  accept  . 
 func TestMetaDoesNotBreakNormalCommands(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, wantIntent string }{
@@ -83,7 +83,7 @@ func TestMetaDoesNotBreakNormalCommands(t *testing.T) {
 	}
 }
 
-// TestNegationBeatsMeta 否定优先于元指令：「不要开始测试」应先判否定。
+// TestNegationBeatsMeta    firstat refer : " needopenstart  " first   . 
 func TestNegationBeatsMeta(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("不要开始测试")
@@ -93,10 +93,10 @@ func TestNegationBeatsMeta(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 评审 G3-P1 的反例回归：字数代理判据的两个方向都错。
+//    G3-P1  revexampleback : charnum   data    toall . 
 // ---------------------------------------------------------------------------
 
-// TestMetaMissedCasesReviewP1 原先会**漏判**的元指令（漏了就会真的去跑测试）。
+// TestMetaMissedCasesReviewP1 origfirst **  **  refer ( then       ). 
 func TestMetaMissedCasesReviewP1(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -115,7 +115,7 @@ func TestMetaMissedCasesReviewP1(t *testing.T) {
 	}
 }
 
-// TestMetaFalsePositiveCasesReviewP1 原先会**误判**的正常指令（误了就把该执行的变成回问）。
+// TestMetaFalsePositiveCasesReviewP1 origfirst **  ** pos refer ( thenpipe    changebecomeclarification). 
 func TestMetaFalsePositiveCasesReviewP1(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -131,7 +131,7 @@ func TestMetaFalsePositiveCasesReviewP1(t *testing.T) {
 	}
 }
 
-// TestMetaActionTextReviewP4 「暂停」类前缀不该被说成"继续推进"。
+// TestMetaActionTextReviewP4 " stop"classbefore   be become"continuecontinue  ". 
 func TestMetaActionTextReviewP4(t *testing.T) {
 	if text := metaActionText("暂停"); text == "继续推进" {
 		t.Error("P4: 「暂停」不该套用「继续推进」文案")

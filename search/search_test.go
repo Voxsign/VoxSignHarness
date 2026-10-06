@@ -62,7 +62,7 @@ func TestFindSymbol_FuncTypeConstVar(t *testing.T) {
 
 func TestFindSymbol_IgnoresVendorWhenNotFiltered(t *testing.T) {
 	root := writeTree(t)
-	// 不传 ignore：vendor/skip.go 也会被扫到（它是 .go）
+	//    ignore: vendor/skip.go also be to( is .go)
 	hits, _ := FindSymbol("VendorFunc", Options{Roots: []string{root}})
 	if len(hits) != 1 {
 		t.Fatalf("未过滤 ignore 时应命中 VendorFunc，实际 %+v", hits)
@@ -75,7 +75,7 @@ func TestFindText_SubstringAndIgnore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// foo.go(1 行) + bar.go(1 行) + note.txt(1 行) = 3 处
+	// foo.go(1  ) + bar.go(1  ) + note.txt(1  ) = 3 place
 	if len(hits) != 3 {
 		t.Fatalf("Hello 文本应命中 3 处，实际 %d: %+v", len(hits), hits)
 	}

@@ -7,14 +7,14 @@ import (
 	"voicesign-harness/contract"
 )
 
-// testSpaces 模拟 pipeline 注入的注册空间候选（VoxBuyBot 沙特女装项目 + 医疗耗材项目）。
+// testSpaces    pipeline notein note emptytime  (VoxBuyBot      obj +      obj). 
 var testSpaces = []SpaceHint{
 	{Name: "voxbuybot", Aliases: []string{"VoxBuyBot", "女装项目", "voxbuy"}},
 	{Name: "medsupply", Aliases: []string{"医疗耗材", "耗材"}},
 }
 
 func TestTaskClassifyNoteWithTimeAnchor(t *testing.T) {
-	// SPEC 验收用例 1：NOTE + 时间锚点
+	// SPEC  recvuseexample 1: NOTE + timetime pt
 	c := NewTaskClassifier(0.6, testSpaces)
 	got := c.ClassifyTask("记一下冀总那个厂房下周一出报价")
 	if got.Intent != contract.IntentNote {
@@ -35,7 +35,7 @@ func TestTaskClassifyNoteWithTimeAnchor(t *testing.T) {
 }
 
 func TestTaskClassifyEditWithSpace(t *testing.T) {
-	// SPEC v1 §2 示例：在 VoxBuyBot 里把错误提示改中文
+	// SPEC v1 §2 showexample:   VoxBuyBot  pipeerror showmodifyin 
 	c := NewTaskClassifier(0.6, testSpaces)
 	got := c.ClassifyTask("在 voxbuybot 里把错误提示改成中文")
 	if got.Intent != contract.IntentEdit {
@@ -60,14 +60,14 @@ func TestTaskClassifyConflicts(t *testing.T) {
 	cases := []struct {
 		text   string
 		want   string
-		conf   string // 期望 conflict 标记
+		conf   string // period  conflict tgt 
 		params map[string]string
 	}{
-		{"发个想法", contract.IntentNote, contract.ConflictNoteVsDeploy, nil},                               // 想法压制部署
-		{"查一下能不能跑测试", contract.IntentAsk, contract.ConflictAskVsOp, nil},                                // 可行性问句
-		{"删掉那条记录", contract.IntentEdit, contract.ConflictDelete, map[string]string{"action": "delete"}}, // 删除动词
-		{"修一下这个 bug 的思路", contract.IntentAsk, contract.ConflictDebugPlan, nil},                          // 修 bug 的思路
-		{"那个文件改好了吗", contract.IntentQuery, "", nil},                                                     // 状态问句 → QUERY
+		{"发个想法", contract.IntentNote, contract.ConflictNoteVsDeploy, nil},                               //    restrict  
+		{"查一下能不能跑测试", contract.IntentAsk, contract.ConflictAskVsOp, nil},                                //   ity sent
+		{"删掉那条记录", contract.IntentEdit, contract.ConflictDelete, map[string]string{"action": "delete"}}, // delete word
+		{"修一下这个 bug 的思路", contract.IntentAsk, contract.ConflictDebugPlan, nil},                          // fix bug   route
+		{"那个文件改好了吗", contract.IntentQuery, "", nil},                                                     // status sent -> QUERY
 	}
 	for _, tc := range cases {
 		got := c.ClassifyTask(tc.text)
@@ -137,8 +137,8 @@ func TestTaskClassifyUnknownAsks(t *testing.T) {
 }
 
 func TestTaskClassifyLowConfAsks(t *testing.T) {
-	// 低置信阈值测试：低于阈值且非 NOTE/ASK/REGISTER_TOOL → 回问
-	c := NewTaskClassifier(0.95, testSpaces) // 阈值抬高，让 0.9 的「把…改成」命中触发回问
+	// low-confidence value  :  at valueand  NOTE/ASK/REGISTER_TOOL -> clarification
+	c := NewTaskClassifier(0.95, testSpaces) //  value  ,   0.9  "pipe…modifybecome" intriggersendclarification
 	got := c.ClassifyTask("把那个改成这个")
 	if got.Intent != contract.IntentEdit {
 		t.Fatalf("意图 = %q, 期望 EDIT", got.Intent)
@@ -152,7 +152,7 @@ func TestTaskClassifyLowConfAsks(t *testing.T) {
 }
 
 func TestTaskClassifySpaceTieNoGuess(t *testing.T) {
-	// 平局不猜：两个同长度别名同时命中 → 不选
+	//     :   same  diffnamesametime in ->   
 	spaces := []SpaceHint{
 		{Name: "aa", Aliases: []string{"XY"}},
 		{Name: "bb", Aliases: []string{"XY"}},
@@ -177,7 +177,7 @@ func TestTaskClassifyLongTextTruncated(t *testing.T) {
 }
 
 func TestResolveTimeAnchor(t *testing.T) {
-	now := time.Date(2026, 10, 2, 10, 0, 0, 0, time.Local) // 2026-10-02 是周五
+	now := time.Date(2026, 10, 2, 10, 0, 0, 0, time.Local) // 2026-10-02 is  
 	cases := []struct {
 		text      string
 		wantHint  string
@@ -191,8 +191,8 @@ func TestResolveTimeAnchor(t *testing.T) {
 		{"下周一", "下周一", "2026-10-05", false},
 		{"下周五", "下周五", "2026-10-09", false},
 		{"下下周一", "下下周一", "2026-10-12", false},
-		{"本周六", "本周六", "2026-10-03", false}, // 本周六（今天周五）
-		{"周五", "周五", "2026-10-02", true},    // 裸周X 恰为今天 → 今天 vs 下周 歧义，回问候选
+		{"本周六", "本周六", "2026-10-03", false}, // base  ( day  )
+		{"周五", "周五", "2026-10-02", true},    //   X  as day ->  day vs under    , clarification  
 		{"没有时间词", "", "", false},
 	}
 	for _, tc := range cases {

@@ -1,10 +1,10 @@
 package input
 
-// punctuate_test.go —— M7 server 端标点后处理兜底的验证器（纯规则，备路径不接线）。
+// punctuate_test.go -- M7 server endtgtptafterhandle bot    ( rule,  path connectline). 
 
 import "testing"
 
-// TestPunctuateSentenceEnd 陈述句末自动落「。」。
+// TestPunctuateSentenceEnd   sentend   ". ". 
 func TestPunctuateSentenceEnd(t *testing.T) {
 	in := "把那个错误提示改成中文"
 	got := Punctuate(in)
@@ -13,7 +13,7 @@ func TestPunctuateSentenceEnd(t *testing.T) {
 	}
 }
 
-// TestPunctuateQuestion 疑问句（疑问词命中）句末落「？」。
+// TestPunctuateQuestion   sent(  word in)sentend " ". 
 func TestPunctuateQuestion(t *testing.T) {
 	cases := map[string]string{
 		"这个报价客户是哪家":  "这个报价客户是哪家？",
@@ -28,7 +28,7 @@ func TestPunctuateQuestion(t *testing.T) {
 	}
 }
 
-// TestPunctuateIdempotent 已带句末标点的文本不重加；重复调用结果一致。
+// TestPunctuateIdempotent already sentendtgtpt  base heavy ; heavy calluseclose   . 
 func TestPunctuateIdempotent(t *testing.T) {
 	already := "把那个错误提示改成中文。"
 	if got := Punctuate(already); got != already {
@@ -38,7 +38,7 @@ func TestPunctuateIdempotent(t *testing.T) {
 	if got := Punctuate(question); got != question {
 		t.Errorf("已带问号不应改动: got %q", got)
 	}
-	// 幂等：对结果再调用一次仍等于结果。
+	//  etc: toclose againcalluse   etcatclose . 
 	once := Punctuate("查一下昨天订单")
 	twice := Punctuate(once)
 	if once != twice {
@@ -46,7 +46,7 @@ func TestPunctuateIdempotent(t *testing.T) {
 	}
 }
 
-// TestPunctuateNoPunctuationForCode 数字/英文/URL/代码路径不加标点。
+// TestPunctuateNoPunctuationForCode numchar/  /URL/ codepath  tgtpt. 
 func TestPunctuateNoPunctuationForCode(t *testing.T) {
 	cases := []string{
 		"go test ./...",

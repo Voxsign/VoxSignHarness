@@ -1,10 +1,10 @@
 //go:build vhsg1
 
-// no_guess_criteria_test.go —— **错配门槛**（Lead 裁决：先治错配，再治未命中）。
+// no_guess_criteria_test.go -- **    **(Lead  decide: first   , again   in). 
 //
-// 通用性质：若最高候选与次高候选的**分数差 < 阈值** ⇒ **不得匹配**（宁可未命中，不猜）。
-// 与 VHS-ZHIJI-001 §2.1「宁可回问，不猜」、JEV 的 ambiguous 是同一个机制。
-// 阈值标 UNVALIDATED。
+//  useity : if    and     **splitnumdiff <  value** ⇒ **    **(    in,   ). 
+// and VHS-ZHIJI-001 §2.1"  clarification,   ", JEV   ambiguous issame   restrict. 
+//  valuetgt UNVALIDATED. 
 package hotcache
 
 import (
@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// ① 具体判据：`哎ops` **不许**再配到 `aiops-portal`。
+// ①  body data: ` ops` ** allow**again to `aiops-portal`. 
 func TestNoGuessOhOpsNeverMismatches(t *testing.T) {
 	c := g1Cache(t)
 	res, ok := c.Lookup("哎ops")
 	if ok && res.Canonical == "aiops-portal" {
 		t.Fatalf("[错配门槛] 仍然错配到 aiops-portal（route=%s）—— 错配比未命中更危险", res.Route)
 	}
-	// 允许：正确命中 aiops；或明确不匹配（NeedEscalate）
+	//  allow: pos  in aiops; or     (NeedEscalate)
 	if ok && res.Canonical != "aiops" {
 		t.Errorf("[错配门槛] 命中了一个既非期望也非不匹配的结果: %+v", res)
 	}
@@ -29,10 +29,10 @@ func TestNoGuessOhOpsNeverMismatches(t *testing.T) {
 	}
 }
 
-// ② 通用性质：两个候选分数接近 ⇒ 不得匹配。
+// ②  useity :     splitnumconnect  ⇒     . 
 func TestNoGuessTieRefusesToMatch(t *testing.T) {
 	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
-	// 构造两个与输入**距离相同**的候选：abc 与 abd（输入 abx，距离各 1）
+	//     and in**   same**   : abc and abd( in abx,     1)
 	c.PutAlias("abc", "canon-abc", "remote")
 	c.PutAlias("abd", "canon-abd", "remote")
 	res, ok := c.Lookup("abx")
@@ -44,7 +44,7 @@ func TestNoGuessTieRefusesToMatch(t *testing.T) {
 	}
 }
 
-// ③ 不退化：唯一近邻仍应正常命中（否则门槛把能力也砍掉了）。
+// ③   ize: unique    pos  in( then  pipe  also  ). 
 func TestNoGuessUniqueNeighborStillMatches(t *testing.T) {
 	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
 	c.PutAlias("voice-sign", "voice-sign", "remote")
@@ -54,42 +54,42 @@ func TestNoGuessUniqueNeighborStillMatches(t *testing.T) {
 	}
 }
 
-// G1-② 混排规范化 + 防治过头。
+// G1-②   rule ize + prevent edhead. 
 func TestG1MixedNormalizationAndGuards(t *testing.T) {
 	c := g1Cache(t)
-	// 正例：哎ops → aiops（混排归一）
+	// posexample:  ops -> aiops(    )
 	res, ok := c.Lookup("哎ops")
 	if !ok || res.Canonical != "aiops" {
 		t.Errorf("[G1-②] 混排未归一到 aiops: %+v ok=%v", res, ok)
 	}
-	// 反例：纯拉丁串不得被误伤（voice-signn 仍走编辑距离命中 voice-sign）
+	// revexample:       be  (voice-signn        in voice-sign)
 	if r, ok := c.Lookup("voice-signn"); !ok || r.Canonical != "voice-sign" {
 		t.Errorf("[G1-② 防过头] 纯拉丁串被误伤: %+v ok=%v", r, ok)
 	}
-	// 反例：`哎ops` 也不得重新错配到 aiops-portal
+	// revexample: ` ops` also  heavynew  to aiops-portal
 	if r, ok := c.Lookup("哎ops"); ok && r.Canonical == "aiops-portal" {
 		t.Errorf("[G1-② 防回退] 又错配到 aiops-portal: %+v", r)
 	}
 }
 
-// 通用判据（Lead 裁决）：**任何归一化，若归一结果对应多个 canonical ⇒ 不得匹配**
-// （例外：其中一个 canonical 就是"规范词自身" ⇒ 它优先）。
-// 理由："归一"天生多对一，所以"归一后必须唯一"是每条归一化规则的条件，不是某个词的修补。
+//  use data(Lead  decide): **    ize, if  close to    canonical ⇒     **
+// (exampleout: itsin   canonical thenis"rule word  " ⇒   first). 
+//  by: "  "dayoccur to ,  by"  after  unique"is    izerule   ,  is  word fixpatch. 
 func TestNormalizationMustBeUniqueOrRefuse(t *testing.T) {
-	// ① 多解 ⇒ 拒绝：两个不同 canonical 归一到同一键（爱ops / aiops 同构）
+	// ①  resolve ⇒ reject:    same canonical   tosame  ( ops / aiops same )
 	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
-	c.PutAlias("爱ops", "canon-A", "remote")  // 归一 → aiops
-	c.PutAlias("aiops", "canon-B", "remote") // 归一 → aiops（自身）
-	res, ok := c.Lookup("哎ops")              // 归一 → aiops
+	c.PutAlias("爱ops", "canon-A", "remote")  //    -> aiops
+	c.PutAlias("aiops", "canon-B", "remote") //    -> aiops(  )
+	res, ok := c.Lookup("哎ops")              //    -> aiops
 	if ok && res.Canonical != "canon-B" && res.Canonical != "" {
-		// 允许：规范词自身（canon-B）优先；否则必须拒绝
+		//  allow: rule word  (canon-B) first;  then  reject
 		t.Errorf("[归一唯一性] 多解却给了非自身答案（猜）: %+v", res)
 	}
 	if !ok && !res.NeedEscalate {
 		t.Errorf("[归一唯一性] 拒绝匹配时必须给升级信号: %+v", res)
 	}
 
-	// ② 例外：规范词自身命中 ⇒ 优先（不是"拒绝"）
+	// ② exampleout: rule word   in ⇒  first( is"reject")
 	c2 := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
 	c2.PutAlias("aiops", "aiops", "remote")
 	c2.PutAlias("爱ops", "aiops-portal", "remote")
@@ -98,7 +98,7 @@ func TestNormalizationMustBeUniqueOrRefuse(t *testing.T) {
 		t.Errorf("[归一唯一性] 规范词自身优先未生效: %+v ok=%v", r2, ok2)
 	}
 
-	// ③ 无歧义 ⇒ 正常命中（防"一律拒绝"的过度保守）
+	// ③ no   ⇒ pos  in(prevent"  reject" ed keep )
 	c3 := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
 	c3.PutAlias("哎ops", "aiops", "remote")
 	r3, ok3 := c3.Lookup("哎ops")
@@ -107,37 +107,37 @@ func TestNormalizationMustBeUniqueOrRefuse(t *testing.T) {
 	}
 }
 
-// G1-③ 拉丁近似容差 + 两类反例。
+// G1-③      diff +  classrevexample. 
 func TestG1LatinToleranceAndGuards(t *testing.T) {
 	c := g1Cache(t)
-	// 反例一：容差放大后 `哎ops` **不得**重新错配（脚本里已断言，这里再钉一次）
+	// revexample :  diff  after ` ops` **  **heavynew  ( base alreadydisconnectlang,   again   )
 	if r, ok := c.Lookup("哎ops"); ok && r.Canonical == "aiops-portal" {
 		t.Errorf("[G1-③ 防回退] 又错配到 aiops-portal: %+v", r)
 	}
-	// 反例二：**不相干的拉丁串不得被匹配**
+	// revexample : **         be  **
 	if r, ok := c.Lookup("zzzqqqxxyy"); ok {
 		t.Errorf("[G1-③ 防治过头] 不相干的拉丁串被匹配: %+v", r)
 	}
 }
 
-// 别名两用途分离（Lead 裁决）：通用词**可路由、不可改写**。
+// diffname usewaysplit (Lead  decide):  useword** routeby,   modifywrite**. 
 func TestRewriteScopeGenericWordsNotRewritten(t *testing.T) {
 	c := New(filepath.Join(t.TempDir(), "c.json"), time.Minute, nil)
-	c.PutAlias("文件", "file-store", "remote")     // 通用词（observed 导致改坏）
-	c.PutAlias("爱ops", "aiops-portal", "remote") // 专名变形
+	c.PutAlias("文件", "file-store", "remote")     //  useword(observed   modify )
+	c.PutAlias("爱ops", "aiops-portal", "remote") //  namechange 
 
-	// ① 通用词：路由可命中，**改写不得命中**
+	// ①  useword: routeby  in, **modifywrite   in**
 	if _, ok := c.Lookup("文件"); !ok {
 		t.Errorf("[改写域] 路由应仍能用通用词")
 	}
 	if r, ok := c.LookupForRewrite("文件"); ok {
 		t.Errorf("[改写域] 通用词被允许改写（会改坏正常句子）: %+v", r)
 	}
-	// ② 专名变形：改写仍必须命中（防治过头）
+	// ②  namechange : modifywrite    in(prevent edhead)
 	if r, ok := c.LookupForRewrite("爱ops"); !ok || r.Canonical != "aiops-portal" {
 		t.Errorf("[改写域] 专名变形被误杀: %+v ok=%v", r, ok)
 	}
-	// ③ 通用词清单必须显式登记
+	// ③  usewordlist   form  
 	if _, ok := GenericRewriteBlocklist()["文件"]; !ok {
 		t.Errorf("[改写域] 通用词清单未显式登记「文件」")
 	}

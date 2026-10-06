@@ -1,9 +1,9 @@
-// evidence_criteria_test.go —— basis 判据族 + `verified` 来源定义（先红→绿）。
+// evidence_criteria_test.go -- basis  data  + `verified`   define(first -> ). 
 package skill
 
 import "testing"
 
-// ① **只有已执行的 check 能产生 verified**；调用方自称一律 hearsay
+// ① **onlyhasalready    check  produceoccur verified**; calluse  called   hearsay
 func TestBasisVerifiedOnlyFromExecutedCheck(t *testing.T) {
 	if c := ClaimedByCaller("我保证这个是对的"); c.IsVerified() {
 		t.Errorf("[basis] 调用方口头主张被判成 verified（架空 basis 规则）: %+v", c)
@@ -12,18 +12,18 @@ func TestBasisVerifiedOnlyFromExecutedCheck(t *testing.T) {
 	if err != nil || !ok.IsVerified() {
 		t.Errorf("[basis] 已执行 check 应产生 verified: %+v err=%v", ok, err)
 	}
-	// 未通过 ⇒ 不算已查证
+	//   ed ⇒   already  
 	fail, _ := ExecutedCheck("checkX", false, "跑失败")
 	if fail.IsVerified() {
 		t.Errorf("[basis] 未通过的 check 不应算 verified")
 	}
-	// checkID 缺失 ⇒ 报错（verified 必须有来源）
+	// checkID    ⇒   (verified   has  )
 	if _, err := ExecutedCheck("", true, "无来源"); err == nil {
 		t.Errorf("[basis] 缺 checkID 却接受了 verified")
 	}
 }
 
-// ② 族规则：可追溯 > 不可追溯；已执行 > 口头；范式优先只在打平时生效
+// ②  rule:     >     ; already   >  head;  form firstonly   timeoccur 
 func TestBasisFamilyRanking(t *testing.T) {
 	traceable := ClaimedByCaller("有 URL 的转述").WithTraceable(true)
 	untraceable := ClaimedByCaller("听说").WithTraceable(false)
@@ -38,7 +38,7 @@ func TestBasisFamilyRanking(t *testing.T) {
 		t.Errorf("[basis] 已执行未优先于可追溯口头: %+v deg=%v", got2, deg2)
 	}
 
-	// ④ 范式优先：**必须来自已执行的 check**（口头自称不算）
+	// ④  form first: **    already    check**( head called  )
 	paradigm, err := ExecutedParadigmCheck("checkParadigm", true, "核电旧经验（经 check 认定）")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestBasisFamilyRanking(t *testing.T) {
 	}
 }
 
-// ③ 反例：**全都只有口头主张 ⇒ 必须 degraded=true**（不许当成已核实）
+// ③ revexample: **safetyallonlyhas head   ⇒    degraded=true**( allowcurbecomealready  )
 func TestBasisOnlyHearsayIsDegraded(t *testing.T) {
 	a := ClaimedByCaller("一方称 A").WithTraceable(true)
 	b := ClaimedByCaller("一方称 B")
@@ -58,13 +58,13 @@ func TestBasisOnlyHearsayIsDegraded(t *testing.T) {
 	if !degraded {
 		t.Errorf("[basis 反例] 全为口头主张却未标 degraded")
 	}
-	// 空证据 ⇒ degraded
+	// empty data ⇒ degraded
 	if _, d := RankByEvidence(nil); !d {
 		t.Errorf("[basis 反例] 空证据应 degraded")
 	}
 }
 
-// ④ 反例（Lead 裁决）：**"这是新范式"不能口头主张** —— 只有已执行 check 能置 paradigm。
+// ④ revexample(Lead  decide): **" isnew form"   head  ** -- onlyhasalready   check    paradigm. 
 func TestBasisParadigmCannotBeClaimed(t *testing.T) {
 	fake := ClaimedByCaller("我这个是 AI 原生范式")
 	if fake.IsParadigm() {

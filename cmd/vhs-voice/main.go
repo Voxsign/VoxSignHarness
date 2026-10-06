@@ -1,12 +1,12 @@
-// vhs-voice：VHS 语音适配层（需求规格 v1，2026-10-04）。
+// vhs-voice: VHS langaudio   (needrequirerule  v1, 2026-10-04). 
 //
-// 让「手机端语音 → 后台长程任务」真正跑通：手机端把语音识别成文本后，
-// 先进本适配层——去噪提意 → 复合指令拆单任务 → 域/对象补全 →
-// 逐个投递主 harness（POST /v1/tasks + 轮询 GET /v1/tasks/{id}）→ 语音友好汇总。
+//  "mobile clientlangaudio -> after   task" pos  : mobile clientpipelangaudio diffbecome baseafter, 
+// first base   --     ->   refer   task -> domain/to patchsafety ->
+//       harness(POST /v1/tasks + poll GET /v1/tasks/{id})-> langaudio    . 
 //
-// 仅标准库，零第三方依赖。端口默认 8950（VHS_VOICE_ADDR 覆盖），
-// 上游主 harness 默认 http://127.0.0.1:8941（VHS_UPSTREAM 覆盖）。
-// 会话记忆：<dataDir>/voice_sessions/<conversation_id>.jsonl（可审计）。
+// onlytgtapprove ,     dependency. portdefault 8950(VHS_VOICE_ADDR overwrite), 
+// on   harness default http://127.0.0.1:8941(VHS_UPSTREAM overwrite). 
+//     : <dataDir>/voice_sessions/<conversation_id>.jsonl(   ). 
 package main
 
 import (
@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------- 词表
+// ---------------------------------------------------------------- wordtable
 
 var fillers = []string{
 	"就是", "那个", "对吧", "好不好", "好吧", "怎么样", "然后",
@@ -51,7 +51,7 @@ var objectPatterns = []struct {
 	{"测试", regexp.MustCompile(`测试\s*([\w\-./@:]+)`)},
 }
 
-// 动作 → 对象类别（resolve 用，按类别从会话历史补全对象）。
+//    -> to classdiff(resolve use, byclassdifffrom    patchsafetyto ). 
 var actionKindMap = map[string]string{
 	"拉取": "GitHub 仓库", "更新": "GitHub 仓库", "提交": "GitHub 仓库",
 	"编译": "服务", "启动": "服务", "部署": "服务", "安装": "服务",
@@ -59,7 +59,7 @@ var actionKindMap = map[string]string{
 	"执行": "需求", "实现": "需求", "报告": "需求", "分析": "需求", "对比": "需求",
 }
 
-// ---------------------------------------------------------------- 类型
+// ---------------------------------------------------------------- classtype
 
 type voiceAction struct {
 	Action string `json:"action"`
@@ -111,7 +111,7 @@ type runTask struct {
 	Question string `json:"question,omitempty"`
 }
 
-// sessionRecord 是写入会话 JSONL 的审计记录（append-only）。
+// sessionRecord iswrite   JSONL      (append-only). 
 type sessionRecord struct {
 	TS             time.Time      `json:"ts"`
 	ConversationID string         `json:"conversation_id"`
@@ -130,7 +130,7 @@ type server struct {
 	client   *http.Client
 }
 
-// ---------------------------------------------------------------- 端点
+// ---------------------------------------------------------------- endpoint
 
 func main() {
 	addr := envOr("VHS_VOICE_ADDR", "8950")
@@ -211,7 +211,7 @@ func parseSpoken(text string) parseResp {
 			removed = append(removed, f)
 		}
 	}
-	// 清理残留空格/顿号粘连
+	//     empty / id link
 	text = strings.Join(strings.Fields(text), " ")
 	actions := extractActions(text)
 	return parseResp{Clean: strings.TrimSpace(text), Actions: actions, NoiseRemoved: uniqKeep(removed)}
@@ -219,7 +219,7 @@ func parseSpoken(text string) parseResp {
 
 func extractActions(text string) []voiceAction {
 	var actions []voiceAction
-	// 动作优先匹配，取首词
+	//    first  , getfirstword
 	firstVerb := ""
 	for _, v := range actionVerbs {
 		if strings.Contains(text, v) {
@@ -241,7 +241,7 @@ func extractObject(text string) string {
 			return p.kind + " " + strings.TrimSpace(m[1])
 		}
 	}
-	// 非模式对象：动作词之后的名词短语（去修饰词/连接词）
+	//   formto :   wordofafter nameword lang( fix word/linkconnectword)
 	if idx := indexOfAnyVerb(text); idx >= 0 {
 		rest := strings.TrimSpace(text[idx+len(firstVerbAt(text)):])
 		rest = trimModifiers(rest)
@@ -275,7 +275,7 @@ func firstVerbAt(text string) string {
 	return ""
 }
 
-// trimLinkVerbPrefix 剥离"并/和/且 + 动作词"前缀（如「编译并启动服务」→「服务」）。
+// trimLinkVerbPrefix   "and/and/and +   word"before (e.g."  andstart serveservice"->"serveservice"). 
 func trimLinkVerbPrefix(s string) string {
 	links := []string{"并", "和", "且", "然后"}
 	for {
@@ -334,7 +334,7 @@ func (s *server) handleDecompose(w http.ResponseWriter, r *http.Request) {
 }
 
 func decomposeText(clean string) decomposeResp {
-	// 按分隔符切短语
+	// bysplit    lang
 	phrases := splitPhrases(clean)
 	tasks := []taskItem{}
 	seq := 1
@@ -394,7 +394,7 @@ func (s *server) resolve(conversationID string, actions []voiceAction) resolveRe
 		case a.Target != "":
 			item.Source = "explicit"
 		default:
-			// session：最近 3 条里按动作类别找对象
+			// session:    3   by  classdiff to 
 			if t, ok := s.findFromSession(conversationID, a.Action); ok {
 				item.Target = t
 				item.Source = "session"
@@ -414,7 +414,7 @@ func (s *server) findFromSession(conversationID, action string) (string, bool) {
 		return "", false
 	}
 	recs := s.readRecentSession(conversationID, 3)
-	// 从近到远
+	// from to 
 	for i := len(recs) - 1; i >= 0; i-- {
 		rec := recs[i]
 		cands := []string{}
@@ -458,7 +458,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	rs := s.resolve(cid, mapActions(p.Actions, dc.Tasks))
 	s.appendRecord(p.Clean, cid, "resolve", p.Clean, p.Actions, dc.Tasks, rs.Resolved, nil)
 
-	// 4. 逐个投递上游
+	// 4.     on 
 	tasks := []runTask{}
 	next := []string{}
 	if len(dc.Tasks) == 0 {
@@ -467,7 +467,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for i, t := range dc.Tasks {
 			rt := runTask{Seq: t.Seq, Action: t.Action, Target: t.Target}
-			// 未补全对象 → pending_resolve，不投递
+			//  patchsafetyto  -> pending_resolve,    
 			if t.Target == "" || t.Target == "unresolved" {
 				rt.Status = "pending_resolve"
 				rt.Result = "对象未补全，待确认"
@@ -511,7 +511,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runResp{Summary: summary, Tasks: tasks, Next: next})
 }
 
-// mapActions 用 decompose 的 action/target 覆盖 parse 的动作清单（decompose 更细）。
+// mapActions use decompose   action/target overwrite parse    list(decompose change ). 
 func mapActions(parsed []voiceAction, tasks []taskItem) []voiceAction {
 	if len(tasks) > 0 {
 		out := []voiceAction{}
@@ -523,7 +523,7 @@ func mapActions(parsed []voiceAction, tasks []taskItem) []voiceAction {
 	return parsed
 }
 
-// dispatchUpstream 投递单任务到主 harness 并轮询至终态。
+// dispatchUpstream    taskto  harness andpoll endstate. 
 func (s *server) dispatchUpstream(cid, document string, t taskItem) (taskID, status, question, result string, err error) {
 	payload := map[string]any{
 		"text":            fmt.Sprintf("%s %s", t.Action, t.Target),
@@ -552,7 +552,7 @@ func (s *server) dispatchUpstream(cid, document string, t taskItem) (taskID, sta
 	if created.Error != "" {
 		return "", "", "", "", errors.New(created.Error)
 	}
-	// 轮询
+	// poll
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		st, q, res := s.pollTask(created.TaskID)
@@ -562,7 +562,7 @@ func (s *server) dispatchUpstream(cid, document string, t taskItem) (taskID, sta
 			question = q
 			result = summarizeResult(res)
 			return created.TaskID, status, question, result, nil
-		default: // running / 其它
+		default: // running / its 
 			if time.Now().After(deadline) {
 				return created.TaskID, "failed", "", "轮询超时", nil
 			}
@@ -605,17 +605,17 @@ func (s *server) pollTask(taskID string) (status, question, result string) {
 	return st, q, res
 }
 
-// summarizeResult 把 receipt JSON 压成一行短句（语音友好 ≤120 字）。
+// summarizeResult pipe receipt JSON  become   sent(langaudio   <=120 char). 
 func summarizeResult(receiptJSON string) string {
 	if receiptJSON == "" {
 		return "已完成"
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(receiptJSON), &m); err != nil {
-		// 截断原样
+		//  disconnectorigkind
 		return cut(receiptJSON, 120)
 	}
-	// 尝试取 view.result / view.Result / result 字段
+	//   get view.result / view.Result / result charseg
 	for _, k := range []string{"view.result", "view.Result", "result"} {
 		if v, ok := getPath(m, k); ok {
 			return cut(fmt.Sprint(v), 120)
@@ -648,7 +648,7 @@ func cut(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// ---------------------------------------------------------------- E6 回读
+// ---------------------------------------------------------------- E6 backread
 
 func (s *server) handleTasksHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -661,7 +661,7 @@ func (s *server) handleTasksHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recs := s.readSession(cid)
-	// 汇总所有 run 阶段任务，去重（按 task_id/seq）
+	//    has run stagetask,  heavy(by task_id/seq)
 	seen := map[string]bool{}
 	tasks := []taskItem{}
 	for _, rec := range recs {
@@ -680,7 +680,7 @@ func (s *server) handleTasksHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---------------------------------------------------------------- 会话审计
+// ----------------------------------------------------------------     
 
 func (s *server) appendRecord(raw, cid, phase, clean string, actions []voiceAction, tasks []taskItem, resolved []resolvedItem, runTasks []runTask) {
 	rec := sessionRecord{
@@ -758,7 +758,7 @@ func sessionCount(dataDir string) (int, error) {
 	return n, nil
 }
 
-// ---------------------------------------------------------------- 工具
+// ----------------------------------------------------------------   
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.Method != http.MethodPost {

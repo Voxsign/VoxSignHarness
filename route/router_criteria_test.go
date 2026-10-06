@@ -1,6 +1,6 @@
 //go:build vhsroute
 
-// router_criteria_test.go —— FASTSLOW-001 三层路由的硬要求（先红 → 绿）。
+// router_criteria_test.go -- FASTSLOW-001   routeby  needrequire(first  ->  ). 
 package route
 
 import (
@@ -36,7 +36,7 @@ func hotCache(t *testing.T) *hotcache.Cache {
 	return c
 }
 
-// ① L0 命中即返回，**不问任何模型**。
+// ① L0  ini.e.returnback, **     type**. 
 func TestL0HitNeverCallsModel(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "other", Confidence: 0.99}}
 	r := &Router{Hot: hotCache(t), JEV: jev}
@@ -52,7 +52,7 @@ func TestL0HitNeverCallsModel(t *testing.T) {
 	}
 }
 
-// ② ambiguous ⇒ 回问用户，**不升 L1**。
+// ② ambiguous ⇒ clarificationuseuser, **   L1**. 
 func TestAmbiguousAsksUserNotEscalate(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "ambiguous", Confidence: 0.55, Reason: "候选区分度不足", ModelID: "jev-v1-rules"}}
 	r := &Router{Hot: hotCache(t), JEV: jev}
@@ -70,7 +70,7 @@ func TestAmbiguousAsksUserNotEscalate(t *testing.T) {
 	}
 }
 
-// ③ 非 200/超时 ⇒ 当 JEV 不可用 ⇒ 降级 L0 + degraded（不假设它总对）。
+// ③   200/ time ⇒ cur JEV   use ⇒    L0 + degraded(     to). 
 func TestJEVFailureDegradesToL0(t *testing.T) {
 	jev := &fakeJEV{err: errors.New("HTTP 502（按不可用处理）")}
 	r := &Router{Hot: hotCache(t), JEV: jev}
@@ -86,7 +86,7 @@ func TestJEVFailureDegradesToL0(t *testing.T) {
 	}
 }
 
-// ④ 判断入工作记忆必须标 judged_by=jev，**不得与事实混放**。
+// ④  disconnectin      tgt judged_by=jev, **  and    **. 
 func TestJudgementMarkedJudgedBy(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "allow", Confidence: 0.88, ModelID: "jev-v1-rules"}}
 	r := &Router{Hot: hotCache(t), JEV: jev}
@@ -102,7 +102,7 @@ func TestJudgementMarkedJudgedBy(t *testing.T) {
 	}
 }
 
-// ① 场景分派：kind 按信号词选择，不再恒为 custom。
+// ①  scenariosplit : kind bysignalword  ,  again as custom. 
 func TestKindDispatchByScenario(t *testing.T) {
 	cases := map[string]Kind{
 		"能不能写入 vault-creds": KindPermission,
@@ -116,14 +116,14 @@ func TestKindDispatchByScenario(t *testing.T) {
 			t.Errorf("[kind 分派] %q → %q，期望 %q", text, got, want)
 		}
 	}
-	// 具名类型保证：非法值在编译期写不出来（此断言只是防回退为 string）
+	//  nameclasstypekeep :   value   periodwrite out ( disconnectlangonlyispreventback as string)
 	var k Kind = KindPermission
 	if string(k) != "permission" {
 		t.Errorf("Kind 常量值不符: %q", k)
 	}
 }
 
-// ① 四块板 → situation 结构桥接（J2：紧凑结构化，不是长文本）。
+// ①     -> situation close  connect(J2:   close ize,  is  base). 
 func TestSituationFromMemoryBridgesBoards(t *testing.T) {
 	w := &plan.WorkingMemory{}
 	w.Remember("working_set", plan.BoardItem{Element: "文件:plan/planner.go", Source: "上一轮"})
@@ -140,7 +140,7 @@ func TestSituationFromMemoryBridgesBoards(t *testing.T) {
 	if len(sit.Memory) != 2 {
 		t.Errorf("[桥接] memory 应含情景板+待决板: %+v", sit.Memory)
 	}
-	// 判断条目必须带（判断）标记，不与事实混放
+	//  disconnect obj   ( disconnect)tgt ,  and    
 	w2 := &plan.WorkingMemory{}
 	w2.Remember("working_set", plan.BoardItem{Element: "判断:allow", Source: "jev", JudgedBy: "jev"})
 	if s := SituationFromMemory(w2); !strings.Contains(s.Candidates[0].Why, "判断") {
@@ -148,7 +148,7 @@ func TestSituationFromMemoryBridgesBoards(t *testing.T) {
 	}
 }
 
-// ① kind 真的被送到 JEV（不是留在本地）。
+// ① kind   be to JEV( is  basely). 
 func TestKindIsSentToJEV(t *testing.T) {
 	var got Kind
 	jev := &recordingJEV{record: func(r JEVRequest) { got = r.Kind }}
@@ -189,7 +189,7 @@ func (f *fakeL1) Complete(ctx context.Context, prompt string) (string, error) {
 	return f.out, f.err
 }
 
-// 第二梯队：网关 /api/route 唯一命中 ⇒ L0 返回，**不调 JEV**（顺序铁律）。
+//     :  close /api/route unique in ⇒ L0 returnback, ** call JEV**(    ). 
 func TestGatewayRouteSecondTierAvoidsJEV(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
 	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{name: "cicd", ok: true}, JEV: jev}
@@ -202,7 +202,7 @@ func TestGatewayRouteSecondTierAvoidsJEV(t *testing.T) {
 	}
 }
 
-// 第二梯队不可用 ⇒ fail-open 落到 L0.5，且**留痕**（不可用 ≠ 没有）。
+//       use ⇒ fail-open  to L0.5, and**  **(  use !=  has). 
 func TestGatewayRouteUnavailableFallsThroughWithTrace(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "cicd", Confidence: 0.9, ModelID: "jev-v1-rules"}}
 	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{err: errors.New("HTTP 502（按不可用处理）")}, JEV: jev}
@@ -221,7 +221,7 @@ func TestGatewayRouteUnavailableFallsThroughWithTrace(t *testing.T) {
 	}
 }
 
-// kind 落空可见：分派落到 custom ⇒ 台账必须记 kind_fallback=true。
+// kind  empty see: split  to custom ⇒       kind_fallback=true. 
 func TestKindFallbackIsVisible(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
 	r := &Router{Hot: hotCache(t), JEV: jev}
@@ -237,11 +237,11 @@ func TestKindFallbackIsVisible(t *testing.T) {
 	}
 }
 
-// 升级只有两个触发器之一：调用方声明"需要多步推理"；**不因"想更准"升级**。
+//   onlyhas  triggersend of : calluse voice "needneed    "; ** because" changeapprove"  **. 
 func TestEscalationOnlyOnReasoningNeed(t *testing.T) {
 	l1 := &fakeL1{out: "多步方案：先 A 再 B"}
 	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.99, ModelID: "jev-v1-rules"}}
-	// (a) 明确需要多步推理 ⇒ 升 L1
+	// (a)   needneed     ⇒   L1
 	r1 := &Router{Hot: hotCache(t), JEV: jev, L1: l1, NeedsReasoning: true}
 	d1 := r1.Route(context.Background(), "先查库存再改报价最后提交", "多步目标", Situation{})
 	if d1.Level != LevelL1 || l1.calls != 1 {
@@ -250,7 +250,7 @@ func TestEscalationOnlyOnReasoningNeed(t *testing.T) {
 	if d1.Level == LevelL1 && d1.Ledger[len(d1.Ledger)-1].Escalated != true {
 		t.Errorf("[L1] 升级未记台账: %+v", d1.Ledger)
 	}
-	// (b) 不需要多步推理 ⇒ 即使 L1 可用也不升（不许"想更准就升"）
+	// (b)  needneed     ⇒ i.e.  L1  usealso  ( allow" changeapprovethen ")
 	l1b := &fakeL1{out: "不该被调用"}
 	r2 := &Router{Hot: hotCache(t), JEV: jev, L1: l1b, NeedsReasoning: false}
 	d2 := r2.Route(context.Background(), "库存还有多少", "查库存", Situation{})
@@ -262,7 +262,7 @@ func TestEscalationOnlyOnReasoningNeed(t *testing.T) {
 	}
 }
 
-// 第二梯队落空也必须可见：多命中/未命中 ⇒ route_ambiguous=true（不静默落 L0.5）。
+//      emptyalso   see:   in/  in ⇒ route_ambiguous=true(     L0.5). 
 func TestRouteAmbiguousIsVisible(t *testing.T) {
 	jev := &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}
 	r := &Router{Hot: hotCache(t), ServiceRouter: &fakeRoute{ok: false}, JEV: jev}
@@ -278,23 +278,23 @@ func TestRouteAmbiguousIsVisible(t *testing.T) {
 	}
 }
 
-// 台账落盘：append-only、不丢字段、可聚合出三个考察指标。
+//     : append-only,   charseg,    out    refertgt. 
 func TestLedgerAppendOnlyAndAggregatable(t *testing.T) {
 	dir := t.TempDir()
 	l := &Ledger{Path: filepath.Join(dir, "ledger.jsonl")}
-	// 1) L0 命中
+	// 1) L0  in
 	r0 := &Router{Hot: hotCache(t)}
 	d0 := r0.Route(context.Background(), "爱ops", "q", Situation{})
 	if err := l.Write(d0, "t0", KindFor("爱ops")); err != nil {
 		t.Fatal(err)
 	}
-	// 2) L0.5 ambiguous → 回问
+	// 2) L0.5 ambiguous -> clarification
 	r1 := &Router{Hot: hotCache(t), JEV: &fakeJEV{resp: JEVResponse{Choice: "ambiguous", Confidence: 0.5}}}
 	d1 := r1.Route(context.Background(), "讲个笑话", "q", Situation{})
 	if err := l.Write(d1, "t1", KindFor("讲个笑话")); err != nil {
 		t.Fatal(err)
 	}
-	// 3) L1 升级
+	// 3) L1   
 	r2 := &Router{Hot: hotCache(t), JEV: &fakeJEV{resp: JEVResponse{Choice: "x", Confidence: 0.9}}, L1: &fakeL1{out: "ok"}, NeedsReasoning: true}
 	d2 := r2.Route(context.Background(), "先A再B", "q", Situation{})
 	if err := l.Write(d2, "t2", KindFor("先A再B")); err != nil {
@@ -324,13 +324,13 @@ func TestLedgerAppendOnlyAndAggregatable(t *testing.T) {
 	if s.L0Share <= 0 || s.L0Share > 1 {
 		t.Errorf("[台账] L0 比例异常: %v", s.L0Share)
 	}
-	// 空台账不崩
+	// empty    
 	if empty, err := Aggregate(filepath.Join(dir, "nope.jsonl")); err != nil || empty.Total != 0 {
 		t.Errorf("[台账] 空/缺失台账应返回空摘要: %+v err=%v", empty, err)
 	}
 }
 
-// 台账接进主流程：**一次真实路由之后，ledger.jsonl 必须多出一条**。
+//   connect  flow: **    routebyofafter, ledger.jsonl    out  **. 
 func TestLedgerWiredIntoRouting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	r := &Router{Hot: hotCache(t), Ledger: &Ledger{Path: path}}
@@ -348,7 +348,7 @@ func TestLedgerWiredIntoRouting(t *testing.T) {
 	}
 }
 
-// P4④：真实路由一次后，WorkingMemory 必须非空且含本轮实体。
+// P4④:   routeby  after, WorkingMemory    emptyand base  body. 
 func TestRouterAutoBuildsWorkingMemory(t *testing.T) {
 	wm := &plan.WorkingMemory{}
 	r := &Router{Hot: hotCache(t), WM: wm}
@@ -367,9 +367,9 @@ func TestRouterAutoBuildsWorkingMemory(t *testing.T) {
 	}
 }
 
-// 记账失败必须留痕（fail-open 但不能静默）。
+//         (fail-open but    ). 
 func TestLedgerWriteFailureLeavesTrace(t *testing.T) {
-	// 用一个**无法创建**的路径触发写失败（父路径是文件而非目录）。
+	// use  **no   ** pathtriggersendwrite  ( pathisfilebut obj ). 
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
@@ -388,7 +388,7 @@ func TestLedgerWriteFailureLeavesTrace(t *testing.T) {
 	}
 }
 
-// 聚合报告：样本不足必须如实说"无法判定"，且考察点③要指出字段缺失。
+//     : kindbase    e.g.  "no   ", and  pt③needreferoutcharseg  . 
 func TestReportIsHonestAboutInsufficientSamples(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
 	l := &Ledger{Path: path}
@@ -409,7 +409,7 @@ func TestReportIsHonestAboutInsufficientSamples(t *testing.T) {
 	}
 }
 
-// 空台账不崩，且如实说"无法判定"。
+// empty    , ande.g.  "no   ". 
 func TestReportOnEmptyLedger(t *testing.T) {
 	out, err := Report(filepath.Join(t.TempDir(), "nope.jsonl"))
 	if err != nil {
@@ -420,16 +420,16 @@ func TestReportOnEmptyLedger(t *testing.T) {
 	}
 }
 
-// 考察点③：含前后质量 ⇒ 能算出"是否变好"；缺字段 ⇒ unknown（不当 0）+ 无法判定。
+//   pt③:  beforeafter   ⇒   out"is change ";  charseg ⇒ unknown( cur 0)+ no   . 
 func TestQualityComparisonAndBackwardCompat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
-	// 旧格式条目（无 quality 字段）——不得崩、不得当 0
+	//   form obj(no quality charseg)--   ,   cur 0
 	old := `{"at":"2026-10-03T00:00:00Z","level":"L1","reason":"legacy","escalated":true,"outcome":"answered"}`
 	if err := os.WriteFile(path, []byte(old+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, after := 0.4, 0.9
-	// 诚实阈值：少于 MinSamplesForVerdict 可比样本时**不得下结论** ⇒ 这里给足 10 条。
+	//    value:  at MinSamplesForVerdict   kindbasetime**  underclose ** ⇒   give  10  . 
 	var recs []Record
 	for i := 0; i < MinSamplesForVerdict; i++ {
 		recs = append(recs, Record{

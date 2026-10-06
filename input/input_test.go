@@ -16,8 +16,8 @@ func TestClean(t *testing.T) {
 		want string
 	}{
 		{"句首填充词", "帮我打开文件", "打开文件"},
-		// M7（Codex 2026-10-02）："那个"是核心指代词已从填充词表移除（"修那个"的"那个"是操作对象），
-		// 循环用例改用仍属填充词的组合验证循环剥除。
+		// M7(Codex 2026-10-02): "  "is  coreferencewordalreadyfrom fillwordtable  ("fix  " "  "is  to ), 
+		//   useexamplemodifyuse   fillword         . 
 		{"多重句首填充词循环", "嗯请帮我列出目录", "列出目录"},
 		{"句尾填充词", "打开文件一下", "打开文件"},
 		{"全角转半角", "打开ＶｏｘＳｉｇｎ", "打开VoxSign"},
@@ -34,7 +34,7 @@ func TestClean(t *testing.T) {
 	}
 }
 
-// stubCorrecter 模拟 memory.Dictionary：把「美墅」→「Mansour」。
+// stubCorrecter    memory.Dictionary: pipe"  "->"Mansour". 
 type stubCorrecter struct{}
 
 func (stubCorrecter) Correct(text string) (string, []contract.Correction) {
@@ -58,7 +58,7 @@ func TestClassifyAllSix(t *testing.T) {
 		{"TIME", "现在几点了", contract.IntentTime, 0.95, false},
 		{"FILE_LIST", "列出 ~/project 有什么", contract.IntentFileList, 0.8, false},
 		{"FILE_READ", "读一下 ~/note.txt", contract.IntentFileRead, 0.8, false},
-		{"FILE_READ缺槽位", "读一下内容", contract.IntentFileRead, 0.6, false}, // 0.6 不<0.6
+		{"FILE_READ缺槽位", "读一下内容", contract.IntentFileRead, 0.6, false}, // 0.6  <0.6
 		{"SHELL", "运行 ls -la", contract.IntentShell, 0.7, false},
 		{"SHELL缺cmd低置信回问", "运行", contract.IntentShell, 0.5, true}, // 0.5<0.6
 		{"INFO", "翻译这句话", contract.IntentInfo, 0.4, false},
@@ -81,23 +81,23 @@ func TestClassifyAllSix(t *testing.T) {
 	}
 }
 
-// TIME/INFO 永不回问；UNKNOWN 必回问。
+// TIME/INFO   clarification; UNKNOWN  clarification. 
 func TestAskNeverForTimeInfo(t *testing.T) {
-	c := NewClassifier(0.0) // 阈值 0：任何低置信都该回问，除 TIME/INFO
+	c := NewClassifier(0.0) //  value 0:   low-confidenceall clarification,   TIME/INFO
 	if got := c.Classify("几点"); got.Ask != "" {
 		t.Errorf("TIME 即使低阈值也不应回问: %q", got.Ask)
 	}
-	// INFO 由明确触发词触发，不应回问
+	// INFO by  triggersendwordtriggersend,   clarification
 	if got := c.Classify("帮我翻译一下"); got.Intent != contract.IntentInfo || got.Ask != "" {
 		t.Errorf("INFO 不应回问: intent=%q ask=%q", got.Intent, got.Ask)
 	}
-	// 无任何触发词 → UNKNOWN，必回问
+	// no  triggersendword -> UNKNOWN,  clarification
 	if got := c.Classify("随便说点啥"); got.Intent != contract.IntentUnknown || got.Ask == "" {
 		t.Errorf("无触发词应 UNKNOWN 且回问: intent=%q ask=%q", got.Intent, got.Ask)
 	}
 }
 
-// 问题1回归：「文件夹」前一个词应剥离动词前缀（打开Mansour → Mansour）。
+//   1back : "file "before  word    wordbefore ( openMansour -> Mansour). 
 func TestExtractPathStripsVerbPrefix(t *testing.T) {
 	cfg := config.Default()
 	p := NewPipeline(&cfg, stubCorrecter{})
@@ -116,7 +116,7 @@ func TestExtractPathStripsVerbPrefix(t *testing.T) {
 	}
 }
 
-// Pipeline 全级跑通：①-④。
+// Pipeline safety   : ①-④. 
 func TestPipelineProcess(t *testing.T) {
 	cfg := config.Default()
 	p := NewPipeline(&cfg, stubCorrecter{})

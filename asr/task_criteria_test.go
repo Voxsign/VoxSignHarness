@@ -1,6 +1,6 @@
 //go:build vhsui
 
-// task_criteria_test.go —— /v1/task：只规划、不执行；域门禁在规划期生效；document 不落盘。
+// task_criteria_test.go -- /v1/task: onlyrule ,    ; domain forbid rule periodoccur ; document    . 
 package asr
 
 import (
@@ -33,7 +33,7 @@ func taskCall(t *testing.T, base, body string) map[string]any {
 	return out
 }
 
-// ① 只规划不执行：可规划的任务返回步骤，且 execute=false。
+// ① onlyrule    :  rule  taskreturnback  , and execute=false. 
 func TestTaskPlansWithoutExecuting(t *testing.T) {
 	base, _ := newUIServer(t)
 	got := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":"TODO: x"}`)
@@ -53,7 +53,7 @@ func TestTaskPlansWithoutExecuting(t *testing.T) {
 	}
 }
 
-// ② 域门禁在**规划期**生效：能力缺口 ⇒ 拒绝 + 该找谁（owner 前缀）。
+// ② domain forbid **rule period**occur :      ⇒ reject +    (owner before ). 
 func TestTaskRefusesOutOfScopeAtPlanningTime(t *testing.T) {
 	base, _ := newUIServer(t)
 	got := taskCall(t, base, `{"task":"帮我部署到生产服务器"}`)
@@ -77,7 +77,7 @@ func TestTaskRefusesOutOfScopeAtPlanningTime(t *testing.T) {
 	}
 }
 
-// ③ document **不落盘**（除 reallog 外，dataDir 不得多文件）。
+// ③ document **   **(  reallog out, dataDir    file). 
 func TestTaskDocumentNotPersisted(t *testing.T) {
 	base, logPath := newUIServer(t)
 	dataDir := filepath.Dir(logPath)
@@ -104,7 +104,7 @@ func TestTaskDocumentNotPersisted(t *testing.T) {
 	}
 }
 
-// ④ 页面：有任务入口 + **明确标注只规划不执行**。
+// ④  face: hastaskin  + **  tgtnoteonlyrule    **. 
 func TestTaskPageHasUploadAndPlanOnlyLabel(t *testing.T) {
 	page := fetchPage(t)
 	for _, want := range []string{`id="doc"`, `id="task"`, "planTask()", "只规划，不执行", `id="file"`} {
@@ -114,7 +114,7 @@ func TestTaskPageHasUploadAndPlanOnlyLabel(t *testing.T) {
 	}
 }
 
-// #2-b：**文档必须真的影响规划结果**（同一任务：空文档 vs 有内容 ⇒ 必须不同）。
+// #2-b: **        rule close **(same task: empty   vs hasin  ⇒    same). 
 func TestTaskDocumentActuallyAffectsPlan(t *testing.T) {
 	base, _ := newUIServer(t)
 	empty := taskCall(t, base, `{"task":"把文档里的待办整理成计划","document":""}`)
@@ -133,7 +133,7 @@ func TestTaskDocumentActuallyAffectsPlan(t *testing.T) {
 	if len(cf) <= len(ce) {
 		t.Fatalf("[文档] 规划结果未因文档而变：considered %d → %d", len(ce), len(cf))
 	}
-	// ② 文档关键词必须出现在 considered 里
+	// ②   close word  outnow  considered  
 	joined := ""
 	for _, c := range cf {
 		m, _ := c.(map[string]any)
@@ -142,13 +142,13 @@ func TestTaskDocumentActuallyAffectsPlan(t *testing.T) {
 	if !strings.Contains(joined, "document:") || !strings.Contains(joined, "TODO") {
 		t.Errorf("[文档] considered 未见文档结构: %s", joined)
 	}
-	// 文档实体进活跃实体口径（w_used 或 considered 可见）
+	//    body    body path(w_used or considered  see)
 	if pf["wm"] == nil || pe["wm"] == nil {
 		t.Errorf("[文档] 缺 wm")
 	}
 }
 
-// ④ 超大文档 ⇒ 降级并说明（不许静默当没有）。
+// ④      ⇒   and  ( allow  cur has). 
 func TestTaskTooLargeDocumentDegrades(t *testing.T) {
 	base, _ := newUIServer(t)
 	huge := strings.Repeat("这是一段很长的文档内容。", 30000) // > 200k runes
@@ -162,10 +162,10 @@ func TestTaskTooLargeDocumentDegrades(t *testing.T) {
 	}
 }
 
-// #2-c：**文档必须影响 steps**。
+// #2-c: **       steps**. 
 func TestTaskDocumentAffectsSteps(t *testing.T) {
 	base, _ := newUIServer(t)
-	// ① 空文档 vs 34 条目文档 ⇒ steps 必须不同
+	// ① empty   vs 34  obj   ⇒ steps    same
 	empty := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档","document":""}`)
 	var b strings.Builder
 	for i := 0; i < 34; i++ {
@@ -178,7 +178,7 @@ func TestTaskDocumentAffectsSteps(t *testing.T) {
 		t.Fatalf("[#2-c] 34 条目文档未改变步骤数量: 空=%d 有=%d", len(es), len(bs))
 	}
 
-	// ② **防乱变**：内容等价、措辞不同的两个文档 ⇒ 步骤数量必须相同
+	// ② **prevent change**: in etc ,    same      ⇒   num    same
 	var c strings.Builder
 	for i := 0; i < 34; i++ {
 		c.WriteString("- 待办事项 " + strconv.Itoa(i) + "\n")
@@ -189,7 +189,7 @@ func TestTaskDocumentAffectsSteps(t *testing.T) {
 		t.Errorf("[#2-c 防乱变] 等价内容的两个文档得到不同步数: %d vs %d", len(bs), len(os))
 	}
 
-	// ③ 未读文档（空）⇒ 与"完全不带 document 字段"一致
+	// ③  read  (empty)⇒ and"finishsafety   document charseg"  
 	none := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
 	ns, _ := none["plan"].(map[string]any)["steps"].([]any)
 	if len(ns) != len(es) {
@@ -197,7 +197,7 @@ func TestTaskDocumentAffectsSteps(t *testing.T) {
 	}
 }
 
-// #2-c-① 条目格式覆盖：每种格式都要认；普通段落不得被算成条目。
+// #2-c-①  obj formoverwrite:  kind formallneed ;   seg   be become obj. 
 func TestTaskItemFormatCoverage(t *testing.T) {
 	base, _ := newUIServer(t)
 	cases := []struct {
@@ -229,7 +229,7 @@ func TestTaskItemFormatCoverage(t *testing.T) {
 	}
 }
 
-// #2-c-② 驱动量与任务语义一致：34 个 TODO 行也必须分批。
+// #2-c-②    andtasksemantic  : 34   TODO  also  splitapprove. 
 func TestTaskTodoCountDrivesBatching(t *testing.T) {
 	base, _ := newUIServer(t)
 	var b strings.Builder
@@ -242,14 +242,14 @@ func TestTaskTodoCountDrivesBatching(t *testing.T) {
 	if len(steps) <= 2 {
 		t.Fatalf("[驱动量] 34 个 TODO 行未触发分批（steps=%d）—— 任务说整理 TODO 却不用 TODO 数决定", len(steps))
 	}
-	// ③ chain_len 必须等于展开后的步数
+	// ③ chain_len   etcat openafter  num
 	wm, _ := p["wm"].(map[string]any)
 	if wm != nil {
 		if cl, _ := wm["chain_len"].(float64); int(cl) != len(steps) {
 			t.Errorf("[chain_len] %v != steps %d（数字是假的）", wm["chain_len"], len(steps))
 		}
 	}
-	// ④ 数字可解释：considered 必须说明驱动量与批数
+	// ④ numchar resolve : considered        andapprovenum
 	found := false
 	for _, c := range p["considered"].([]any) {
 		m, _ := c.(map[string]any)
@@ -262,7 +262,7 @@ func TestTaskTodoCountDrivesBatching(t *testing.T) {
 	}
 }
 
-// ⭐ 端点级判据（Lead 常设规则）：**能力必须走用户实际经过的入口**。
+// ⭐ endpoint  data(Lead   rule): **     useuser  through in **. 
 type stubPlanModel struct {
 	out   string
 	err   error
@@ -287,7 +287,7 @@ func newTaskServerWithL2(t *testing.T, model plan.PlanModel, modelID string) str
 	return srv.URL
 }
 
-// 端点级①：注入桩模型 ⇒ **HTTP 响应里的 steps 必须不同**（证明端点真接了 L2）。
+// endpoint ①: notein  type ⇒ **HTTP      steps    same**(  endpoint connect L2). 
 func TestTaskEndpointUsesL2Model(t *testing.T) {
 	baseOff := newTaskServerWithL2(t, nil, "off")
 	off := taskCall(t, baseOff, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
@@ -318,7 +318,7 @@ func TestTaskEndpointUsesL2Model(t *testing.T) {
 	}
 }
 
-// 端点级②：L2 未启用 ⇒ **与纯规则式逐字段一致**。
+// endpoint ②: L2  startuse ⇒ **and ruleform charseg  **. 
 func TestTaskEndpointL2OffIsIdentical(t *testing.T) {
 	b1 := newTaskServerWithL2(t, nil, "off")
 	b2 := newTaskServerWithL2(t, &stubPlanModel{out: `{"steps":[{"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"}]}`}, "off")
@@ -334,7 +334,7 @@ func TestTaskEndpointL2OffIsIdentical(t *testing.T) {
 	}
 }
 
-// 端点级③：模型报错 ⇒ HTTP 仍 200、响应标 degraded + 原因。
+// endpoint ③:  type   ⇒ HTTP   200,   tgt degraded + origbecause. 
 func TestTaskEndpointL2FailureDegrades(t *testing.T) {
 	base := newTaskServerWithL2(t, &stubPlanModel{err: errors.New("boom")}, "deepseek-v4-pro")
 	got := taskCall(t, base, `{"task":"把这个项目里所有 TODO 整理成一份文档"}`)
@@ -344,7 +344,7 @@ func TestTaskEndpointL2FailureDegrades(t *testing.T) {
 	}
 }
 
-// ⭐ 合并后的通道路径：plan 通道指向 quality ⇒ 与指向 fast 的结果必须不同（桩可证）。
+// ⭐  andafter   path: plan   referto quality ⇒ andreferto fast  close    same(   ). 
 func TestTaskEndpointChannelTierChangesResult(t *testing.T) {
 	stub := &stubPlanModel{out: `{"steps":[
 	  {"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"},

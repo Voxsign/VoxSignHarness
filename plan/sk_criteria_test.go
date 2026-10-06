@@ -1,14 +1,14 @@
 //go:build vhsplan
 
-// sk_criteria_test.go —— VHS-PLAN-001 §3：SK-1..SK-6（先红）。
+// sk_criteria_test.go -- VHS-PLAN-001 §3: SK-1..SK-6(first ). 
 //
-// 真值来源（已由探针核实可机械导出）：
+//  value  (alreadyby        out): 
 //
-//	工具 ← tools.LoadContracts(dir).All()
-//	意图 ← contract.Intent* 常量 × 生产代码引用（live/dormant）
-//	域   ← space.Load(dir).List()/Get()
+//	   ← tools.LoadContracts(dir).All()
+//	intent ← contract.Intent*    × occurproduce code use(live/dormant)
+//	domain   ← space.Load(dir).List()/Get()
 //
-// 运行：go test -tags vhsplan ./plan
+//   : go test -tags vhsplan ./plan
 package plan
 
 import (
@@ -21,16 +21,16 @@ import (
 	"voicesign-harness/tools"
 )
 
-// 真值（机械导出结果的期望；数字来自探针，不是手写猜测）。
+//  value(   outclose  period ; numchar    ,  is write  ). 
 var (
 	wantTools = []string{"file", "git", "run", "search", "test", "verify"}
-	// live/dormant 口径：按 DSH 裁决（2026-10-03）采用**生产代码引用**规则
-	// —— 能力清单描述"运行时真能做什么"，测试引用（router/router_test.go:37）
-	// 不构成运行时能力。故 APP_LAUNCH 归 dormant：16 live / 2 dormant。
+	// live/dormant  path: by DSH  decide(2026-10-03) use**occurproduce code use**rule
+	// --   listdescribe"  time     ",    use(router/router_test.go:37)
+	//   become  time  . thus APP_LAUNCH   dormant: 16 live / 2 dormant. 
 	wantLive    = []string{"ASK", "COMMIT", "DEBUG", "DEPLOY", "EDIT", "FILE_LIST", "FILE_READ", "INFO", "NOTE", "ORCHESTRATE", "QUERY", "REGISTER_TOOL", "SHELL", "TEST", "TIME", "UNKNOWN"}
 	wantDormant = []string{"APP_LAUNCH", "FILE_WRITE"}
 	wantDomains = []string{"external", "global", "project", "sandbox", "vault-creds", "vault-notes"}
-	// 域级别名中在契约注册表里不存在的（探针实测 11 处）。
+	// domain diffnamein   note table  store  (     11 place). 
 	wantUnresolvedAliases = []string{"ask", "deploy", "file-append", "http", "note", "query", "read"}
 )
 
@@ -76,7 +76,7 @@ func (m Manifest) dormantIntents() map[string]bool {
 	return out
 }
 
-// SK-1 不虚报：清单里每个工具都必须在注册表里真实存在。
+// SK-1    : list     all   note table   store . 
 func TestSK1NoOverclaim(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m := ExportManifest(tr, sr)
@@ -94,7 +94,7 @@ func TestSK1NoOverclaim(t *testing.T) {
 	}
 }
 
-// SK-2 不隐瞒：注册表里有的，清单里不得漏。
+// SK-2    : note table has , list    . 
 func TestSK2NoOmission(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m := ExportManifest(tr, sr)
@@ -111,7 +111,7 @@ func TestSK2NoOmission(t *testing.T) {
 	}
 }
 
-// SK-3 边界准确：每条能力必须带硬限制（risk / allowed_spaces / 高风险需确认）。
+// SK-3  boundaryapprove :         limitrestrict(risk / allowed_spaces /  riskneedconfirm). 
 func TestSK3BoundariesAccurate(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m := ExportManifest(tr, sr)
@@ -125,7 +125,7 @@ func TestSK3BoundariesAccurate(t *testing.T) {
 	for _, cap := range m.Tools {
 		c, ok := byName[cap.Name]
 		if !ok {
-			continue // SK-1 已报
+			continue // SK-1 already 
 		}
 		if !reflect.DeepEqual(cap.Risk, c.Risk) {
 			t.Errorf("[SK-3] %s 的 risk 与契约不符: %v vs %v", cap.Name, cap.Risk, c.Risk)
@@ -141,7 +141,7 @@ func TestSK3BoundariesAccurate(t *testing.T) {
 	}
 }
 
-// SK-4 来源可审计 + 非硬编码：注入合成契约后清单必须跟着变。
+// SK-4       +    code: notein become  afterlist   ingchange. 
 func TestSK4SourceAuditableAndDerived(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m1 := ExportManifest(tr, sr)
@@ -168,7 +168,7 @@ func TestSK4SourceAuditableAndDerived(t *testing.T) {
 		}
 	}
 
-	// 结构性证明：不是硬编码 —— 注入一个合成契约，清单必须反映它。
+	// close ity  :  is  code -- notein   become  , list  rev  . 
 	synth := &tools.Registry{Contracts: map[string]contract.ToolContract{}}
 	for _, c := range tr.All() {
 		synth.Contracts[c.Name] = c
@@ -184,7 +184,7 @@ func TestSK4SourceAuditableAndDerived(t *testing.T) {
 	}
 }
 
-// SK-5 意图：live 集合必须等于机械导出的真值；dormant 不得当可执行能力。
+// SK-5 intent: live     etcat   out  value; dormant   cur     . 
 func TestSK5IntentsLiveAndDormant(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m := ExportManifest(tr, sr)
@@ -209,7 +209,7 @@ func TestSK5IntentsLiveAndDormant(t *testing.T) {
 	}
 }
 
-// SK-6 域与别名诚实：域集合可导出；域级别名不得混进工具能力列表。
+// SK-6 domainanddiffname  : domain    out; domain diffname        listtable. 
 func TestSK6DomainsAndAliasHonesty(t *testing.T) {
 	tr, sr := loadRegistries(t)
 	m := ExportManifest(tr, sr)
@@ -221,7 +221,7 @@ func TestSK6DomainsAndAliasHonesty(t *testing.T) {
 		t.Errorf("[SK-6] 域集合与 space.List() 不符：got=%v want=%v", gotDomains, wantDomains)
 	}
 
-	// 别名诚实：契约注册表里不存在的别名，绝不能出现在工具能力列表里（否则 SK-1 虚报）。
+	// diffname  :   note table  store  diffname,    outnow     listtable ( then SK-1   ). 
 	real := map[string]bool{}
 	for _, c := range tr.All() {
 		real[c.Name] = true

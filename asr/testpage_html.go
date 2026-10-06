@@ -2,8 +2,8 @@ package asr
 
 import "net/http"
 
-// testPageHTML 是零依赖测试页（无框架/CDN/npm）。输入框用标准 <textarea>，
-// **不做键盘拦截** ⇒ macOS 听写（连按两下 Fn / 麦克风键）可直接用。
+// testPageHTML is dependency   (no  /CDN/npm).  in usetgtapprove <textarea>, 
+// **    block** ⇒ macOS  write(linkby under Fn /     )  connectuse. 
 const testPageHTML = `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8"><title>VoxSign 本地测试页（录音 → 纠错 → 台账）</title>
 <style>

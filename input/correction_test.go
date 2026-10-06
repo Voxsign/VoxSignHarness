@@ -1,11 +1,11 @@
-// 自我修正的边界测试（缺口 G7）。
+//   fixpos  boundary  (   G7). 
 //
-// G7 的真实危害：用户口述时改口——`记一下A，不对，改成记B` —— 系统把
-// "不对"之前的整段当成目标槽位（object="记一下A，不对"），即**用被作废的内容去执行**。
+// G7      : useuser  timemodify --`  underA,  to, modifybecome B` --   pipe
+// " to"ofbefore  segcurbecomeobjtgt  (object="  underA,  to"), i.e.**usebe   in    **. 
 //
-// 设计要点：
-//  1. 修正标记取**最后一次**出现，支持连续改口；
-//  2. 修正后常省略对象（`把标题改成中文，不对，改成英文`），须**承接**修正前的对象。
+//   needpt: 
+//  1. fixpostgt get** after  **outnow,  keeplinkcontinuemodify ; 
+//  2. fixposafter   to (`pipetgt modifybecomein ,  to, modifybecome  `),  ** connect**fixposbefore to . 
 package input
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestSelfCorrectionDropsPriorClause 修正前的内容不得进入槽位。
+// TestSelfCorrectionDropsPriorClause fixposbefore in    in  . 
 func TestSelfCorrectionDropsPriorClause(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("记一下A，不对，改成记B")
@@ -26,7 +26,7 @@ func TestSelfCorrectionDropsPriorClause(t *testing.T) {
 	}
 }
 
-// TestSelfCorrectionCarriesObject 修正后省略对象时，承接修正前的对象。
+// TestSelfCorrectionCarriesObject fixposafter  to time,  connectfixposbefore to . 
 func TestSelfCorrectionCarriesObject(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("把标题改成中文，不对，改成英文")
@@ -41,7 +41,7 @@ func TestSelfCorrectionCarriesObject(t *testing.T) {
 	}
 }
 
-// TestLastCorrectionTakesLatest 连续改口取最后一次。
+// TestLastCorrectionTakesLatest linkcontinuemodify get after  . 
 func TestLastCorrectionTakesLatest(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("把标题改成中文，不对，改成英文，说错了，改成阿拉伯语")
@@ -56,7 +56,7 @@ func TestLastCorrectionTakesLatest(t *testing.T) {
 	}
 }
 
-// TestNoCorrectionUnchanged 无修正标记时行为不变。
+// TestNoCorrectionUnchanged nofixpostgt time as change. 
 func TestNoCorrectionUnchanged(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	got := c.ClassifyTask("把报价模块改成中文")
@@ -68,7 +68,7 @@ func TestNoCorrectionUnchanged(t *testing.T) {
 	}
 }
 
-// TestLastCorrectionUnit 函数级单测。
+// TestLastCorrectionUnit  num   . 
 func TestLastCorrectionUnit(t *testing.T) {
 	cases := []struct {
 		text      string

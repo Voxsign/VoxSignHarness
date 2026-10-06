@@ -1,12 +1,12 @@
-// knowhow_fixture_test.go —— **真实服务 knowhow**（自测拉取，2026-10-03）生成的 fixture。
+// knowhow_fixture_test.go -- **  serveservice knowhow**(   get, 2026-10-03)occurbecome  fixture. 
 //
-// 来源：GET https://aiops.peterzou.com/api/skill/skills/{id}（Header X-AIops-Key）。
-// **对账**：条数与 Lead 真值逐项一致（30/11/9/6 = 56）；未做任何人工增删。
+//   : GET https://aiops.peterzou.com/api/skill/skills/{id}(Header X-AIops-Key). 
+// **to **:  numand Lead  value    (30/11/9/6 = 56);     humanadd . 
 package skill
 
 func realKnowhow() map[string]Knowhow {
 	return map[string]Knowhow{
-		// ai-native-architecture-design 1.0.1：合计 30 条
+		// ai-native-architecture-design 1.0.1:    30  
 		"ai-native-architecture-design": {
 			Steps: []string{
 				"澄清约束：目标/边界/涉众/规模/技术栈/成本合规；关键信息不足先提≤3个必要问题，不臆造假设",
@@ -49,7 +49,7 @@ func realKnowhow() map[string]Knowhow {
 				"落地用脚手架：python scripts/scaffold_arch_repo.py <repo> [--path <dir>]",
 			},
 		},
-		// arch-guardian 0.1.0：合计 11 条
+		// arch-guardian 0.1.0:    11  
 		"arch-guardian": {
 			Steps: []string{
 				"澄清目标与边界",
@@ -73,7 +73,7 @@ func realKnowhow() map[string]Knowhow {
 				"证据支撑",
 			},
 		},
-		// deep-research 0.3.0：合计 9 条
+		// deep-research 0.3.0:    9  
 		"deep-research": {
 			Steps: []string{
 				"澄清任务目标与边界",
@@ -95,7 +95,7 @@ func realKnowhow() map[string]Knowhow {
 				"证据支撑",
 			},
 		},
-		// arch-review 0.1.0：合计 6 条
+		// arch-review 0.1.0:    6  
 		"arch-review": {
 			Steps: []string{
 				"澄清约束",

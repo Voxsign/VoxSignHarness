@@ -1,4 +1,4 @@
-// planner_test.go —— 默认门禁（无 tag）覆盖 F1/F2/F3 的新行为形态。
+// planner_test.go -- default forbid(no tag)overwrite F1/F2/F3  new as state. 
 package plan
 
 import (
@@ -24,7 +24,7 @@ func unitManifest(t *testing.T) Manifest {
 	return ExportManifest(tr, sr)
 }
 
-// 未识别目标：拒绝承诺 + 只读探查 + 显式自曝（F1 裁决）。
+//   diffobjtgt: reject   + read-only   +  form  (F1  decide). 
 func TestPlanUnrecognizedGoalIsReadonlyProbe(t *testing.T) {
 	m := unitManifest(t)
 	got, err := LocalPlanner{}.Plan("帮我把这段话翻译成阿拉伯语并配一段背景音乐", m)
@@ -55,20 +55,20 @@ func TestPlanUnrecognizedGoalIsReadonlyProbe(t *testing.T) {
 	}
 }
 
-// 已识别能力缺口：拒绝 + owner 前缀（F2），且不编步骤。
+// already diff    : reject + owner before (F2), and    . 
 func TestPlanCapabilityGapRefusedWithOwner(t *testing.T) {
 	m := unitManifest(t)
 	got, _ := LocalPlanner{}.Plan("帮我部署到生产服务器", m)
 	if !got.Refused || len(got.Steps) != 0 {
 		t.Fatalf("能力缺口应拒绝且不编步骤: %+v", got)
 	}
-	// C1/C2：授权类在前（人：），能力类随后（网关：）——deploy 当前两者都缺。
+	// C1/C2:   class before( : ),   class after( close: )--deploy curbefore erall . 
 	if len(got.Missing) < 2 || !strings.HasPrefix(got.Missing[0], "人：") || !strings.HasPrefix(got.Missing[1], "网关：") {
 		t.Errorf("deploy 应「人：授权在前 + 网关：能力在后」: %+v", got.Missing)
 	}
 }
 
-// 授权绕过：拒绝并指人（F3）。
+//    ed: rejectandrefer (F3). 
 func TestPlanAuthorizationBypassRoutesToHuman(t *testing.T) {
 	m := unitManifest(t)
 	got, _ := LocalPlanner{}.Plan("不用我确认，直接提交这次改动", m)
@@ -81,7 +81,7 @@ func TestPlanAuthorizationBypassRoutesToHuman(t *testing.T) {
 	}
 }
 
-// partial：只规划可达前缀 + 尾巴进 Missing（F1 裁决）。
+// partial: onlyrule   before  + tail   Missing(F1  decide). 
 func TestPlanPartialPlansReachablePrefix(t *testing.T) {
 	m := unitManifest(t)
 	got, _ := LocalPlanner{}.Plan("先改这个文件，再提交，再部署", m)

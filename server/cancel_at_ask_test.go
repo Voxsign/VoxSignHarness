@@ -1,9 +1,9 @@
-// 评审 P3 的回归测试：否定仲裁的回问文案让用户「说取消」，这个选项必须有确定语义。
+//    P3  back   :      clarification   useuser" cancel",       has  semantic. 
 //
-// 原状况：resumeAsk 只映射 edit/query/note/commit 前缀，没有「取消」处理器，
-// 于是用户照着文案说「取消」会被当成又一轮澄清答案 ——
-// 含指代词时被替换成「不要删除“取消”」→ 再判否定 → 同一 Ask → 以"未收敛"报错；
-// 不含指代词时拼成「 澄清：取消」→ 重新提问。结果虽都不执行，但走的是错误态。
+// origstatus : resumeAsk only   edit/query/note/commit before ,  has"cancel"handle , 
+// atisuseuser ing   "cancel" becurbecomeagain       --
+//  coreferencewordtimebe  become" needdelete“cancel”"-> again    -> same  Ask -> by" recv "  ; 
+//   coreferencewordtime become"   : cancel"-> heavynew  . close  all   , but  iserrorstate. 
 package server
 
 import "testing"
@@ -21,7 +21,7 @@ func TestIsCancelAnswer(t *testing.T) {
 	}
 }
 
-// TestCancelAtAskEndsTaskCleanly 端到端：对否定回问回答「取消」→ 干净取消，不是"未收敛"错误。
+// TestCancelAtAskEndsTaskCleanly endtoend: to  clarificationanswer"cancel"->   cancel,  is" recv "error. 
 func TestCancelAtAskEndsTaskCleanly(t *testing.T) {
 	ts := simPhone(t)
 	id := submit(t, ts, "不要删除那个文件")

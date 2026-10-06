@@ -1,6 +1,6 @@
 //go:build vhsplanmodel
 
-// l2_criteria_test.go —— Task A：L2 接线（用**桩模型**证明接线是通的，不必等 Peter 定模型）。
+// l2_criteria_test.go -- Task A: L2 connectline(use**  type**  connectlineis  ,   etc owner   type). 
 package plan
 
 import (
@@ -9,14 +9,14 @@ import (
 	"testing"
 )
 
-// ① 规则式 vs 模型式 ⇒ 步骤必须不同（用桩产出不同计划证明接线通）。
+// ① ruleform vs  typeform ⇒      same(use produceout same    connectline ). 
 func TestL2ModelDiffersFromRule(t *testing.T) {
 	_, m := fixture(t)
 	rule, err := LocalPlanner{}.Plan("把这个项目里所有 TODO 整理成一份文档", m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 桩模型返回**三步**计划（与规则式两步不同）
+	//   typereturnback**  **  (andruleform   same)
 	f := &fakeModel{out: `{"steps":[
 	  {"tool":"search","caps":["text"],"params":{"pattern":"TODO"},"action":"搜索","output":"列表","why":"定位","domain":"project"},
 	  {"tool":"file","caps":["read"],"params":{"path":"docs/TODO.md"},"action":"读现有汇总","output":"现有内容","why":"避免重复","domain":"project"},
@@ -37,7 +37,7 @@ func TestL2ModelDiffersFromRule(t *testing.T) {
 	}
 }
 
-// ② L2 未启用（空/off/nil）⇒ **与纯规则式逐字段一致**（不得因加槽位改变默认行为）。
+// ② L2  startuse(empty/off/nil)⇒ **and ruleform charseg  **(  because   modifychangedefault as). 
 func TestL2DisabledBehavesExactlyLikeRule(t *testing.T) {
 	_, m := fixture(t)
 	rule, _ := LocalPlanner{}.Plan("帮我部署到生产服务器", m)
@@ -51,14 +51,14 @@ func TestL2DisabledBehavesExactlyLikeRule(t *testing.T) {
 			t.Errorf("[L2] 未启用(%q)时行为应等同规则式: %+v vs %+v", id, got, rule)
 		}
 	}
-	// model 为 nil 同样走规则式
+	// model as nil samekind ruleform
 	got, _ := PlanWithL2(context.Background(), "帮我部署到生产服务器", m, nil, DefaultL2Model)
 	if got.Source != rule.Source || len(got.Missing) != len(rule.Missing) {
 		t.Errorf("[L2] model=nil 应走规则式: %+v", got)
 	}
 }
 
-// ③ L2 不可用（桩报错）⇒ 降级 + 标注，不崩、不静默。
+// ③ L2   use(   )⇒    + tgtnote,   ,    . 
 func TestL2FailureDegradesAndMarks(t *testing.T) {
 	_, m := fixture(t)
 	got, err := PlanWithL2(context.Background(), "把这个项目里所有 TODO 整理成一份文档", m,
@@ -74,7 +74,7 @@ func TestL2FailureDegradesAndMarks(t *testing.T) {
 	}
 }
 
-// ④ 模型 id 可配：env > 配置文件 > 代码默认；默认值即 Lead 指定值。
+// ④  type id   : env >   file >  codedefault; defaultvaluei.e. Lead refer value. 
 func TestL2ModelIsConfigurable(t *testing.T) {
 	if DefaultL2Model != "deepseek-v4-pro" {
 		t.Errorf("[L2] 默认模型应为 Lead 指定值，实际 %q", DefaultL2Model)

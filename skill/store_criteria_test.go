@@ -1,4 +1,4 @@
-// store_criteria_test.go —— 内化（SK-2/3/4/9/10）。
+// store_criteria_test.go -- inize(SK-2/3/4/9/10). 
 package skill
 
 import (
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// SK-2：内化后**离线可读**（不发任何网络请求即可拿到内容）。
+// SK-2: inizeafter** line read**( send     requirei.e.  toin ). 
 func TestSK2OfflineReadAfterInternalize(t *testing.T) {
 	st := NewStore(t.TempDir(), time.Hour)
 	if err := st.SaveManifest(Manifest{ID: "arch-guardian", Version: "v0.1.0", Source: "remote", Raw: json.RawMessage(`{"id":"arch-guardian"}`)}); err != nil {
@@ -20,7 +20,7 @@ func TestSK2OfflineReadAfterInternalize(t *testing.T) {
 	}
 }
 
-// SK-3：远端版本变了/超 TTL ⇒ 标 **stale**（不静默用旧的）。
+// SK-3:  end basechange/  TTL ⇒ tgt **stale**(   use  ). 
 func TestSK3StaleWhenTTLExceeded(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(dir, time.Minute)
@@ -42,7 +42,7 @@ func TestSK3StaleWhenTTLExceeded(t *testing.T) {
 	}
 }
 
-// SK-4：拉取/读取失败 ⇒ **unknown**，不得当"没有"。
+// SK-4:  get/readget   ⇒ **unknown**,   cur" has". 
 func TestSK4FailureIsUnknownNotAbsent(t *testing.T) {
 	st := NewStore(filepath.Join(t.TempDir(), "nope"), time.Hour)
 	_, status, err := st.LoadIndex()
@@ -57,7 +57,7 @@ func TestSK4FailureIsUnknownNotAbsent(t *testing.T) {
 	}
 }
 
-// SK-9：下线态覆盖 + 未登记 state ⇒ 不纳入且记录 unknown_state
+// SK-9: underlinestateoverwrite +     state ⇒   inand   unknown_state
 func TestSK9OfflineAndUnknownStates(t *testing.T) {
 	for _, s := range []string{"deprecated", "disabled", "paused", "retired"} {
 		if StateClass(s) != "offline" {
@@ -88,7 +88,7 @@ func TestSK9OfflineAndUnknownStates(t *testing.T) {
 	}
 }
 
-// SK-10：白名单必须**落成常量**（可审计，不由调用方随手传）
+// SK-10:  name   ** become  **(   ,  bycalluse    )
 func TestSK10WhitelistIsDeclared(t *testing.T) {
 	if len(DefaultWhitelist) != 4 {
 		t.Errorf("[SK-10] 白名单应有 4 项，实际 %d", len(DefaultWhitelist))

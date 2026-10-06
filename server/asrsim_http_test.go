@@ -1,16 +1,16 @@
-// 手机 App ASR 模拟 · HTTP 契约套件（绿）。
+// mobile App ASR    · HTTP     ( ). 
 //
-// 与 e2e/asrsim_test.go 的区别：那一套直接调 pipeline.Run（同进程函数调用），
-// 这一套**完整走手机真正会走的字节流**：
+// and e2e/asrsim_test.go   diff:     connectcall pipeline.Run(sameprocess numcalluse), 
+//    **finish  mobile pos   charnode **: 
 //
-//	iPhone ASR 出文本 → POST /v1/tasks {text} → 202 {task_id}
-//	                  → GET  /v1/tasks/{id} 轮询 → {task_id,status,role,question?,options?,receipt?,attribution?}
+//	iPhone ASR out base -> POST /v1/tasks {text} -> 202 {task_id}
+//	                  -> GET  /v1/tasks/{id} poll -> {task_id,status,role,question?,options?,receipt?,attribution?}
 //
-// 锁的是"手机屏幕上能看到什么"：
-//   - 决策点必须有 question（否则是一张空白决策卡，用户无从回答）
-//   - done 必须有 receipt，且四行齐全（M7"done 空渲染"的数据侧根因）
-//   - 有候选按钮时每个按钮必须可点、可回传
-//   - 连说几句不串号
+//   is"mobile  on  to  ": 
+//   - decision point  has question( thenis  empty decide  , useusernofromanswer)
+//   - done   has receipt, and   safety(M7"done empty  " numdatasiderootbecause)
+//   - has  by time  by    pt,  back 
+//   - link  sent  id
 package server
 
 import (
@@ -26,9 +26,9 @@ import (
 	"voicesign-harness/pipeline"
 )
 
-// phoneView 是 INTERACT-v1 手机端轮询响应的真实形状（server.writeTaskView 产出）。
-// 刻意不复用 taskState：那是服务端内部结构，含手机看不到的字段，
-// 用它做断言会掩盖"手机实际收到什么"。
+// phoneView is INTERACT-v1 mobile clientpoll      status(server.writeTaskView produceout). 
+//     use taskState:  isserveserviceendin close ,  mobile  to charseg, 
+// use  disconnectlang   "mobile  recvto  ". 
 type phoneView struct {
 	TaskID      string               `json:"task_id"`
 	Status      string               `json:"status"`
@@ -41,7 +41,7 @@ type phoneView struct {
 	Reversible  bool                 `json:"reversible,omitempty"`
 }
 
-// simPhone 起一个测试用 harness，返回手机侧 HTTP 句柄。
+// simPhone raise    use harness, returnbackmobileside HTTP sent . 
 func simPhone(t *testing.T) *httptest.Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -53,7 +53,7 @@ func simPhone(t *testing.T) *httptest.Server {
 	return ts
 }
 
-// submit 模拟 App 提交一条 ASR 文本，返回 task_id。
+// submit    App      ASR  base, returnback task_id. 
 func submit(t *testing.T, ts *httptest.Server, text string) string {
 	t.Helper()
 	resp := postJSON(t, ts.URL+"/v1/tasks", "", tasksPostReq{Text: text})
@@ -74,7 +74,7 @@ func submit(t *testing.T, ts *httptest.Server, text string) string {
 	return ack.TaskID
 }
 
-// poll 轮询到决策点或终态（手机 App 的真实行为）。
+// poll polltodecision pointorendstate(mobile App     as). 
 func poll(t *testing.T, ts *httptest.Server, id string) phoneView {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -99,16 +99,16 @@ func poll(t *testing.T, ts *httptest.Server, id string) phoneView {
 	return view
 }
 
-// say 是"说一句"的完整往返。
+// say is"  sent" finish  return. 
 func say(t *testing.T, ts *httptest.Server, text string) phoneView {
 	t.Helper()
 	return poll(t, ts, submit(t, ts, text))
 }
 
-// receiptLabels 是手机回执必须齐的四行（contract.RenderReceipt 的固定标签）。
+// receiptLabels ismobileback       (contract.RenderReceipt    tgt ). 
 var receiptLabels = []string{"动作：", "文件：", "结果：", "撤销："}
 
-// asrFuzzyCorpus 是手机 ASR 常见的模糊文本（无音频，直接给文本）。
+// asrFuzzyCorpus ismobile ASR  see    base(noaudiofreq,  connectgive base). 
 var asrFuzzyCorpus = []string{
 	"推进项目",
 	"继续",
@@ -125,10 +125,10 @@ var asrFuzzyCorpus = []string{
 	"开始测试",
 }
 
-// TestASRSimPhoneFuzzyNeverBlankOrStuck 模糊输入不允许在手机上表现为"卡住"或"空白页"。
+// TestASRSimPhoneFuzzyNeverBlankOrStuck    in  allow mobileontablenowas"  "or"empty  ". 
 //
-// 每个 ASR 模糊句都必须落到终态（done/canceled）或决策点（need_ask/need_confirm）；
-// 决策点必须带问题文本，终态必须带回执 —— 否则手机端渲染出没有内容的一屏。
+//    ASR   sentall   toendstate(done/canceled)ordecision point(need_ask/need_confirm); 
+// decision point      base, endstate   back  --  thenmobile client  out hasin    . 
 func TestASRSimPhoneFuzzyNeverBlankOrStuck(t *testing.T) {
 	ts := simPhone(t)
 	for _, text := range asrFuzzyCorpus {
@@ -144,15 +144,15 @@ func TestASRSimPhoneFuzzyNeverBlankOrStuck(t *testing.T) {
 					text, view.Status)
 			}
 		case stInterrupted:
-			// 重启恢复态，手机有专门文案，不算空白
+			// heavystart  state, mobilehas    ,   empty 
 		default:
 			t.Errorf("%q: 未到决策点或终态，状态 = %q（手机侧表现为卡住）", text, view.Status)
 		}
 	}
 }
 
-// TestASRSimPhoneReceiptAlwaysFourLines done 的回执四行必须齐全。
-// 这是 M7"done 空渲染"的数据侧根因：任一行缺失，手机上就是一张残缺卡片。
+// TestASRSimPhoneReceiptAlwaysFourLines done  back      safety. 
+//  is M7"done empty  " numdatasiderootbecause:      , mobileonthenis      . 
 func TestASRSimPhoneReceiptAlwaysFourLines(t *testing.T) {
 	ts := simPhone(t)
 	for _, text := range []string{"记一下明天开会", "查一下库存", "改一下", "开始测试", "随便看看"} {
@@ -173,7 +173,7 @@ func TestASRSimPhoneReceiptAlwaysFourLines(t *testing.T) {
 	}
 }
 
-// TestASRSimPhoneAttributionAlwaysClassified 回执要能回答"这次是谁判断的"——归因六格必须有值。
+// TestASRSimPhoneAttributionAlwaysClassified back need answer"  is  disconnect "--attribution    hasvalue. 
 func TestASRSimPhoneAttributionAlwaysClassified(t *testing.T) {
 	ts := simPhone(t)
 	for _, text := range []string{"记一下明天开会", "查一下库存"} {
@@ -187,8 +187,8 @@ func TestASRSimPhoneAttributionAlwaysClassified(t *testing.T) {
 	}
 }
 
-// TestASRSimPhoneAskOptionsWellFormed 有候选按钮时，每个按钮必须可点、可回传。
-// 契约：ID 非空（answer 回传键）、Label 非空（用户要能读懂）、数量 ≤4（一屏一决策）。
+// TestASRSimPhoneAskOptionsWellFormed has  by time,   by    pt,  back . 
+//   : ID  empty(answer back  ), Label  empty(useuserneed read ), num  <=4(   decide ). 
 func TestASRSimPhoneAskOptionsWellFormed(t *testing.T) {
 	ts := simPhone(t)
 	for _, text := range asrFuzzyCorpus {
@@ -207,8 +207,8 @@ func TestASRSimPhoneAskOptionsWellFormed(t *testing.T) {
 	}
 }
 
-// TestASRSimPhoneAnswerEndpointAccepts 澄清回答的管道本身要通：answer 返回 200、任务仍在追踪中。
-// "回答后能否真正收敛到终态"是另一个问题，见 asrsim_gaps_test.go（当前为红）。
+// TestASRSimPhoneAnswerEndpointAccepts   answer manage base need : answer returnback 200, task    in. 
+// "answerafter   posrecv toendstate"is     , see asrsim_gaps_test.go(curbeforeas ). 
 func TestASRSimPhoneAnswerEndpointAccepts(t *testing.T) {
 	ts := simPhone(t)
 	first := say(t, ts, "把这个改一下")
@@ -230,8 +230,8 @@ func TestASRSimPhoneAnswerEndpointAccepts(t *testing.T) {
 	}
 }
 
-// TestASRSimPhoneConcurrentTasksDoNotCross 连说几句不串号：每条任务拿到自己的回执。
-// 对应 M7"回执行不稳定 id 导致 done 无反应"那一类问题的数据侧保证。
+// TestASRSimPhoneConcurrentTasksDoNotCross link  sent  id:   task to   back . 
+// to  M7"back      id    done norev "  class   numdatasidekeep . 
 func TestASRSimPhoneConcurrentTasksDoNotCross(t *testing.T) {
 	ts := simPhone(t)
 	texts := []string{"记一下第一条", "记一下第二条", "查一下第三条"}

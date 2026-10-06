@@ -7,7 +7,7 @@ import (
 	"voicesign-harness/config"
 )
 
-// recordingObserver 记录收到的 ProgressEvent 序列。
+// recordingObserver   recvto  ProgressEvent  list. 
 type recordingObserver struct{ got []ProgressEvent }
 
 func (r *recordingObserver) OnEvent(ev ProgressEvent) { r.got = append(r.got, ev) }
@@ -20,8 +20,8 @@ func stages(evs []ProgressEvent) []string {
 	return out
 }
 
-// TestRunner_SingleRun：Runner 单跑一条 NOTE 任务，事件序列 accepted→pipeline_start→
-// stage_change(→done)→pipeline_done。
+// TestRunner_SingleRun: Runner      NOTE task, event list accepted->pipeline_start->
+// stage_change(->done)->pipeline_done. 
 func TestRunner_SingleRun(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -31,7 +31,7 @@ func TestRunner_SingleRun(t *testing.T) {
 
 	ob := &recordingObserver{}
 	rn := NewRunner(ts, tmpl, ob)
-	rn.emit(EvAccepted, "", "") // 入口已受理
+	rn.emit(EvAccepted, "", "") // in alreadyaccept 
 
 	out, err := rn.Run(context.Background(), "记一下 runner 单跑")
 	if err != nil {
@@ -73,7 +73,7 @@ func TestRunner_SingleRun(t *testing.T) {
 	}
 }
 
-// TestRunner_TraceIDPropagated：Runner 上抛事件的 TraceID == 入参 requestID。
+// TestRunner_TraceIDPropagated: Runner on event  TraceID == in  requestID. 
 func TestRunner_TraceIDPropagated(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

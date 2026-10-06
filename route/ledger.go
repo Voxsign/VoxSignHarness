@@ -1,8 +1,8 @@
-// ledger.go —— 路由台账落盘（append-only JSONL）+ 可聚合（VHS-OUTPUT-001 对齐）。
+// ledger.go -- routeby    (append-only JSONL)+    (VHS-OUTPUT-001 to ). 
 //
-// Peter：「大概什么时候用什么模型……要有记录。」
-// 没有落盘，三个考察点就无法考察：L0 比例（低=太慢）/ 升级率（高=快模型选错）/
-// 升级后是否真的变好（需要跨记录对比，见 Aggregate）。
+// owner: "    time use   type……needhas  . "
+//  has  ,     ptthenno   : L0  example( = slow)/   rate( =fast type  )/
+//   afteris   change (needneed   to , see Aggregate). 
 package route
 
 import (
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Record 是一条台账记录（字段对齐 VHS-OUTPUT-001）。
+// Record is      (charsegto  VHS-OUTPUT-001). 
 type Record struct {
 	At             string `json:"at"`
 	Task           string `json:"task,omitempty"`
@@ -26,27 +26,27 @@ type Record struct {
 	Kind           Kind   `json:"kind,omitempty"`
 	KindFallback   bool   `json:"kind_fallback"`
 	RouteAmbiguous bool   `json:"route_ambiguous"`
-	// WMCAP 留痕（否则"为什么这次抓了 N 个"无从回答）。
+	// WMCAP   ( then"as      N  "nofromanswer). 
 	Capacity    int     `json:"capacity,omitempty"`
 	DemandFloor int     `json:"demand_floor,omitempty"`
 	Familiarity float64 `json:"familiarity,omitempty"`
 	Capped      bool    `json:"capped,omitempty"`
 	DropCount   int     `json:"drop_count,omitempty"`
-	// 考察点③（升级后是否变好）所需字段。
-	// **向后兼容**：旧条目没有这些字段 ⇒ 指针为 nil ⇒ 一律标 unknown，**不得当 0**。
+	//   pt③(  afteris change ) needcharseg. 
+	// **toaftercompat**:   obj has  charseg ⇒ refer as nil ⇒   tgt unknown, **  cur 0**. 
 	TaskID        string   `json:"task_id,omitempty"`
 	QualityBefore *float64 `json:"quality_before,omitempty"`
 	QualityAfter  *float64 `json:"quality_after,omitempty"`
 	OutcomeAfter  string   `json:"outcome_after,omitempty"`
 }
 
-// Ledger 是 append-only 台账写入器。
+// Ledger is append-only   write . 
 type Ledger struct {
 	Path string
 	Now  func() time.Time
 }
 
-// Write 把一次决策（含其台账条目）落盘；每条决策写一行，含聚合所需的全部字段。
+// Write pipe  decide ( its   obj)  ;   decide write  ,     need safety charseg. 
 func (l *Ledger) Write(d Decision, task string, kind Kind) error {
 	if l.Path == "" {
 		return nil
@@ -104,30 +104,30 @@ func (l *Ledger) Write(d Decision, task string, kind Kind) error {
 	return f.Sync()
 }
 
-// Summary 是台账聚合结果（三个考察指标）。
+// Summary is    close (    refertgt). 
 type Summary struct {
 	Total          int           `json:"total"`
 	ByLevel        map[Level]int `json:"by_level"`
-	L0Share        float64       `json:"l0_share"`        // 考察点①：低 = 太慢
-	EscalationRate float64       `json:"escalation_rate"` // 考察点②：高 = 快模型选错
+	L0Share        float64       `json:"l0_share"`        //   pt①:   =  slow
+	EscalationRate float64       `json:"escalation_rate"` //   pt②:   = fast type  
 	DegradedRate   float64       `json:"degraded_rate"`
 	AskedUserRate  float64       `json:"asked_user_rate"`
 	KindFallbacks  int           `json:"kind_fallbacks"`
 	RouteAmbiguous int           `json:"route_ambiguous"`
-	// 考察点③：只统计**同时具备前后质量**的条目；缺字段计 UnknownQuality（不当 0）。
+	//   pt③: only  **sametime  beforeafter  **  obj;  charseg  UnknownQuality( cur 0). 
 	ComparableQuality int `json:"comparable_quality"`
 	UnknownQuality    int `json:"unknown_quality"`
 	Improved          int `json:"improved"`
 	Worsened          int `json:"worsened"`
 }
 
-// Aggregate 读 JSONL 并算出考察指标（考察点③"升级后是否变好"需跨记录对比，留给上层分析）。
+// Aggregate read JSONL and out  refertgt(  pt③"  afteris change "need   to ,  giveon split ). 
 func Aggregate(path string) (Summary, error) {
 	s := Summary{ByLevel: map[Level]int{}}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil // 没落盘过 = 空台账，不崩
+			return s, nil //    ed = empty  ,   
 		}
 		return s, err
 	}
@@ -141,7 +141,7 @@ func Aggregate(path string) (Summary, error) {
 		}
 		var rec Record
 		if err := json.Unmarshal(line, &rec); err != nil {
-			continue // 坏行跳过，不中断聚合
+			continue //    ed,  interrupt  
 		}
 		s.Total++
 		s.ByLevel[rec.Level]++
@@ -169,7 +169,7 @@ func Aggregate(path string) (Summary, error) {
 				s.Worsened++
 			}
 		} else {
-			s.UnknownQuality++ // 旧条目/缺字段 ⇒ unknown，不当 0
+			s.UnknownQuality++ //   obj/ charseg ⇒ unknown,  cur 0
 		}
 	}
 	if s.Total > 0 {

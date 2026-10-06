@@ -1,21 +1,21 @@
-// Package input 是 ASR 输入容错管线（架构 §5）：
-// ①raw 原样保留 → ②clean 清洗 → ③correct 词典纠错 → ④classify 意图 JSON → ⑤低置信回问。
-// 本包只依赖 contract/config，不依赖 memory（纠错通过 Correcter 接口注入，memory.Dictionary 天然实现）。
+// Package input is ASR  in  manageline(   §5): 
+// ①raw origkindkeep  -> ②clean clean -> ③correct word correction -> ④classify intent JSON -> ⑤low-confidenceclarification. 
+// this packageonlydependency contract/config,  dependency memory(correction ed Correcter connect notein, memory.Dictionary dayhowever now). 
 package input
 
 import "strings"
 
-// defaultFillers 是默认填充词表（架构 §5.1）。
-// M7（Codex/gpt-6-luna 诊断 2026-10-02）：移除"那个"——它是核心指代词（anaphora），
-// 句尾"修那个/打开上次那个"里是操作对象，cleaner 剥掉后 refer 指代消解失效（根因实证）。
+// defaultFillers isdefault fillwordtable(   §5.1). 
+// M7(Codex/gpt-6-luna  disconnect 2026-10-02):   "  "-- is  coreferenceword(anaphora), 
+// senttail"fix  / openon   " is  to , cleaner   after refer coreference resolution  (rootbecause  ). 
 var defaultFillers = []string{"嗯", "请", "帮我", "麻烦", "的话", "一下"}
 
-// Cleaner 做文本规范化：全角→半角、去句首句尾填充词、压缩空白、去句末标点。
+// Cleaner   baserule ize: safety ->  ,  sentfirstsenttail fillword,   empty ,  sentendtgtpt. 
 type Cleaner struct {
 	Fillers []string
 }
 
-// NewCleaner 构造清洗器。fillers 为 nil 时使用默认填充词表。
+// NewCleaner   clean . fillers as nil time usedefault fillwordtable. 
 func NewCleaner(fillers []string) *Cleaner {
 	if fillers == nil {
 		fillers = defaultFillers
@@ -23,16 +23,16 @@ func NewCleaner(fillers []string) *Cleaner {
 	return &Cleaner{Fillers: fillers}
 }
 
-// Clean 执行清洗管线：
-//  1. 全角字母/数字/标点 → 半角（含全角空格 U+3000 → 半角空格）；
-//  2. 循环去除句首、句尾填充词；
-//  3. 压缩连续空白为单个空格；
-//  4. 去除句末句读标点（保留 /~._-、中文与字母数字等内部字符）。
+// Clean   cleanmanageline: 
+//  1. safety char /numchar/tgtpt ->   ( safety empty  U+3000 ->   empty ); 
+//  2.     sentfirst, senttail fillword; 
+//  3.   linkcontinueempty as  empty ; 
+//  4.   sentendsentreadtgtpt(keep  /~._-, in andchar numcharetcin char ). 
 func (c *Cleaner) Clean(raw string) string {
 	s := fullwidthToHalf(raw)
 	s = strings.TrimSpace(s)
 
-	// 循环去句首填充词（每轮 TrimSpace 后再比对，处理「帮我 请 …」这类空格间隔）。
+	//    sentfirst fillword(   TrimSpace afteragain to, handle"     …" classempty time ). 
 	for changed := true; changed; {
 		changed = false
 		t := strings.TrimSpace(s)
@@ -48,7 +48,7 @@ func (c *Cleaner) Clean(raw string) string {
 		}
 	}
 
-	// 循环去句尾填充词。
+	//    senttail fillword. 
 	for changed := true; changed; {
 		changed = false
 		t := strings.TrimSpace(s)
@@ -64,15 +64,15 @@ func (c *Cleaner) Clean(raw string) string {
 		}
 	}
 
-	// 压缩连续空白（含全角空格已在上一步转半角）。
+	//   linkcontinueempty ( safety empty already on     ). 
 	s = strings.Join(strings.Fields(s), " ")
 
-	// 去句末句读标点（不动内部的 /~._-）。
+	//  sentendsentreadtgtpt(  in   /~._-). 
 	s = strings.TrimRight(s, "。．.！!？?，,、；;：:～~ ")
 	return strings.TrimSpace(s)
 }
 
-// fullwidthToHalf 把全角 ASCII（U+FF01–U+FF5E）与全角空格（U+3000）转为半角。
+// fullwidthToHalf pipesafety  ASCII(U+FF01–U+FF5E)andsafety empty (U+3000) as  . 
 func fullwidthToHalf(s string) string {
 	r := []rune(s)
 	for i, ch := range r {

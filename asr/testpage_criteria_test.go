@@ -1,6 +1,6 @@
 //go:build vhsui
 
-// testpage_criteria_test.go —— 测试页判据（先红纪律）：能打开 + 一次输入 ⇒ 台账多一条。
+// testpage_criteria_test.go --     data(first   ):   open +    in ⇒      . 
 package asr
 
 import (
@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// uiStore 是本 tag 自带的教词后端（避免依赖 vhs002 夹具里的实现）。
+// uiStore isbase tag     wordafterend(  dependency vhs002      now). 
 type uiStore struct {
 	m      map[string]string
 	taught map[string]bool
@@ -65,7 +65,7 @@ func newUIServer(t *testing.T) (string, string) {
 	return srv.URL, filepath.Join(dir, "reallog.jsonl")
 }
 
-// 页面能打开（200 + 有输入框）。
+//  face  open(200 + has in ). 
 func TestUIPageServesHTML(t *testing.T) {
 	base, _ := newUIServer(t)
 	resp, err := http.Get(base + "/")
@@ -83,7 +83,7 @@ func TestUIPageServesHTML(t *testing.T) {
 	}
 }
 
-// **页面意义所在**：一次输入 ⇒ 真实台账多一条（含考察点所需字段）。
+// ** face    **:    in ⇒        (   pt needcharseg). 
 func TestUIOneInputAppendsRealLog(t *testing.T) {
 	base, logPath := newUIServer(t)
 	body := `{"text":"把哎欧劈艾斯接上"}`
@@ -118,7 +118,7 @@ func TestUIOneInputAppendsRealLog(t *testing.T) {
 	}
 }
 
-// 看台账端点能算出三个考察点。
+//    endpoint  out    pt. 
 func TestUITestLogComputesMetrics(t *testing.T) {
 	base, _ := newUIServer(t)
 	for i := 0; i < 2; i++ {

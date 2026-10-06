@@ -1,4 +1,4 @@
-// intent_test.go —— 本地意图分类的默认门禁（无网络、确定性）。
+// intent_test.go -- baselyintentclassify default forbid(no  ,   ity). 
 package asr
 
 import (
@@ -49,7 +49,7 @@ func TestLowConfidenceAsksBack(t *testing.T) {
 	}
 }
 
-// fakeIntentModel 记录调用次数，用于证明"高置信不调模型"。
+// fakeIntentModel   calluse num, useat  "    call type". 
 type fakeIntentModel struct {
 	calls int
 	typ   string

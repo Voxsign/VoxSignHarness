@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadContracts_Builtins(t *testing.T) {
-	r, err := LoadContracts(t.TempDir()) // 空目录 → 仅内置
+	r, err := LoadContracts(t.TempDir()) // emptyobj  -> onlyin 
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestLoadContracts_Builtins(t *testing.T) {
 	}
 }
 
-// 用例 9a：ValidateContract 拒绝缺字段契约。
+// useexample 9a: ValidateContract reject charseg  . 
 func TestValidateContract_RejectsMissing(t *testing.T) {
 	good := contract.ToolContract{
 		Name: "demo", Version: "1.0",
@@ -43,25 +43,25 @@ func TestValidateContract_RejectsMissing(t *testing.T) {
 		t.Fatalf("合法契约应通过: %v", err)
 	}
 
-	// 缺 name
+	//   name
 	badName := good
 	badName.Name = ""
 	if err := ValidateContract(badName); err == nil {
 		t.Fatal("缺 name 应拒绝")
 	}
-	// 缺 caps
+	//   caps
 	badCaps := good
 	badCaps.Caps = nil
 	if err := ValidateContract(badCaps); err == nil {
 		t.Fatal("缺 caps 应拒绝")
 	}
-	// cap 缺 risk
+	// cap   risk
 	badRisk := good
 	badRisk.Risk = map[string]string{}
 	if err := ValidateContract(badRisk); err == nil {
 		t.Fatal("cap 缺 risk 应拒绝")
 	}
-	// 非法 risk 级别
+	//    risk  diff
 	badLevel := good
 	badLevel.Risk = map[string]string{"run": "catastrophic"}
 	if err := ValidateContract(badLevel); err == nil {
@@ -69,7 +69,7 @@ func TestValidateContract_RejectsMissing(t *testing.T) {
 	}
 }
 
-// 用例 9b：REGISTER_TOOL —— approved=false 不落盘；approved=true 落盘且下次可见。
+// useexample 9b: REGISTER_TOOL -- approved=false    ; approved=true   andunder  see. 
 func TestRegister_ToggleApproved(t *testing.T) {
 	dir := t.TempDir()
 	r, _ := LoadContracts(dir)
@@ -80,7 +80,7 @@ func TestRegister_ToggleApproved(t *testing.T) {
 		Risk:   map[string]string{"convert": "low"},
 	}
 
-	// approved=false → error 且不落盘
+	// approved=false -> error and   
 	if err := r.Register(c, false); err == nil {
 		t.Fatal("approved=false 应返回错误")
 	}
@@ -88,7 +88,7 @@ func TestRegister_ToggleApproved(t *testing.T) {
 		t.Fatal("approved=false 不得落盘")
 	}
 
-	// approved=true → 落盘
+	// approved=true ->   
 	if err := r.Register(c, true); err != nil {
 		t.Fatalf("approved=true 应注册成功: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRegister_ToggleApproved(t *testing.T) {
 		t.Fatalf("approved=true 应落盘: %v", err)
 	}
 
-	// 重新 LoadContracts 应看到语音注册的契约
+	// heavynew LoadContracts   tolangaudionote    
 	r2, err := LoadContracts(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -110,11 +110,11 @@ func TestRegister_ToggleApproved(t *testing.T) {
 	}
 }
 
-// 用例 9c：非法契约即使 approved=true 也拒绝落盘。
+// useexample 9c:     i.e.  approved=true alsoreject  . 
 func TestRegister_InvalidRejectedEvenApproved(t *testing.T) {
 	dir := t.TempDir()
 	r, _ := LoadContracts(dir)
-	bad := contract.ToolContract{Name: "broken"} // 缺 caps/params/risk
+	bad := contract.ToolContract{Name: "broken"} //   caps/params/risk
 	if err := r.Register(bad, true); err == nil {
 		t.Fatal("非法契约即使 approved=true 也应拒绝")
 	}
@@ -128,12 +128,12 @@ func TestExecutor_TestPassAndFail(t *testing.T) {
 	reg, _ := LoadContracts(t.TempDir())
 	c := reg.Contracts["test"]
 
-	// 真命令退出 0 → OK
+	//     out 0 -> OK
 	recv, err := e.Exec("test", map[string]any{"command": []string{"/bin/sh", "-c", "true"}}, c)
 	if err != nil || !recv.OK {
 		t.Fatalf("sh -c true 应 OK，recv=%+v err=%v", recv, err)
 	}
-	// 真命令退出 1 → OK=false（执行器按真实退出码，不自证）
+	//     out 1 -> OK=false(   by   outcode,    )
 	recv, _ = e.Exec("test", map[string]any{"command": []string{"/bin/sh", "-c", "exit 1"}}, c)
 	if recv.OK {
 		t.Fatal("sh -c exit 1 应 OK=false")
@@ -147,12 +147,12 @@ func TestExecutor_FileWriteBackupAndRead(t *testing.T) {
 	reg2, _ := LoadContracts(t.TempDir())
 	c := reg2.Contracts["file"]
 
-	// 先写初版
+	// firstwriteinit 
 	recv, _ := e.Exec("file", map[string]any{"action": "write", "path": "a.txt", "content": "v1"}, c)
 	if !recv.OK {
 		t.Fatalf("首次写入失败: %+v", recv)
 	}
-	// 再改：应在 logDir/backups 留下 v1 备份
+	// againmodify:    logDir/backups  under v1   
 	recv, _ = e.Exec("file", map[string]any{"action": "write", "path": "a.txt", "content": "v2", "log_dir": logDir}, c)
 	if !recv.OK {
 		t.Fatalf("二次写入失败: %+v", recv)
@@ -161,7 +161,7 @@ func TestExecutor_FileWriteBackupAndRead(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("二次写入前应留 1 个备份，实际 %d", len(entries))
 	}
-	// 读回 v2
+	// readback v2
 	recv, _ = e.Exec("file", map[string]any{"action": "read", "path": "a.txt"}, c)
 	if !strings.Contains(recv.Stdout, "v2") {
 		t.Fatalf("读回应为 v2，实际 %q", recv.Stdout)
@@ -181,20 +181,20 @@ func TestExecutor_SearchAndVerify(t *testing.T) {
 	if !recv.OK || !strings.Contains(recv.Stdout, "main.go") {
 		t.Fatalf("search symbol 应命中 main.go: %+v", recv)
 	}
-	// verify: 文件真实包含 func main → pass
+	// verify: file     func main -> pass
 	recv, _ = e.Exec("verify", map[string]any{"kind": "file", "args": []string{"main.go", "func main"}}, reg.Contracts["verify"])
 	if !recv.OK {
 		t.Fatalf("verify 应 pass: %+v", recv)
 	}
-	// verify: 期望子串不存在 → fail
+	// verify: period    store  -> fail
 	recv, _ = e.Exec("verify", map[string]any{"kind": "diff", "args": []string{"main.go", "nonexistent"}}, reg.Contracts["verify"])
 	if recv.OK {
 		t.Fatalf("verify 对真实缺失应 fail: %+v", recv)
 	}
 }
 
-// TestExecutorBackupPathReported（M4-2）：NOTE 追加 / EDIT 改写后，结构化输出必须带出
-// 具体备份路径（BackupMarker 行），且该路径真实存在于 backups 目录；只读动作无该字段。
+// TestExecutorBackupPathReported(M4-2): NOTE    / EDIT modifywriteafter, close ize out   out
+//  body  path(BackupMarker  ), and path  store at backups obj ; read-only  no charseg. 
 func TestExecutorBackupPathReported(t *testing.T) {
 	dir := t.TempDir()
 	logDir := t.TempDir()
@@ -202,7 +202,7 @@ func TestExecutorBackupPathReported(t *testing.T) {
 	reg, _ := LoadContracts(t.TempDir())
 	c := reg.Contracts["file"]
 
-	// NOTE 追加：notes.md 先存在旧内容，再 append。
+	// NOTE   : notes.md firststore  in , again append. 
 	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("旧想法\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestExecutorBackupPathReported(t *testing.T) {
 		t.Fatalf("备份路径应落在 log_dir/backups 下: %s", noteBackup)
 	}
 
-	// EDIT 改写：同样带出备份路径。
+	// EDIT modifywrite: samekind out  path. 
 	recv, _ = e.Exec("file", map[string]any{"action": "write", "path": "notes.md", "content": "覆写\n", "log_dir": logDir}, c)
 	editBackup := ParseBackupPath(recv.Stdout)
 	if editBackup == "" {
@@ -234,7 +234,7 @@ func TestExecutorBackupPathReported(t *testing.T) {
 		t.Fatalf("两次备份应是不同文件，不能同名覆盖: note=%s edit=%s", noteBackup, editBackup)
 	}
 
-	// 只读动作：read / exists 不应出现备份字段。
+	// read-only  : read / exists   outnow  charseg. 
 	recv, _ = e.Exec("file", map[string]any{"action": "read", "path": "notes.md"}, c)
 	if p := ParseBackupPath(recv.Stdout); p != "" {
 		t.Fatalf("只读 read 不应带出备份路径，实际 %q", p)
@@ -244,7 +244,7 @@ func TestExecutorBackupPathReported(t *testing.T) {
 		t.Fatalf("exists 不应带出备份路径，实际 %q", p)
 	}
 
-	// 首次创建（无旧内容）→ 无备份，无字段。
+	// first   (no in )-> no  , nocharseg. 
 	recv, _ = e.Exec("file", map[string]any{"action": "write", "path": "brand_new.md", "content": "first\n", "log_dir": logDir}, c)
 	if p := ParseBackupPath(recv.Stdout); p != "" {
 		t.Fatalf("首次创建无旧内容不应带出备份路径，实际 %q", p)

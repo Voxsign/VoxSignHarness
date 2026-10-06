@@ -1,4 +1,4 @@
-// config_test.go —— 模型中心配置与通道的默认门禁（无网络）。
+// config_test.go --  typein   and   default forbid(no  ). 
 package modelcenter
 
 import (
@@ -67,7 +67,7 @@ func TestValidateC2OnlyLearnWritesBack(t *testing.T) {
 func TestValidateC3EnabledNeedsModelID(t *testing.T) {
 	c := goodConfig()
 	d := c.Channels["diagnose"]
-	d.Enabled = true // model_id 仍是 TBD
+	d.Enabled = true // model_id  is TBD
 	c.Channels["diagnose"] = d
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "C3") {
 		t.Fatalf("C3 未拦住 TBD 的启用通道: %v", err)
@@ -110,8 +110,8 @@ func TestLoadRealTemplate(t *testing.T) {
 	if !cfg.Channels["default"].Enabled || cfg.Channels["default"].ModelID != "deepseek-flash" {
 		t.Errorf("default 通道配置不符: %+v", cfg.Channels["default"])
 	}
-	// **升版（Lead 2026-10-03，Peter 拍板）**：learn 用 deepseek-reasoner 启用；
-	// diagnose 按 quality 档启用。旧断言"模型未定前必须 enabled:false"已不适用。
+	// **  (Lead 2026-10-03, owner   )**: learn use deepseek-reasoner startuse; 
+	// diagnose by quality  startuse.  disconnectlang" type  before   enabled:false"already  use. 
 	if !cfg.Channels["diagnose"].Enabled {
 		t.Error("diagnose 应已启用（quality 档）")
 	}
@@ -169,7 +169,7 @@ func TestRegistryOnlyEnablesConfiguredChannels(t *testing.T) {
 	}
 }
 
-// TestInvokeUsesMeasuredPath：请求必须打到实测路径，鉴权头正确，响应按 OpenAI 格式解析。
+// TestInvokeUsesMeasuredPath:  require   to  path,   headpos ,   by OpenAI  formresolve . 
 func TestInvokeUsesMeasuredPath(t *testing.T) {
 	var gotPath, gotAuth, gotModel string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -242,10 +242,10 @@ func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// 档位+用途两层（Lead 裁决）：通道名与档位分开；default 不得指向 quality。
+//   +useway  (Lead  decide):   nameand  splitopen; default   referto quality. 
 func TestTiersAndChannelResolution(t *testing.T) {
 	c := goodConfig()
-	// plan/research ⇒ 走 quality 档
+	// plan/research ⇒   quality  
 	for _, ch := range []Channel{ChannelPlan, ChannelResearch} {
 		got, err := c.ResolveModel(ch)
 		if err != nil {
@@ -255,11 +255,11 @@ func TestTiersAndChannelResolution(t *testing.T) {
 			t.Errorf("[tier] %s 应解析到 quality 档模型，实际 %q", ch, got)
 		}
 	}
-	// default ⇒ fast 档（显式 model_id 优先）
+	// default ⇒ fast  ( form model_id  first)
 	if got, _ := c.ResolveModel(ChannelDefault); got != "deepseek-flash" {
 		t.Errorf("[tier] default 应为快档模型，实际 %q", got)
 	}
-	// ⑤ 分档退化：default 指向 quality ⇒ 必须拦下
+	// ⑤ split  ize: default referto quality ⇒    under
 	bad := goodConfig()
 	d := bad.Channels["default"]
 	d.Tier = TierQuality
@@ -267,7 +267,7 @@ func TestTiersAndChannelResolution(t *testing.T) {
 	if err := bad.Validate(); err == nil {
 		t.Error("[tier] default 指向 quality 却未被拦下（分档退化）")
 	}
-	// fail-closed：通道引用不存在的 tier ⇒ 报错
+	// fail-closed:    use store   tier ⇒   
 	bad2 := goodConfig()
 	p := bad2.Channels["plan"]
 	p.Tier = "no-such-tier"

@@ -1,7 +1,7 @@
 package server
 
-// cloud_test.go — 云端模式 P0 验证（R15a JWT / R16 租户隔离 / R17 配额）。
-// 真实谷歌登录（JWKS 200 路径）待用户提供 VHS_GOOGLE_CLIENT_ID 后接真 OAuth 验证。
+// cloud_test.go —  end form P0   (R15a JWT / R16  user   / R17   ). 
+//       (JWKS 200 path) useuser provide VHS_GOOGLE_CLIENT_ID afterconnect  OAuth   . 
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func testCloudCfg(t *testing.T, logDir string) *config.Config {
 	return &cfg
 }
 
-// R15a：JWT 签发 / 校验 / 过期 / 篡改。
+// R15a: JWT  send / verify / edperiod /  modify. 
 func TestCloudJWTSignAndVerify(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testCloudCfg(t, dir)
@@ -34,7 +34,7 @@ func TestCloudJWTSignAndVerify(t *testing.T) {
 	if err := c.ensureInit(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	// 正常签发 + 校验
+	// pos  send + verify
 	claims := sessionClaims{Sub: "user-a", Email: "a@x.com", Tier: "free",
 		IAT: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix()}
 	tok, err := signJWT(c.jwtKey, claims)
@@ -45,17 +45,17 @@ func TestCloudJWTSignAndVerify(t *testing.T) {
 	if err != nil || got.Sub != "user-a" || got.Tier != "free" {
 		t.Fatalf("verify: got=%+v err=%v", got, err)
 	}
-	// 篡改 payload → 验签失败
+	//  modify payload ->     
 	bad := tok[:len(tok)-3] + "abc"
 	if _, err := c.verifyJWT(bad); err == nil {
 		t.Fatal("篡改 token 应验签失败")
 	}
-	// 过期拒绝
+	// edperiodreject
 	expired, _ := signJWT(c.jwtKey, sessionClaims{Sub: "u", Exp: time.Now().Add(-time.Hour).Unix()})
 	if _, err := c.verifyJWT(expired); err == nil || !strings.Contains(err.Error(), "过期") {
 		t.Fatalf("过期 token 应拒绝，err=%v", err)
 	}
-	// 签名不可伪造（用错 secret）
+	// signature    (use  secret)
 	other, _ := signJWT([]byte("wrong-secret"), sessionClaims{Sub: "u", Exp: time.Now().Add(time.Hour).Unix()})
 	if _, err := c.verifyJWT(other); err == nil {
 		t.Fatal("错 secret 签名应拒绝")
@@ -63,7 +63,7 @@ func TestCloudJWTSignAndVerify(t *testing.T) {
 	t.Log("R15a JWT 正反用例 PASS")
 }
 
-// R16：双租户热词/配额命名空间隔离。
+// R16:   user word/   nameemptytime  . 
 func TestCloudTenantIsolation(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testCloudCfg(t, dir)
@@ -82,11 +82,11 @@ func TestCloudTenantIsolation(t *testing.T) {
 	if ta.Sub != "user-a" || tb.Sub != "user-b" {
 		t.Fatalf("租户身份错位")
 	}
-	// 各自租户目录独立
+	//    userobj   
 	if c.tenantPath("user-a") == c.tenantPath("user-b") {
 		t.Fatal("租户目录应隔离")
 	}
-	// 热词互不影响：A 写热词后 B 目录不出现
+	//  word    : A write wordafter B obj  outnow
 	aDir := c.tenantPath("user-a")
 	if err := os.MkdirAll(filepath.Join(aDir, "personal"), 0o755); err != nil {
 		t.Fatal(err)
@@ -101,11 +101,11 @@ func TestCloudTenantIsolation(t *testing.T) {
 	if !containsStr(wa, "九万年就准") || containsStr(wb, "九万年就准") {
 		t.Fatalf("热词隔离失败 wa=%v wb=%v", wa, wb)
 	}
-	// 种子词作为新租户默认热词（设计如此）：B 首次加载应含种子词
-	if !containsStr(wb, "季总") {
+	// kind word asnew userdefault word(  e.g. ): B first     kind word
+	if !containsStr(wb, "截个图") {
 		t.Fatalf("新租户应获得种子词，wb=%v", wb)
 	}
-	// 配额独立：A 设为体验过期租户后消费到超限，B 不受影响
+	//     : A  asbody edperiod userafter  to limit, B  accept  
 	ta.TrialUntil = time.Now().Add(-time.Hour).Unix()
 	ab, _ := json.Marshal(ta)
 	if err := os.WriteFile(filepath.Join(c.tenantPath("user-a"), "tenant.json"), ab, 0o644); err != nil {
@@ -119,14 +119,14 @@ func TestCloudTenantIsolation(t *testing.T) {
 	if _, err := c.checkAndConsume("user-a"); err != quotaExceededErr {
 		t.Fatalf("A 应超限，err=%v", err)
 	}
-	// B 为新租户（体验会员期内按 prime，left=-1 即不限额）：消费应无错
+	// B asnew user(body   periodinby prime, left=-1 i.e. limit ):    no 
 	if _, err := c.checkAndConsume("user-b"); err != nil {
 		t.Fatalf("B 不应受影响，err=%v", err)
 	}
 	t.Log("R16 租户隔离 PASS（目录/热词/配额独立）")
 }
 
-// R17：免费超限 429 语义 + 体验会员放行。
+// R17:    limit 429 semantic + body     . 
 func TestCloudQuotaTiers(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testCloudCfg(t, dir)
@@ -141,7 +141,7 @@ func TestCloudQuotaTiers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(c.tenantPath("free-user"), "tenant.json"), fs, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// 免费档：3 条额度，第 4 条超限
+	//    : 3    ,   4   limit
 	for i := 0; i < 3; i++ {
 		if _, err := c.checkAndConsume("free-user"); err != nil {
 			t.Fatalf("前 3 条应放行: %v", err)
@@ -150,11 +150,11 @@ func TestCloudQuotaTiers(t *testing.T) {
 	if _, err := c.checkAndConsume("free-user"); err != quotaExceededErr {
 		t.Fatalf("第 4 条应 quota_exceeded, got %v", err)
 	}
-	// prime 档不限
+	// prime   limit
 	if _, err := c.checkAndConsume("prime-user"); err != nil {
 		t.Fatalf("prime 首次应放行: %v", err)
 	}
-	// 体验会员期内按 prime（新租户 trial_until 未来）
+	// body   periodinby prime(new user trial_until   )
 	tr, _ := c.loadTenant("trial-user", "t@x.com")
 	if tr.effectiveTier() != "prime" {
 		t.Fatalf("体验会员期应视为 prime, got %s", tr.effectiveTier())

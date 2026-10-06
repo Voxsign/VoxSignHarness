@@ -1,9 +1,9 @@
 //go:build vhs002live
 
-// intent_live_test.go —— 真模型兜底的**实跑证明**（独立 tag，不继承 vhs002 夹具的注入开关）。
+// intent_live_test.go --   type bot **    **(   tag,  continue  vhs002    noteinopenclose). 
 //
-// 运行：VHS_MODEL_LIVE=1 go test -tags vhs002live ./asr -run TestLiveIntent
-// key 只从进程环境/.env 读；缺 key → skip（不内置）。
+//   : VHS_MODEL_LIVE=1 go test -tags vhs002live ./asr -run TestLiveIntent
+// key onlyfromprocess  /.env read;   key -> skip( in ). 
 package asr
 
 import (
@@ -33,7 +33,7 @@ func TestLiveIntentModelFallbackAndRealTimeout(t *testing.T) {
 		t.Skipf("缺少密钥环境变量（按纪律跳过）: %v", err)
 	}
 
-	// ① 真实兜底：低置信文本 → 真的调 default 通道并采纳其分类。
+	// ①    bot: low-confidence base ->   call default   and  itsclassify. 
 	got := ClassifyIntentWith(context.Background(), "嗯这个东西吧", reg, 40*time.Second)
 	if got.Degraded {
 		t.Fatalf("真实兜底失败(降级) = 链路未验证: %s", got.DegradedReason)
@@ -43,7 +43,7 @@ func TestLiveIntentModelFallbackAndRealTimeout(t *testing.T) {
 	}
 	t.Logf("live 兜底 OK: type=%s confidence=%.2f", got.Type, got.Confidence)
 
-	// ② **真实超时路径**：给 1ms 超时，真的发起调用并让它超时 → 必须 fail-open 降级。
+	// ② **   timepath**: give 1ms  time,   sendraisecalluseand   time ->    fail-open   . 
 	start := time.Now()
 	to := ClassifyIntentWith(context.Background(), "嗯这个东西吧", reg, time.Millisecond)
 	elapsed := time.Since(start)
@@ -61,7 +61,7 @@ func TestLiveIntentModelFallbackAndRealTimeout(t *testing.T) {
 	}
 	t.Logf("live 真实超时降级 OK：%v，原因=%s", elapsed, to.DegradedReason)
 
-	// ③ 生产超时（3s）真跑：VHS_INTENT_3S=1 时执行（默认跳过以保持 live 快速）。
+	// ③ occurproduce time(3s)  : VHS_INTENT_3S=1 time  (default edbykeepkeep live fast ). 
 	if os.Getenv("VHS_INTENT_3S") == "1" {
 		start3 := time.Now()
 		p3 := ClassifyIntentWith(context.Background(), "嗯这个东西吧", reg, DefaultIntentTimeout)

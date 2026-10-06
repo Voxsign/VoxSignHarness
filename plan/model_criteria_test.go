@@ -1,10 +1,10 @@
 //go:build vhsplanmodel
 
-// model_criteria_test.go —— 模型式 planner 的专属判据 PM-1..PM-5（**独立 tag**，
-// 不混进 PL/RV 的 15 条 —— "把两件事塞进同一判据"是本项目栽过六次的那个毛病）。
+// model_criteria_test.go --  typeform planner     data PM-1..PM-5(**   tag**, 
+//     PL/RV   15   -- "pipe     same  data"isbase obj ed       ). 
 //
-// 运行：go test -tags vhsplanmodel ./plan
-// 默认用**假模型**（离线、确定性）；真模型另有 env 守卫测试。
+//   : go test -tags vhsplanmodel ./plan
+// defaultuse**  type**( line,   ity);   type has env     . 
 package plan
 
 import (
@@ -22,7 +22,7 @@ import (
 	"voicesign-harness/tools"
 )
 
-// fakeModel 是可编程的假模型：可返回固定文本、错误或超时。
+// fakeModel is      type:  returnback   base, erroror time. 
 type fakeModel struct {
 	out   string
 	err   error
@@ -45,7 +45,7 @@ func (f *fakeModel) Propose(ctx context.Context, goal string, m Manifest) (strin
 	return f.out, nil
 }
 
-// loadModelRegistries 是本 tag 自带的真值装载（不依赖 vhsplan tag 的测试文件）。
+// loadModelRegistries isbase tag     value  ( dependency vhsplan tag    file). 
 func loadModelRegistries(t *testing.T) (*tools.Registry, *space.Registry) {
 	t.Helper()
 	missing := filepath.Join(t.TempDir(), "no-such-dir")
@@ -73,7 +73,7 @@ func validModelPlan() string {
 	]}`
 }
 
-// PM-1 不得引入清单外能力：模型编出 deploy 步骤 → 本机必须拒绝。
+// PM-1    inlistout  :  type out deploy    -> base   reject. 
 func TestPM1NeverIntroducesExternalCapability(t *testing.T) {
 	f, m := fixture(t)
 	f.out = `{"steps":[{"tool":"deploy","caps":["exec"],"params":{"target":"prod"},"action":"部署到生产","output":"已部署","why":"用户要求部署","domain":"external"}]}`
@@ -91,7 +91,7 @@ func TestPM1NeverIntroducesExternalCapability(t *testing.T) {
 	}
 }
 
-// PM-2 失败可降级（默认行为）：模型报错 / 超时 / 垃圾输出 → 回落到规则式，不抛错、不卡死。
+// PM-2      (default as):  type   /  time /    out -> back toruleform,    ,    . 
 func TestPM2FallsBackOnModelFailure(t *testing.T) {
 	cases := []struct {
 		name string
@@ -118,7 +118,7 @@ func TestPM2FallsBackOnModelFailure(t *testing.T) {
 			if len(pl.Steps) == 0 && !pl.Refused {
 				t.Errorf("[PM-2] 降级后既无步骤也未拒绝: %+v", pl)
 			}
-			// 降级后仍必须是清单内能力
+			//   after   islistin  
 			for _, s := range pl.Steps {
 				if missing := missingTools(m, []Step{s}); len(missing) > 0 {
 					t.Errorf("[PM-2] 降级计划含清单外工具 %v", missing)
@@ -128,8 +128,8 @@ func TestPM2FallsBackOnModelFailure(t *testing.T) {
 	}
 }
 
-// PM-3 确定性可复检：同一（假）模型输出 → 计划结构逐字段一致。
-// 真模型非确定，容忍口径见文档与 live 测试（只比工具序列）。
+// PM-3   ity   : same ( ) type out ->   close  charseg  . 
+//   type   ,    pathsee  and live   (only    list). 
 func TestPM3DeterministicGivenSameModelOutput(t *testing.T) {
 	_, m := fixture(t)
 	a, err := ModelPlanner{Model: &fakeModel{out: validModelPlan()}}.Plan("把这个项目里所有 TODO 整理成一份文档", m)
@@ -145,10 +145,10 @@ func TestPM3DeterministicGivenSameModelOutput(t *testing.T) {
 	}
 }
 
-// PM-4 不得绕过域门禁：模型提出越域步骤 → 本机拒绝（域门禁优先）。
+// PM-4    eddomain forbid:  type out domain   -> base reject(domain forbid first). 
 func TestPM4NeverBypassesDomainGate(t *testing.T) {
 	f, m := fixture(t)
-	// vault-creds 域只读；模型却在里面写文件。
+	// vault-creds domainread-only;  typebut  facewritefile. 
 	f.out = `{"steps":[{"tool":"file","caps":["write"],"params":{"path":"/creds/x","content":"x"},"action":"写入凭证库","output":"文件","why":"用户要求","domain":"vault-creds"}]}`
 	pl, err := ModelPlanner{Model: f}.Plan("把凭证写进保险库", m)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestPM4NeverBypassesDomainGate(t *testing.T) {
 	}
 }
 
-// PM-5 可解释：合法模型计划的每一步必须有 why；计划必须标明来源。
+// PM-5  resolve :    type        has why;     tgt   . 
 func TestPM5Explainable(t *testing.T) {
 	_, m := fixture(t)
 	pl, err := ModelPlanner{Model: &fakeModel{out: validModelPlan()}}.Plan("把这个项目里所有 TODO 整理成一份文档", m)
@@ -182,7 +182,7 @@ func TestPM5Explainable(t *testing.T) {
 			t.Errorf("[PM-5] 第 %d 步缺依据（黑盒）: %+v", i, s)
 		}
 	}
-	// 缺 why 的模型计划应被本机拒绝（不可解释即不合规）
+	//   why   type   bebase reject(  resolve i.e.  rule)
 	f2, m2 := fixture(t)
 	f2.out = `{"steps":[{"tool":"search","caps":["text"],"params":{"pattern":"x"},"action":"搜索","output":"结果","why":"","domain":"project"}]}`
 	pl2, _ := ModelPlanner{Model: f2}.Plan("找到这个项目里的 TODO 文件", m2)
@@ -201,14 +201,14 @@ func liveRegistry(cfgPath string) (*modelcenter.Registry, error) {
 	return modelcenter.NewRegistry(cfg)
 }
 
-// 真模型冒烟（默认跳过；VHS_PLAN_MODEL_LIVE=1 才跑）。
-// 只断言**结构性**性质（PM-1 保底），不比文本 —— 真模型非确定。
+//   type  (default ed; VHS_PLAN_MODEL_LIVE=1 only ). 
+// onlydisconnectlang**close ity**ity (PM-1 keepbot),    base --   type   . 
 func TestPM1LiveModelNeverExternal(t *testing.T) {
 	if os.Getenv("VHS_PLAN_MODEL_LIVE") != "1" {
 		t.Skip("需要 VHS_PLAN_MODEL_LIVE=1（默认跳过，避免测试依赖外网/密钥）")
 	}
 	if _, err := loadDotEnvForTest(filepath.Join("..", ".env")); err != nil {
-		// .env 不在（如 worktree）不致命：只要进程环境已提供 key 就继续。
+		// .env   (e.g. worktree)   : onlyneedprocess  already provide key thencontinuecontinue. 
 		if os.Getenv("AIOPS_KEY") == "" {
 			t.Skipf("无 .env 且环境无 AIOPS_KEY（按纪律跳过）: %v", err)
 		}

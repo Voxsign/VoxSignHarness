@@ -1,6 +1,6 @@
 // l2config.go -- L2(  type)  and  (Task A). 
 //
-// Peter     confirm type, thus**defaultvaluewrite  code +  be config/env overwrite**(modify  i.e.  ). 
+// owner     confirm type, thus**defaultvaluewrite  code +  be config/env overwrite**(modify  i.e.  ). 
 // ⚠️ defaultvalue `deepseek-v4-pro` by Lead refer ; **live  data   env   **(VHS_PLAN_L2_LIVE=1). 
 package plan
 

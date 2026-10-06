@@ -1,11 +1,11 @@
-// 否定仲裁的**评审补充**测试（缺口 G1 · 独立评审第二轮）。
+//      **  patchfill**  (   G1 ·        ). 
 //
-// 评审 P1/P2 指出的两类漏洞，本文件各钉一组：
+//    P1/P2 referout  class  , basefile    : 
 //
-//	P1 该收未收：勿/请勿/切勿/无需/不再/免了，以及裸"别"后随的去/管/乱/忘
-//	   —— 漏了这些，"请勿删除"仍会被判成可执行删除，G1 就没闭合。
-//	P2 误伤（安全侧）：要不要/不要紧 里的"不要"不是否定
-//	   —— 误判会让正常指令凭空弹出确认，把"帮我删除"变成"确认不执行吗"。
+//	P1  recv recv:  /  /  /noneed/ again/ , byand "diff"after   /manage/ / 
+//	   --    , "  delete"  be become   delete, G1 then   . 
+//	P2   (safesafetyside): need need/ need    " need" is  
+//	   --     pos refer  empty outconfirm, pipe"  delete"changebecome"confirm    ". 
 package input
 
 import (
@@ -14,7 +14,7 @@ import (
 	"voicesign-harness/contract"
 )
 
-// TestNegationCoversReviewP1Markers 评审 P1：补齐后的否定词必须都生效。
+// TestNegationCoversReviewP1Markers    P1: patch after   word  alloccur . 
 func TestNegationCoversReviewP1Markers(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []string{
@@ -42,7 +42,7 @@ func TestNegationCoversReviewP1Markers(t *testing.T) {
 	}
 }
 
-// TestNegationReviewP2FalsePositives 评审 P2：形似否定、实非否定。
+// TestNegationReviewP2FalsePositives    P2:     ,     . 
 func TestNegationReviewP2FalsePositives(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []struct{ text, why string }{
@@ -56,13 +56,13 @@ func TestNegationReviewP2FalsePositives(t *testing.T) {
 				tc.text, tc.why, got.Intent)
 		}
 	}
-	// 「不要紧，帮我删除它」应真的按删除处理（这是用户的真实请求）
+	// " need ,   delete "   bydeletehandle( isuseuser    require)
 	got := c.ClassifyTask("不要紧，帮我删除它")
 	if got.Intent != contract.IntentEdit {
 		t.Errorf("「不要紧，帮我删除它」意图 = %q，期望 EDIT（用户确实要求删除）", got.Intent)
 	}
 
-	// 单测 hasNegation 层面
+	//    hasNegation  face
 	for _, text := range []string{"要不要删除", "不要紧"} {
 		if _, _, hit := hasNegation(text); hit {
 			t.Errorf("hasNegation(%q) 应为 false（形似否定）", text)
@@ -75,7 +75,7 @@ func TestNegationReviewP2FalsePositives(t *testing.T) {
 	}
 }
 
-// TestNegationMarkerPrecedence 长词优先：不要再 / 不需要 不应被 不要 抢先回显。
+// TestNegationMarkerPrecedence  word first:  needagain /  needneed   be  need  firstback . 
 func TestNegationMarkerPrecedence(t *testing.T) {
 	if mk, _, _ := hasNegation("不要再部署"); mk != "不要再" {
 		t.Errorf("回显 = %q，期望「不要再」（长词优先，评审 P6）", mk)

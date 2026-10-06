@@ -60,14 +60,14 @@ func testOptions(t *testing.T, confirm func(string, string) (bool, error)) *Opti
 	}
 }
 
-// TestPipelineWritesAttribution（SPEC 用例 12 / #43）：执行后归因写轨迹 + discuss-log。
+// TestPipelineWritesAttribution(SPEC useexample 12 / #43):   afterattributionwritetrace + discuss-log. 
 func TestPipelineWritesAttribution(t *testing.T) {
 	o := testOptions(t, nil)
 	out, err := Run(context.Background(), o, "记一下归因测试")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 归因六格之一
+	// attribution  of 
 	valid := map[string]bool{
 		"input": true, "context": true, "contract": true,
 		"model": true, "execution": true, "external": true,
@@ -78,7 +78,7 @@ func TestPipelineWritesAttribution(t *testing.T) {
 	if out.Attribution.Evidence == "" {
 		t.Fatal("归因必须带证据")
 	}
-	// discuss.jsonl 落盘
+	// discuss.jsonl   
 	data, err := os.ReadFile(filepath.Join(o.Cfg.Global.LogDir, "discuss.jsonl"))
 	if err != nil {
 		t.Fatalf("discuss-log 应存在: %v", err)
@@ -86,19 +86,19 @@ func TestPipelineWritesAttribution(t *testing.T) {
 	if !strings.Contains(string(data), `"class"`) {
 		t.Fatalf("discuss-log 缺归因: %s", data)
 	}
-	// 认知闭环双报
+	//       
 	if out.LoopMs < 0 || out.NetMs < 0 {
 		t.Fatalf("LoopMs/NetMs 非负: %d/%d", out.LoopMs, out.NetMs)
 	}
 }
 
-// TestPipelineOrdering（SPEC #5）：执行不得在 space_check/risk 之前；拦截即止。
+// TestPipelineOrdering(SPEC #5):       space_check/risk ofbefore; blocki.e.stop. 
 func TestPipelineOrdering(t *testing.T) {
-	// 2026-10-04 语音场景修复：写意图无点名域默认落 project（消除"跑一下测试/提交代码"→越界）；
-	// 无项目根时以 FAILED 收据表达，而非 global 只读域 BOUNDARY_VIOLATION。
+	// 2026-10-04 langaudio scenariofix : write intentnoptnamedomaindefault  project(  "  under  /   code"->out-of-scope); 
+	// no objroottimeby FAILED recvdatatable , but  global read-onlydomain BOUNDARY_VIOLATION. 
 	called := false
 	o := testOptions(t, func(string, string) (bool, error) { called = true; return true, nil })
-	// 直接发起 COMMIT（无 proj 域）→ 默认 project 域，执行被放行；无项目根 → FAILED
+	//  connectsendraise COMMIT(no proj domain)-> default project domain,   be  ; no objroot -> FAILED
 	out, err := Run(context.Background(), o, "提交代码")
 	if err != nil {
 		t.Fatal(err)
@@ -117,9 +117,9 @@ func TestPipelineOrdering(t *testing.T) {
 	}
 }
 
-// TestPipelineConfirmStrategy（用例 8/9）：auto 不打断；human 永远问。
+// TestPipelineConfirmStrategy(useexample 8/9): auto   disconnect; human    . 
 func TestPipelineConfirmStrategy(t *testing.T) {
-	// auto 路径：ConfirmFn 不被调用
+	// auto path: ConfirmFn  becalluse
 	autoCalled := false
 	o1 := testOptions(t, func(string, string) (bool, error) { autoCalled = true; return true, nil })
 	if _, err := Run(context.Background(), o1, "记一下 auto 测试"); err != nil {
@@ -129,7 +129,7 @@ func TestPipelineConfirmStrategy(t *testing.T) {
 		t.Fatal("auto 决策不应打断用户")
 	}
 
-	// human 路径：注册 proj 域后 COMMIT 必问
+	// human path: note  proj domainafter COMMIT   
 	projDir := t.TempDir()
 	o2 := testOptions(t, nil)
 	_ = o2.Spaces.Add(&space.Manifest{
@@ -150,7 +150,7 @@ func TestPipelineConfirmStrategy(t *testing.T) {
 	}
 }
 
-// TestPipelineVerifyHooked（用例 10）：NOTE 后 verify 独立校验 notes.md 真实存在。
+// TestPipelineVerifyHooked(useexample 10): NOTE after verify independent verification notes.md   store . 
 func TestPipelineVerifyHooked(t *testing.T) {
 	o := testOptions(t, nil)
 	out, err := Run(context.Background(), o, "记一下 verify 钩子")
@@ -162,12 +162,12 @@ func TestPipelineVerifyHooked(t *testing.T) {
 	}
 }
 
-// TestMechanicalImpactRealRefCount：temp 项目内有引用 vs 无引用 → RefCount 差异。
+// TestMechanicalImpactRealRefCount: temp  objinhas use vs no use -> RefCount diffdiff. 
 func TestMechanicalImpactRealRefCount(t *testing.T) {
 	root := t.TempDir()
 	projDir := filepath.Join(root, "proj")
 	_ = os.MkdirAll(projDir, 0o755)
-	// 目标文件 + 两个引用它的文件
+	// objtgtfile +    use  file
 	_ = os.WriteFile(filepath.Join(projDir, "target.go"), []byte("package target\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(projDir, "a.go"), []byte(`import "proj/target"\n`), 0o644)
 	_ = os.WriteFile(filepath.Join(projDir, "b_test.go"), []byte(`package a\nimport "proj/target"\n`), 0o644)
@@ -182,7 +182,7 @@ func TestMechanicalImpactRealRefCount(t *testing.T) {
 	})
 	o := &Options{Cfg: cfgVal(cfg), Spaces: spaces}
 
-	// 有引用：target.go 被 a.go / b_test.go 引用 → RefCount≥2，HasTest=true
+	// has use: target.go be a.go / b_test.go  use -> RefCount>=2, HasTest=true
 	it := contract.Intent{Intent: contract.IntentEdit, Space: "proj",
 		Params: map[string]string{"object": "target"}}
 	imp := o.mechanicalImpact(it)
@@ -193,7 +193,7 @@ func TestMechanicalImpactRealRefCount(t *testing.T) {
 		t.Fatal("scope 内有 b_test.go，HasTest 应为 true")
 	}
 
-	// 无引用：不存在的符号 → RefCount=0
+	// no use:  store   id -> RefCount=0
 	it2 := contract.Intent{Intent: contract.IntentEdit, Space: "proj",
 		Params: map[string]string{"object": "nonexistent_xyz"}}
 	imp2 := o.mechanicalImpact(it2)
@@ -202,15 +202,15 @@ func TestMechanicalImpactRealRefCount(t *testing.T) {
 	}
 }
 
-// TestMechanicalImpactExcludesLogDir：log_dir 自身绝不能被算成引用。
+// TestMechanicalImpactExcludesLogDir: log_dir      be become use. 
 func TestMechanicalImpactExcludesLogDir(t *testing.T) {
 	root := t.TempDir()
 	logDir := filepath.Join(root, "logs")
 	_ = os.MkdirAll(logDir, 0o755)
-	// 故意把轨迹日志写进 logDir 且含目标字样
+	// thus pipetraceday write  logDir and objtgtcharkind
 	_ = os.WriteFile(filepath.Join(logDir, "trajectory-20260101.jsonl"), []byte("{\"target\":\"leaked_sym\"}\n"), 0o644)
 
-	// 空项目 scope（真实项目目录在别处）
+	// empty obj scope(   objobj  diffplace)
 	projDir := t.TempDir()
 	spaces, _ := space.Load(t.TempDir())
 	_ = spaces.Add(&space.Manifest{
@@ -228,9 +228,9 @@ func TestMechanicalImpactExcludesLogDir(t *testing.T) {
 	}
 }
 
-// TestSummaryAggregation（#52）：跑 2 个任务后摘要含任务数/通过率/均值/按域/按归因。
+// TestSummaryAggregation(#52):   2  taskafter need tasknum/ edrate/ value/bydomain/byattribution. 
 func TestSummaryAggregation(t *testing.T) {
-	// 2026-10-04 修复恢复：task_metrics kind 登记 + Space 补齐（摘要按域/按归因/纯管线标注恢复）
+	// 2026-10-04 fix   : task_metrics kind    + Space patch ( needbydomain/byattribution/ managelinetgtnote  )
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下摘要任务A"); err != nil {
 		t.Fatal(err)
@@ -249,8 +249,8 @@ func TestSummaryAggregation(t *testing.T) {
 	}
 }
 
-// TestCacheNeverAutoApprovesHuman（安全回归）：human 级 COMMIT 批准一次后，
-// 第二次同 quad 仍必须走 ConfirmFn；ConfirmFn 返回 false 时绝不执行。
+// TestCacheNeverAutoApprovesHuman(safesafetyback ): human   COMMIT approveapprove  after, 
+//    same quad      ConfirmFn; ConfirmFn returnback false time    . 
 func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 	o := testOptions(t, nil)
 	projDir := t.TempDir()
@@ -262,10 +262,10 @@ func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 	calls := 0
 	o.ConfirmFn = func(taskID, q string) (bool, error) {
 		calls++
-		return true, nil // 第一次放行
+		return true, nil //      
 	}
 
-	// 第一次 COMMIT：human，走 ConfirmFn，放行。
+	//     COMMIT: human,   ConfirmFn,   . 
 	out1, err := Run(context.Background(), o, "在 proj 提交所有改动")
 	if err != nil {
 		t.Fatal(err)
@@ -280,8 +280,8 @@ func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 		t.Fatal("首次应放行")
 	}
 
-	// 第二次同 quad：若 human 被错误缓存，ConfirmFn 不会再被调。
-	// 改 ConfirmFn 返回 false——若被缓存绕过，仍会 approved=true 并执行（bug）。
+	//    same quad: if human beerrorcache, ConfirmFn   againbecall. 
+	// modify ConfirmFn returnback false--ifbecache ed,    approved=true and  (bug). 
 	o.ConfirmFn = func(taskID, q string) (bool, error) {
 		calls++
 		return false, nil
@@ -301,9 +301,9 @@ func TestCacheNeverAutoApprovesHuman(t *testing.T) {
 	}
 }
 
-// TestSummaryNetExcludesNoLLM（M4-1 ④）：纯管线 NOTE 不计入 Net 均值。
+// TestSummaryNetExcludesNoLLM(M4-1 ④):  manageline NOTE   in Net  value. 
 func TestSummaryNetExcludesNoLLM(t *testing.T) {
-	// 2026-10-04 修复恢复：task_metrics 行已写入轨迹（此前 kind 未登记被拒）
+	// 2026-10-04 fix   : task_metrics  alreadywritetrace( before kind    bereject)
 	o := testOptions(t, nil)
 	if _, err := Run(context.Background(), o, "记一下纯管线A"); err != nil {
 		t.Fatal(err)
@@ -339,15 +339,15 @@ func TestPipelineReceiptFourLines(t *testing.T) {
 	}
 }
 
-// TestReceiptShowsBackupPath（M4-3 ②）：第二次 NOTE 追加后回执撤销行显示具体 .bak 文件名。
+// TestReceiptShowsBackupPath(M4-3 ②):     NOTE   afterback     show body .bak filename. 
 func TestReceiptShowsBackupPath(t *testing.T) {
 	o := testOptions(t, nil)
 
-	// 第一次：创建 notes.md（无旧内容，无备份）。
+	//    :    notes.md(no in , no  ). 
 	if _, err := Run(context.Background(), o, "记一下 first"); err != nil {
 		t.Fatal(err)
 	}
-	// 第二次：追加（旧内容存在 → 触发 VHS_BACKUP_PATH）。
+	//    :   ( in store  -> triggersend VHS_BACKUP_PATH). 
 	out, err := Run(context.Background(), o, "记一下 second")
 	if err != nil {
 		t.Fatal(err)
@@ -360,9 +360,9 @@ func TestReceiptShowsBackupPath(t *testing.T) {
 	}
 }
 
-// TestAskOptionsStructured（M4-3 ① → Codex 2026-10-02 改版）：候选按意图动态生成，形状 [{id,label}]。
+// TestAskOptionsStructured(M4-3 ① -> Codex 2026-10-02 modify ):   byintent stateoccurbecome,  status [{id,label}]. 
 func TestAskOptionsStructured(t *testing.T) {
-	// EDIT 歧义候选 = refer 目标文件（结构化 [{id,label}]）
+	// EDIT      = refer objtgtfile(close ize [{id,label}])
 	opts := optionsForIntent(&contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85},
 		[]refer.Option{{ID: "file-a.go", Label: "file-a.go"}, {ID: "file-b.go", Label: "file-b.go"}})
 	if len(opts) != 2 {
@@ -375,11 +375,11 @@ func TestAskOptionsStructured(t *testing.T) {
 	}
 }
 
-// TestGitCommitInProjectRoot（M4-4）：temp git 项目注册 project 域，COMMIT → 项目根真实出现新提交。
+// TestGitCommitInProjectRoot(M4-4): temp git  objnote  project domain, COMMIT ->  objroot  outnownew  . 
 func TestGitCommitInProjectRoot(t *testing.T) {
 	o := testOptions(t, nil)
 	projDir := t.TempDir()
-	// init git 仓 + 一个初始提交
+	// init git   +   initstart  
 	mustRun := func(args ...string) string {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = projDir
@@ -390,11 +390,11 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
-	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
-	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
-	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
-	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	// ⚠️   use **--local**(2026-10-03 CI  thus): 
+	// produce  code Run()   `git commit`(pipeline.go cm.Dir=root)** has -c notein**, 
+	//  dependency    user    ⇒  ** hasglobal    CI runner** on 
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot   . 
+	// but `--local` **forbidstopon    ** ⇒   provide  , again        .git/config. 
 	mustRun("git", "config", "--local", "user.email", "vhs@test")
 	mustRun("git", "config", "--local", "user.name", "vhs")
 	if err := os.WriteFile(filepath.Join(projDir, "init.txt"), []byte("init\n"), 0o644); err != nil {
@@ -404,7 +404,7 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 	mustRun("git", "-c", "user.email=vhs@test", "-c", "user.name=vhs", "commit", "-q", "-m", "init")
 	before := strings.TrimSpace(mustRun("git", "log", "-1", "--format=%H"))
 
-	// 制造未提交改动
+	// restrict uncommitted changes
 	if err := os.WriteFile(filepath.Join(projDir, "new.txt"), []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -433,14 +433,14 @@ func TestGitCommitInProjectRoot(t *testing.T) {
 	if after == "" || after == before {
 		t.Fatalf("应产生新提交: before=%s after=%s", before, after)
 	}
-	// 历史未改写：init 提交仍在
+	//    modifywrite: init     
 	hist := mustRun("git", "log", "--oneline")
 	if !strings.Contains(hist, "init") {
 		t.Fatalf("历史应保留 init 提交: %s", hist)
 	}
 }
 
-// TestCommitRefusedNoExec（M4-4）：拒绝 COMMIT → 无新提交。
+// TestCommitRefusedNoExec(M4-4): reject COMMIT -> nonew  . 
 func TestCommitRefusedNoExec(t *testing.T) {
 	o := testOptions(t, nil)
 	projDir := t.TempDir()
@@ -454,11 +454,11 @@ func TestCommitRefusedNoExec(t *testing.T) {
 		return string(out)
 	}
 	mustRun("git", "init", "-q")
-	// ⚠️ 必须用 **--local**（2026-10-03 CI 事故）：
-	// 产品代码 Run() 的 `git commit`（pipeline.go cm.Dir=root）**没有 -c 注入**，
-	// 它依赖仓库的 user 配置 ⇒ 在**没有全局身份的 CI runner** 上会
-	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot 失败。
-	// 而 `--local` **禁止上溯父仓库** ⇒ 既提供身份，又不会污染主仓库 .git/config。
+	// ⚠️   use **--local**(2026-10-03 CI  thus): 
+	// produce  code Run()   `git commit`(pipeline.go cm.Dir=root)** has -c notein**, 
+	//  dependency    user    ⇒  ** hasglobal    CI runner** on 
+	// `fatal: empty ident name` ⇒ TestGitCommitInProjectRoot   . 
+	// but `--local` **forbidstopon    ** ⇒   provide  , again        .git/config. 
 	mustRun("git", "config", "--local", "user.email", "vhs@test")
 	mustRun("git", "config", "--local", "user.name", "vhs")
 	_ = os.WriteFile(filepath.Join(projDir, "a.txt"), []byte("a\n"), 0o644)
@@ -485,7 +485,7 @@ func TestCommitRefusedNoExec(t *testing.T) {
 	}
 }
 
-// TestAskOptionsIncludeReferCandidates（M4-5）：意图候选 + refer 候选合并去重。
+// TestAskOptionsIncludeReferCandidates(M4-5): intent   + refer    and heavy. 
 func TestAskOptionsIncludeReferCandidates(t *testing.T) {
 	base := optionsForIntent(&contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85}, nil)
 	referOpts := []refer.Option{
@@ -504,23 +504,23 @@ func TestAskOptionsIncludeReferCandidates(t *testing.T) {
 		}
 		ids[o.ID] = true
 	}
-	// 固定意图候选已废除（Codex 2026-10-02：options 按意图动态生成）——只验证 refer 候选去重
-	// 必含 refer 候选
+	//   intent  already  (Codex 2026-10-02: options byintent stateoccurbecome)--only   refer    heavy
+	//    refer   
 	for _, want := range []string{"dict:那个", "rec:orders.go"} {
 		if !ids[want] {
 			t.Fatalf("应含 refer 候选 %s: %+v", want, merged)
 		}
 	}
-	// 空 refer 候选 → 仅意图候选
+	// empty refer    -> onlyintent  
 	onlyIntent := mergeAskOptions(base, nil)
 	if len(onlyIntent) != len(base) {
 		t.Fatalf("无 refer 候选时应仅返回意图候选: %+v", onlyIntent)
 	}
 }
 
-// TestQueryHighConfidenceSkipsReferAsk（M7，外部模型诊断方案 2026-10-02）：
-// QUERY 高置信（>=0.8）且含"这个"口语代词 → 跳过 refer 指代消解 → 不 need_ask。
-// 修复前：refer 命中"这个"、候选为空 → 写 Ask"你说的「这个」指的是哪个？"→ need_ask（答非所问）。
+// TestQueryHighConfidenceSkipsReferAsk(M7, out  type disconnect   2026-10-02): 
+// QUERY    (>=0.8)and "  " lang word ->  ed refer coreference resolution ->   need_ask. 
+// fix before: refer  in"  ",   asempty -> write Ask"   "  "refer is   "-> need_ask(    ). 
 func TestQueryHighConfidenceSkipsReferAsk(t *testing.T) {
 	o := testOptions(t, nil)
 	out, err := Run(context.Background(), o, "查一下 这个方案怎么样")
@@ -532,8 +532,8 @@ func TestQueryHighConfidenceSkipsReferAsk(t *testing.T) {
 	}
 }
 
-// TestShouldResolveReferGate（M7 门控纯函数单测，方案来源 Codex/gpt-6-luna 外部诊断；
-// 2026-10-04 多轮指代接线新增 hasRecent 参数——有会话上下文时 QUERY 非裸指代也解析）。
+// TestShouldResolveReferGate(M7     num  ,      Codex/gpt-6-luna out  disconnect; 
+// 2026-10-04   coreferenceconnectlinenewadd hasRecent  num--has  onunder time QUERY   coreferencealsoresolve ). 
 func TestShouldResolveReferGate(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -566,8 +566,8 @@ func TestShouldResolveReferGate(t *testing.T) {
 	}
 }
 
-// TestColloquialQuestionNoReferAsk（M7 复验补强）：22:04 用户原句——规则可能误判 NOTE，
-// 但含问句特征（"效果怎么样"）时 refer 指代消解整体豁免，不因"这个"写 Ask。
+// TestColloquialQuestionNoReferAsk(M7   patch ): 22:04 useuserorigsent--rule     NOTE, 
+// but  sent  ("    kind")time refer coreference resolution body  ,  because"  "write Ask. 
 func TestColloquialQuestionNoReferAsk(t *testing.T) {
 	o := testOptions(t, nil)
 	out, err := Run(context.Background(), o, "我现在测试一下，看看效果怎么样，如果这个效果好，我们就继续推进，就是重点是把这个能力建立起来")
@@ -579,13 +579,13 @@ func TestColloquialQuestionNoReferAsk(t *testing.T) {
 	}
 }
 
-// TestCodexNineRegressions — Codex/gpt-6-luna 外部诊断（2026-10-02）9 项回归清单。
-// 覆盖：陈述引用抑制 / 操作指代仍 Ask / 裸指代真歧义 / 元指令不 Ask / 既有正例不回归。
+// TestCodexNineRegressions — Codex/gpt-6-luna out  disconnect(2026-10-02)9  back list. 
+// overwrite:    use restrict /   coreference  Ask /  coreference    /  refer   Ask /  hasposexample back . 
 func TestCodexNineRegressions(t *testing.T) {
 	cases := []struct {
 		name    string
 		text    string
-		wantAsk string // 子串断言；"" 表示断言 Ask 为空
+		wantAsk string //   disconnectlang; "" tableshowdisconnectlang Ask asempty
 	}{
 		{"1-本实例不弹那个指哪个", "我现在想认真开始测，测完了之后能把这个哈你真的开始推进起来，我那个前端的问题又不过来", "指的是哪个"},
 		{"2-陈述引用不Ask（断言不含'指的是哪个'）", "我那个前端的问题又不过来", "NOT:指的是哪个"},
@@ -617,7 +617,7 @@ func TestCodexNineRegressions(t *testing.T) {
 		} else if !strings.Contains(out.Ask, c.wantAsk) {
 			t.Errorf("[%s] 预期 ask 含 %q，got ask=%q", c.name, c.wantAsk, out.Ask)
 		}
-		// 固定候选不得出现（Codex：options 按意图生成，不塞"改文件/查代码/记想法/提交"）
+		//       outnow(Codex: options byintentoccurbecome,   "modifyfile/  code/   /  ")
 		for _, oo := range out.Options {
 			if oo.ID == "edit" || oo.ID == "query" || oo.ID == "note" || oo.ID == "commit" {
 				t.Errorf("[%s] options 出现固定候选 id=%s（应为按意图动态生成）", c.name, oo.ID)
@@ -626,7 +626,7 @@ func TestCodexNineRegressions(t *testing.T) {
 	}
 }
 
-// TestCodexOptionsForIntent — EDIT 歧义候选只含 refer 目标文件（Codex 第 5 项）。
+// TestCodexOptionsForIntent — EDIT     only  refer objtgtfile(Codex   5  ). 
 func TestCodexOptionsForIntent(t *testing.T) {
 	it := contract.Intent{Intent: contract.IntentEdit, Confidence: 0.85}
 	opts := optionsForIntent(&it, []refer.Option{{ID: "file-a.go", Label: "file-a.go"}})
@@ -642,10 +642,10 @@ func TestCodexOptionsForIntent(t *testing.T) {
 	}
 }
 
-// TestQueryLLMAnswerDegradedUnchanged（回归）：Providers=nil（testOptions 现状）→
-// 诊断层零开销跳过，QUERY 走逐字降级文案（"今日预算可能已用尽或网络异常"）。
+// TestQueryLLMAnswerDegradedUnchanged(back ): Providers=nil(testOptions nowstatus)->
+//  disconnect  open  ed, QUERY   char    (" day    alreadyuse or  error"). 
 func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
-	o := testOptions(t, nil) // Providers 未设 → nil
+	o := testOptions(t, nil) // Providers    -> nil
 	out, err := Run(context.Background(), o, "查一下 订单系统怎么样")
 	if err != nil {
 		t.Fatal(err)
@@ -654,10 +654,10 @@ func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
 	for _, r := range out.Receipts {
 		joined += r.Stdout
 	}
-	// **判据升版（由 Lead 发起，理由见 Issue #4 comment）**：
-	// 原文断言"含'今日预算可能已用尽或网络异常'"—— 那是在**保护一个错误的归因**：
-	// 真因可能是 HTTP 401 invalid_api_key，用户看了会去等明天/查网络。
-	// 新文：**归因必须来自真实错误** —— 401 ⇒ 鉴权且**不得**出现"预算/网络"。
+	// ** data  (by Lead sendraise,  bysee Issue #4 comment)**: 
+	// orig disconnectlang" ' day    alreadyuse or  error'"--  is **protect  error attribution**: 
+	//  because  is HTTP 401 invalid_api_key, useuser   etc day/   . 
+	// new : **attribution      error** -- 401 ⇒   and**  **outnow"  /  ". 
 	if strings.Contains(joined, "今日预算可能已用尽或网络异常") {
 		t.Errorf("降级文案仍套用旧的「预算/网络」归因：%s", joined)
 	}
@@ -668,8 +668,8 @@ func TestQueryLLMAnswerDegradedUnchanged(t *testing.T) {
 	}
 }
 
-// TestQueryLLMAnswerDiagRetrySucceeds（异常自愈接线）：fast 首次 500 → 诊断模型判 retry
-// → 指数退避后重试 fast 成功，返回回答（而非降级文案）。诊断请求 failure 带 model=fast。
+// TestQueryLLMAnswerDiagRetrySucceeds(error  connectline): fast first  500 ->  disconnect type  retry
+// -> refernum  afterheavy  fast become , returnbackanswer(but     ).  disconnect require failure   model=fast. 
 func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
 	logDir := t.TempDir()
 	var fastCalls int32
@@ -677,7 +677,7 @@ func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
 
 	fastTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&fastCalls, 1)
-		// openaiClient 内部对 5xx 重试 3 次：前 3 次都 500 才能让外层 callFast 真正返回错误。
+		// openaiClient in to 5xx heavy  3  : before 3  all 500 only  out  callFast  posreturnbackerror. 
 		if n <= 3 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, `{"error":"boom"}`)
@@ -714,11 +714,11 @@ func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
 	if !strings.Contains(answer, "订单系统运行正常") {
 		t.Fatalf("diag=retry 退避重试成功应返回回答, got %q", answer)
 	}
-	// 前 3 次耗尽 openaiClient 内部重试 → 外层错误；退避后第 4 次成功。
+	// before 3     openaiClient in heavy  -> out error;   after  4  become . 
 	if atomic.LoadInt32(&fastCalls) != 4 {
 		t.Fatalf("fast 应被调用 4 次（3 次内部 500 + 1 次退避后成功）, got %d", fastCalls)
 	}
-	// 诊断请求体应含 jev-diagnose 模型名；user content（二次 JSON 串）应带 failure.model=fast。
+	//  disconnect requirebody   jev-diagnose  typename; user content(   JSON  )   failure.model=fast. 
 	var outer struct {
 		Model    string `json:"model"`
 		Messages []struct {
@@ -743,12 +743,12 @@ func TestQueryLLMAnswerDiagRetrySucceeds(t *testing.T) {
 	}
 }
 
-// TestRequestIDPassthroughAndTrajectory（P0-4b）：
+// TestRequestIDPassthroughAndTrajectory(P0-4b): 
 //
-//	① Options.RequestID 空 → Run 自生成（= 现状行为，向后兼容）；
-//	② 指定 RequestID → out.RequestID 等于传入值，且写盘的每条轨迹 Entry 的 request_id 都是它。
+//	① Options.RequestID empty -> Run  occurbecome(= nowstatus as, toaftercompat); 
+//	② refer  RequestID -> out.RequestID etcat invalue, andwrite    trace Entry   request_id allis . 
 func TestRequestIDPassthroughAndTrajectory(t *testing.T) {
-	// ① 空 → 自生成
+	// ① empty ->  occurbecome
 	o1 := testOptions(t, nil)
 	out1, err := Run(context.Background(), o1, "记一下 rid 自生成")
 	if err != nil {
@@ -758,7 +758,7 @@ func TestRequestIDPassthroughAndTrajectory(t *testing.T) {
 		t.Fatalf("空 RequestID 应自生成 req-*，实际 %q", out1.RequestID)
 	}
 
-	// ② 指定 → 透传 + 轨迹 Entry 一致
+	// ② refer  ->    + trace Entry   
 	o2 := testOptions(t, nil)
 	o2.RequestID = "client-req-xyz"
 	out2, err := Run(context.Background(), o2, "记一下 rid 指定")
@@ -795,9 +795,9 @@ func TestRequestIDPassthroughAndTrajectory(t *testing.T) {
 	}
 }
 
-// TestSerialGateSharedAcrossClones 验证 C0 串行闸跨任务生效：
-// EnableSerialGate 后，浅拷贝克隆与模板共享同一把 *sync.Mutex（server 每任务 o:=*tmpl）。
-// 反向对照：未 EnableSerialGate 时克隆 mu 各为 nil（即此前闸失效的 bug 形态）。
+// TestSerialGateSharedAcrossClones    C0 serial gate taskoccur : 
+// EnableSerialGate after,      and    same pipe *sync.Mutex(server  task o:=*tmpl). 
+// revtoto :   EnableSerialGate time   mu  as nil(i.e. before     bug  state). 
 func TestSerialGateSharedAcrossClones(t *testing.T) {
 	tmpl := testOptions(t, nil)
 	tmpl.EnableSerialGate()
@@ -810,7 +810,7 @@ func TestSerialGateSharedAcrossClones(t *testing.T) {
 		t.Fatal("克隆必须与模板共享同一把串行闸指针（跨任务串行生效）")
 	}
 
-	// 对照：未初始化的 Options，浅拷贝后 mu 仍为 nil（Run 将各自懒建新锁 → 不串行）
+	// to :  initstartize  Options,    after mu  as nil(Run will    new  ->  serial)
 	fresh := testOptions(t, nil)
 	if fresh.mu != nil {
 		t.Fatal("新 Options 未经 EnableSerialGate，mu 应为 nil")

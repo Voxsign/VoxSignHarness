@@ -1,7 +1,7 @@
-// jev.go —— JEV 快判断客户端（POST /api/decide）。
+// jev.go -- JEV fast disconnectclientuserend(POST /api/decide). 
 //
-// 实测（Lead 2026-10-03）：JEV 只认 candidates，不看 constraints；
-// 非法 kind 已修为 400 BAD_KIND，但**本客户端不假设它永远正确**（非 200 一律错误 ⇒ 上层降级）。
+//   (Lead 2026-10-03): JEV only  candidates,    constraints; 
+//    kind alreadyfixas 400 BAD_KIND, but**baseclientuserend      pos **(  200   error ⇒ on   ). 
 package route
 
 import (
@@ -14,14 +14,14 @@ import (
 	"time"
 )
 
-// Situation 是**紧凑结构化态势**（J2：不是长文本），由本机渲染（WORKMEM-001 的四块板）。
+// Situation is**  close izestate **(J2:  is  base), bybase   (WORKMEM-001     ). 
 type Situation struct {
 	Candidates  []Candidate `json:"candidates"`
 	Constraints []string    `json:"constraints,omitempty"`
 	Memory      []string    `json:"memory,omitempty"`
 }
 
-// JEVRequest 是 /api/decide 的请求体（严格照规范 §2.2 形状）。
+// JEVRequest is /api/decide   requirebody(   rule  §2.2  status). 
 type JEVRequest struct {
 	Kind       Kind      `json:"kind"`
 	Question   string    `json:"question"`
@@ -30,16 +30,16 @@ type JEVRequest struct {
 	MustBeFast bool      `json:"must_be_fast"`
 }
 
-// JEVClient 是 /api/decide 的真实客户端。
+// JEVClient is /api/decide    clientuserend. 
 type JEVClient struct {
-	Endpoint string // 例如 https://aiops.peterzou.com/api/decide
-	APIKey   string // 只从环境/.env 传入；不打印、不落盘
-	// Kind 是具名类型（编译期写不出非法值）。⚠️ 实测：kind 用错时 JEV 返回 400 BAD_KIND。
+	Endpoint string // examplee.g. https://aiops.peterzou.com/api/decide
+	APIKey   string // onlyfrom  /.env  in;    ,    
+	// Kind is nameclasstype(  periodwrite out  value). ⚠️   : kind use time JEV returnback 400 BAD_KIND. 
 	Kind Kind
 	HTTP *http.Client
 }
 
-// Decide 调一次快判断（按规范形状；options 由调用方给出，JEV 不自己发明答案空间 J3）。
+// Decide call  fast disconnect(byrule  status; options bycalluse giveout, JEV    send   emptytime J3). 
 func (c *JEVClient) Decide(ctx context.Context, req JEVRequest) (JEVResponse, error) {
 	hc := c.HTTP
 	if hc == nil {

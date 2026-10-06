@@ -1,7 +1,7 @@
-// testpage.go —— 本地测试页（Peter 要"马上能测"）：零依赖 HTML + 真实台账。
+// testpage.go -- basely   (owner need" on  "):  dependency HTML +     . 
 //
-// 全部意义在**台账落盘**：每用一次就产生一条**真实样本**，
-// 让"L0 比例 / 升级率 / 升级后是否变好"从"无法判定"变成"可算"。
+// safety    **    **:  use  thenproduceoccur  **  kindbase**, 
+//  "L0  example /   rate /   afteris change "from"no   "changebecome"  ". 
 package asr
 
 import (
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// RealLogRecord 是一条真实使用样本（append-only）。
+// RealLogRecord is     usekindbase(append-only). 
 type RealLogRecord struct {
 	At          string  `json:"at"`
 	Raw         string  `json:"raw"`
@@ -38,7 +38,7 @@ func (s *Server) realLogPath() string {
 	return filepath.Join(s.DataDir, "reallog.jsonl")
 }
 
-// appendRealLog 追加一条真实样本（append-only；失败不阻断页面）。
+// appendRealLog       kindbase(append-only;     disconnect face). 
 func (s *Server) appendRealLog(rec RealLogRecord) error {
 	p := s.realLogPath()
 	if p == "" {
@@ -60,7 +60,7 @@ func (s *Server) appendRealLog(rec RealLogRecord) error {
 	return err
 }
 
-// handleTestRun 是页面唯一的数据入口：纠错 → 意图 → 落**真实台账**。
+// handleTestRun is faceunique numdatain : correction -> intent ->  **    **. 
 func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -95,7 +95,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	}
 	logErr := ""
 	if err := s.appendRealLog(rec); err != nil {
-		logErr = err.Error() // 记账失败**留痕**，不静默、不阻断
+		logErr = err.Error() //     **  **,    ,   disconnect
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"raw": rec.Raw, "corrected": rec.Corrected, "punctuated": res.Punctuated,
@@ -107,7 +107,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTestLog 返回最近 N 条 + **三个考察点**的聚合。
+// handleTestLog returnback   N   + **    pt**   . 
 func (s *Server) handleTestLog(w http.ResponseWriter, r *http.Request) {
 	n := 20
 	if v := r.URL.Query().Get("n"); v != "" {
@@ -149,7 +149,7 @@ func (s *Server) handleTestLog(w http.ResponseWriter, r *http.Request) {
 		}
 		return float64(k) / float64(total)
 	}
-	// 末尾 N 条（倒序）
+	// endtail N  (  )
 	recent := recs
 	if len(recent) > n {
 		recent = recent[len(recent)-n:]

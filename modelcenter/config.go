@@ -2,7 +2,7 @@
 //
 //   name**  **: default / diagnose / learn(L1); bot  type**from  read**,  change. 
 // base onlystartuse default( type `deepseek-flash`, ASR-EXT-006 §2   fixpos); 
-// diagnose / learn    Peter refer  type -> `enabled:false`(fail-closed, C3). 
+// diagnose / learn    owner refer  type -> `enabled:false`(fail-closed, C3). 
 //
 // safesafety  (ASR-EXT-006 §4): 
 //   - key **onlyfrom  change  / .env read**,     code,   writeday /commit/    ; 

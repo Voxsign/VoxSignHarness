@@ -23,7 +23,7 @@ func TestSetGet_HitAndMiss(t *testing.T) {
 	if !ok || got != "approved_light" {
 		t.Fatalf("Set 后应命中，got=%q ok=%v", got, ok)
 	}
-	// 四元组缺一即 miss
+	//      i.e. miss
 	other := QuadKey{Intent: "EDIT", Space: "project:demo", Perm: "write", Ref: "other.go"}
 	if _, ok := s.Get(other); ok {
 		t.Fatal("不同 Ref 的四元组不应命中")
@@ -76,7 +76,7 @@ func TestBumpPolicyVersion_AllInvalidate(t *testing.T) {
 	if _, ok := s.Get(k2); ok {
 		t.Fatal("Bump 后 k2 应失效")
 	}
-	// Bump 后新 Set 应能命中（新版本号）
+	// Bump afternew Set    in(new baseid)
 	_ = s.Set(k1, "z")
 	if got, ok := s.Get(k1); !ok || got != "z" {
 		t.Fatalf("Bump 后新写入应命中，got=%q ok=%v", got, ok)

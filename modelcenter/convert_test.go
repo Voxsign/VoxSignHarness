@@ -1,6 +1,6 @@
-// convert_test.go —— 协议互转判据（防 provider/ ↔ modelcenter/ 协议漂移）。
+// convert_test.go --      data(prevent provider/ ↔ modelcenter/     ). 
 //
-// 这是 Lead 明确要求补的一条：两条客户端可以并存，但**响应语义必须能互转**。
+//  is Lead   needrequirepatch   :   clientuserend byandstore, but**  semantic     **. 
 package modelcenter
 
 import (
@@ -10,7 +10,7 @@ import (
 	"voicesign-harness/provider"
 )
 
-// TestProtocolRoundTrip：两侧响应类型必须能无损互转（共享字段逐字保留）。
+// TestProtocolRoundTrip:  side  classtype   no   (  charseg charkeep ). 
 func TestProtocolRoundTrip(t *testing.T) {
 	orig := Response{
 		Channel: ChannelDefault, ModelID: "deepseek-flash",
@@ -24,13 +24,13 @@ func TestProtocolRoundTrip(t *testing.T) {
 	if back.PromptTokens != orig.PromptTokens || back.CompletionTokens != orig.CompletionTokens || back.TotalTokens != orig.TotalTokens {
 		t.Fatalf("usage 在互转中丢失: %+v", back)
 	}
-	// 通道层属性按文档丢弃（provider 信封没有对应字段）
+	//     ityby    (provider    hasto charseg)
 	if back.Channel != "" || back.ModelID != "" {
 		t.Fatalf("通道属性不应由 provider 信封带回: %+v", back)
 	}
 }
 
-// TestProtocolFromProvider：provider 响应 → 本包响应，字段一一对应。
+// TestProtocolFromProvider: provider    -> this package  , charseg  to . 
 func TestProtocolFromProvider(t *testing.T) {
 	pr := provider.ChatResponse{
 		Content: "ok", FinishReason: "length",

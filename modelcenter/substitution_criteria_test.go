@@ -1,7 +1,7 @@
-// substitution_criteria_test.go —— 模型替换检测（先红→绿）。
+// substitution_criteria_test.go --  type    (first -> ). 
 //
-// 依据：Lead 实测「请求 deepseek-reasoner → 响应 model=deepseek-flash」。
-// 若台账只记请求的模型 ⇒ model_id 是假的 ⇒ 一切"用了强模型"的结论作废。
+//  data: Lead   " require deepseek-reasoner ->    model=deepseek-flash". 
+// if  only  require  type ⇒ model_id is   ⇒   "use  type" close   . 
 package modelcenter
 
 import (
@@ -21,7 +21,7 @@ func substRegistry(t *testing.T, actualModel string) *Registry {
 			Model string `json:"model"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		// 上游**如实**回报它实际用的模型（替换行为在这里被模拟）
+		// on **e.g. **back    use  type(   as   be  )
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model":   actualModel,
 			"choices": []map[string]any{{"message": map[string]string{"role": "assistant", "content": "ok"}}},
@@ -50,9 +50,9 @@ func substRegistry(t *testing.T, actualModel string) *Registry {
 	return reg
 }
 
-// ① 响应 model ≠ 请求 model ⇒ 必须标记 substituted（不得静默）
+// ①    model !=  require model ⇒   tgt  substituted(    )
 func TestModelSubstitutionIsRecorded(t *testing.T) {
-	reg := substRegistry(t, "deepseek-flash") // 请求 quality(deepseek-v4-pro)，上游回报 flash
+	reg := substRegistry(t, "deepseek-flash") //  require quality(deepseek-v4-pro), on back  flash
 	resp, err := reg.Invoke(context.Background(), ChannelPlan, "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestModelSubstitutionIsRecorded(t *testing.T) {
 	}
 }
 
-// ④ 反例：一致 ⇒ **不得**误报 substituted
+// ④ revexample:    ⇒ **  **   substituted
 func TestModelSubstitutionNotFalselyReported(t *testing.T) {
 	reg := substRegistry(t, "deepseek-v4-pro")
 	resp, err := reg.Invoke(context.Background(), ChannelPlan, "hi")

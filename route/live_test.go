@@ -1,9 +1,9 @@
 //go:build vhsroute
 
-// live_test.go —— 真端点判据（env 守卫；key 只在进程环境/.env，不打印不落盘）。
+// live_test.go --  endpoint data(env   ; key only process  /.env,       ). 
 //
-//	VHS_ROUTE_LIVE=1 → 真调网关 /api/route
-//	VHS_L1_LIVE=1    → 真调 deepseek-flash（L1）
+//	VHS_ROUTE_LIVE=1 ->  call close /api/route
+//	VHS_L1_LIVE=1    ->  call deepseek-flash(L1)
 package route
 
 import (
@@ -28,7 +28,7 @@ func loadEnv(t *testing.T) string {
 	return key
 }
 
-// 真调网关 /api/route（L0 第二梯队）。
+//  call close /api/route(L0     ). 
 func TestLiveGatewayRoute(t *testing.T) {
 	if os.Getenv("VHS_ROUTE_LIVE") != "1" {
 		t.Skip("需要 VHS_ROUTE_LIVE=1（默认跳过）")
@@ -47,7 +47,7 @@ func TestLiveGatewayRoute(t *testing.T) {
 	}
 }
 
-// 真调 L1（deepseek-flash）——唯一升级目标。
+//  call L1(deepseek-flash)--unique  objtgt. 
 func TestLiveL1DeepseekFlash(t *testing.T) {
 	if os.Getenv("VHS_L1_LIVE") != "1" {
 		t.Skip("需要 VHS_L1_LIVE=1（默认跳过）")

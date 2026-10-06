@@ -1,34 +1,34 @@
-// pinyin.go —— 自写的（稀疏）音节表 + 拼音近音索引（无第三方依赖）。
+// pinyin.go --  write (  )audionodetable +  audio audio  (no   dependency). 
 //
-// 设计取舍（诚实边界）：
-//   - 这是一张**按需增长的稀疏表**，不是完整拼音字典：表里没有的汉字就不参与
-//     近音匹配（窗口直接放弃），因此不会因为"猜拼音"而误伤。
-//   - 多音字**未做读音消歧**（任务书 §9）：表里每个字只登记**一个**读音。
-//     读音歧义会影响匹配的字（觉 jiào/jué、差 chā/chà）整体不收；
-//     调(diào/tiáo) 这类只保留一个读音，并由
-//     TestPinyinTableHasNoCrossGroupDuplicate 禁止"同字跨两组"（那会让结果依赖组顺序）。
-//     宁可不匹配，也不给错的音节。
-//   - 近音匹配**只产出候选**（Candidates），绝不自动改写文本。
-//     自动改写只走人工审定的静态词表（lexicon.go），高风险专名一律只给候选。
+//   get (   boundary): 
+//   -  is  **byneedadd    table**,  isfinish  audiochar : table  has  charthen  and
+//      audio  (   connect  ), because   becauseas"  audio"but  . 
+//   -  audiochar**  readaudio  **(task  §9): table   charonly  **  **readaudio. 
+//     readaudio        char(  jiào/jué, diff chā/chà) body recv; 
+//     call(diào/tiáo)  classonlykeep   readaudio, andby
+//     TestPinyinTableHasNoCrossGroupDuplicate forbidstop"samechar   "(   close dependency   ). 
+//          , also give  audionode. 
+//   -  audio  **onlyproduceout  **(Candidates),     modifywrite base. 
+//       modifywriteonly human    statewordtable(lexicon.go),  risk name  onlygive  . 
 //
-// 匹配方式：索引把"音节序列"映射到正确写法；Correct 时用定长滑窗在原文上取窗口，
-// 窗口每个字都能在表里查到音节、且音节序列命中索引、且窗口文字 ≠ 正确写法时，
-// 产出一条候选。
+//    form:   pipe"audionode list"  topos write ; Correct timeuse     orig onget  , 
+//     charall  table  toaudionode, andaudionode list in  , and   char != pos write time, 
+// produceout    . 
 package asr
 
 import "strings"
 
-// pinyinGroup 是一个音节的汉字分组。**有序切片**（不是 map）：
-// 表必须可回放——Go map 迭代顺序随机，若依赖"先命中者胜"，
-// 同一份代码在不同进程/重启后可能给出不同拼音表，直接破坏 Correct 的可回放承诺。
+// pinyinGroup is  audionode  charsplit . **has   **( is map): 
+// table   back --Go map       , ifdependency"first iner ", 
+// same   code  sameprocess/heavystartafter  giveout same audiotable,  connect   Correct   back   . 
 type pinyinGroup struct {
 	syllable string
 	chars    string
 }
 
-// pinyinGroups 是**有序**分组表：越靠前的组在冲突时优先（当前表中无跨组重复字，
-// 由 TestPinyinTableHasNoCrossGroupDuplicate 钉住；多音字请勿入表——见文件头）。
-// 表随语料增长；新增一条词条时，把该词涉及的变体字补进来即可。
+// pinyinGroups is**has **split table:   before     time first(curbeforetableinno  heavy char, 
+// by TestPinyinTableHasNoCrossGroupDuplicate   ;  audiochar  intable--seefilehead). 
+// table lang add ; newadd  word time, pipe word and changebodycharpatch  i.e. . 
 var pinyinGroups = []pinyinGroup{
 	{"a", "啊"},
 	{"ai", "爱哎唉"},
@@ -323,9 +323,9 @@ var pinyinGroups = []pinyinGroup{
 	{"zuo", "做作坐左座"},
 }
 
-// buildPinyinTable 把**有序**分组表反转成 汉字→音节 的查询表。
-// 纯函数：同一份 pinyinGroups 永远得到同一张表（顺序确定，与 map 迭代无关）。
-// 冲突（同字跨组）时前者优先，但当前表已由测试保证不存在冲突。
+// buildPinyinTable pipe**has **split tablerev become  char->audionode    table. 
+//   num: same   pinyinGroups    tosame  table(    , and map   noclose). 
+//   (samechar  )timebeforeer first, butcurbeforetablealreadyby  keep  store   . 
 func buildPinyinTable() map[rune]string {
 	table := make(map[rune]string)
 	for _, g := range pinyinGroups {
@@ -338,7 +338,7 @@ func buildPinyinTable() map[rune]string {
 	return table
 }
 
-// pinyinTerm 是一条"正确写法 + 其音节序列"的热词条目。
+// pinyinTerm is  "pos write  + itsaudionode list"  word obj. 
 type pinyinTerm struct {
 	canonical string
 	syllables []string
@@ -346,10 +346,10 @@ type pinyinTerm struct {
 	note      string
 }
 
-// pinyinIndex 是音节序列 → 正确写法 的索引。
+// pinyinIndex isaudionode list -> pos write     . 
 type pinyinIndex struct {
 	byKey map[string][]pinyinTerm
-	lens  []int // 需要尝试的窗口长度（rune 数），升序
+	lens  []int // needneed       (rune num),   
 	table map[rune]string
 }
 
@@ -358,7 +358,7 @@ func newPinyinIndex(terms []pinyinTerm, table map[rune]string) *pinyinIndex {
 	seenLen := make(map[int]bool)
 	for _, t := range terms {
 		if len([]rune(t.canonical)) != len(t.syllables) {
-			continue // 条目自洽性检查：音节数必须等于字数
+			continue //  obj  ity  : audionodenum  etcatcharnum
 		}
 		key := strings.Join(t.syllables, "|")
 		idx.byKey[key] = append(idx.byKey[key], t)
@@ -367,7 +367,7 @@ func newPinyinIndex(terms []pinyinTerm, table map[rune]string) *pinyinIndex {
 			idx.lens = append(idx.lens, n)
 		}
 	}
-	// 插入排序即可（长度种类很少），避免再引一个依赖外的排序用法差异。
+	//  in  i.e. (  kindclass  ),   again   dependencyout   use diffdiff. 
 	for i := 1; i < len(idx.lens); i++ {
 		for j := i; j > 0 && idx.lens[j] < idx.lens[j-1]; j-- {
 			idx.lens[j], idx.lens[j-1] = idx.lens[j-1], idx.lens[j]
@@ -376,7 +376,7 @@ func newPinyinIndex(terms []pinyinTerm, table map[rune]string) *pinyinIndex {
 	return idx
 }
 
-// keyOf 返回窗口的音节序列 key；窗口里有表外字（含拉丁/标点）则返回 false，放弃。
+// keyOf returnback   audionode list key;    hastableoutchar(   /tgtpt)thenreturnback false,   . 
 func (p *pinyinIndex) keyOf(runes []rune) (string, bool) {
 	parts := make([]string, len(runes))
 	for i, r := range runes {

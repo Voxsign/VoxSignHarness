@@ -1,6 +1,6 @@
 //go:build vhsui
 
-// uifail_criteria_test.go —— **失败路径**判据（这次修的是静默失败，所以判据钉失败路径）。
+// uifail_criteria_test.go -- **  path** data(  fix is    ,  by data   path). 
 package asr
 
 import (
@@ -20,7 +20,7 @@ func pageScript(t *testing.T) string {
 	return page[i+len("<script>") : i+j]
 }
 
-// 固定桩：元素保存 innerHTML；fetch 可按用例注入失败。
+//    :   keepstore innerHTML; fetch  byuseexamplenotein  . 
 const failHarnessPrelude = `
 const assert = require('assert');
 function el(id){ return {id, value:'', dataset:{}, disabled:false, textContent:'', innerHTML:'', onclick:null, addEventListener(){}}; }
@@ -51,7 +51,7 @@ func runNode(t *testing.T, script string) string {
 	return string(out)
 }
 
-// ① **失败可见**：/v1/testpage 失败 ⇒ #out 必须非空且含错误信息（不得空白）。
+// ① **   see**: /v1/testpage    ⇒ #out    emptyand error  (  empty ). 
 func TestUIFailureIsVisible(t *testing.T) {
 	js := failHarnessPrelude + pageScript(t) + `
 global.fetch = (url, opts)=>{
@@ -73,7 +73,7 @@ run().then(()=>{
 	}
 }
 
-// ② 处理中状态：点击后、响应前 ⇒ 必须出现"处理中"。
+// ② handleinstatus: pt after,   before ⇒   outnow"handlein". 
 func TestUIProcessingState(t *testing.T) {
 	js := failHarnessPrelude + pageScript(t) + `
 let resolveIt; global.fetch = (url, opts)=>{
@@ -93,7 +93,7 @@ p.then(()=>{ assert.ok(!els.out.innerHTML.includes('处理中'), '响应后应�
 	}
 }
 
-// ③ 服务不可用横幅 + ④ 文案（主路径是〔🎤 说话〕）。
+// ③ serveservice  use   + ④   ( pathis 🎤    ). 
 func TestUIBannerAndCopy(t *testing.T) {
 	page := fetchPage(t)
 	if !strings.Contains(page, "🎤 说话") || !strings.Contains(page, "点 <b>〔🎤 说话〕</b>") {
@@ -114,7 +114,7 @@ probe().then(()=>{
 	}
 }
 
-// 优先级③：标点必须体现在测试页链路上（`/v1/correct` 早就有，页面这条链路原先没带）。
+//  first ③: tgtpt  bodynow    chainrouteon(`/v1/correct`  thenhas,  face  chainrouteorigfirst  ). 
 func TestUIPunctuationIsExposed(t *testing.T) {
 	base, _ := newUIServer(t)
 	resp, err := http.Post(base+"/v1/testpage", "application/json",
@@ -134,7 +134,7 @@ func TestUIPunctuationIsExposed(t *testing.T) {
 	if !strings.Contains(page, "标点：") {
 		t.Errorf("[标点] 页面没有标点显示行")
 	}
-	// 正文不变式不得被破坏：corrected（正文）不应把标点恢复进去
+	// pos  changeform  be  : corrected(pos )  pipetgtpt    
 	if strings.Contains(out["corrected"].(string), "，") && !strings.Contains(out["raw"].(string), "，") {
 		t.Logf("提示：corrected 含标点（若实现变更需核对 C1 v2 不变式）: %q", out["corrected"])
 	}

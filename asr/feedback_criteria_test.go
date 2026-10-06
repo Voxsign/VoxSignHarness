@@ -1,8 +1,8 @@
-// feedback_criteria_test.go —— 回馈（✔/✘）落盘 + 黑名单端点判据（§5.1 第 4/5 件；A8/A9/A10）。
+// feedback_criteria_test.go -- back (✔/✘)   +  name endpoint data(§5.1   4/5  ; A8/A9/A10). 
 //
-// 默认门禁（无 tag）：本能力**已实现**，判据随默认门禁常跑（不依赖真实服务/网络）。
-// 钉住：① ✔ ⇒ feedback.jsonl +1；② ✘ ⇒ +1 且**带原因**；③ 黑名单端点登记 + 钩子被调用；
-// ④ 页面含 A2 要求的控制元素。
+// default forbid(no tag): base  **already now**,  data default forbid  ( dependency  serveservice/  ). 
+//   : ① ✔ ⇒ feedback.jsonl +1; ② ✘ ⇒ +1 and** origbecause**; ③  name endpoint   +   becalluse; 
+// ④  face  A2 needrequire control  . 
 package asr
 
 import (
@@ -16,7 +16,7 @@ import (
 	"testing"
 )
 
-// newFeedbackServer 是自包含的测试服务（默认 tag 专用；vhsui 的 newUIServer 不可见）。
+// newFeedbackServer is      serveservice(default tag  use; vhsui   newUIServer   see). 
 func newFeedbackServer(t *testing.T) (base string, feedbackPath string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -71,7 +71,7 @@ func readFeedbackLines(t *testing.T, p string) []FeedbackRecord {
 	return out
 }
 
-// A8：点〔✔ 对〕⇒ feedback.jsonl 多一条。
+// A8: pt ✔ to ⇒ feedback.jsonl    . 
 func TestFeedbackAcceptedAppendsLine(t *testing.T) {
 	base, p := newFeedbackServer(t)
 	postFeedback(t, base, `{"text_raw":"哈牛斯","text_final":"harness","accepted":true,"source":"user_edit"}`)
@@ -85,7 +85,7 @@ func TestFeedbackAcceptedAppendsLine(t *testing.T) {
 	if lines[0].Raw != "哈牛斯" || lines[0].Corrected != "harness" {
 		t.Errorf("[FB-01] 原文/纠错未记录：%+v", lines[0])
 	}
-	// 原有语义不破：accepted+有改动 ⇒ 词典仍登记（SCOPE-AUDIT-01 依赖）。
+	// orighassemantic  : accepted+haschange ⇒ word    (SCOPE-AUDIT-01 dependency). 
 	resp, err := http.Post(base+"/v1/dictionary", "application/json", strings.NewReader(`{"op":"list"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestFeedbackAcceptedAppendsLine(t *testing.T) {
 	}
 }
 
-// A9：点〔✘ 不对〕⇒ 多一条且**带原因**。
+// A9: pt ✘  to ⇒    and** origbecause**. 
 func TestFeedbackRejectedAppendsLineWithReason(t *testing.T) {
 	base, p := newFeedbackServer(t)
 	postFeedback(t, base, `{"text_raw":"把哎欧劈艾斯接上","text_final":"把aiops接上","accepted":false,"reason":"这个不该改"}`)
@@ -117,7 +117,7 @@ func TestFeedbackRejectedAppendsLineWithReason(t *testing.T) {
 	}
 }
 
-// A9 边界：✘ 未填原因 ⇒ 记默认原因（字段恒非空，不许丢）。
+// A9  boundary: ✘   origbecause ⇒  defaultorigbecause(charseg  empty,  allow ). 
 func TestFeedbackRejectedDefaultsReason(t *testing.T) {
 	base, p := newFeedbackServer(t)
 	postFeedback(t, base, `{"text_raw":"x","text_final":"y","accepted":false}`)
@@ -127,7 +127,7 @@ func TestFeedbackRejectedDefaultsReason(t *testing.T) {
 	}
 }
 
-// A10 服务端：/v1/blacklist 登记并调用钩子；缺钩子 ⇒ 503（不假装支持）。
+// A10 serveserviceend: /v1/blacklist   andcalluse  ;     ⇒ 503(    keep). 
 func TestBlacklistEndpointAddsAndNeedsHook(t *testing.T) {
 	dir := t.TempDir()
 	pipe := NewPipeline(NewEngine(), nil, nil)
@@ -152,7 +152,7 @@ func TestBlacklistEndpointAddsAndNeedsHook(t *testing.T) {
 		t.Errorf("[BL-10] 端点未正确登记：%v hook=(%q,%q)", out, gotTerm, gotNote)
 	}
 
-	// 缺钩子 ⇒ 503。
+	//     ⇒ 503. 
 	pipe2 := NewPipeline(NewEngine(), nil, nil)
 	s2 := NewServer(pipe2)
 	srv2 := httptest.NewServer(s2.Handler())
@@ -167,7 +167,7 @@ func TestBlacklistEndpointAddsAndNeedsHook(t *testing.T) {
 	}
 }
 
-// A2 元素：页面含〔🎤 说话〕〔处理〕〔上传〕〔规划〕〔✔〕〔✘〕〔这个改错了〕。
+// A2   :  face  🎤     handle  on   rule   ✔  ✘    modify  . 
 func TestPageHasAcceptanceControls(t *testing.T) {
 	base, _ := newFeedbackServer(t)
 	resp, err := http.Get(base + "/")

@@ -17,8 +17,8 @@ import (
 	"voicesign-harness/provider"
 )
 
-// newDiagProvider 用 httptest 造一个指向测试端点的 diag openai provider（零真实网络）。
-// 返回 diag provider 与请求计数（断言 KB 命中时 0 调用 / 未命中时调用次数）。
+// newDiagProvider use httptest    referto  endpoint  diag openai provider(     ). 
+// returnback diag provider and require num(disconnectlang KB  intime 0 calluse /   intimecalluse num). 
 func newDiagProvider(t *testing.T, h http.HandlerFunc) (provider.Provider, *int32) {
 	t.Helper()
 	var calls int32
@@ -47,7 +47,7 @@ func newDiagProvider(t *testing.T, h http.HandlerFunc) (provider.Provider, *int3
 	return p, &calls
 }
 
-// diagJSONBody 是一个合法的诊断模型响应。
+// diagJSONBody is      disconnect type  . 
 const diagJSONBody = `{"choices":[{"message":{"content":"{\"category\":\"network\",\"root_cause\":\"模型中心超时抖动\",\"confidence\":0.8,\"recoverable\":true,\"suggestion\":\"退避后重试\",\"action\":\"retry\",\"retry_params\":{}}","finish_reason":"stop"}}],"usage":{}}`
 
 func okJSON(w http.ResponseWriter, content string) {
@@ -61,17 +61,17 @@ func jsonString(s string) string {
 }
 
 func TestFingerprintAndErrSegment(t *testing.T) {
-	// 确定性：同输入同指纹。
+	//   ity: same insamerefer . 
 	a := Fingerprint("QUERY", "search", "dial tcp: i/o timeout\nsecond line")
 	b := Fingerprint("QUERY", "search", "dial tcp: i/o timeout\nother noise")
 	if a != b {
 		t.Fatalf("首行相同应同指纹: %s vs %s", a, b)
 	}
-	// 工具/意图不同 → 指纹不同。
+	//   /intent same -> refer  same. 
 	if Fingerprint("EDIT", "search", "x") == Fingerprint("QUERY", "search", "x") {
 		t.Fatal("intent 不同指纹应不同")
 	}
-	// errFirstSegment：首行去空白 + 80 截断。
+	// errFirstSegment: first  empty  + 80  disconnect. 
 	long := strings.Repeat("字", 100)
 	if got := errFirstSegment(long); len(got) != 80 {
 		t.Fatalf("应截断到 80 字符, got %d", len(got))
@@ -84,7 +84,7 @@ func TestFingerprintAndErrSegment(t *testing.T) {
 func TestKBLoadDedupeAndRemember(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exceptions.jsonl")
-	// 两行同指纹：后写的应覆盖先写的（updated 更新）。
+	//   samerefer : afterwrite  overwritefirstwrite (updated changenew). 
 	old := KBEntry{Fingerprint: "fp1", Category: CatNetwork, Suggestion: "old", Hits: 1, Updated: "2020-01-01T00:00:00Z"}
 	new := KBEntry{Fingerprint: "fp1", Category: CatBudget, Suggestion: "预算已用尽", Recoverable: true, Action: ActionFallback, Hits: 2, Updated: "2026-10-02T00:00:00Z"}
 	b1, _ := json.Marshal(old)
@@ -100,7 +100,7 @@ func TestKBLoadDedupeAndRemember(t *testing.T) {
 	if !ok {
 		t.Fatal("应命中 fp1")
 	}
-	// 去重取最新：Category 应为后写的 budget（而非 network）。
+	//  heavyget new: Category  asafterwrite  budget(but  network). 
 	if d.Category != CatBudget {
 		t.Fatalf("应取最新一条的 category, got %q", d.Category)
 	}
@@ -111,13 +111,13 @@ func TestKBLoadDedupeAndRemember(t *testing.T) {
 		t.Fatalf("KB 命中 source 应为 kb, got %q", d.Source)
 	}
 
-	// Remember 新指纹 → 回写磁盘。
+	// Remember newrefer  -> write-back  . 
 	kb.Remember(Diagnosis{Fingerprint: "fp2", Category: CatParam, RootCause: "max_tokens 400", Suggestion: "换 max_completion_tokens", Action: ActionModify, Recoverable: true})
 	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), `"fp2"`) {
 		t.Fatalf("回写应含 fp2: %s", data)
 	}
-	// 再加载：fp2 hits=1。
+	// again  : fp2 hits=1. 
 	kb2 := OpenKB(path)
 	if _, ok := kb2.Lookup("fp2"); !ok {
 		t.Fatal("回写后应能查到 fp2")
@@ -168,7 +168,7 @@ func TestDiagnoseModelHappyPath(t *testing.T) {
 	if *calls != 1 {
 		t.Fatalf("应调用诊断模型 1 次, got %d", *calls)
 	}
-	// 请求体：模型名 jev-diagnose + response_format=json_object + user 负载含 task/intent/traces/model。
+	//  requirebody:  typename jev-diagnose + response_format=json_object + user     task/intent/traces/model. 
 	if body["model"] != "jev-diagnose" {
 		t.Fatalf("model 应为 jev-diagnose, got %v", body["model"])
 	}
@@ -213,7 +213,7 @@ func TestDiagnoseDegradesOnBadEndpoint(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `this is not json {{{`)
 		},
-		"missing-fields": func(w http.ResponseWriter, r *http.Request) { okJSON(w, `{"root_cause":"x"}`) }, // 缺 category/action
+		"missing-fields": func(w http.ResponseWriter, r *http.Request) { okJSON(w, `{"root_cause":"x"}`) }, //   category/action
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestDiagnoseDegradesOnBadEndpoint(t *testing.T) {
 }
 
 func TestDiagnoseNoDiagProviderSkips(t *testing.T) {
-	// diag=nil（未配置）→ 返回 nil，零开销跳过。
+	// diag=nil(   )-> returnback nil,  open  ed. 
 	svc := NewService(OpenKB(filepath.Join(t.TempDir(), "exceptions.jsonl")), nil, nil)
 	if d := svc.Diagnose(context.Background(), "t", "QUERY", []Trace{NewTrace("x", "", nil, "y")}); d != nil {
 		t.Fatalf("未配置 diag 应 nil, got %+v", d)
@@ -259,15 +259,15 @@ func TestSafeRetryReadOnlySuccessWritesKB(t *testing.T) {
 	if d == nil || d.Action != ActionRetry {
 		t.Fatalf("诊断结论应保留: %+v", d)
 	}
-	// 修复成功 → 回写知识库（指纹应落盘）。
+	// fix become  -> write-back   (refer    ). 
 	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), `"fingerprint"`) {
 		t.Fatalf("修复成功应回写 exceptions.jsonl: %s", data)
 	}
 }
 
-// TestSafeRetryReplayFailureDoesNotWriteKB（负向）：重放后仍失败 → 绝不回写知识库，
-// 避免把未验证的结论固化成"已知修复"。
+// TestSafeRetryReplayFailureDoesNotWriteKB( to): heavy after    ->   write-back   , 
+//   pipe    close  izebecome"already fix ". 
 func TestSafeRetryReplayFailureDoesNotWriteKB(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exceptions.jsonl")
@@ -275,7 +275,7 @@ func TestSafeRetryReplayFailureDoesNotWriteKB(t *testing.T) {
 		okJSON(w, `{"category":"transient","root_cause":"瞬时抖动","confidence":0.7,"recoverable":true,"suggestion":"重试","action":"retry"}`)
 	})
 	runner := func(tool string, args map[string]any) contract.Receipt {
-		return contract.Receipt{Tool: tool, OK: false, Err: "still down"} // 重放仍失败
+		return contract.Receipt{Tool: tool, OK: false, Err: "still down"} // heavy    
 	}
 	svc := NewService(OpenKB(path), diag, runner)
 	att := Attempt{Tool: "search", Args: map[string]any{"pattern": "x"}, Receipt: contract.Receipt{Tool: "search", OK: false, Err: "dial tcp: i/o timeout"}}
@@ -286,7 +286,7 @@ func TestSafeRetryReplayFailureDoesNotWriteKB(t *testing.T) {
 	if d == nil || d.Action != ActionRetry {
 		t.Fatalf("诊断结论应保留: %+v", d)
 	}
-	// KB 应为空（未修复成功不得回写）。
+	// KB  asempty( fix become   write-back). 
 	if got := svc.KB.Count(); got != 0 {
 		t.Fatalf("重放失败不得回写 KB, KB 条目数=%d", got)
 	}
@@ -298,7 +298,7 @@ func TestSafeRetryReplayFailureDoesNotWriteKB(t *testing.T) {
 func TestSafeRetryNeverReplaysIrreversible(t *testing.T) {
 	dir := t.TempDir()
 	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		// 模型即使说 retry，git commit 是不可逆工具也绝不自动重放。
+		//  typei.e.   retry, git commit is reversible  also    heavy . 
 		okJSON(w, `{"category":"transient","root_cause":"抖动","confidence":0.9,"recoverable":true,"suggestion":"重试","action":"retry"}`)
 	})
 	called := 0
@@ -349,7 +349,7 @@ func TestSafeRetryTwoRoundLimit(t *testing.T) {
 func TestRecoverableFalseForcesStop(t *testing.T) {
 	dir := t.TempDir()
 	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		// action=retry 但 recoverable=false → 冲突，以 recoverable 为准转 stop。
+		// action=retry but recoverable=false ->   , by recoverable asapprove  stop. 
 		okJSON(w, `{"category":"auth","root_cause":"key 无效","confidence":0.99,"recoverable":false,"suggestion":"检查 key","action":"retry"}`)
 	})
 	called := 0
@@ -368,9 +368,9 @@ func TestRecoverableFalseForcesStop(t *testing.T) {
 	}
 }
 
-// TestSafeRetryModifyReplaysReadOnlyWithFilteredParams：param→modify 正向重放。
-// 只读工具首次失败 → 诊断 modify → 应用 retry_params 后重放成功；
-// 断言业务键合入工具 args，而 harness 控制键（backoff/cooldown/max_retries）被过滤不注入。
+// TestSafeRetryModifyReplaysReadOnlyWithFilteredParams: param->modify postoheavy . 
+// read-only  first    ->  disconnect modify ->  use retry_params afterheavy become ; 
+// disconnectlang service  in   args, but harness control (backoff/cooldown/max_retries)beed  notein. 
 func TestSafeRetryModifyReplaysReadOnlyWithFilteredParams(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exceptions.jsonl")
@@ -388,32 +388,32 @@ func TestSafeRetryModifyReplaysReadOnlyWithFilteredParams(t *testing.T) {
 	att := Attempt{Tool: "search", Args: map[string]any{"pattern": "wrong*"}, Receipt: contract.Receipt{Tool: "search", OK: false, Err: "param invalid"}}
 	nr, d := svc.SafeRetry(context.Background(), "查 x", "QUERY", att)
 
-	// (a) 重放发生且成功。
+	// (a) heavy sendoccurandbecome . 
 	if nr == nil || !nr.OK || called != 1 {
 		t.Fatalf("modify 应重放一次并成功: called=%d nr=%+v", called, nr)
 	}
 	if d == nil || d.Action != ActionModify || d.Category != CatParam {
 		t.Fatalf("诊断结论应为 param/modify: %+v", d)
 	}
-	// (b) 业务键合入工具 args。
+	// (b)  service  in   args. 
 	if gotArgs["pattern"] != "fixed-pattern" {
 		t.Fatalf("合入业务键 pattern 应为 fixed-pattern, got %v", gotArgs["pattern"])
 	}
-	// (c) harness 控制键未注入工具 args。
+	// (c) harness control  notein   args. 
 	for _, k := range []string{"backoff_seconds", "cooldown_seconds", "max_retries"} {
 		if _, leaked := gotArgs[k]; leaked {
 			t.Fatalf("控制键 %s 不应注入工具 args: %+v", k, gotArgs)
 		}
 	}
-	// (d) 修复成功回写 KB。
+	// (d) fix become write-back KB. 
 	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), `"fingerprint"`) {
 		t.Fatalf("modify 修复成功应回写 KB: %s", data)
 	}
 }
 
-// TestSafeRetryUnknownAskDoesNotReplay：unknown→ask 路由。
-// runner 零调用（不重放）、无错误扩散，结论保留供归因。
+// TestSafeRetryUnknownAskDoesNotReplay: unknown->ask routeby. 
+// runner  calluse( heavy ), noerror  , close keep provideattribution. 
 func TestSafeRetryUnknownAskDoesNotReplay(t *testing.T) {
 	dir := t.TempDir()
 	diag, _ := newDiagProvider(t, func(w http.ResponseWriter, r *http.Request) {
@@ -446,8 +446,8 @@ func TestReadOnlyClassification(t *testing.T) {
 		{"verify", nil, true},
 		{"file", map[string]any{"action": "read"}, true},
 		{"file", map[string]any{"action": "exists"}, true},
-		{"file", map[string]any{"action": "append"}, false}, // NOTE append 写
-		{"file", map[string]any{"action": "write"}, false},  // 文件写
+		{"file", map[string]any{"action": "append"}, false}, // NOTE append write
+		{"file", map[string]any{"action": "write"}, false},  // filewrite
 		{"git", map[string]any{"args": []string{"commit"}}, false},
 		{"run", map[string]any{"command": []string{"make"}}, false},
 		{"deploy", nil, false},
@@ -462,7 +462,7 @@ func TestReadOnlyClassification(t *testing.T) {
 func TestBudgetFriendlyAndParamSuggestion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exceptions.jsonl")
-	// budget → 友好文案含「预算」。
+	// budget ->      "  ". 
 	kb := OpenKB(path)
 	kb.Remember(Diagnosis{Fingerprint: "fp-budget", Category: CatBudget, RootCause: "额度用尽", Suggestion: "今日额度耗尽", Action: ActionFallback, Recoverable: false})
 	d, _ := kb.Lookup("fp-budget")
@@ -472,13 +472,13 @@ func TestBudgetFriendlyAndParamSuggestion(t *testing.T) {
 }
 
 func TestNormalizeActionWhitelist(t *testing.T) {
-	// 越界 category/action 归一。
+	// out-of-scope category/action   . 
 	d := Diagnosis{Category: "nonsense", Action: "explode", Recoverable: true}
 	d.normalizeAction()
 	if d.Category != CatUnknown || d.Action != ActionStop {
 		t.Fatalf("越界应归一 unknown/stop: %+v", d)
 	}
-	// parseDiagnosis 缺字段报错。
+	// parseDiagnosis  charseg  . 
 	if _, err := parseDiagnosis(`{"root_cause":"x"}`); err == nil {
 		t.Fatal("缺 category/action 应报错")
 	}
@@ -494,19 +494,19 @@ func TestPrepareDiagKeyPreservesExplicit(t *testing.T) {
 	if cfg.Providers[0].APIKey != "explicit-123" {
 		t.Fatal("显式 api_key 必须优先保留，不被覆盖")
 	}
-	// diag 未显式配 TimeoutMs → 默认 30000ms（避免干等 60s）。
+	// diag   form  TimeoutMs -> default 30000ms(   etc 60s). 
 	if cfg.Providers[0].TimeoutMs != DiagDefaultTimeoutMs {
 		t.Fatalf("diag 未配 TimeoutMs 应默认 %dms, got %d", DiagDefaultTimeoutMs, cfg.Providers[0].TimeoutMs)
 	}
-	// 显式 TimeoutMs 不被覆盖。
+	//  form TimeoutMs  beoverwrite. 
 	cfg3 := config.Config{Providers: []config.Provider{{Name: "diag", Kind: config.OpenAIKind, Endpoint: "https://x", Model: "jev-diagnose", APIKey: "k", TimeoutMs: 12345}}}
 	PrepareDiagKey(&cfg3)
 	if cfg3.Providers[0].TimeoutMs != 12345 {
 		t.Fatalf("显式 TimeoutMs 应保留, got %d", cfg3.Providers[0].TimeoutMs)
 	}
-	// 未声明 diag → 零动作。
+	//  voice  diag ->    . 
 	cfg2 := config.Config{Providers: []config.Provider{{Name: "fast", Kind: config.OpenAIKind, Endpoint: "https://x", Model: "m"}}}
-	PrepareDiagKey(&cfg2) // 不应 panic
+	PrepareDiagKey(&cfg2) //    panic
 	if len(cfg2.Providers) != 1 {
 		t.Fatal("无 diag provider 应零动作")
 	}
