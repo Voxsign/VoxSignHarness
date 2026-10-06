@@ -52,7 +52,7 @@ func TestCloudJWTSignAndVerify(t *testing.T) {
 	}
 	// edperiodreject
 	expired, _ := signJWT(c.jwtKey, sessionClaims{Sub: "u", Exp: time.Now().Add(-time.Hour).Unix()})
-	if _, err := c.verifyJWT(expired); err == nil || !strings.Contains(err.Error(), "过期") {
+	if _, err := c.verifyJWT(expired); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("过期 token 应拒绝，err=%v", err)
 	}
 	// signature    (use  secret)

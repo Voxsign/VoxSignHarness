@@ -65,13 +65,13 @@ func signJWT(secret []byte, claims sessionClaims) (string, error) {
 func verifyJWT(secret []byte, token string) (*sessionClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("jwt 段数错误")
+		return nil, fmt.Errorf("jwt segment count invalid")
 	}
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	want := b64u(mac.Sum(nil))
 	if !hmac.Equal([]byte(want), []byte(parts[2])) {
-		return nil, fmt.Errorf("jwt 签名无效")
+		return nil, fmt.Errorf("jwt signature invalid")
 	}
 	payload, err := b64uDecode(parts[1])
 	if err != nil {
@@ -83,10 +83,10 @@ func verifyJWT(secret []byte, token string) (*sessionClaims, error) {
 	}
 	now := time.Now().Unix()
 	if c.Exp < now-jwtLeeway {
-		return nil, fmt.Errorf("jwt 已过期")
+		return nil, fmt.Errorf("jwt expired")
 	}
 	if c.Sub == "" {
-		return nil, fmt.Errorf("jwt 缺 sub")
+		return nil, fmt.Errorf("jwt missing sub")
 	}
 	return &c, nil
 }
@@ -160,7 +160,7 @@ func (c *jwksCache) get(kid string) (*rsa.PublicKey, error) {
 	c.fetched = time.Now()
 	k, ok := m[kid]
 	if !ok {
-		return nil, fmt.Errorf("JWKS 无此 kid: %s", kid)
+		return nil, fmt.Errorf("JWKS has no such kid: %s", kid)
 	}
 	return k, nil
 }
@@ -202,7 +202,7 @@ func (c *cloudAuth) acceptsAud(aud string) bool {
 // verifyGoogleIDToken verify Google id_token: RS256    + iss/aud/exp. 
 func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) {	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("id_token 段数错误")
+		return nil, fmt.Errorf("id_token segment count invalid")
 	}
 	// head get kid
 	hdr, err := b64uDecode(parts[0])
@@ -217,7 +217,7 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 		return nil, err
 	}
 	if h.Alg != "RS256" {
-		return nil, fmt.Errorf("仅支持 RS256，实际 %s", h.Alg)
+		return nil, fmt.Errorf("only RS256 supported, got %s", h.Alg)
 	}
 	pub, err := c.jwks.get(h.Kid)
 	if err != nil {
@@ -229,7 +229,7 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 	}
 	hash := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
 	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], sig); err != nil {
-		return nil, fmt.Errorf("id_token 验签失败")
+		return nil, fmt.Errorf("id_token signature verification failed")
 	}
 	payload, err := b64uDecode(parts[1])
 	if err != nil {
@@ -241,13 +241,13 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 	}
 	now := time.Now().Unix()
 	if tok.Iss != "accounts.google.com" && tok.Iss != "https://accounts.google.com" {
-		return nil, fmt.Errorf("iss 非法: %s", tok.Iss)
+		return nil, fmt.Errorf("iss invalid: %s", tok.Iss)
 	}
 	if !c.acceptsAud(tok.Aud) {
-		return nil, fmt.Errorf("aud 非法（非本应用签发的 token）: aud=%s", tok.Aud)
+		return nil, fmt.Errorf("aud invalid (token not issued by this app): aud=%s", tok.Aud)
 	}
 	if tok.Exp < now {
-		return nil, fmt.Errorf("id_token 已过期")
+		return nil, fmt.Errorf("id_token expired")
 	}
 	return &tok, nil
 }
@@ -257,7 +257,7 @@ func (c *cloudAuth) verifyGoogleIDToken(idToken string) (*googleIDToken, error) 
 // exchangeGoogleCode use authorization code + PKCE verifier   id_token. 
 func (c *cloudAuth) exchangeGoogleCode(code, verifier string) (*googleIDToken, error) {
 	if c.cfg.Cloud.GoogleClientID == "" || c.cfg.Cloud.GoogleClientSecret == "" {
-		return nil, fmt.Errorf("未配置 VHS_GOOGLE_CLIENT_ID / VHS_GOOGLE_CLIENT_SECRET")
+		return nil, fmt.Errorf("VHS_GOOGLE_CLIENT_ID / VHS_GOOGLE_CLIENT_SECRET not configured")
 	}
 	form := url.Values{}
 	form.Set("code", code)
@@ -278,7 +278,7 @@ func (c *cloudAuth) exchangeGoogleCode(code, verifier string) (*googleIDToken, e
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Google token 交换 HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+		return nil, fmt.Errorf("Google token exchange HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
 	}
 	var out struct {
 		IDToken string `json:"id_token"`
@@ -287,7 +287,7 @@ func (c *cloudAuth) exchangeGoogleCode(code, verifier string) (*googleIDToken, e
 		return nil, err
 	}
 	if out.IDToken == "" {
-		return nil, fmt.Errorf("token 响应缺 id_token")
+		return nil, fmt.Errorf("token response missing id_token")
 	}
 	return c.verifyGoogleIDToken(out.IDToken)
 }
@@ -555,12 +555,12 @@ func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 	}
 	var req authLoginReq
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体解析失败"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse request body"})
 		return
 	}
 	cloud := s.cloud
 	if cloud == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "云端模式未启用（VHS_MODE=cloud）"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "cloud mode not enabled (VHS_MODE=cloud)"})
 		return
 	}
 	var gtok *googleIDToken
@@ -571,20 +571,20 @@ func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 	case req.Code != "":
 		gtok, err = cloud.exchangeGoogleCode(req.Code, req.CodeVerifier)
 	default:
-		err = fmt.Errorf("需提供 code 或 id_token")
+		err = fmt.Errorf("code or id_token is required")
 	}
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "谷歌登录失败: " + err.Error()})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Google sign-in failed: " + err.Error()})
 		return
 	}
 	t, err := cloud.loadTenant(gtok.Sub, gtok.Email)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "租户初始化失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "tenant initialization failed"})
 		return
 	}
 	token, err := cloud.signSession(t)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "会话签发失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session issuance failed"})
 		return
 	}
 	eff := t.effectiveTier()
@@ -608,13 +608,13 @@ func (s *Server) handleAuthGoogle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	sub := ctxTenant(r.Context())
 	if sub == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "无租户上下文"})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no tenant context"})
 		return
 	}
 	cloud := s.cloud
 	t, err := cloud.loadTenant(sub, "")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "租户读取失败"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "tenant read failed"})
 		return
 	}
 	eff := t.effectiveTier()
