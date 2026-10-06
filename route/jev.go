@@ -32,7 +32,7 @@ type JEVRequest struct {
 
 // JEVClient is /api/decide    clientuserend. 
 type JEVClient struct {
-	Endpoint string // examplee.g. https://aiops.peterzou.com/api/decide
+	Endpoint string // examplee.g. https://aiops.example.com/api/decide
 	APIKey   string // onlyfrom  /.env  in;    ,    
 	// Kind is nameclasstype(  periodwrite out  value). ⚠️   : kind use time JEV returnback 400 BAD_KIND. 
 	Kind Kind

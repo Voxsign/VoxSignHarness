@@ -59,13 +59,13 @@ func ValidIntentSource(v string) bool {
 // Validate verify  trace obj; **     kind ⇒   **( allow    /  ). 
 func Validate(e Entry) error {
 	if e.Kind == "" {
-		return fmt.Errorf("trajectory: kind 为空（必须登记；见 trajectory.Kinds）")
+		return fmt.Errorf("trajectory: kind is empty (must be registered; see trajectory.Kinds)")
 	}
 	if !KnownKind(e.Kind) {
-		return fmt.Errorf("trajectory: 未登记的 kind %q（必须先在 trajectory.Kinds 登记）", e.Kind)
+		return fmt.Errorf("trajectory: unregistered kind %q (must first register in trajectory.Kinds)", e.Kind)
 	}
 	if e.Kind == KindIntentSource && !ValidIntentSource(e.Content) {
-		return fmt.Errorf("trajectory: intent_source 值 %q 不在值域 [%s, %s] 内",
+		return fmt.Errorf("trajectory: intent_source value %q not in range [%s, %s]",
 			e.Content, IntentSourceASR, IntentSourceTextFallback)
 	}
 	return nil

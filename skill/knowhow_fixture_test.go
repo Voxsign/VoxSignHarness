@@ -1,6 +1,6 @@
 // knowhow_fixture_test.go -- **  serveservice knowhow**(   get, 2026-10-03)occurbecome  fixture. 
 //
-//   : GET https://aiops.peterzou.com/api/skill/skills/{id}(Header X-AIops-Key). 
+//   : GET https://aiops.example.com/api/skill/skills/{id}(Header X-AIops-Key). 
 // **to **:  numand Lead  value    (30/11/9/6 = 56);     humanadd . 
 package skill
 

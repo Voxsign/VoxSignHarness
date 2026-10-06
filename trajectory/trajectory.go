@@ -62,12 +62,12 @@ type Trajectory struct {
 // Open  open(or  )curdaytracefile trajectory-YYYYMMDD.jsonl. 
 func Open(dir string) (*Trajectory, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("创建轨迹目录 %s 失败: %w", dir, err)
+		return nil, fmt.Errorf("failed to create trajectory dir %s: %w", dir, err)
 	}
 	name := filepath.Join(dir, "trajectory-"+time.Now().Format("20060102")+".jsonl")
 	f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("打开轨迹文件 %s 失败: %w", name, err)
+		return nil, fmt.Errorf("failed to open trajectory file %s: %w", name, err)
 	}
 	return &Trajectory{f: f}, nil
 }
@@ -83,12 +83,12 @@ func (t *Trajectory) Write(e Entry) error {
 	}
 	b, err := json.Marshal(e)
 	if err != nil {
-		return fmt.Errorf("轨迹事件序列化失败: %w", err)
+		return fmt.Errorf("failed to serialize trajectory event: %w", err)
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, err := t.f.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("轨迹写入失败: %w", err)
+		return fmt.Errorf("failed to write trajectory: %w", err)
 	}
 	return nil
 }

@@ -96,7 +96,7 @@ func NewSedimentStore(path string) *SedimentStore { return &SedimentStore{Path: 
 // Record       (SK-6). ** backfill ⇒ Verdict as pending. **
 func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 	if strings.TrimSpace(e.SkillID) == "" {
-		return Sediment{}, fmt.Errorf("skill: Record 需要 skill_id（SK-6：沉淀必须可归因）")
+		return Sediment{}, fmt.Errorf("skill: Record requires skill_id (SK-6: sediment must be attributable)")
 	}
 	if e.Verdict == "" {
 		e.Verdict = VerdictUnverified //  backfill(rule default)
@@ -106,7 +106,7 @@ func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 	}
 	// ⚠️ outcome    rule   in(   by  ⇒    " has   "no   )
 	if e.Outcome != "" && !ValidOutcome(e.Outcome) {
-		return Sediment{}, fmt.Errorf("skill: outcome %q 不在规范枚举内（adopted|revised|rejected|pending）", e.Outcome)
+		return Sediment{}, fmt.Errorf("skill: outcome %q not in spec enum (adopted|revised|rejected|pending)", e.Outcome)
 	}
 	if e.ID == "" {
 		e.ID = fmt.Sprintf("sed-%d", time.Now().UnixNano())
@@ -122,14 +122,14 @@ func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 // ⚠️ backfillvalue   ⇒ **  **(   curbecome right). 
 func (s *SedimentStore) BackfillVerdict(id string, v Verdict) error {
 	if strings.TrimSpace(id) == "" {
-		return fmt.Errorf("skill: BackfillVerdict 需要 id")
+		return fmt.Errorf("skill: BackfillVerdict requires id")
 	}
 	switch v {
 	case VerdictCorrect, VerdictWrong:
 	case VerdictUnverified:
-		return fmt.Errorf("skill: 回填值不能是 unverified（那就是「未回填」）")
+		return fmt.Errorf("skill: backfilled value cannot be unverified (that means not backfilled)")
 	default:
-		return fmt.Errorf("skill: 未知裁决 %q ⇒ 判不了，**不当成 correct**", v)
+		return fmt.Errorf("skill: unknown verdict %q -> cannot judge, **must not count as correct**", v)
 	}
 	return s.append(map[string]any{"kind": "verdict", "id": id, "verdict": v,
 		"ts": time.Now().UTC().Format(time.RFC3339)})
@@ -197,10 +197,10 @@ func (s *SedimentStore) Pending() ([]Sediment, error) {
 // ⚠️   wrong ⇒ **  **(SK-8 onlyto wrong occur ;  allowpipe right also become data). 
 func CriterionFromWrong(e Sediment) (Criterion, error) {
 	if e.Verdict != VerdictWrong {
-		return Criterion{}, fmt.Errorf("skill: SK-8 只对 verdict=wrong 生效（实际 %q）", e.Verdict)
+		return Criterion{}, fmt.Errorf("skill: SK-8 applies only to verdict=wrong (got %q)", e.Verdict)
 	}
 	if strings.TrimSpace(e.Scenario) == "" || strings.TrimSpace(e.Judgement) == "" {
-		return Criterion{}, fmt.Errorf("skill: 从 wrong 转判据需要 scenario 与 judgement（否则重犯时无法识别）")
+		return Criterion{}, fmt.Errorf("skill: deriving a criterion from wrong requires scenario and judgement (otherwise recurrence cannot be detected)")
 	}
 	return Criterion{
 		ID:      "from-wrong-" + e.ID,

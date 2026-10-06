@@ -12,7 +12,7 @@ import (
 
 // Fetcher isread-only get . Calls refertocalluse num(SK-1 disconnectlang" endcallusenum=0"). 
 type Fetcher struct {
-	BaseURL string // examplee.g. https://aiops.peterzou.com
+	BaseURL string // examplee.g. https://aiops.example.com
 	APIKey  string // onlyfrom  /.env read;       
 	HTTP    *http.Client
 	Calls   *int

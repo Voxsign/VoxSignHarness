@@ -102,13 +102,13 @@ func (s *Service) Diagnose(ctx context.Context, task, intent string, traces []Tr
 	})
 	if err != nil {
 		// 404/5xx/ time/  :    . error  only statuscode+ disconnect  body(   alreadykeep    key). 
-		log.Printf("[selfheal] rid=%s diag Chat 失败，跳过诊断（不阻断主链）: %v", primary.RequestID, err)
+		log.Printf("[selfheal] rid=%s diag Chat failed, skipping diagnosis (non-blocking): %v", primary.RequestID, err)
 		return nil
 	}
 
 	d, err := parseDiagnosis(resp.Content)
 	if err != nil {
-		log.Printf("[selfheal] rid=%s diag JSON 解析失败，跳过诊断: %v", primary.RequestID, err)
+		log.Printf("[selfheal] rid=%s diag JSON parse failed, skipping diagnosis: %v", primary.RequestID, err)
 		return nil
 	}
 	d.Source = "model"
@@ -132,7 +132,7 @@ func parseDiagnosis(content string) (Diagnosis, error) {
 }
 
 // errMissingFields is disconnect JSON    charseg   error. 
-var errMissingFields = &diagError{"诊断 JSON 缺 category/action 字段"}
+var errMissingFields = &diagError{"diag JSON missing category/action fields"}
 
 type diagError struct{ s string }
 

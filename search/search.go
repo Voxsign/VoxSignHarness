@@ -73,7 +73,7 @@ func collectFiles(opts Options, goOnly bool) ([]string, error) {
 		}
 		fi, err := os.Stat(root)
 		if err != nil {
-			return nil, fmt.Errorf("扫描根 %q 不可访问: %w", root, err)
+			return nil, fmt.Errorf("scan root %q not accessible: %w", root, err)
 		}
 		if !fi.IsDir() {
 			out = append(out, root)
@@ -107,7 +107,7 @@ func collectFiles(opts Options, goOnly bool) ([]string, error) {
 	return out, nil
 }
 
-var errMaxHits = fmt.Errorf("达到文件数上限")
+var errMaxHits = fmt.Errorf("file hit limit reached")
 
 // lineCount returnback in disconnectafter    innum. 
 func hitCap(opts Options) int {
@@ -120,7 +120,7 @@ func hitCap(opts Options) int {
 // FindSymbol    Go tgt  define(func/type/const/var),   Go   ,  heavy ignore. 
 func FindSymbol(name string, opts Options) ([]Hit, error) {
 	if strings.TrimSpace(name) == "" {
-		return nil, fmt.Errorf("符号名为空")
+		return nil, fmt.Errorf("symbol name is empty")
 	}
 	files, err := collectFiles(opts, true)
 	if err != nil {
@@ -176,7 +176,7 @@ func appendSymbolHits(path string, patterns []struct {
 // FindText     (rune safesafetyby strings.Contains   ),  heavy ignore. 
 func FindText(pattern string, opts Options) ([]Hit, error) {
 	if pattern == "" {
-		return nil, fmt.Errorf("搜索模式为空")
+		return nil, fmt.Errorf("search pattern is empty")
 	}
 	files, err := collectFiles(opts, false)
 	if err != nil {

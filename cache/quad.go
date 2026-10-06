@@ -50,14 +50,14 @@ type diskFormat struct {
 // Open  open(ornew )   cache. file store  -> emptycache, Version=1; store then  . 
 func Open(path string, ttl time.Duration) (*Store, error) {
 	if filepath.Ext(path) == "" {
-		return nil, fmt.Errorf("cache 路径应指向 .json 文件: %q", path)
+		return nil, fmt.Errorf("cache path must point to a .json file: %q", path)
 	}
 	s := &Store{Path: path, Version: 1, TTL: ttl, entries: map[QuadKey]Entry{}}
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var df diskFormat
 		if jerr := json.Unmarshal(data, &df); jerr != nil {
-			return nil, fmt.Errorf("解析缓存文件 %s 失败: %w", path, jerr)
+			return nil, fmt.Errorf("failed to parse cache file %s: %w", path, jerr)
 		}
 		s.Version = df.Version
 		if s.Version < 1 {
@@ -67,7 +67,7 @@ func Open(path string, ttl time.Duration) (*Store, error) {
 			s.entries[e.Key] = e
 		}
 	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("读取缓存文件 %s 失败: %w", path, err)
+		return nil, fmt.Errorf("failed to read cache file %s: %w", path, err)
 	}
 	return s, nil
 }
@@ -75,7 +75,7 @@ func Open(path string, ttl time.Duration) (*Store, error) {
 // persist pipecurbeforestatusorig   (write timefileagain rename,      JSON). 
 func (s *Store) persist() error {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
-		return fmt.Errorf("创建缓存目录失败: %w", err)
+		return fmt.Errorf("failed to create cache dir: %w", err)
 	}
 	df := diskFormat{Version: s.Version}
 	for _, e := range s.entries {
@@ -83,14 +83,14 @@ func (s *Store) persist() error {
 	}
 	data, err := json.MarshalIndent(df, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化缓存失败: %w", err)
+		return fmt.Errorf("failed to serialize cache: %w", err)
 	}
 	tmp := s.Path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("写缓存临时文件失败: %w", err)
+		return fmt.Errorf("failed to write cache temp file: %w", err)
 	}
 	if err := os.Rename(tmp, s.Path); err != nil {
-		return fmt.Errorf("提交缓存文件失败: %w", err)
+		return fmt.Errorf("failed to commit cache file: %w", err)
 	}
 	return nil
 }

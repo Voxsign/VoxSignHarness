@@ -64,7 +64,7 @@ func loopbackOnly(next http.Handler) http.Handler {
 		ip := net.ParseIP(strings.Trim(host, "[]"))
 		if ip == nil || !ip.IsLoopback() {
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"仅允许本机调用（loopback-only）"}`))
+			_, _ = w.Write([]byte(`{"error":"loopback-only calls allowed"}`))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -310,11 +310,11 @@ func (s *Server) handleObserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(req.Term) == "" || strings.TrimSpace(req.Canonical) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term/canonical 不得为空"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term/canonical must not be empty"})
 		return
 	}
 	if strings.TrimSpace(req.Term) == strings.TrimSpace(req.Canonical) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term 与 canonical 相同，无需教"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term and canonical are identical, nothing to teach"})
 		return
 	}
 	if err := s.Teach(req.Term, req.Canonical); err != nil {
@@ -434,7 +434,7 @@ func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
 	switch req.Op {
 	case "add":
 		if strings.TrimSpace(req.Term) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term 不得为空"})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "term must not be empty"})
 			return
 		}
 		if err := s.Blacklist(req.Term, req.Note); err != nil {

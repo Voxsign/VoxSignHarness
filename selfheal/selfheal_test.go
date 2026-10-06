@@ -487,7 +487,7 @@ func TestNormalizeActionWhitelist(t *testing.T) {
 func TestPrepareDiagKeyPreservesExplicit(t *testing.T) {
 	cfg := config.Config{
 		Providers: []config.Provider{
-			{Name: "diag", Kind: config.OpenAIKind, Endpoint: "https://model.peterzou.com/v1", Model: "jev-diagnose", APIKey: "explicit-123"},
+			{Name: "diag", Kind: config.OpenAIKind, Endpoint: "https://model.example.com/v1", Model: "jev-diagnose", APIKey: "explicit-123"},
 		},
 	}
 	PrepareDiagKey(&cfg)

@@ -96,8 +96,6 @@ func defaultEntries() []entry {
 			evidence: "专名候选：voice sound harnessnes ≈ voice-sign harness（obs-01）",
 		},
 		{
-			from: "P图做点com", to: "peterzou.com", kind: "hotword", conf: 0.66,
-			evidence: "专名候选：P图做点com ≈ peterzou.com（obs-17，域名被彻底撕碎）",
 		},
 		{
 			from: "AR", to: "ASR", kind: "hotword", conf: 0.40,
@@ -123,7 +121,6 @@ func defaultHotwords() []Hotword {
 	return []Hotword{
 		{Term: "voice-sign harness", Kind: "project", Weight: 1.0, SeenCnt: 1},
 		{Term: "DeepSeek", Kind: "project", Weight: 1.0, SeenCnt: 1},
-		{Term: "peterzou.com", Kind: "project", Weight: 1.0, SeenCnt: 1},
 		{Term: "ASR", Kind: "term", Weight: 1.0, SeenCnt: 1},
 		{Term: "提交", Kind: "command", Weight: 1.0, SeenCnt: 1},
 		{Term: "错别字", Kind: "term", Weight: 1.0, SeenCnt: 1},

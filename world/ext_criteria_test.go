@@ -21,7 +21,7 @@ import (
 
 const fakeSummary = `{"ok":true,"ts":"2026-10-03T00:00:00Z","zone":"inner","hosts":{
  "trelva":{"hostname":"VM-4-15-ubuntu","purpose":"trelva（生产中枢：研究引擎/Koyee/peterzou.com）","domain":"trelva.ai","status":"OK","cpu":70.8,"mem":17.0,"disk":84,"disk_free":12.4,"ports":[22,443,8080],"services":36,"env":"prod","role":"research","network":{"openai":"ok"}},
- "center":{"hostname":"VM-0-14-ubuntu","purpose":"center（voxsign.net 生产中心，含 deploy 脚本）","domain":"aiops.peterzou.com","status":"OK","cpu":10.0,"mem":30.0,"disk":50,"disk_free":50,"ports":[22,443],"services":12,"env":"prod","role":"center"}}}`
+ "center":{"hostname":"VM-0-14-ubuntu","purpose":"center（voxsign.net 生产中心，含 deploy 脚本）","domain":"aiops.example.com","status":"OK","cpu":10.0,"mem":30.0,"disk":50,"disk_free":50,"ports":[22,443],"services":12,"env":"prod","role":"center"}}}`
 
 const fakeCICD = `{"ok":true,"zone":"inner","status":"idle","current_tag":"release/runtime-2026-10-02-01","ledger":[{"ts":"2026-10-02T00:00:00Z","tag":"release/runtime-2026-10-01-01","status":"dry-run","note":"build+gate passed"}]}`
 
@@ -200,7 +200,7 @@ func TestLiveGatewayOptional(t *testing.T) {
 	if os.Getenv("VHS_AIOPS_LIVE") != "1" {
 		t.Skip("需要 VHS_AIOPS_LIVE=1 才跑真网关（默认跳过，避免测试依赖外网）")
 	}
-	base := "https://aiops.peterzou.com"
+	base := "https://aiops.example.com"
 	g := NewGateway(base)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

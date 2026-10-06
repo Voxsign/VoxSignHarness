@@ -264,7 +264,7 @@ func (c *Cache) Refresh(ctx context.Context) Snapshot {
 	if err != nil {
 		//  overwrite hasnumdata; tgt unknown(K5:  is" has")
 		s.meta.Status = StatusUnknown
-		s.meta.Note = "L2 刷新失败（不是「没有」）：" + err.Error()
+		s.meta.Note = "L2 refresh failed (does not mean absent): " + err.Error()
 		s.meta.FetchedAt = now.Format(time.RFC3339)
 		return c.snapshotLocked(now)
 	}

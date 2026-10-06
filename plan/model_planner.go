@@ -57,7 +57,7 @@ func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 		fb = LocalPlanner{}
 	}
 	if mp.Model == nil {
-		return degrade(goal, m, fb, "未配置模型"), nil
+		return degrade(goal, m, fb, "no model configured"), nil
 	}
 	timeout := mp.Timeout
 	if timeout <= 0 {
@@ -68,22 +68,22 @@ func (mp ModelPlanner) Plan(goal string, m Manifest) (Plan, error) {
 
 	raw, err := mp.Model.Propose(ctx, goal, m)
 	if err != nil {
-		return degrade(goal, m, fb, "模型不可用/超时："+err.Error()), nil
+		return degrade(goal, m, fb, "model unavailable/timeout: "+err.Error()), nil
 	}
 	cand, err := parseModelPlan(raw)
 	if err != nil {
-		return degrade(goal, m, fb, "模型输出不是合法计划 JSON："+err.Error()), nil
+		return degrade(goal, m, fb, "model output is not a valid plan JSON: "+err.Error()), nil
 	}
 
 	// ---- base  boundary  ( type  out-of-scope)----
 	steps, violations := reviewStepsFor(cand.Steps, m, goal)
 	if len(violations) > 0 {
-		return degrade(goal, m, fb, "本机复核拒绝模型计划："+strings.Join(violations, "; ")), nil
+		return degrade(goal, m, fb, "local review rejected model plan: "+strings.Join(violations, "; ")), nil
 	}
 	// objtgtbase  outlist   -> reject(andruleformsame   PM-1/PL-2  path). 
 	if missing, ok := unmetRequirement(strings.ToLower(goal), m); !ok {
 		return Plan{Goal: goal, Source: "model", Refused: true, Missing: missing,
-			Reason: "目标需要清单外能力（本机复核）"}, nil
+			Reason: "goal needs out-of-manifest capability (local review)"}, nil
 	}
 	if cand.Refused || len(steps) == 0 {
 		return Plan{Goal: goal, Source: "model", Refused: true, Missing: cand.Missing,
@@ -106,7 +106,7 @@ func parseModelPlan(raw string) (modelPlanJSON, error) {
 		return modelPlanJSON{}, err
 	}
 	if !out.Refused && len(out.Steps) == 0 {
-		return modelPlanJSON{}, fmt.Errorf("既未拒绝也没有步骤")
+		return modelPlanJSON{}, fmt.Errorf("neither refused nor has steps")
 	}
 	return out, nil
 }
@@ -128,19 +128,19 @@ func reviewStepsFor(in []modelPlanStep, m Manifest, goal string) ([]Step, []stri
 	for i, s := range in {
 		c, ok := tools[s.Tool]
 		if !ok {
-			bad = append(bad, fmt.Sprintf("第 %d 步工具 %q 不在能力清单内（幻觉）", i, s.Tool))
+			bad = append(bad, fmt.Sprintf("step %d tool %q not in capability manifest (hallucination)", i, s.Tool))
 			continue
 		}
 		for _, cap := range s.Caps {
 			if !contains(c.Caps, cap) {
-				bad = append(bad, fmt.Sprintf("第 %d 步 cap %q 不属于工具 %s", i, cap, s.Tool))
+				bad = append(bad, fmt.Sprintf("step %d cap %q does not belong to tool %s", i, cap, s.Tool))
 			}
 		}
 		if s.Domain != "" && !contains(c.AllowedSpaces, s.Domain) {
-			bad = append(bad, fmt.Sprintf("第 %d 步越域：%s 不允许在 %s（本机域门禁优先）", i, s.Tool, s.Domain))
+			bad = append(bad, fmt.Sprintf("step %d out-of-domain: %s is not allowed in %s (local domain guard takes precedence)", i, s.Tool, s.Domain))
 		}
 		if len(s.Params) == 0 || s.Output == "" || s.Why == "" {
-			bad = append(bad, fmt.Sprintf("第 %d 步不可执行或不可解释（params/output/why 缺）", i))
+			bad = append(bad, fmt.Sprintf("step %d not executable or unexplainable (missing params/output/why)", i))
 		}
 		out = append(out, Step{
 			Tool: s.Tool, Caps: s.Caps, Params: s.Params,
@@ -159,7 +159,7 @@ func degrade(goal string, m Manifest, fb Planner, reason string) Plan {
 	if err != nil || (len(p.Steps) == 0 && !p.Refused) {
 		p = Plan{Goal: goal, Steps: searchSteps(), Source: "readonly-fallback"}
 		if missing := missingTools(m, p.Steps); len(missing) > 0 {
-			p = Plan{Goal: goal, Refused: true, Missing: missing, Reason: "清单内无只读能力可用"}
+			p = Plan{Goal: goal, Refused: true, Missing: missing, Reason: "no read-only capability available in manifest"}
 		}
 	}
 	p.Degraded = true

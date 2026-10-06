@@ -45,7 +45,7 @@ var twentySamples = []sampleCase{
 	{9, "medsupply", "部署一下医疗耗材那个销售报表", contract.IntentDeploy, contract.IntentDeploy, "medsupply", ""},
 	{10, "medsupply", "医疗耗材进口沙特的政策你觉得要注意哪些", contract.IntentAsk, contract.IntentAsk, "medsupply", ""},
 	// ③  typein   
-	{11, "modelcenter", "查一下今天彼得周点com的访问日志", contract.IntentQuery, contract.IntentQuery, "", "词典纠错 彼得周点com→model.peterzou.com"},
+	{11, "modelcenter", "查一下今天彼得周点com的访问日志", contract.IntentQuery, contract.IntentQuery, "", "词典纠错 彼得周点com→model.example.com"},
 	{12, "modelcenter", "修一下那个 API 超时的报错", contract.IntentDebug, contract.IntentDebug, "", ""},
 	{13, "modelcenter", "跑一下那个推理性能基准", contract.IntentTest, contract.IntentTest, "", "test_kind=bench"},
 	{14, "modelcenter", "部署最新的模型更新到服务器", contract.IntentDeploy, contract.IntentDeploy, "", ""},

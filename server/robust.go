@@ -128,7 +128,7 @@ func (b *bulkhead) acquire(ctx context.Context, acquireTimeout time.Duration) er
 	case b.sem <- struct{}{}:
 		return nil
 	case <-time.After(acquireTimeout):
-		return fmt.Errorf("外部通道繁忙（bulkhead 满），快速失败")
+		return fmt.Errorf("external channel busy (bulkhead full), fast-failing")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -158,7 +158,7 @@ func robustJSONHdr(ctx context.Context, bh *bulkhead, cb *circuitBreaker,
 	hdr map[string]string) (int, []byte, error) {
 
 	if !cb.allow() {
-		return 0, nil, fmt.Errorf("熔断打开（channel open），快速失败")
+		return 0, nil, fmt.Errorf("circuit open, fast-failing")
 	}
 	if err := bh.acquire(ctx, 2*time.Second); err != nil {
 		return 0, nil, err

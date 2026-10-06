@@ -178,7 +178,7 @@ func TestPageHasAcceptanceControls(t *testing.T) {
 	buf := make([]byte, 1<<16)
 	n, _ := resp.Body.Read(buf)
 	page := string(buf[:n])
-	for _, want := range []string{"🎤 说话", "处理", "规划", "✔ 对", "✘ 不对", "这个改错了"} {
+	for _, want := range []string{"🎤 Speak", "Process", "Plan", "✔ OK", "✘ Wrong", "This correction is wrong"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("[A2] 页面缺 %q", want)
 		}

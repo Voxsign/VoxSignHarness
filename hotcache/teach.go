@@ -18,10 +18,10 @@ const SourceUserTaught = "user_taught"
 func (c *Cache) Teach(term, canonical string) error {
 	term, canonical = strings.TrimSpace(term), strings.TrimSpace(canonical)
 	if term == "" || canonical == "" {
-		return errors.New("hotcache: Teach 需要非空的 term 与 canonical")
+		return errors.New("hotcache: Teach requires non-empty term and canonical")
 	}
 	if term == canonical {
-		return errors.New("hotcache: term 与 canonical 相同，无需教")
+		return errors.New("hotcache: term and canonical are identical, nothing to teach")
 	}
 	c.PutAlias(term, canonical, SourceUserTaught)
 	return nil
