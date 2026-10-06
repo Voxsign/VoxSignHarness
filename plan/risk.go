@@ -88,8 +88,8 @@ func reviewMinRisk(goal string, steps []Step, m Manifest) []string {
 }
 
 func fmt_risk(i int, chosen, alt string) string {
-	return "第 " + itoa(i) + " 步选了高风险工具 " + chosen + "，清单内存在更低风险替代 " + alt +
-		"（PM-6：最小风险工具优先）"
+	return "Step " + itoa(i) + " selected high-risk tool " + chosen + "; a lower-risk alternative exists: " + alt +
+		" (PM-6: prefer minimal-risk tool)"
 }
 
 func itoa(n int) string {

@@ -12,16 +12,16 @@ import "strings"
 // genericRewriteBlocklist is** form  **  useword:  androuteby, **  and basemodifywrite**. 
 // ⚠️    " ing " disconnect; newsendnow  useword **    **(   ). 
 var genericRewriteBlocklist = map[string]string{
-	"文件": "通用词（observed：'先改这个文件再提交' 被改写成 file-store）",
-	"文档": "通用词（同上族）",
-	"存储": "通用词",
-	"数据": "通用词",
-	"服务": "通用词",
-	"系统": "通用词",
-	"任务": "通用词",
-	"内容": "通用词",
-	"状态": "通用词",
-	"配置": "通用词",
+	"文件": "generic word (observed: '先改这个文件再提交' rewritten to file-store)",
+	"文档": "generic word (same family)",
+	"存储": "generic word",
+	"数据": "generic word",
+	"服务": "generic word",
+	"系统": "generic word",
+	"任务": "generic word",
+	"内容": "generic word",
+	"状态": "generic word",
+	"配置": "generic word",
 }
 
 // GenericRewriteBlocklist returnback usewordlist(word ->    by), provide  and data use. 

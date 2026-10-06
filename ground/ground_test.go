@@ -14,10 +14,10 @@ func TestRenderMissingDataSources(t *testing.T) {
 	g := New(dir, nil)
 	snap := g.Render()
 	if snap.Block == "" {
-		t.Fatal("空数据源也应渲染占位块")
+		t.Fatal("empty data source should still render a placeholder block")
 	}
-	if !strings.Contains(snap.Block, "（无注册域）") || !strings.Contains(snap.Block, "（无）") {
-		t.Fatalf("缺失行为应给占位而非报错: %q", snap.Block)
+	if !strings.Contains(snap.Block, "(no registered domain)") || !strings.Contains(snap.Block, "(none)") {
+		t.Fatalf("missing data should render placeholders, not error: %q", snap.Block)
 	}
 }
 
