@@ -6,19 +6,19 @@
 config/.env*
 
 # ===== runtime artifacts (never publish user data) =====
-# 注意：cache/ 与 ground/ 里同时放着**源码**（quad.go / ground.go 及其测试），
-# 整目录忽略会导致全新克隆编译不过（go build ./... 报 package not in std）——
-# 因此只忽略运行期产物，不再忽略源码目录。
-# data/ 同理：里面是合成评测集 20-tasks.jsonl 与域清单 data/spaces/，必须可复现。
+# Note: cache/ and ground/ also contain source files (quad.go / ground.go and
+# their tests); ignoring the whole directory would break a fresh clone
+# (go build ./... reports "package not in std"). So we ignore only runtime
+# outputs, never the source directories.
+# data/ keeps only data/spaces/ (the sample space manifests); all other runtime
+# data under data/ is regenerated locally.
 /data/*
-!/data/20-tasks.jsonl
 !/data/spaces/
 /cache/*.json
 /cache/*.jsonl
 /ground/*.json
 /ground/*.jsonl
 /dist/
-/bench/out/
 *.log
 
 # ===== OS / editor =====
@@ -32,22 +32,5 @@ config/.env*
 *.prof
 coverage.out
 
-# 校准快照（calib.sh 生成，不入库）
-.calib-before
-.calib-after
-
-# 校准产物（采集工具生成，不入库）
-.calib-evidence-C.md
-.calib-evidence-R.md
-.calib-before
-.calib-after
-.calib-diff
-
-# Xcode 本机用户态（不提交）
-ios/**/xcuserdata/
-ios/**/project.xcworkspace/
-
-# ===== 本地产物（可重建，不入库）=====
+# ===== local build artifacts (reproducible, not committed) =====
 /bin/
-*.ipa
-ios/build/

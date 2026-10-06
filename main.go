@@ -1,5 +1,5 @@
-// VoxSign 设备端 harness 入口。
-// M2 扩展子命令：run / serve / repl / task / summary / compare / version。
+// VoxSign device-side harness entrypoint.
+// M2 extended subcommands: run / serve / repl / task / summary / compare / version.
 package main
 
 import (
@@ -59,31 +59,31 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "vhs: 未知子命令 %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "vhs: unknown subcommand %q\n\n", os.Args[1])
 		usage()
 		os.Exit(2)
 	}
 }
 
 func usage() {
-	fmt.Println(`vhs — VoxSign 设备端 harness（M2 语音驱动开发）
+	fmt.Println(`vhs — VoxSign device-side harness (M2 voice-driven development)
 
-用法:
-  vhs run "<文本>"   一次性跑完整管线，打印四行回执
-  vhs serve          起手机 HTTP API（/v1/run /v1/task /v1/confirm /v1/cancel /v1/health）
-  vhs repl           交互式 REPL（逐行读 stdin → 四行回执）
-  vhs task           跑 data/20-tasks.jsonl 的 20 条样例并统计通过率
-  vhs summary        打印当日每日摘要（轨迹聚合）
-  vhs compare        单工对比方法说明（#49，降级为报告）
-  vhs machine-code   打印本机机器码（装机生成，用于云道机器码绑定）
-  vhs version        打印版本、Go 版本与平台`)
+Usage:
+  vhs run "<text>"    Run the full pipeline once, print the four-line receipt
+  vhs serve           Start the mobile HTTP API (/v1/run /v1/task /v1/confirm /v1/cancel /v1/health)
+  vhs repl             Interactive REPL (read stdin line by line -> four-line receipt)
+  vhs task             Run the bundled task sample file and report pass rate
+  vhs summary          Print today's daily summary (trajectory aggregation)
+  vhs compare          Single-job comparison report (#49, degraded to report)
+  vhs machine-code     Print this machine's code (generated on install, used for cloud binding)
+  vhs version          Print version, Go version, and platform`)
 }
 
-// loadCfg 从 VHS_CONFIG 或默认位置加载配置（命令行未显式指定时）。
+// loadCfg loads config from VHS_CONFIG or the default location when no path is given on the CLI.
 func loadCfg() *config.Config {
 	cfg, err := config.Load("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败（用默认值继续）: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to load config (continuing with defaults): %v\n", err)
 		def := config.Default()
 		cfg = def
 	}
@@ -93,7 +93,7 @@ func loadCfg() *config.Config {
 	return &cfg
 }
 
-// buildOptions 用配置装配 pipeline.Options（所有可空依赖做薄降级）。
+// buildOptions assembles pipeline.Options from config; every nullable dependency degrades gracefully.
 func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (bool, error)) *pipeline.Options {
 	opts := &pipeline.Options{Cfg: cfg, ConfirmFn: confirmFn}
 
@@ -101,9 +101,10 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 		opts.Dict = dict
 		opts.Refer = refer.New(dict)
 	}
-	// 域注册表：Load 失败（如单个 manifest 解析错误）不得让 Spaces 为 nil，
-	// 否则 pipeline space.Check 会 nil 解引用 panic（M7 实测 2026-10-03）。
-	// 失败时退回内置模板：Load("") 语义即纯内置，域边界仍生效（默认拒绝）。
+	// Space registry: if Load fails (e.g. a single manifest parse error), Spaces must not be nil,
+	// otherwise pipeline space.Check would nil-dereference and panic (observed 2026-10-03).
+	// On failure fall back to builtin templates: Load("") means pure builtin, and space
+	// boundaries still apply (default deny).
 	if spaces, err := space.Load(cfg.SpacesDir()); err == nil {
 		opts.Spaces = spaces
 	} else {
@@ -112,7 +113,7 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 			opts.Spaces = builtin
 		}
 	}
-	// M3 #37：认知切片注入器（project-map + decisions.jsonl）。
+	// M3 #37: cognition-slice injector (project-map + decisions.jsonl).
 	opts.Ground = ground.New(cfg.Global.LogDir, opts.Spaces)
 	if cacheDir := cfg.CacheDir(); cacheDir != "" {
 		_ = os.MkdirAll(cacheDir, 0o755)
@@ -128,8 +129,9 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 	if tr, err := trajectory.Open(cfg.Global.LogDir); err == nil {
 		opts.Trace = tr
 	}
-	// M7：LLM provider 注册表（VHS_API_KEY 已在 cfg 中）；失败薄降级。
-	// 异常自愈：diag provider 未显式配 key 时，从模型中心凭证文件补填（未配置 diag 则零动作）。
+	// M7: LLM provider registry (VHS_API_KEY is already in cfg); failures degrade gracefully.
+	// Self-healing: if the diag provider has no explicit key, backfill it from the model-center
+	// credential file (no-op when diag is not configured).
 	selfheal.PrepareDiagKey(cfg)
 	if reg, err := provider.NewRegistry(cfg); err == nil {
 		opts.Providers = reg
@@ -137,7 +139,7 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 	return opts
 }
 
-// cliConfirm 从 stdin 读 y/n 应答人工确认。
+// cliConfirm reads a y/n confirmation answer from stdin.
 func cliConfirm(taskID, question string) (bool, error) {
 	fmt.Printf("\n[%s] %s [y/n]: ", taskID, question)
 	r := bufio.NewReader(os.Stdin)
@@ -151,50 +153,52 @@ func cliConfirm(taskID, question string) (bool, error) {
 
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	quiet := fs.Bool("quiet", false, "零执行期滚动输出，退回一次性四行回执（别名 -q）")
-	fs.BoolVar(quiet, "q", false, "同 --quiet")
+	quiet := fs.Bool("quiet", false, "no streaming progress during execution; fall back to a one-shot four-line receipt (alias -q)")
+	fs.BoolVar(quiet, "q", false, "same as --quiet")
 	fs.Parse(args)
 	text := strings.Join(fs.Args(), " ")
 	if strings.TrimSpace(text) == "" {
-		fmt.Fprintln(os.Stderr, "用法: vhs run \"<文本>\"")
+		fmt.Fprintln(os.Stderr, `usage: vhs run "<text>"`)
 		os.Exit(2)
 	}
 	cfg := loadCfg()
 	opts := buildOptions(cfg, cliConfirm)
-	renderer := observe.NewCliRenderer(os.Stdout, *quiet) // S2：非 quiet 时滚动进度，-q 静默
+	renderer := observe.NewCliRenderer(os.Stdout, *quiet) // S2: stream progress when not quiet; -q silences
 	out, err := pipeline.Run(context.Background(), opts, text)
-	renderer.Finish() // 清滚动行，不污染后续四行回执
+	renderer.Finish() // clear streaming lines so they don't pollute the receipt
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "管线执行失败:", err)
+		fmt.Fprintln(os.Stderr, "pipeline failed:", err)
 		os.Exit(1)
 	}
 	fmt.Println(contract.RenderReceipt(out.View))
-	fmt.Printf("\n[计量] loop=%dms net=%dms 归因=%s/%s\n", out.LoopMs, out.NetMs, out.Attribution.Class, out.Attribution.Detail)
+	fmt.Printf("\n[metrics] loop=%dms net=%dms attribution=%s/%s\n", out.LoopMs, out.NetMs, out.Attribution.Class, out.Attribution.Detail)
 }
 
 func cmdServe() {
 	cfg := loadCfg()
 	opts := buildOptions(cfg, func(taskID, q string) (bool, error) {
-		// serve 模式下人工确认走手机 /v1/confirm，此处直接拒绝（不阻塞）。
+		// In serve mode, human confirmation goes through the mobile /v1/confirm endpoint;
+		// here we auto-deny so we never block.
 		return false, nil
 	})
 	srv := server.New(cfg, opts)
-	// VHS_DEVICE_SERVER 非空时自动注册 + 自适应心跳（状态感知来自任务表，架构 v1 §5）。
+	// When VHS_DEVICE_SERVER is set, auto-register and adaptively heartbeat
+	// (state awareness comes from the task table, architecture v1 §5).
 	startDeviceRegistration(cfg, srv.ActivityState)
 	if err := srv.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, "server 退出:", err)
+		fmt.Fprintln(os.Stderr, "server exited:", err)
 		os.Exit(1)
 	}
 }
 
 func cmdRepl(args []string) {
 	fs := flag.NewFlagSet("repl", flag.ExitOnError)
-	quiet := fs.Bool("quiet", false, "零执行期滚动输出，退回一次性回执（别名 -q）")
-	fs.BoolVar(quiet, "q", false, "同 --quiet")
+	quiet := fs.Bool("quiet", false, "no streaming progress during execution; fall back to a one-shot receipt (alias -q)")
+	fs.BoolVar(quiet, "q", false, "same as --quiet")
 	fs.Parse(args)
 	cfg := loadCfg()
 	opts := buildOptions(cfg, cliConfirm)
-	fmt.Println("vhs repl（输入文本，空行退出）")
+	fmt.Println("vhs repl (type text; empty line to exit)")
 	sc := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")
@@ -205,8 +209,9 @@ func cmdRepl(args []string) {
 		if text == "" {
 			return
 		}
-		// S2：每条 REPL 输入独立建渲染器——执行期 \r 覆写滚动进度；Finish 清行不破坏下次 "> " 提示符。
-		// -q/--quiet 时渲染器全静默，行为与接入前逐字节一致。
+		// S2: each REPL input gets its own renderer — during execution \r overwrites the
+		// streaming progress; Finish() clears the line without breaking the next "> " prompt.
+		// With -q/--quiet the renderer is fully silent.
 		renderer := observe.NewCliRenderer(os.Stdout, *quiet)
 		out, err := pipeline.Run(context.Background(), opts, text)
 		renderer.Finish()
@@ -218,16 +223,17 @@ func cmdRepl(args []string) {
 	}
 }
 
-// cmdTask 跑 data/20-tasks.jsonl 的 20 条样例（M2 集成冒烟）。
+// cmdTask runs the bundled task sample file (M2 integration smoke test).
 func cmdTask() {
 	path := "data/20-tasks.jsonl"
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "读取 %s 失败: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", path, err)
 		os.Exit(1)
 	}
 	cfg := loadCfg()
-	// task 模式不触发任何人工确认/写盘到真实 log_dir，临时沙箱跑分类与门禁即可。
+	// task mode triggers no human confirmation and writes nothing to the real log_dir;
+	// run classification and gating in a temporary sandbox.
 	sandbox, _ := os.MkdirTemp("", "vhs-task-*")
 	cfg.Global.LogDir = sandbox
 	cfg.Memory.Dir = filepath.Join(sandbox, "mem")
@@ -244,8 +250,8 @@ func cmdTask() {
 			continue
 		}
 		var sample struct {
-			Raw        string `json:"raw"`
-			WantIntent string `json:"want_intent"`
+			Raw         string `json:"raw"`
+			WantIntent  string `json:"want_intent"`
 		}
 		if jerr := json.Unmarshal([]byte(line), &sample); jerr != nil {
 			continue
@@ -258,10 +264,10 @@ func cmdTask() {
 		if out.Intent.Intent == sample.WantIntent {
 			pass++
 		} else {
-			fmt.Printf("  ✗ %-40s got=%s want=%s\n", sample.Raw, out.Intent.Intent, sample.WantIntent)
+			fmt.Printf("  X %-40s got=%s want=%s\n", sample.Raw, out.Intent.Intent, sample.WantIntent)
 		}
 	}
-	fmt.Printf("20 样例：%d/%d 意图分类一致（门槛 ≥17/20）\n", pass, total)
+	fmt.Printf("samples: %d/%d intent classification matches (threshold >=17/20)\n", pass, total)
 }
 
 func cmdSummary() {
@@ -275,19 +281,20 @@ func cmdSummary() {
 	fmt.Println(s)
 }
 
-// cmdCompare（#49）实跑 data/20-tasks.jsonl 两配置（context off vs on）对比表。
-// 对比轴：context 注入（ground）开关。输出按意图通过率、平均 loop ms、归因分布。
+// cmdCompare (#49) runs the task sample file under two configs (context off vs on).
+// Comparison axis: context injection (ground) on/off. Outputs intent pass rate,
+// average loop ms, and attribution distribution.
 func cmdCompare() {
 	path := "data/20-tasks.jsonl"
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "读取 %s 失败: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", path, err)
 		os.Exit(1)
 	}
 
 	type sample struct {
-		Raw        string `json:"raw"`
-		WantIntent string `json:"want_intent"`
+		Raw         string `json:"raw"`
+		WantIntent  string `json:"want_intent"`
 	}
 	var samples []sample
 	sc := bufio.NewScanner(strings.NewReader(string(data)))
@@ -336,20 +343,20 @@ func cmdCompare() {
 		return
 	}
 
-	fmt.Println("vhs compare —— context 注入（#37 ground）开关对比（#49）")
-	fmt.Printf("样例数：%d（data/20-tasks.jsonl）\n\n", len(samples))
+	fmt.Println("vhs compare — context injection (#37 ground) on/off comparison (#49)")
+	fmt.Printf("samples: %d\n\n", len(samples))
 
 	offPR, offLoop, offAttr, offN := runConfig(false)
 	onPR, onLoop, onAttr, onN := runConfig(true)
 
-	fmt.Println("┌──────────────┬──────┬───────────┬──────────────┐")
-	fmt.Println("│ 配置         │ 任务 │ 意图通过率 │ 平均 loop ms │")
-	fmt.Println("├──────────────┼──────┼───────────┼──────────────┤")
-	fmt.Printf("│ context off  │ %4d │ %6.1f%%   │ %10d   │\n", offN, offPR, offLoop)
-	fmt.Printf("│ context on   │ %4d │ %6.1f%%   │ %10d   │\n", onN, onPR, onLoop)
-	fmt.Println("└──────────────┴──────┴───────────┴──────────────┘")
+	fmt.Println("-------------- ----  ---------- --------------")
+	fmt.Println("| config     | jobs | intent pass | avg loop ms |")
+	fmt.Println("-------------- ----  ---------- --------------")
+	fmt.Printf("| context off| %4d | %6.1f%%    | %10d   |\n", offN, offPR, offLoop)
+	fmt.Printf("| context on | %4d | %6.1f%%    | %10d   |\n", onN, onPR, onLoop)
+	fmt.Println("-------------- ----  ---------- --------------")
 
-	fmt.Println("\n归因分布（class ×次数）：")
+	fmt.Println("\nattribution distribution (class x count):")
 	allAttr := map[string]bool{}
 	for k := range offAttr {
 		allAttr[k] = true

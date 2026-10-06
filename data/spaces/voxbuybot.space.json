@@ -6,7 +6,7 @@
   "tools": ["file", "git", "search", "test", "run", "read"],
   "context": ["project-map:voxbuybot"],
   "perms": { "read": true, "write": true, "exec": ["test", "run"] },
-  "acceptance": "沙特女装店：中文文案改动限定在 voxbuybot 内，订单查询只读",
+  "acceptance": "Sample project: text/content edits are confined to voxbuybot; order lookups are read-only.",
   "risk_default": "light",
   "cross_refs": ["vault-notes"],
   "version": 1

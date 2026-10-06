@@ -1,9 +1,13 @@
-// vhs-relay：Mac 端常驻反向中继 agent（异网连回本机 harness）。
+// vhs-relay: a long-running reverse-relay agent on the Mac (connects back to the
+// local harness across networks).
 //
-// 工作方式：主动 SSE 连接云端 GET /v1/relay/connect?machine_code=（Bearer 设备 token），
-// 常驻不断开。云端把客户端请求信封（{id,method,path,headers,body}）经 SSE 推下来，
-// agent 转发到本地上游 VHS_RELAY_UPSTREAM（如 http://127.0.0.1:8897），再 POST
-// /v1/relay/respond 回包。Mac 无需公网端口/固定 IP。断线指数退避重连（上限 60s）。
+// How it works: it opens a persistent SSE connection to the cloud
+// GET /v1/relay/connect?machine_code= (with the Bearer device token) and stays
+// connected. The cloud pushes client request envelopes
+// ({id,method,path,headers,body}) down over SSE; the agent forwards them to the
+// local upstream VHS_RELAY_UPSTREAM (e.g. http://127.0.0.1:8897), then POSTs the
+// response back to /v1/relay/respond. The Mac needs no public port or fixed IP.
+// On disconnect it reconnects with exponential backoff (capped at 60s).
 package main
 
 import (
@@ -32,14 +36,14 @@ func main() {
 	token := env("VHS_RELAY_TOKEN", "")
 	upstream := env("VHS_RELAY_UPSTREAM", "http://127.0.0.1:8897")
 	if machine == "" || token == "" {
-		log.Fatalf("vhs-relay: 必须设置 VHS_RELAY_MACHINE 与 VHS_RELAY_TOKEN")
+		log.Fatalf("vhs-relay: VHS_RELAY_MACHINE and VHS_RELAY_TOKEN must be set")
 	}
-	log.Printf("vhs-relay 启动 cloud=%s machine=%s upstream=%s", cloud, machine, upstream)
+	log.Printf("vhs-relay starting cloud=%s machine=%s upstream=%s", cloud, machine, upstream)
 
 	backoff := 1 * time.Second
 	for {
 		err := serve(cloud, machine, token, upstream)
-		log.Printf("vhs-relay 连接断开：%v（%v 后重连）", err, backoff)
+		log.Printf("vhs-relay disconnected: %v (reconnecting in %v)", err, backoff)
 		time.Sleep(backoff)
 		backoff *= 2
 		if backoff > 60*time.Second {
@@ -62,7 +66,7 @@ func serve(cloud, machine, token, upstream string) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("connect HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	log.Printf("vhs-relay 已连接 machine=%s", machine)
+	log.Printf("vhs-relay connected machine=%s", machine)
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -91,7 +95,7 @@ func forward(cloud, token, upstream, id, method, path string, headers map[string
 	u := strings.TrimRight(upstream, "/") + path
 	req, err := http.NewRequest(method, u, bytes.NewBufferString(body))
 	if err != nil {
-		respond(cloud, token, id, 500, nil, `{"error":"agent 构造请求失败"}`)
+		respond(cloud, token, id, 500, nil, `{"error":"agent failed to build request"}`)
 		return
 	}
 	for k, v := range headers {
@@ -100,7 +104,7 @@ func forward(cloud, token, upstream, id, method, path string, headers map[string
 	client := &http.Client{Timeout: 35 * time.Second}
 	r, err := client.Do(req)
 	if err != nil {
-		respond(cloud, token, id, 502, nil, `{"error":"agent 转发上游失败: `+err.Error()+`"}`)
+		respond(cloud, token, id, 502, nil, `{"error":"agent upstream forward failed: `+err.Error()+`"}`)
 		return
 	}
 	defer r.Body.Close()
@@ -117,7 +121,7 @@ func respond(cloud, token, id string, status int, headers map[string]string, bod
 	req.Header.Set("Content-Type", "application/json")
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("vhs-relay respond %s 失败: %v", id, err)
+		log.Printf("vhs-relay respond %s failed: %v", id, err)
 		return
 	}
 	r.Body.Close()

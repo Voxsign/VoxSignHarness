@@ -1,7 +1,0 @@
-#!/bin/sh
-# pre-push —— 机制性防复发：推送前必须过构建与默认门禁，非 0 直接拒绝。
-#
-# 与 scripts/gate.sh 是**同一个入口**（CI 也跑它），避免本地/远端两套门禁漂移。
-# 本 hook 无法阻止 `git push --no-verify`（git 语义如此），
-# 因此 CI 里再跑一次同一脚本作为兜底 —— 见 .github/workflows/gate.yml。
-exec sh "$(git rev-parse --show-toplevel)/scripts/gate.sh"

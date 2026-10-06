@@ -6,7 +6,7 @@
   "tools": ["read"],
   "context": [],
   "perms": { "read": true, "write": false },
-  "acceptance": "凭证库高敏只读：禁止写、禁止外发、禁止 deploy/http",
+  "acceptance": "Credential vault: high-sensitivity read-only. No writes, no outbound, no deploy/http tools.",
   "risk_default": "human",
   "cross_refs": [],
   "version": 1

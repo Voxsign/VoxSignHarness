@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VoxSign harness 构建脚本：vet + test + 全平台交叉编译（零外部依赖，CGO_ENABLED=0）。
+# VoxSign harness build script: vet + test + cross-compile for all platforms
+# (zero external dependencies, CGO_ENABLED=0).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -9,9 +10,9 @@ go vet ./...
 echo "== go test ./... =="
 go test ./...
 
-echo "== gofmt 检查（应为空）=="
+echo "== gofmt check (should be empty) =="
 if [ -n "$(gofmt -l .)" ]; then
-  echo "gofmt 发现未格式化文件："
+  echo "gofmt found unformatted files:"
   gofmt -l .
   exit 1
 fi
@@ -26,5 +27,5 @@ for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; d
   CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w" -o "$out" .
 done
 
-echo "== 产物 =="
+echo "== artifacts =="
 ls -lh dist
