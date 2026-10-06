@@ -128,4 +128,17 @@ final class VSLogicTests: XCTestCase {
         XCTAssertTrue(VSLogic.isInterruptPhrase(" stop "))
         XCTAssertFalse(VSLogic.isInterruptPhrase("记一下"))
     }
+
+    // MARK: - 9. V6.2 自动命名
+
+    func testAutoTitle() {
+        // 空 → 兜底"新会话"
+        XCTAssertEqual(VSLogic.autoTitle(from: "   "), "新会话")
+        // 短文本原样
+        XCTAssertEqual(VSLogic.autoTitle(from: "记一个想法"), "记一个想法")
+        // 长文本截 12 字 + 省略号
+        XCTAssertEqual(VSLogic.autoTitle(from: "查一下北京上海的天气情况怎么样"), "查一下北京上海的天气情况…")
+        // 换行压成空格
+        XCTAssertEqual(VSLogic.autoTitle(from: "第一行\n第二行第三行第四行第五行"), "第一行 第二行第三行第四…")
+    }
 }

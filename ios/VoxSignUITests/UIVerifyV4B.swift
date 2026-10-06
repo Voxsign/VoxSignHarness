@@ -44,13 +44,30 @@ final class UIVerifyV4B: XCTestCase {
             sleep(1)
         }
 
-        // ① 默认态：等空态 + 语音大按钮出现
+        // ① 默认态：等输入条出现（offline 时显示"未连接"横幅，同样截图——顶栏机器名/右上新建始终可见）
         let mic = app.descendants(matching: .any)["vhs.mic"]
-        _ = mic.waitForExistence(timeout: 25)
+        let offline = app.descendants(matching: .any)["vhs.offline"]
+        _ = mic.waitForExistence(timeout: 10)
         sleep(2)
-        shot("01-v4-default")
+        shot("01-v6-default")
 
-        // ② 按住态：按住语音大按钮，按住中途在辅助线程截图（波形界面）
+        // ④ V6 左侧抽屉：点左上会话入口 → 抽屉滑出 → 截图 → 关闭（不依赖 mic/在线）
+        let sessions = app.descendants(matching: .any)["vhs.sessions"]
+        if sessions.waitForExistence(timeout: 5) {
+            sessions.tap()
+            sleep(1)
+            shot("05-v6-drawer")
+            let close = app.descendants(matching: .any)["vhs.session.close"]
+            if close.exists { close.tap() }
+            sleep(1)
+        }
+
+        // ② 按住态（仅语音大按钮存在时——offline 横幅场景跳过）
+        guard mic.exists else {
+            if offline.exists { shot("02-v6-offline") }
+            return
+        }
+        // 按住语音大按钮，按住中途在辅助线程截图（波形界面）
         let holdShot = expectation(description: "hold-shot")
         Thread.detachNewThread { [weak self] in
             Thread.sleep(forTimeInterval: 2.0)

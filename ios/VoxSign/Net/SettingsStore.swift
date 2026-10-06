@@ -69,6 +69,9 @@ final class SettingsStore: ObservableObject {
     /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
     var cloudBase: String { "https://voxsign.ai" }
 
+    /// 当前活动服务器（自建模式；云道 / 无选中 → nil）。
+    var activeServerConfig: ServerConfig? { activeServer() }
+
     /// 当前生效的 base（下游兼容用）。
     var base: String {
         switch mode {
@@ -106,6 +109,9 @@ final class SettingsStore: ObservableObject {
     func setMode(_ m: ConnectionMode) {
         mode = m
         defaults.set(m.rawValue, forKey: modeKey)
+        // V6.3 切换即重探：状态点与机器名必须跟随"实际连接目标"。
+        // 否则会出现"设置点了自建、实际还连云端，名字却已变"的错位。
+        ConnectivityService.shared.reset()
     }
 
     // MARK: - 自建服务器管理

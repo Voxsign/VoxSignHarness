@@ -35,12 +35,27 @@ final class SpeechRecognizer: ObservableObject {
     private var holdTimer: Timer?
 
     private let engine = AVAudioEngine()
+    /// 音频会话/引擎启动专用后台串行队列（按住延迟修复：不阻塞主线程渲染）。
+    private let audioSetupQueue = DispatchQueue(label: "com.voicesign.audio-setup", qos: .userInitiated)
     /// 录音 WAV 文件（平台校准用）与对应 URL。
     private var audioFile: AVAudioFile?
     private var audioURL: URL?
     /// v2.3 重入防护：isRecording 是异步置位，快速连按时 start() 可能被重复调用，
     /// 导致 installTap 二次注册崩溃。启动中/录音中直接忽略。
     private var starting = false
+
+    // MARK: - 按住延迟打点（LAT）：touch→pressActive→startHold→session→engine→meter 首帧
+    private static var touchMs: TimeInterval = 0
+    /// 由 InputBarView.onChanged 在手指落下瞬间调用（主线程，最近）。
+    static func markTouch() { touchMs = Date().timeIntervalSince1970 * 1000 }
+    private func lat(_ tag: String) {
+        let now = Date().timeIntervalSince1970 * 1000
+        let d = Self.touchMs > 0 ? now - Self.touchMs : 0
+        print("[LAT] \(tag) +\(String(format: "%.0f", d))ms")
+        DiagLogger.shared.log("LAT", "\(tag) +\(String(format: "%.0f", d))ms")
+    }
+    /// tap 首帧打点只打一次。
+    private var didLogFirstMeter = false
 
     private init() {}
 
@@ -59,6 +74,8 @@ final class SpeechRecognizer: ObservableObject {
 
     /// 按住开始录音（纯录音，不喂任何本地识别）。
     func startHold() {
+        lat("startHold entry")
+        didLogFirstMeter = false
         holdMode = true
         // UI v3：按住录音计时（语音气泡时长）。
         lastHoldSeconds = 0
@@ -195,7 +212,6 @@ final class SpeechRecognizer: ObservableObject {
             return
         }
         starting = true
-        defer { starting = false }
         // 豆包式：按下瞬间立即进录音态（UI 先反馈，不等引擎就绪）。
         DispatchQueue.main.async {
             self.transcript = ""
@@ -237,105 +253,143 @@ final class SpeechRecognizer: ObservableObject {
         @unknown default:
             return
         }
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-            print("[ASR] session 已激活 (record)")
-            DiagLogger.shared.log("ASR", "session 已激活")
-            // v2.3 崩溃修复：AVAudioEngine 已有 tap 时再次 installTap 会抛 ObjC NSException。
-            // installTap 前**幂等清理**：引擎还在跑就停、已有 tap 就移除，再开新 tap。
-            if engine.isRunning { engine.stop() }
-            engine.inputNode.removeTap(onBus: 0)
-
-            let node = engine.inputNode
-            let hardwareFormat = node.outputFormat(forBus: 0)
-            print("[ASR] installTap format=\(hardwareFormat.sampleRate)Hz ch=\(hardwareFormat.channelCount)")
-            // v2.5 录音修复：AVAudioFile 统一写 16k Int16 单声道。
-            // 1) 旧版强制 channels=1 写文件，但 tap buffer 用硬件格式（可能 2ch），
-            //    af.write 因声道不匹配静默失败 → WAV data chunk 为空 → 平台 422 asr_audio_empty。
-            // 2) 16k Int16 是平台 ASR 标准输入格式（已实测 200）：文件体积比 48k Float32 小 12 倍，
-            //    上传更快、平台预处理更省，端到端延迟更稳。
-            // tap 按硬件格式收 buffer，用 AVAudioConverter 转成目标格式再写文件。
-            let fileURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("vhs-voice-\(Int(Date().timeIntervalSince1970 * 1000)).wav")
-            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                             sampleRate: 16000, channels: 1, interleaved: false)!
+        // 【按住延迟修复】AVAudioSession setCategory/setActive 与 engine.start() 是同步阻塞调用
+        // （真机首发起可达数百 ms ~ 1s）。原来在主线程同步执行 → pressActive=true 的 SwiftUI
+        // 渲染被它挡住，用户按下去要等引擎起完才看到波形（≈1s）。改到后台串行队列：按下瞬间
+        // 主线程立即返回，pressActive 视觉 + 触觉反馈马上生效；引擎在后台起来后 meterLevel
+        // 自然接上波形。AVAudioSession/AVAudioEngine 操作线程安全，仅 UI 状态回主线程。
+        audioSetupQueue.async { [weak self] in
+            guard let self = self else { return }
             do {
-                audioFile = try AVAudioFile(forWriting: fileURL,
-                                            settings: targetFormat.settings,
-                                            commonFormat: .pcmFormatInt16, interleaved: false)
-            } catch {
-                print("[ASR] AVAudioFile create FAIL: \(error.localizedDescription)")
-                DiagLogger.shared.log("ASR", "AVAudioFile FAIL: \(error.localizedDescription)")
-                audioFile = nil
-            }
-            audioURL = fileURL
-            let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat)
-            node.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { [weak self] buffer, _ in
-                guard let self = self else { return }
-                guard let af = self.audioFile else { return }
-                guard let cv = converter else { return }
-                let ratio = targetFormat.sampleRate / hardwareFormat.sampleRate
-                let cap = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-                guard let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: cap) else { return }
-                var convErr: NSError?
-                let status = cv.convert(to: outBuf, error: &convErr) { _, outStatus in
-                    outStatus.pointee = .haveData
-                    return buffer
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                try session.setActive(true, options: .notifyOthersOnDeactivation)
+                self.lat("session active")
+                print("[ASR] session 已激活 (record)")
+                DiagLogger.shared.log("ASR", "session 已激活")
+                // v2.3 崩溃修复：AVAudioEngine 已有 tap 时再次 installTap 会抛 ObjC NSException。
+                // installTap 前**幂等清理**：引擎还在跑就停、已有 tap 就移除，再开新 tap。
+                if self.engine.isRunning { self.engine.stop() }
+                self.engine.inputNode.removeTap(onBus: 0)
+
+                let node = self.engine.inputNode
+                let hardwareFormat = node.outputFormat(forBus: 0)
+                print("[ASR] installTap format=\(hardwareFormat.sampleRate)Hz ch=\(hardwareFormat.channelCount)")
+                // v2.5 录音修复：AVAudioFile 统一写 16k Int16 单声道。
+                // 16k Int16 是平台 ASR 标准输入格式；tap 按硬件格式收 buffer，用
+                // AVAudioConverter 转成 16k Int16 单声道再写文件。
+                let fileURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vhs-voice-\(Int(Date().timeIntervalSince1970 * 1000)).wav")
+                let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                                 sampleRate: 16000, channels: 1, interleaved: false)!
+                do {
+                    self.audioFile = try AVAudioFile(forWriting: fileURL,
+                                                settings: targetFormat.settings,
+                                                commonFormat: .pcmFormatInt16, interleaved: false)
+                } catch {
+                    print("[ASR] AVAudioFile create FAIL: \(error.localizedDescription)")
+                    DiagLogger.shared.log("ASR", "AVAudioFile FAIL: \(error.localizedDescription)")
+                    self.audioFile = nil
                 }
-                if convErr != nil {
-                    print("[ASR] convert FAIL: \(convErr!.localizedDescription)")
-                    return
-                }
-                if status == .haveData || status == .inputRanDry {
-                    if outBuf.frameLength > 0 {
-                        do {
-                            try af.write(from: outBuf)
-                        } catch {
-                            print("[ASR] tap write FAIL: \(error.localizedDescription)")
-                            DiagLogger.shared.log("ASR", "tap write FAIL: \(error.localizedDescription)")
+                self.audioURL = fileURL
+                let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat)
+                node.installTap(onBus: 0, bufferSize: 1024, format: hardwareFormat) { [weak self] buffer, _ in
+                    guard let self = self else { return }
+                    guard let af = self.audioFile else { return }
+                    guard let cv = converter else { return }
+                    let ratio = targetFormat.sampleRate / hardwareFormat.sampleRate
+                    let cap = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+                    guard let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: cap) else { return }
+                    var convErr: NSError?
+                    // 【ASR 重复字根因修复】input block 必须"每次只供一块 buffer"，之后回 .noDataNow。
+                    var suppliedInput = false
+                    let status = cv.convert(to: outBuf, error: &convErr) { _, outStatus in
+                        if suppliedInput {
+                            outStatus.pointee = .noDataNow
+                            return nil
+                        }
+                        suppliedInput = true
+                        outStatus.pointee = .haveData
+                        return buffer
+                    }
+                    if convErr != nil {
+                        print("[ASR] convert FAIL: \(convErr!.localizedDescription)")
+                        return
+                    }
+                    if status == .haveData || status == .inputRanDry {
+                        if outBuf.frameLength > 0 {
+                            do {
+                                try af.write(from: outBuf)
+                            } catch {
+                                print("[ASR] tap write FAIL: \(error.localizedDescription)")
+                                DiagLogger.shared.log("ASR", "tap write FAIL: \(error.localizedDescription)")
+                            }
                         }
                     }
-                }
-                // 按住时的实时振幅反馈：从原始 buffer 算峰值（硬件格式通常 float32），
-                // 低通平滑后驱动 UI 声波条（豆包式"按住有反应"）。
-                if let ch = buffer.floatChannelData, buffer.format.commonFormat == .pcmFormatFloat32 {
+                    // 按住时的实时振幅反馈：兼容 float32 / int16 两种 tap 格式，
+                    // 低通平滑后驱动 UI 声波条（豆包式"按住有反应"）。
                     var peak: Float = 0
                     let n = Int(buffer.frameLength)
-                    let stride = buffer.stride
-                    for i in 0..<n {
-                        let v = abs(ch[0][i * stride])
-                        if v > peak { peak = v }
-                    }
-                    // 用双声道峰值
-                    if buffer.format.channelCount > 1, let ch1 = buffer.floatChannelData?[1] {
+                    if buffer.format.commonFormat == .pcmFormatFloat32, let ch = buffer.floatChannelData {
+                        let stride = buffer.stride
                         for i in 0..<n {
-                            let v = abs(ch1[i * stride])
+                            let v = abs(ch[0][i * stride])
                             if v > peak { peak = v }
                         }
+                        if buffer.format.channelCount > 1, let ch1 = buffer.floatChannelData?[1] {
+                            for i in 0..<n {
+                                let v = abs(ch1[i * stride])
+                                if v > peak { peak = v }
+                            }
+                        }
+                    } else if buffer.format.commonFormat == .pcmFormatInt16, let ch = buffer.int16ChannelData {
+                        let stride = buffer.stride
+                        for i in 0..<n {
+                            let v = abs(Float(ch[0][i * stride]) / 32768.0)
+                            if v > peak { peak = v }
+                        }
+                        if buffer.format.channelCount > 1, let ch1 = buffer.int16ChannelData?[1] {
+                            for i in 0..<n {
+                                let v = abs(Float(ch1[i * stride]) / 32768.0)
+                                if v > peak { peak = v }
+                            }
+                        }
                     }
-                    let lvl = min(1, peak * 2.5)
+                    // dB 域映射：0.001(-60dB)~1(0dB) 线性展开到 0~1
+                    let lvl: Float
+                    if peak > 1e-3 {
+                        lvl = min(1, max(0, (log10(peak) + 3.0) / 3.0))
+                    } else {
+                        lvl = 0
+                    }
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
+                        if !self.didLogFirstMeter {
+                            self.didLogFirstMeter = true
+                            self.lat("first meter (tap alive)")
+                        }
                         self.meterLevel = self.meterLevel * 0.65 + lvl * 0.35
                     }
                 }
+                self.engine.prepare()
+                try self.engine.start()
+                self.lat("engine started")
+                print("[ASR] engine.start OK")
+                DiagLogger.shared.log("ASR", "engine.start OK")
+                self.starting = false
+                DispatchQueue.main.async {
+                    self.isRecording = true
+                    self.transcript = ""
+                }
+            } catch {
+                print("[ASR] 启动异常(可捕): \(error.localizedDescription)")
+                DiagLogger.shared.log("ASR", "启动异常: \(error.localizedDescription)")
+                self.starting = false
+                DispatchQueue.main.async {
+                    self.isRecording = false
+                    self.unavailable = true
+                }
             }
-            engine.prepare()
-            try engine.start()
-            print("[ASR] engine.start OK")
-            DiagLogger.shared.log("ASR", "engine.start OK")
-            DispatchQueue.main.async {
-                self.isRecording = true
-                self.transcript = ""
-            }
-        } catch {
-            print("[ASR] 启动异常(可捕): \(error.localizedDescription)")
-            DiagLogger.shared.log("ASR", "启动异常: \(error.localizedDescription)")
-            DispatchQueue.main.async { self.isRecording = false }
-            unavailable = true
-            stop()
         }
     }
 
