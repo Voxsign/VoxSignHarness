@@ -5,22 +5,22 @@ import (
 	"math"
 )
 
-// trimWAVSilence 裁剪 PCM WAV 首尾静音段（ASR 前置优化）。
-// 用户"按住说话"的录音通常首尾带 0.3~1.5s 静音（按住延迟、松手延迟），
-// 裁剪后音频更短 → 平台推理更快，端到端延迟显著下降（松手→出字）。
+// trimWAVSilence    PCM WAV firsttail audioseg(ASR before  ize). 
+// useuser"by   "  audio  firsttail  0.3~1.5s  audio(by   ,     ), 
+//   afteraudiofreqchange  ->     changefast, endtoend    under (  ->outchar). 
 //
-// 支持 8k/16k/48k、Int16/Float32、1/2 声道（平台实际输入为 16k Int16 单声道，
-// 这里做通用解析；不支持的格式原样返回，绝不破坏上传）。
-// 阈值：帧能量低于 threshold 视为静音（Int16 用 600/32768≈-35dB，Float32 用 0.02）。
+//  keep 8k/16k/48k, Int16/Float32, 1/2 voice (     inas 16k Int16  voice , 
+//     useresolve ;   keep  formorigkindreturnback,     on ). 
+//  value:     at threshold  as audio(Int16 use 600/32768~=-35dB, Float32 use 0.02). 
 func trimWAVSilence(wav []byte) []byte {
-	// 最小长度：RIFF 头 12B + fmt chunk ≥24B + data chunk ≥8B
+	//     : RIFF head 12B + fmt chunk >=24B + data chunk >=8B
 	if len(wav) < 44 {
 		return wav
 	}
 	if string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
 		return wav
 	}
-	// 解析 fmt 与 data chunk（跳过中间可能存在的 LIST/bext 等 chunk）
+	// resolve  fmt and data chunk( edmiddle  store   LIST/bext etc chunk)
 	sampleRate := 0
 	bitsPerSample := 0
 	channels := 0
@@ -39,7 +39,7 @@ func trimWAVSilence(wav []byte) []byte {
 			dataLen = sz
 			break
 		}
-		off += 8 + sz + (sz & 1) // chunk 对齐（奇数补 1 字节）
+		off += 8 + sz + (sz & 1) // chunk to ( numpatch 1 charnode)
 	}
 	if dataStart < 0 || dataLen <= 0 || sampleRate <= 0 || bitsPerSample <= 0 || channels <= 0 {
 		return wav
@@ -57,7 +57,7 @@ func trimWAVSilence(wav []byte) []byte {
 		return wav
 	}
 	frames := (end - dataStart) / frameBytes
-	if frames < sampleRate/8 { // 少于 0.125s 不裁剪（避免把短促语音裁没）
+	if frames < sampleRate/8 { //  at 0.125s    (  pipe  langaudio  )
 		return wav
 	}
 
@@ -83,32 +83,32 @@ func trimWAVSilence(wav []byte) []byte {
 		threshold = 600.0 / 32768.0
 		threshold = threshold * threshold
 	}
-	// 前端：跳过静音帧
+	// beforeend:  ed audio 
 	start := 0
 	for start < frames && frameEnergy(start) < threshold {
 		start++
 	}
-	// 后端：跳过静音帧（倒序）
+	// afterend:  ed audio (  )
 	endF := frames
 	for endF > start && frameEnergy(endF-1) < threshold {
 		endF--
 	}
-	// 保护：至少保留 0.15s 音频
+	// protect:   keep  0.15s audiofreq
 	minFrames := sampleRate / 6
 	if endF-start < minFrames {
-		return wav // 音频几乎全静音/太短，交给平台判断，不自行裁坏
+		return wav // audiofreq  safety audio/  ,  give   disconnect,      
 	}
 	if start == 0 && endF == frames {
-		return wav // 无静音可裁
+		return wav // no audio  
 	}
-	// 重建 WAV：沿用原头，仅改 RIFF 大小与 data 大小、裁剪数据
+	// heavy  WAV:  useorighead, onlymodify RIFF   and data   ,   numdata
 	newData := wav[dataStart+start*frameBytes : dataStart+endF*frameBytes]
 	out := make([]byte, 0, dataStart+len(newData))
 	out = append(out, wav[:dataStart]...)
 	out = append(out, newData...)
-	// data chunk 长度
+	// data chunk   
 	binary.LittleEndian.PutUint32(out[dataStart-4:dataStart], uint32(len(newData)))
-	// RIFF 总长 = 文件总长 - 8
+	// RIFF    = file   - 8
 	binary.LittleEndian.PutUint32(out[4:8], uint32(len(out)-8))
 	return out
 }

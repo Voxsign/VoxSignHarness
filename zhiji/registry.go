@@ -1,9 +1,9 @@
-// registry.go —— 知己 · 元层 per-model 能力注册表（架构 v1.0 §6.4 / §08 model-registry 落地）。
+// registry.go --    ·    per-model   note table(   v1.0 §6.4 / §08 model-registry  ly). 
 //
-// 按模型定制压缩与路由的数据基础（M1 前置组件，不依赖 GPU/网关）：
-//   - 弱模型 → 保守压缩（少压多留骨架）
-//   - 强模型 → 激进压缩（依赖检索回补）
-// 持久化到 model_registry.json（JSON 文件，与 Store 同目录风格）。
+// by type restrict  androuteby numdatabase (M1 before   ,  dependency GPU/ close): 
+//   -   type -> keep   (      )
+//   -   type ->     (dependency  backpatch)
+// keep izeto model_registry.json(JSON file, and Store sameobj   ). 
 package zhiji
 
 import (
@@ -15,28 +15,28 @@ import (
 	"sync"
 )
 
-// CompressionDensity 压缩密度策略（架构 §6.4：弱保守 / 强激进）。
+// CompressionDensity       (   §6.4:  keep  /    ). 
 type CompressionDensity string
 
 const (
-	DensityConservative CompressionDensity = "conservative" // 弱模型：少压多留骨架
-	DensityAggressive   CompressionDensity = "aggressive"   // 强模型：依赖检索回补
+	DensityConservative CompressionDensity = "conservative" //   type:       
+	DensityAggressive   CompressionDensity = "aggressive"   //   type: dependency  backpatch
 )
 
-// ModelProfile 单模型能力画像（架构 §6.4 字段）。
+// ModelProfile   type    (   §6.4 charseg). 
 type ModelProfile struct {
 	ID                string             `json:"id"`
-	NominalWindow     int                `json:"nominal_window"`      // 标称上下文窗口（token）
-	EffectiveWindow   int                `json:"effective_window"`    // 实测有效窗口（token）
-	LostInMiddle      float64            `json:"lost_in_middle"`      // Lost-in-middle 敏感度 0–1
-	FormatPref        string             `json:"format_pref"`         // 格式偏好（json|markdown|xml…）
-	InstructionFollow float64            `json:"instruction_follow"`  // 指令遵循强弱 0–1
-	PriceClass        string             `json:"price_class"`         // 价格档（cheap|mid|premium）
-	Strengths         []string           `json:"strengths"`           // 强项标签
-	Density           CompressionDensity `json:"density"`             // 压缩密度策略
+	NominalWindow     int                `json:"nominal_window"`      // tgtcalledonunder   (token)
+	EffectiveWindow   int                `json:"effective_window"`    //   has   (token)
+	LostInMiddle      float64            `json:"lost_in_middle"`      // Lost-in-middle     0–1
+	FormatPref        string             `json:"format_pref"`         //  form  (json|markdown|xml…)
+	InstructionFollow float64            `json:"instruction_follow"`  // refer      0–1
+	PriceClass        string             `json:"price_class"`         //    (cheap|mid|premium)
+	Strengths         []string           `json:"strengths"`           //   tgt 
+	Density           CompressionDensity `json:"density"`             //       
 }
 
-// Registry per-model 能力注册表（线程安全，JSON 持久化）。
+// Registry per-model   note table(line safesafety, JSON keep ize). 
 type Registry struct {
 	path      string
 	mu        sync.RWMutex
@@ -44,7 +44,7 @@ type Registry struct {
 	defaultID string
 }
 
-// NewRegistry 创建/加载注册表（dir 不存在自动创建）。
+// NewRegistry   /  note table(dir  store     ). 
 func NewRegistry(dir string) (*Registry, error) {
 	if dir == "" {
 		return nil, errors.New("zhiji: 注册表目录不能为空")
@@ -64,13 +64,13 @@ func NewRegistry(dir string) (*Registry, error) {
 	return r, nil
 }
 
-// Register 注册/更新模型画像。
+// Register note /changenew type  . 
 func (r *Registry) Register(p ModelProfile) error {
 	if p.ID == "" {
 		return errors.New("zhiji: 模型 ID 不能为空")
 	}
 	if p.Density == "" {
-		p.Density = DensityConservative // 未知模型默认保守压缩（不冒险丢信息）
+		p.Density = DensityConservative //    typedefaultkeep   (  risk   )
 	}
 	r.mu.Lock()
 	r.profiles[p.ID] = p
@@ -81,9 +81,9 @@ func (r *Registry) Register(p ModelProfile) error {
 	return r.save()
 }
 
-// SetDefault 设置默认模型（路由兜底）。
-// 注意：save() 内部自取 RLock，此处必须先 Unlock 再 save——
-// RWMutex 不可重入，持写锁再读锁即自死锁（与 Register() 的先 Unlock 后 save 同款）。
+// SetDefault   default type(routeby bot). 
+// note : save() in  get RLock,  place  first Unlock again save--
+// RWMutex   heavyin, keepwrite againread i.e.   (and Register()  first Unlock after save same ). 
 func (r *Registry) SetDefault(id string) error {
 	r.mu.Lock()
 	if _, ok := r.profiles[id]; !ok {
@@ -95,7 +95,7 @@ func (r *Registry) SetDefault(id string) error {
 	return r.save()
 }
 
-// Get 取单模型画像。
+// Get get  type  . 
 func (r *Registry) Get(id string) (ModelProfile, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -106,7 +106,7 @@ func (r *Registry) Get(id string) (ModelProfile, error) {
 	return p, nil
 }
 
-// Default 默认模型（路由兜底）。
+// Default default type(routeby bot). 
 func (r *Registry) Default() (ModelProfile, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -116,7 +116,7 @@ func (r *Registry) Default() (ModelProfile, error) {
 	return r.profiles[r.defaultID], nil
 }
 
-// List 全部画像（按 ID 排序，稳定输出）。
+// List safety   (by ID   ,    out). 
 func (r *Registry) List() []ModelProfile {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -128,7 +128,7 @@ func (r *Registry) List() []ModelProfile {
 	return out
 }
 
-// CompressionPolicy 压缩密度策略（架构 §6.4：按模型定制压缩的输入）。
+// CompressionPolicy       (   §6.4: by type restrict    in). 
 func (r *Registry) CompressionPolicy(id string) (CompressionDensity, error) {
 	p, err := r.Get(id)
 	if err != nil {

@@ -1,10 +1,10 @@
-// router.go —— 知己 · 元层路由（架构 v1.0 §6.4 / ADR-005 落地）。
+// router.go --    ·   routeby(   v1.0 §6.4 / ADR-005  ly). 
 //
-// 演进路径（Phase 0 → Phase 2）：
-//   规则表（LiteLLM complexity_router 式）→ 影子模式（只记录不改变线上）
-//   → BERT 路由器（保 95% 质量、砍 50%+ 强模型调用；路由开销 <0.4%）。
-// 本文件实现前两档：规则表 + 影子模式（影子推荐全部落 shadow_log，
-// 是 Phase 2 路由器自举训练集的一部分）。
+//   path(Phase 0 -> Phase 2): 
+//   ruletable(LiteLLM complexity_router form)->    form(only   modifychangelineon)
+//   -> BERT routeby (keep 95%   ,   50%+   typecalluse; routebyopen  <0.4%). 
+// basefile nowbefore  : ruletable +    form(    safety   shadow_log, 
+// is Phase 2 routeby         split). 
 package zhiji
 
 import (
@@ -16,15 +16,15 @@ import (
 	"time"
 )
 
-// TaskProfile 任务画像（路由输入）。
+// TaskProfile task  (routeby in). 
 type TaskProfile struct {
-	Complexity        float64 `json:"complexity"` // 0–1 复杂度（规则路由主信号）
-	RequiredStrength  string  `json:"required_strength,omitempty"` // 强项要求（如 "reasoning"|"extraction"）
+	Complexity        float64 `json:"complexity"` // 0–1    (rulerouteby signal)
+	RequiredStrength  string  `json:"required_strength,omitempty"` //   needrequire(e.g. "reasoning"|"extraction")
 	Domain            string  `json:"domain,omitempty"`
 	EstimatedTokens   int     `json:"estimated_tokens,omitempty"`
 }
 
-// RouteRule 一条规则（区间匹配，取第一条命中）。
+// RouteRule   rule( time  , get    in). 
 type RouteRule struct {
 	MinComplexity float64 `json:"min"`
 	MaxComplexity float64 `json:"max"`
@@ -32,16 +32,16 @@ type RouteRule struct {
 	Reason        string  `json:"reason,omitempty"`
 }
 
-// ShadowDecision 影子模式决策记录（Phase 2 训练集原料）。
+// ShadowDecision    formdecide   (Phase 2    orig ). 
 type ShadowDecision struct {
 	At         time.Time   `json:"at"`
 	Task       TaskProfile `json:"task"`
-	Chosen     string      `json:"chosen"` // 影子推荐
-	Production string      `json:"production"` // 线上实际
+	Chosen     string      `json:"chosen"` //     
+	Production string      `json:"production"` // lineon  
 	Hit        string      `json:"hit"`
 }
 
-// Router 规则表路由器（线程安全）。
+// Router ruletablerouteby (line safesafety). 
 type Router struct {
 	registry *Registry
 	rules    []RouteRule
@@ -53,7 +53,7 @@ type Router struct {
 	shadowFile string
 }
 
-// NewRouter 构造规则表路由器（默认三档规则）。
+// NewRouter   ruletablerouteby (default  rule). 
 func NewRouter(reg *Registry, dir string) (*Router, error) {
 	if reg == nil {
 		return nil, errors.New("zhiji: 路由器需要注册表")
@@ -63,7 +63,7 @@ func NewRouter(reg *Registry, dir string) (*Router, error) {
 	}
 	r := &Router{
 		registry:   reg,
-		shadow:     false, // 默认线上模式；M1 影子模式显式开启
+		shadow:     false, // defaultlineon form; M1    form formopenstart
 		shadowFile: filepath.Join(dir, "shadow_log.json"),
 		rules: []RouteRule{
 			{MinComplexity: 0.0, MaxComplexity: 0.3, ModelID: "cheap", Reason: "低复杂度走弱模型（规则表 v1）"},
@@ -74,16 +74,16 @@ func NewRouter(reg *Registry, dir string) (*Router, error) {
 	return r, nil
 }
 
-// SetShadow 切换影子模式（影子只记录推荐，不改变线上决策）。
+// SetShadow      form(  only    ,  modifychangelineondecide ). 
 func (r *Router) SetShadow(on bool) { r.shadow = on }
 
-// SetRules 覆盖规则表（Phase 1 由经验数据调参）。
+// SetRules overwriteruletable(Phase 1 by  numdatacall ). 
 func (r *Router) SetRules(rules []RouteRule) {
 	r.rules = rules
 }
 
-// Decide 路由决策：task_profile → 模型选择。
-// 开销：纯规则表查表 + 一次注册表读（<0.4% 目标，微秒级）。
+// Decide routebydecide : task_profile ->  type  . 
+// open :  ruletable table +   note tableread(<0.4% objtgt,  sec ). 
 func (r *Router) Decide(p TaskProfile) (RouteDecision, error) {
 	model := ""
 	hit := ""
@@ -97,7 +97,7 @@ func (r *Router) Decide(p TaskProfile) (RouteDecision, error) {
 	if model == "" {
 		return RouteDecision{}, errors.New("zhiji: 无规则命中")
 	}
-	// 注册表确认模型存在；不存在则回落默认模型。
+	// note tableconfirm typestore ;  store thenback default type. 
 	if _, err := r.registry.Get(model); err != nil {
 		def, derr := r.registry.Default()
 		if derr != nil {
@@ -108,7 +108,7 @@ func (r *Router) Decide(p TaskProfile) (RouteDecision, error) {
 	}
 	production := model
 	if r.shadow {
-		production = r.productionModel(p) // 影子模式：线上仍走原模型，影子只推荐
+		production = r.productionModel(p) //    form: lineon  orig type,   only  
 		r.record(p, model, production, hit)
 	}
 	r.mu.Lock()
@@ -117,15 +117,15 @@ func (r *Router) Decide(p TaskProfile) (RouteDecision, error) {
 	return RouteDecision{ModelID: model, Production: production, RuleHit: hit, Shadow: r.shadow}, nil
 }
 
-// RouteDecision 路由结果。
+// RouteDecision routebyclose . 
 type RouteDecision struct {
-	ModelID    string `json:"model_id"`     // 推荐模型
-	Production string `json:"production"`   // 线上实际模型（影子模式下与推荐不同）
+	ModelID    string `json:"model_id"`     //    type
+	Production string `json:"production"`   // lineon   type(   formunderand   same)
 	RuleHit    string `json:"rule_hit"`
 	Shadow     bool   `json:"shadow"`
 }
 
-// productionModel 影子模式下线上实际模型（默认：未启用路由时走默认/原策略）。
+// productionModel    formunderlineon   type(default:  startuseroutebytime default/orig  ). 
 func (r *Router) productionModel(p TaskProfile) string {
 	def, err := r.registry.Default()
 	if err != nil {
@@ -142,7 +142,7 @@ func (r *Router) record(p TaskProfile, chosen, production, hit string) {
 	r.mu.Unlock()
 }
 
-// ShadowLog 影子决策记录（Phase 2 训练集）。
+// ShadowLog   decide   (Phase 2    ). 
 func (r *Router) ShadowLog() []ShadowDecision {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -151,14 +151,14 @@ func (r *Router) ShadowLog() []ShadowDecision {
 	return out
 }
 
-// Decisions 决策计数。
+// Decisions decide  num. 
 func (r *Router) Decisions() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.decisions
 }
 
-// FlushShadow 落盘影子日志（JSONL 追加）。
+// FlushShadow     day (JSONL   ). 
 func (r *Router) FlushShadow() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

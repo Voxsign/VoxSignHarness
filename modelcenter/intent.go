@@ -1,4 +1,4 @@
-// intent.go —— 把 default 通道接成 asr.IntentModel（结构化满足其接口，无需反向依赖）。
+// intent.go -- pipe default   connectbecome asr.IntentModel(close izefull itsconnect , noneedrevtodependency). 
 package modelcenter
 
 import (
@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// ClassifyIntent 通过本通道做一次意图兜底判断（仅用于低置信场景）。
+// ClassifyIntent  edbase     intent bot disconnect(onlyuseatlow-confidence scenario). 
 func (r *Registry) ClassifyIntent(ctx context.Context, text string) (string, float64, error) {
 	prompt := "只输出 JSON，不要解释：{\"intent\":\"<类别>\",\"confidence\":0到1}。\n" +
 		"类别只能取：EDIT/DEBUG/QUERY/TEST/COMMIT/DEPLOY/NOTE/ASK/ORCHESTRATE。\n" +

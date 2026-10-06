@@ -1,12 +1,12 @@
-// reflect.go —— 知己 · 反思线程调度器（架构 v1.0 §6.3 + 2026-10-05 决策落地）。
+// reflect.go --    · rev line call  (   v1.0 §6.3 + 2026-10-05 decide  ly). 
 //
-// 设计参数（2026-10-05 用户锁定，架构已同步）：
-//   - 唤醒节律：默认 1 分钟；可调区间 1–10 分钟（60–600s）；未来任务密集可调快
-//   - 输入门控：无新输入直接跳过本轮（反思核心=有输入才有东西可反思）
-//   - 保底：最大空转 1 小时（3600s）强制跳一次，空闲期每日反思 ≤24 次
-//   - 两级触发：浅扫（工作记忆滚动更新）vs 深反思（累计重要性超阈值才触发）
-//   - 写前验证：哈希去重 + 同层矛盾 superseded（防 confabulation）
-//   - 隔离：独立配额由上层注入（本包不占主链路）
+//    num(2026-10-05 useuser  ,   alreadysame ): 
+//   -   node : default 1 splitclock;  call time 1–10 splitclock(60–600s);   task   callfast
+//   -  in  : nonew in connect edbase (rev   =has inonlyhas   rev )
+//   - keepbot:   empty  1  time(3600s) restrict   , empty period dayrev  <=24  
+//   -   triggersend:   (      changenew)vs  rev (  heavyneedity  valueonlytriggersend)
+//   - writebefore  :    heavy + same    superseded(prevent confabulation)
+//   -   :     byon notein(this package   chainroute)
 package zhiji
 
 import (
@@ -19,48 +19,48 @@ import (
 	"time"
 )
 
-// 默认反思参数（架构 §6.3 / 接口 reflect-tick）。
+// defaultrev  num(   §6.3 / connect  reflect-tick). 
 const (
-	DefaultInterval    = 60 * time.Second  // 默认 1 分钟唤醒
-	MinInterval        = 60 * time.Second  // 可调下限 1 分钟
-	MaxInterval        = 600 * time.Second // 可调上限 10 分钟
-	DefaultMaxIdle     = 3600 * time.Second // 最大空转 1 小时保底
-	DefaultThreshold   = 30.0              // 重要性累计阈值（轻量版；Generative Agents 参考 150）
-	DeepReflectMinImp  = 6.0               // 深反思只提炼 importance≥6 的高信号事件
+	DefaultInterval    = 60 * time.Second  // default 1 splitclock  
+	MinInterval        = 60 * time.Second  //  callunderlimit 1 splitclock
+	MaxInterval        = 600 * time.Second //  callonlimit 10 splitclock
+	DefaultMaxIdle     = 3600 * time.Second //   empty  1  timekeepbot
+	DefaultThreshold   = 30.0              // heavyneedity   value(   ; Generative Agents    150)
+	DeepReflectMinImp  = 6.0               //  rev only   importance>=6   signalevent
 )
 
-// ReflectStats 反思调度统计（可观测性）。
+// ReflectStats rev call   (   ity). 
 type ReflectStats struct {
-	Ticks       int64 `json:"ticks"`        // 总节拍数
-	Skips       int64 `json:"skips"`        // 输入门控跳过次数
-	IdleForced  int64 `json:"idle_forced"`  // 空转保底强制次数
+	Ticks       int64 `json:"ticks"`        //  node num
+	Skips       int64 `json:"skips"`        //  in   ed num
+	IdleForced  int64 `json:"idle_forced"`  // empty keepbot restrict num
 	ShallowSweep int64 `json:"shallow_sweep"`
 	DeepReflect int64 `json:"deep_reflect"`
-	Written     int64 `json:"written"`      // 写前验证通过的写入数
-	Rejected    int64 `json:"rejected"`     // 写前验证拒绝数（去重/矛盾）
+	Written     int64 `json:"written"`      // writebefore   ed writenum
+	Rejected    int64 `json:"rejected"`     // writebefore  rejectnum( heavy/  )
 }
 
-// ReflectFn 深反思执行体（Phase 0 默认：从 STM 高信号事件提炼记忆；
-// Phase 1 起替换为小模型调用，签名不变）。
+// ReflectFn  rev   body(Phase 0 default: from STM  signalevent    ; 
+// Phase 1 raise  as  typecalluse, signature change). 
 type ReflectFn func(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, error)
 
-// Reflector 反思线程调度器。
+// Reflector rev line call  . 
 //
-// v1.1 耦合说明：匿名嵌入 *DefaultSystemOne，Interval/MaxIdle/Threshold/Classify/Route/Gate 等
-// 直接提升到 Reflector 命名空间（r.Interval == r.DefaultSystemOne.Interval，r.Gate(...) == r.DefaultSystemOne.Gate(...)）——
-// 同一份真值，SetInterval/外部赋值与 r.Gate 读到的永远一致，绝不漂移。
+// v1.1     :  name in *DefaultSystemOne, Interval/MaxIdle/Threshold/Classify/Route/Gate etc
+//  connect  to Reflector  nameemptytime(r.Interval == r.DefaultSystemOne.Interval, r.Gate(...) == r.DefaultSystemOne.Gate(...))--
+// same   value, SetInterval/out  valueand r.Gate readto     ,     . 
 type Reflector struct {
-	*DefaultSystemOne // 匿名嵌入：提升 Interval/MaxIdle/Threshold/DeepMinImp 与全部 SystemOne 方法
+	*DefaultSystemOne //  name in:    Interval/MaxIdle/Threshold/DeepMinImp andsafety  SystemOne   
 	Store     *Store
-	InputGate bool // 输入门控（默认 true）
+	InputGate bool //  in  (default true)
 
-	Reflect ReflectFn // 深反思执行体（默认 DefaultReflect）
+	Reflect ReflectFn //  rev   body(default DefaultReflect)
 
 	mu    sync.Mutex
 	stats ReflectStats
 }
 
-// NewReflector 构造反思调度器（默认参数；数值与 reflect.go 现有常量逐位一致）。
+// NewReflector   rev call  (default num; numvalueand reflect.go nowhas      ). 
 func NewReflector(store *Store) *Reflector {
 	return &Reflector{
 		Store: store,
@@ -75,8 +75,8 @@ func NewReflector(store *Store) *Reflector {
 	}
 }
 
-// SetInterval 调整唤醒节律（架构：区间 60–600s；越界 clamp）。
-// 写入 r.Interval（经匿名嵌入落到 r.DefaultSystemOne.Interval），Gate 下一拍即见。
+// SetInterval call   node (  :  time 60–600s; out-of-scope clamp). 
+// write r.Interval(  name in to r.DefaultSystemOne.Interval), Gate under  i.e.see. 
 func (r *Reflector) SetInterval(d time.Duration) {
 	if d < MinInterval {
 		d = MinInterval
@@ -87,19 +87,19 @@ func (r *Reflector) SetInterval(d time.Duration) {
 	r.Interval = d
 }
 
-// Stats 当前调度统计（并发安全）。
+// Stats curbeforecall   (andsendsafesafety). 
 func (r *Reflector) Stats() ReflectStats {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stats
 }
 
-// Tick 单次反思节拍（供 Run 循环调用；也可由外部按需调用）。
-// 输入门控语义（2026-10-05 决策）：
-//   idle < interval       → 节律内有输入活动 → 正常检查（浅扫/深反思）
-//   interval ≤ idle ≤ max → 超过一个节律无新输入 → 跳过（无事可做）
-//   idle > max            → 超 1 小时无输入 → 保底强制浅扫一次（不深反思）
-// 返回 (跳过原因, 是否深反思)。skip=true 表示本轮无事可做。
+// Tick   rev node (provide Run   calluse; also byout byneedcalluse). 
+//  in  semantic(2026-10-05 decide ): 
+//   idle < interval       -> node inhas in   -> pos   (  / rev )
+//   interval <= idle <= max ->  ed  node nonew in ->  ed(no   )
+//   idle > max            ->   1  timeno in -> keepbot restrict    (  rev )
+// returnback ( edorigbecause, is  rev ). skip=true tableshowbase no   . 
 func (r *Reflector) Tick(ctx context.Context, now time.Time) (skip bool, deep bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, false, err
@@ -107,26 +107,26 @@ func (r *Reflector) Tick(ctx context.Context, now time.Time) (skip bool, deep bo
 	idle := now.Sub(r.Store.LastInput())
 
 	if r.InputGate && r.DefaultSystemOne != nil {
-		// v1.1：三段门控从硬编码 switch 抽到 SystemOne.Gate（经匿名嵌入提升为 r.Gate）；
-		// DefaultSystemOne 的 Interval/MaxIdle/Threshold 与原常量同值，行为逐位不变。
+		// v1.1:  seg  from  code switch  to SystemOne.Gate(  name in  as r.Gate); 
+		// DefaultSystemOne   Interval/MaxIdle/Threshold andorig  samevalue,  as   change. 
 		imp := r.Store.ImportanceScore()
 		gSkip, gIdleForced, gDeep := r.Gate(idle, imp)
 		switch {
 		case gIdleForced:
-			// 保底：即使无输入也做一次浅扫（检查状态一致性），不深反思。
+			// keepbot: i.e. no inalso     (  status  ity),   rev . 
 			r.mu.Lock()
 			r.stats.IdleForced++
 			r.mu.Unlock()
 			_ = r.shallowSweep(now)
 			return false, false, nil
 		case gSkip:
-			// 超过一个节律无新输入 → 跳过（没有可反思的新东西）。
+			//  ed  node nonew in ->  ed( has rev  new  ). 
 			r.mu.Lock()
 			r.stats.Skips++
 			r.mu.Unlock()
 			return true, false, nil
 		case gDeep:
-			// 节律内有输入活动：浅扫 + 深反思。
+			// node inhas in  :    +  rev . 
 			_ = r.shallowSweep(now)
 			r.mu.Lock()
 			r.stats.DeepReflect++
@@ -141,13 +141,13 @@ func (r *Reflector) Tick(ctx context.Context, now time.Time) (skip bool, deep bo
 			r.mu.Unlock()
 			return false, true, nil
 		default:
-			// 节律内有输入但累计重要性未达阈值 → 浅扫即止。
+			// node inhas inbut  heavyneedity   value ->   i.e.stop. 
 			_ = r.shallowSweep(now)
 			return false, false, nil
 		}
 	}
 
-	// InputGate 关闭（或 DefaultSystemOne 未注入）：原路径——浅扫 + 判断深反思。
+	// InputGate close (or DefaultSystemOne  notein): origpath--   +  disconnect rev . 
 	_ = r.shallowSweep(now)
 	imp := r.Store.ImportanceScore()
 	if r.DefaultSystemOne != nil && imp >= r.Threshold {
@@ -167,7 +167,7 @@ func (r *Reflector) Tick(ctx context.Context, now time.Time) (skip bool, deep bo
 	return false, false, nil
 }
 
-// Run 反思主循环（独立 goroutine；ctx 取消即退出）。
+// Run rev    (   goroutine; ctx canceli.e. out). 
 func (r *Reflector) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()
@@ -179,23 +179,23 @@ func (r *Reflector) Run(ctx context.Context) {
 			r.mu.Lock()
 			r.stats.Ticks++
 			r.mu.Unlock()
-			_, _, _ = r.Tick(ctx, now) // 错误按降级处理：不阻塞主循环
+			_, _, _ = r.Tick(ctx, now) // errorby  handle:       
 		}
 	}
 }
 
-// shallowSweep 浅扫：工作记忆滚动更新（架构 §6.3——不调模型或极小模型）。
+// shallowSweep   :       changenew(   §6.3-- call typeor   type). 
 func (r *Reflector) shallowSweep(now time.Time) error {
 	r.mu.Lock()
 	r.stats.ShallowSweep++
 	r.mu.Unlock()
-	// Phase 0：轻量动作——旧 STM 事件按 recency 降权，超龄（>MaxIdle）事件
-	// 若 importance 高则并入重要性累计（触发深反思）；低则留给遗忘。
+	// Phase 0:     --  STM eventby recency   ,   (>MaxIdle)event
+	// if importance  thenandinheavyneedity  (triggersend rev );  then give  . 
 	return nil
 }
 
-// deepReflect 深反思：执行 Reflect 回调 → 写前验证 → 写入 LTM/自我模型。
-// 返回 (写入数, 拒绝数, error)。
+// deepReflect  rev :    Reflect backcall -> writebefore   -> write LTM/   type. 
+// returnback (writenum, rejectnum, error). 
 func (r *Reflector) deepReflect(ctx context.Context) (int, int, error) {
 	if r.Reflect == nil {
 		return 0, 0, errors.New("zhiji: Reflect 未设置")
@@ -231,8 +231,8 @@ func (r *Reflector) deepReflect(ctx context.Context) (int, int, error) {
 	return written, rejected, nil
 }
 
-// verifyMemory 写前验证（防 confabulation）：去重 + 矛盾检测。
-// 去重：同 hash 已在 LTM/STM → 拒绝；矛盾：同层存在明显反向规则 → 拒绝（留给 superseded 流程）。
+// verifyMemory writebefore  (prevent confabulation):  heavy +     . 
+//  heavy: same hash already  LTM/STM -> reject;   : same store   revtorule -> reject( give superseded flow). 
 func (r *Reflector) verifyMemory(m MemoryItem) bool {
 	if strings.TrimSpace(m.Text) == "" {
 		return false
@@ -240,20 +240,20 @@ func (r *Reflector) verifyMemory(m MemoryItem) bool {
 	h := contentHash(m.Text)
 	for _, it := range r.Store.Search(m.Text, 32, time.Now()) {
 		if it.Hash == h && it.Status == StatusActive {
-			return false // 已存在同内容（去重）
+			return false // alreadystore samein ( heavy)
 		}
 	}
 	return true
 }
 
-// verifySelf 自我模型写前验证：同层同文本版本化（由 UpsertSelf 处理 superseded）；
-// 这里仅拒绝空文本与明显自相矛盾的即时覆盖。
+// verifySelf    typewritebefore  : same same base baseize(by UpsertSelf handle superseded); 
+//   onlyrejectempty baseand       i.e.timeoverwrite. 
 func (r *Reflector) verifySelf(s SelfItem) bool {
 	if strings.TrimSpace(s.Text) == "" {
 		return false
 	}
-	// 同层已有方向相反（含「不/勿/禁止」vs 不含）的同主题条目 → 不直接写，
-	// 交由上层走 superseded（架构：矛盾标 superseded 不静默覆盖）。
+	// same alreadyhas to rev( " / /forbidstop"vs   ) same   obj ->   connectwrite, 
+	//  byon   superseded(  :   tgt superseded    overwrite). 
 	for _, old := range r.Store.SelfModel(s.Layer) {
 		if sameTopic(old.Text, s.Text) && contradicts(old.Text, s.Text) {
 			return false
@@ -262,15 +262,15 @@ func (r *Reflector) verifySelf(s SelfItem) bool {
 	return true
 }
 
-// DefaultReflect Phase 0 默认深反思：从 STM 高信号事件（importance≥6）提炼
-// 行为层记忆；从多次成功教训提炼机制层策略。Phase 1 起替换为小模型。
+// DefaultReflect Phase 0 default rev : from STM  signalevent(importance>=6)  
+//  as   ; from  become      restrict   . Phase 1 raise  as  type. 
 //
-// 可选增强（v1.1，默认不启用）：可把 s.Search("", 5, ...) 换成
-// s.BudgetSearch("", RetrieveBudget{MaxItems: 24, MaxHops: 3}, ...) 做候选召回；
-// 当前保持 Search 不变，默认筛选 importance>=DeepReflectMinImp && layer==behavior 逐位一致。
+//   add (v1.1, default startuse):  pipe s.Search("", 5, ...)  become
+// s.BudgetSearch("", RetrieveBudget{MaxItems: 24, MaxHops: 3}, ...)     back; 
+// curbeforekeepkeep Search  change, default   importance>=DeepReflectMinImp && layer==behavior     . 
 func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, error) {
-	// 简化：深反思动作由上层（主循环）在写入 STM 时同步构造候选；
-	// 默认实现从 STM 抓 importance 最高的事件作为待固化记忆。
+	//  ize:  rev   byon (   ) write STM timesame     ; 
+	// default nowfrom STM   importance    event as  ize  . 
 	top := s.Search("", 5, time.Now())
 	var mems []MemoryItem
 	for _, it := range top {
@@ -287,14 +287,14 @@ func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, er
 	return mems, nil, nil
 }
 
-// contentHash FNV-1a 内容哈希（写前验证去重用，十六进制）。
+// contentHash FNV-1a in   (writebefore   heavyuse,    restrict). 
 func contentHash(s string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(strings.TrimSpace(s)))
 	return fmt.Sprintf("%016x", h.Sum64())
 }
 
-// sameTopic 同主题判断：首 8 字符（中文语境下足够区分主题）。
+// sameTopic same   disconnect: first 8 char (in lang under   split  ). 
 func sameTopic(a, b string) bool {
 	ra, rb := []rune(strings.TrimSpace(a)), []rune(strings.TrimSpace(b))
 	if len(ra) == 0 || len(rb) == 0 {
@@ -310,7 +310,7 @@ func sameTopic(a, b string) bool {
 	return string(ra[:n]) == string(rb[:n])
 }
 
-// contradicts 反向规则检测：一个含否定词而另一个不含（同主题）。
+// contradicts revtorule  :      wordbut     (same  ). 
 func contradicts(a, b string) bool {
 	neg := []string{"不", "勿", "禁止", "不要", "避免", "never", "don't"}
 	an, bn := false, false

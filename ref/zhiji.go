@@ -1,9 +1,9 @@
-// zhiji.go —— 知己（长期记忆）**只读**客户端（第三层）。
+// zhiji.go --   ( period  )**read-only**clientuserend(   ). 
 //
-// 实测路径（Lead 2026-10-03）：`GET /api/zhiji/api/events`，Header `X-AIops-Key`。
-// 服务自报 `read_only: true` ⇒ **本客户端只有读方法**；写回未实现，也不自己想办法写。
+//   path(Lead 2026-10-03): `GET /api/zhiji/api/events`, Header `X-AIops-Key`. 
+// serveservice   `read_only: true` ⇒ **baseclientuserendonlyhasread  **; writeback  now, also      write. 
 //
-// ⚠️ AIOps 响应**可能带尾随字节**（已两次实测）⇒ 用 json.Decoder 只解第一个 JSON 值。
+// ⚠️ AIOps   **   tail charnode**(already    )⇒ use json.Decoder onlyresolve    JSON value. 
 package ref
 
 import (
@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Event 是一条知己记忆事件。
+// Event is      event. 
 type Event struct {
 	ID       string `json:"id"`
 	Role     string `json:"role"`
@@ -26,19 +26,19 @@ type Event struct {
 	Text     string `json:"text"`
 }
 
-// ZhijiSource 是知己只读数据源（测试可注入假实现）。
+// ZhijiSource is  read-onlynumdata (   notein  now). 
 type ZhijiSource interface {
 	Events(ctx context.Context) ([]Event, error)
 }
 
-// ZhijiClient 是只读 HTTP 客户端。
+// ZhijiClient isread-only HTTP clientuserend. 
 type ZhijiClient struct {
-	Endpoint string // 例如 https://aiops.peterzou.com/api/zhiji
-	APIKey   string // 只从环境/.env 读；不打印不落盘
+	Endpoint string // examplee.g. https://aiops.peterzou.com/api/zhiji
+	APIKey   string // onlyfrom  /.env read;       
 	HTTP     *http.Client
 }
 
-// Events 拉取记忆事件（只读）。
+// Events  get  event(read-only). 
 func (c *ZhijiClient) Events(ctx context.Context) ([]Event, error) {
 	hc := c.HTTP
 	if hc == nil {

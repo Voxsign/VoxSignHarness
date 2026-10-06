@@ -1,9 +1,9 @@
-// cloud.go —— 知己 · 外化客户端（架构 v1.0：内化知己 → 外化知己 →「我的数据」）。
+// cloud.go --    · outizeclientuserend(   v1.0: inize   -> outize   ->"  numdata"). 
 //
-// 对接云端 zhiji 服务（zhiji.peterzou.com：vault 想法库 / glossary 专名表 / distill 蒸馏；
-// X-API-Key 鉴权，key 与 AIOps 不同——env 提供，不打印不落盘）。
-// 实测状态（VHS-ZHIJI-001）：端点在线、鉴权形态已确认；vault 写回 schema 以实测为准
-// （本文件为客户端骨架 + 可注入假实现，供 Phase 0 冒烟与集成使用）。
+// toconnect end zhiji serveservice(zhiji.peterzou.com: vault     / glossary  nametable / distill   ; 
+// X-API-Key   , key and AIOps  same--env  provide,       ). 
+//   status(VHS-ZHIJI-001): endpoint line,    statealreadyconfirm; vault writeback schema by  asapprove
+// (basefileasclientuserend   +  notein  now, provide Phase 0   andintegrate use). 
 package zhiji
 
 import (
@@ -16,31 +16,31 @@ import (
 	"time"
 )
 
-// DefaultVaultEndpoint 云端知己服务默认端点（任务文档 VHS-ZHIJI-001 实测在线）。
+// DefaultVaultEndpoint  end  serveservicedefaultendpoint(task   VHS-ZHIJI-001    line). 
 const DefaultVaultEndpoint = "https://zhiji.peterzou.com"
 
-// VaultEntry 外化条目（深反思/学习产物 → 云端「我的数据」）。
+// VaultEntry outize obj( rev /  artifact ->  end"  numdata"). 
 type VaultEntry struct {
 	Type   string `json:"type"`            // memory|rule|goal|behavior
 	Text   string `json:"text"`
-	Source string `json:"source,omitempty"` // 来源轨迹（可审计）
+	Source string `json:"source,omitempty"` //   trace(   )
 	Domain string `json:"domain,omitempty"` // user|session|agent
 }
 
-// VaultWriter 云端写回接口（测试可注入假实现）。
+// VaultWriter  endwritebackconnect (   notein  now). 
 type VaultWriter interface {
 	Write(ctx context.Context, e VaultEntry) error
 	Read(ctx context.Context) ([]VaultEntry, error)
 }
 
-// VaultClient 云端 zhiji vault 客户端。
+// VaultClient  end zhiji vault clientuserend. 
 type VaultClient struct {
 	Endpoint string
-	APIKey   string // X-API-Key；只从环境/.env 读
+	APIKey   string // X-API-Key; onlyfrom  /.env read
 	HTTP     *http.Client
 }
 
-// NewVaultClient 构造客户端（默认端点）。
+// NewVaultClient   clientuserend(defaultendpoint). 
 func NewVaultClient(apiKey string) *VaultClient {
 	return &VaultClient{
 		Endpoint: DefaultVaultEndpoint,
@@ -49,7 +49,7 @@ func NewVaultClient(apiKey string) *VaultClient {
 	}
 }
 
-// Write 写一条外化条目（POST /api/vault）。
+// Write write  outize obj(POST /api/vault). 
 func (c *VaultClient) Write(ctx context.Context, e VaultEntry) error {
 	if e.Type == "" {
 		e.Type = "memory"
@@ -78,7 +78,7 @@ func (c *VaultClient) Write(ctx context.Context, e VaultEntry) error {
 	return nil
 }
 
-// Read 拉取外化条目（GET /api/vault）。
+// Read  getoutize obj(GET /api/vault). 
 func (c *VaultClient) Read(ctx context.Context) ([]VaultEntry, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/vault", nil)
 	if err != nil {

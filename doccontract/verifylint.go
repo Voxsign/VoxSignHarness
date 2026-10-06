@@ -1,20 +1,20 @@
-// verifylint.go —— VSL-v3「验证标准层」的机器校验实现（V3-01…V3-08）。
+// verifylint.go -- VSL-v3"  tgtapprove "   verify now(V3-01…V3-08). 
 //
-// 规格书：docs/VSL-v3-验证标准层.md
+// rule  : docs/VSL-v3-  tgtapprove .md
 //
-//	§2    定义块强制追加的 7 个验证字段（claim/method/evidence/threshold/
-//	      counterexample/verdict_states/approver/falsifier），缺一即"未完成"
-//	§2.1  字段级机器校验规则 V3-01…V3-08
-//	§4    三态门禁：unverified 不得折算为通过；E0 无来源禁止入结论
-//	§7.2  threshold: unset 允许存在（诚实表达"未验证"），但不得伴随 met
+//	§2    define  restrict    7    charseg(claim/method/evidence/threshold/
+//	      counterexample/verdict_states/approver/falsifier),   i.e." done"
+//	§2.1  charseg   verifyrule V3-01…V3-08
+//	§4     state forbid: unverified     as ed; E0 no  forbidstopinclose 
+//	§7.2  threshold: unset  allowstore (  table "   "), but     met
 //
-// §2.1 末段明确划出了界限：**结构可校验，语义需评审**。本文件只做结构校验；
-// claim 与真实意图是否一致、counterexample 是否真的是反例、threshold 取值是否有
-// 依据，这三件事不在本 lint 的能力范围内（见 VerifyBlock.Check 的返回值说明）。
+// §2.1 endseg   outboundarylimit: **close  verify, semanticneed  **. basefileonly close verify; 
+// claim and  intentis   , counterexample is   isrevexample, threshold getvalueis has
+//  data,       base lint      in(see VerifyBlock.Check  returnbackvalue  ). 
 //
-// 纯标准库、零第三方依赖：手写一个最小 YAML 子集解析器（缩进键值、内联列表与
-// 块列表、单/双引号字符串、折行标量、注释），只覆盖本规格书出现的形态。
-// 刻意不引入 YAML 库——仓库"零第三方依赖"是硬约束。
+//  tgtapprove ,     dependency:  write     YAML   resolve  (   value, in listtableand
+//  listtable,  /  idchar  ,   tgt , note ), onlyoverwritebaserule  outnow  state. 
+//     in YAML  --  "    dependency"is  end. 
 package doccontract
 
 import (
@@ -25,39 +25,39 @@ import (
 	"unicode"
 )
 
-// RuleIDs 返回本 lint 实现的规则全集，顺序固定为 V3-01…V3-08。
+// RuleIDs returnbackbase lint  now rulesafety ,     as V3-01…V3-08. 
 func RuleIDs() []string {
 	return []string{"V3-01", "V3-02", "V3-03", "V3-04", "V3-05", "V3-06", "V3-07", "V3-08"}
 }
 
-// RuleStatus 是一条规则的裁定结果。
+// RuleStatus is  rule   close . 
 type RuleStatus string
 
 const (
-	// StatusPass 表示该条结构校验通过。
+	// StatusPass tableshow  close verify ed. 
 	StatusPass RuleStatus = "pass"
-	// StatusFail 表示该条结构校验不通过。
+	// StatusFail tableshow  close verify  ed. 
 	StatusFail RuleStatus = "fail"
 )
 
-// RuleResult 是单条规则的裁定：pass/fail + 原因。
+// RuleResult is  rule   : pass/fail + origbecause. 
 type RuleResult struct {
 	Rule   string     `json:"rule"`
 	Status RuleStatus `json:"status"`
 	Reason string     `json:"reason"`
 }
 
-// Report 是 8 条规则的裁定集合。
+// Report is 8  rule     . 
 type Report struct {
 	Results []RuleResult `json:"results"`
 }
 
-// Pass 报告是否 8 条全过。
+// Pass   is  8  safetyed. 
 func (r *Report) Pass() bool {
 	return len(r.FailedRules()) == 0
 }
 
-// FailedRules 返回所有 fail 的规则 ID（按 V3-01…V3-08 顺序）。
+// FailedRules returnback has fail  rule ID(by V3-01…V3-08   ). 
 func (r *Report) FailedRules() []string {
 	var out []string
 	for _, res := range r.Results {
@@ -68,7 +68,7 @@ func (r *Report) FailedRules() []string {
 	return out
 }
 
-// Result 取某条规则的裁定；规则 ID 不存在时返回零值。
+// Result get  rule   ; rule ID  store timereturnback value. 
 func (r *Report) Result(rule string) RuleResult {
 	for _, res := range r.Results {
 		if res.Rule == rule {
@@ -78,7 +78,7 @@ func (r *Report) Result(rule string) RuleResult {
 	return RuleResult{}
 }
 
-// String 输出人类可读的裁定明细，便于测试失败时直接看到原因。
+// String  out class read     , thenat    time connect toorigbecause. 
 func (r *Report) String() string {
 	var b strings.Builder
 	for _, res := range r.Results {
@@ -87,10 +87,10 @@ func (r *Report) String() string {
 	return b.String()
 }
 
-// VerifyBlock 是"验证标准块"被解析后的结构化视图。
+// VerifyBlock is"  tgtapprove "beresolve after close ize  . 
 //
-// Owner 是实现者（规格书 V3-07「同仓库内比对 owner 字段」），来自定义块顶层的
-// owner / builder / implementer 字段；Approver 等人来自 verify: 子块。
+// Owner is nower(rule   V3-07"same  in to owner charseg"),   define top  
+// owner / builder / implementer charseg; Approver etc    verify:   . 
 type VerifyBlock struct {
 	Claim          string
 	Method         string
@@ -105,21 +105,21 @@ type VerifyBlock struct {
 	Owner          string
 }
 
-// Options 控制需要外部世界信息的那一条规则（V3-04 evidence.ref 是否存在）。
+// Options controlneedneedout  boundary      rule(V3-04 evidence.ref is store ). 
 //
-// Exists 非空时优先使用它（测试注入）；否则以 Root 为基准在真实文件系统上
-// os.Stat；Root 为空则以进程当前目录为基准。
+// Exists  emptytime first use (  notein);  thenby Root asbaseapprove   file  on
+// os.Stat; Root asemptythenbyprocesscurbeforeobj asbaseapprove. 
 type Options struct {
 	Root   string
 	Exists func(ref string) bool
 }
 
-// Verify 解析并裁定一段验证标准块文本，evidence.ref 以当前目录为基准校验。
+// Verify resolve and   seg  tgtapprove  base, evidence.ref bycurbeforeobj asbaseapproveverify. 
 func Verify(text string) (*Report, error) {
 	return VerifyWith(text, Options{})
 }
 
-// VerifyWith 解析并裁定一段验证标准块文本。
+// VerifyWith resolve and   seg  tgtapprove  base. 
 func VerifyWith(text string, opts Options) (*Report, error) {
 	blk, err := ParseVerify(text)
 	if err != nil {
@@ -128,10 +128,10 @@ func VerifyWith(text string, opts Options) (*Report, error) {
 	return blk.Check(opts), nil
 }
 
-// ParseVerify 把一段 YAML 风格的定义块文本解析成 VerifyBlock。
+// ParseVerify pipe seg YAML    define  baseresolve become VerifyBlock. 
 //
-// 文本可以带顶层 v2 字段（purpose/priority/…）；本函数自动定位 verify: 子块。
-// 若整段文本本身就是 verify 块（没有 verify: 包裹），也接受。
+//  base by top  v2 charseg(purpose/priority/…); base num     verify:   . 
+// if seg basebase thenis verify  ( has verify:   ), alsoconnectaccept. 
 func ParseVerify(text string) (*VerifyBlock, error) {
 	lines, err := lexYAML(text)
 	if err != nil {
@@ -173,12 +173,12 @@ func ParseVerify(text string) (*VerifyBlock, error) {
 	return blk, nil
 }
 
-// Check 逐条裁定 V3-01…V3-08。
+// Check      V3-01…V3-08. 
 //
-// 注意：Check 只回答"字段结构是否合规格"。§2.1 末段的语义问题
-// （claim 与真实意图是否一致、counterexample 是否真能证伪、threshold 取值是否
-// 有依据）一律判不了，必须留给人或强模型评审——即使 8 条全 pass，也不代表这条
-// 定义已经"对了"。
+// note : Check onlyanswer"charsegclose is  rule ". §2.1 endseg semantic  
+// (claim and  intentis   , counterexample is     , threshold getvalueis 
+// has data)    ,    give or  type  --i.e.  8  safety pass, also  table  
+// definealready "to". 
 func (b *VerifyBlock) Check(opts Options) *Report {
 	return &Report{Results: []RuleResult{
 		ruleV301(b),
@@ -192,11 +192,11 @@ func (b *VerifyBlock) Check(opts Options) *Report {
 	}}
 }
 
-// verdictStates 返回"有效三态清单"：未声明时取规格书缺省 [met, unverified, not_met]。
+// verdictStates returnback"has  statelist":  voice timegetrule     [met, unverified, not_met]. 
 //
-// §2 写明三态"缺省即此"，且 §4 要求 unverified 必须显式可表达。因此若定义块没写
-// verdict_states，就按含 met 处理——E0 或 threshold=unset 时这会导致相应规则失败，
-// 这正是"E0 无来源禁止入结论"的收紧方向。
+// §2 write  state"  i.e. ", and §4 needrequire unverified    form table . because ifdefine  write
+// verdict_states, thenby  met handle--E0 or threshold=unset time      rule  , 
+//  posis"E0 no  forbidstopinclose " recv  to. 
 func (b *VerifyBlock) verdictStates() []string {
 	if len(b.VerdictStates) == 0 {
 		return []string{"met", "unverified", "not_met"}
@@ -206,11 +206,11 @@ func (b *VerifyBlock) verdictStates() []string {
 
 // ---- V3-01…V3-08 ----
 
-// VagueWordWhitelist 是 V3-01 的形容词白名单：规格书说 claim 不得含"形容词白名单
-// 外的模糊词"，但未枚举白名单，故默认为空（=所有模糊词都禁）。调用方可扩充。
+// VagueWordWhitelist is V3-01    word name : rule    claim    "  word name 
+// out   word", but    name , thusdefaultasempty(= has  wordallforbid). calluse   fill. 
 var VagueWordWhitelist = map[string]bool{}
 
-// vagueWords 是"不可判定"的模糊形容词样本（§1 形态一）。中文按子串匹配，英文按词边界。
+// vagueWords is"    "     wordkindbase(§1  state ). in by    ,   byword boundary. 
 var vagueWords = []string{
 	"稳定", "高效", "优秀", "良好", "快速", "流畅", "友好", "合理", "适当", "尽量",
 	"足够", "完善", "健壮", "智能", "简单", "方便", "满意",
@@ -219,7 +219,7 @@ var vagueWords = []string{
 	"optimal", "satisfactory", "reasonable", "sufficient", "seamless",
 }
 
-// ruleV301：claim 非空，且不含形容词白名单外的模糊词。
+// ruleV301: claim  empty, and    word name out   word. 
 func ruleV301(b *VerifyBlock) RuleResult {
 	const id = "V3-01"
 	claim := strings.TrimSpace(b.Claim)
@@ -233,10 +233,10 @@ func ruleV301(b *VerifyBlock) RuleResult {
 	return rulePass(id, "claim 非空，且不含模糊形容词")
 }
 
-// methodEnum 是 §2 规定的 method 取值集合。
+// methodEnum is §2 rule   method getvalue  . 
 var methodEnum = []string{"test", "replay", "measurement", "review", "audit"}
 
-// ruleV302：method ∈ 枚举。
+// ruleV302: method ∈   . 
 func ruleV302(b *VerifyBlock) RuleResult {
 	const id = "V3-02"
 	m := strings.ToLower(strings.TrimSpace(b.Method))
@@ -251,7 +251,7 @@ func ruleV302(b *VerifyBlock) RuleResult {
 	return ruleFail(id, fmt.Sprintf("method=%q 不在枚举 %v 内", b.Method, methodEnum))
 }
 
-// ruleV303：evidence.level ∈ {E0,E1,E2,E3}，且 E0 不得伴随 verdict_states 含 met。
+// ruleV303: evidence.level ∈ {E0,E1,E2,E3}, and E0      verdict_states   met. 
 func ruleV303(b *VerifyBlock) RuleResult {
 	const id = "V3-03"
 	lv := strings.ToUpper(strings.TrimSpace(b.EvidenceLevel))
@@ -274,7 +274,7 @@ func e0Note(lv string) string {
 	return ""
 }
 
-// ruleV304：evidence.ref 非空，且指向真实存在的产物（可 open 验证）。
+// ruleV304: evidence.ref  empty, andreferto  store  artifact(  open   ). 
 func ruleV304(b *VerifyBlock, opts Options) RuleResult {
 	const id = "V3-04"
 	ref := strings.TrimSpace(b.EvidenceRef)
@@ -303,7 +303,7 @@ func ruleV304(b *VerifyBlock, opts Options) RuleResult {
 	return rulePass(id, fmt.Sprintf("evidence.ref=%s 存在且可打开", p))
 }
 
-// ruleV305：threshold 为数字+单位，或恰为 unset；unset 时禁止判 met。
+// ruleV305: threshold asnumchar+  , or as unset; unset timeforbidstop  met. 
 func ruleV305(b *VerifyBlock) RuleResult {
 	const id = "V3-05"
 	t := strings.TrimSpace(b.Threshold)
@@ -322,7 +322,7 @@ func ruleV305(b *VerifyBlock) RuleResult {
 	return rulePass(id, "threshold 含数字，可作为可判定阈值")
 }
 
-// ruleV306：counterexample 至少 1 条，且不是 claim 的简单取反。
+// ruleV306: counterexample    1  , and is claim    getrev. 
 func ruleV306(b *VerifyBlock) RuleResult {
 	const id = "V3-06"
 	ce := strings.TrimSpace(b.Counterexample)
@@ -335,7 +335,7 @@ func ruleV306(b *VerifyBlock) RuleResult {
 	return rulePass(id, "counterexample 非空，且不是 claim 的简单取反")
 }
 
-// ruleV307：approver 与实现者不同（同仓库内比对 owner 字段）。
+// ruleV307: approver and nower same(same  in to owner charseg). 
 func ruleV307(b *VerifyBlock) RuleResult {
 	const id = "V3-07"
 	approver := strings.TrimSpace(b.Approver)
@@ -352,7 +352,7 @@ func ruleV307(b *VerifyBlock) RuleResult {
 	return rulePass(id, fmt.Sprintf("approver=%s 独立于实现者 owner=%s", approver, owner))
 }
 
-// ruleV308：falsifier 非空。
+// ruleV308: falsifier  empty. 
 func ruleV308(b *VerifyBlock) RuleResult {
 	const id = "V3-08"
 	if strings.TrimSpace(b.Falsifier) == "" {
@@ -361,7 +361,7 @@ func ruleV308(b *VerifyBlock) RuleResult {
 	return rulePass(id, "falsifier 非空")
 }
 
-// ---- 规则辅助 ----
+// ---- rule   ----
 
 func rulePass(rule, reason string) RuleResult {
 	return RuleResult{Rule: rule, Status: StatusPass, Reason: reason}
@@ -389,7 +389,7 @@ func containsDigit(s string) bool {
 	return false
 }
 
-// containsWord 做 ASCII 词边界匹配，避免 "good" 命中 "goodness" 之类的中间片段。
+// containsWord   ASCII word boundary  ,    "good"  in "goodness" ofclass middle seg. 
 func containsWord(s, w string) bool {
 	for idx := 0; ; {
 		j := strings.Index(s[idx:], w)
@@ -420,7 +420,7 @@ func isASCIIWord(s string) bool {
 	return true
 }
 
-// findVagueWord 在 claim 里找第一个命中白名单之外的模糊词。
+// findVagueWord   claim       in name ofout   word. 
 func findVagueWord(claim string) (string, bool) {
 	lower := strings.ToLower(claim)
 	for _, w := range vagueWords {
@@ -440,13 +440,13 @@ func findVagueWord(claim string) (string, bool) {
 	return "", false
 }
 
-// negationPrefixes 是"简单取反"的识别词。
+// negationPrefixes is"  getrev"  diffword. 
 var negationPrefixes = []string{"不", "非", "无", "未", "not ", "no ", "never "}
 
-// isSimpleNegation 判定 counterexample 是否只是 claim 的简单取反（而非可观测现象）。
+// isSimpleNegation    counterexample is onlyis claim    getrev(but    now ). 
 //
-// 判定方式：去掉空白与标点（保留文字/数字）后，若 counterexample 等于 claim，
-// 或等于"否定词 + claim"，或 claim 被整体包含且多余部分只有否定词 → 简单取反。
+//    form:   empty andtgtpt(keep  char/numchar)after, if counterexample etcat claim, 
+// oretcat"  word + claim", or claim be body  and   splitonlyhas  word ->   getrev. 
 func isSimpleNegation(counterexample, claim string) bool {
 	nc := normalizeText(claim)
 	if nc == "" {
@@ -487,7 +487,7 @@ func onlyNegation(s string) bool {
 	return true
 }
 
-// normalizeText 只保留字母与数字（含中文），丢掉空白、标点与引号。
+// normalizeText onlykeep char andnumchar( in ),   empty , tgtptand id. 
 func normalizeText(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
@@ -498,8 +498,8 @@ func normalizeText(s string) string {
 	return b.String()
 }
 
-// canonicalAgent 归一化"谁判/谁实现"，用于 V3-07 比对：
-// 去首尾空白、丢掉尾随括号注释（如「reviewer-agent（不得为实现者）」）、转小写、去空格。
+// canonicalAgent   ize"  /  now", useat V3-07  to: 
+//  firsttailempty ,   tail  idnote (e.g."reviewer-agent(  as nower)"),   write,  empty . 
 func canonicalAgent(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexAny(s, "（("); i >= 0 {
@@ -508,7 +508,7 @@ func canonicalAgent(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), "")
 }
 
-// cleanRef 从 evidence.ref 里去掉 # 锚点，得到可 stat 的路径部分。
+// cleanRef from evidence.ref     #  pt,  to  stat  path split. 
 func cleanRef(ref string) string {
 	if i := strings.IndexByte(ref, '#'); i >= 0 {
 		ref = ref[:i]
@@ -516,7 +516,7 @@ func cleanRef(ref string) string {
 	return strings.TrimSpace(ref)
 }
 
-// ---- 最小 YAML 子集解析器 ----
+// ----    YAML   resolve   ----
 
 type yline struct {
 	indent int
@@ -532,7 +532,7 @@ type yvalue struct {
 	isMap  bool
 }
 
-// lexYAML 把文本切成带缩进的行，去掉注释与空行；只支持空格缩进。
+// lexYAML pipe base become     ,   note andempty ; only keepempty   . 
 func lexYAML(text string) ([]yline, error) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	var out []yline
@@ -557,7 +557,7 @@ func lexYAML(text string) ([]yline, error) {
 	return out, nil
 }
 
-// stripComment 去掉行尾注释：只有当 # 前面是空白且不在引号内时才截断。
+// stripComment    tailnote : onlyhascur # beforefaceisempty and   idintimeonly disconnect. 
 func stripComment(s string) string {
 	var quote byte
 	for i := 0; i < len(s); i++ {
@@ -580,7 +580,7 @@ func stripComment(s string) string {
 	return s
 }
 
-// splitKey 把一个"键: 值"行拆开；键必须是 ASCII 标识符，冒号后须是空格或行尾。
+// splitKey pipe  " : value"  open;    is ASCII tgt  ,  idafter isempty or tail. 
 func splitKey(s string) (string, string, bool) {
 	for i := 0; i < len(s); i++ {
 		switch {
@@ -656,7 +656,7 @@ func parseYAMLMap(lines []yline, i, indent int) (map[string]*yvalue, int, error)
 		}
 
 		raw := rest
-		// 折行标量：缩进更深、且不是新键的行，拼接到当前值。
+		//   tgt :   change , and isnew   ,  connecttocurbeforevalue. 
 		for i < len(lines) && lines[i].indent > indent {
 			if _, _, isKey := splitKey(lines[i].text); isKey {
 				break

@@ -1,10 +1,10 @@
-// registry.go —— 按配置构建通道客户端；key 只从环境变量读（L1/L2/L5）。
+// registry.go -- by      clientuserend; key onlyfrom  change read(L1/L2/L5). 
 //
-// 为什么没有直接复用 provider/：其 normalizeEndpoint 会把端点规范成
-// `<base>/chat/completions`，而 AIOps 实测端点是 `/api/model/chat`
-// （ASR-EXT-006 §1）。按 A5「不猜路径」，我们**用实测路径原样发起**，
-// 协议仍是标准 OpenAI 兼容（chat.completion / choices[].message.content / usage）。
-// 这一点已作为 C 类信号上报（复用点不成立，不是不愿意复用）。
+// as   has connect use provider/: its normalizeEndpoint  pipeendpointrule become
+// `<base>/chat/completions`, but AIOps   endpointis `/api/model/chat`
+// (ASR-EXT-006 §1). by A5"  path",   **use  pathorigkindsendraise**, 
+//    istgtapprove OpenAI compat(chat.completion / choices[].message.content / usage). 
+//   ptalready as C classsignalon ( usept become ,  is    use). 
 package modelcenter
 
 import (
@@ -20,14 +20,14 @@ import (
 	"time"
 )
 
-// Response 是一次模型调用的最小信封（与 OpenAI 兼容格式对齐）。
+// Response is   typecalluse     (and OpenAI compat formto ). 
 type Response struct {
-	// RequestedModel/ActualModel/Substituted 用于**如实记录实际生效的模型**。
+	// RequestedModel/ActualModel/Substituted useat**e.g.     occur   type**. 
 	RequestedModel   string
 	ActualModel      string
 	Substituted      bool
 	Channel          Channel `json:"channel"`
-	ModelID          string  `json:"model_id"` // L5：每次调用必须可归因
+	ModelID          string  `json:"model_id"` // L5:   calluse   attribution
 	Content          string  `json:"content"`
 	FinishReason     string  `json:"finish_reason"`
 	PromptTokens     int     `json:"prompt_tokens"`
@@ -35,16 +35,16 @@ type Response struct {
 	TotalTokens      int     `json:"total_tokens"`
 }
 
-// WriteToken 是"允许写回持久知识"的能力凭证（L2）。
-// 未导出字段 ⇒ 外部无法伪造；只有 learn 通道且 enabled 时才会签发。
+// WriteToken is" allowwritebackkeep   "     (L2). 
+//   outcharseg ⇒ out no   ; onlyhas learn   and enabled timeonly  send. 
 type WriteToken struct{ channel Channel }
 
-// Channel 返回该令牌对应的通道（审计用）。
+// Channel returnback tokento    (  use). 
 func (t WriteToken) Channel() Channel { return t.channel }
 
 type chatClient struct {
-	endpoint string // 完整端点（实测路径）
-	key      string // 只存在于内存，绝不落盘/打印
+	endpoint string // finish endpoint(  path)
+	key      string // onlystore atinstore,     /  
 	model    string
 	timeout  time.Duration
 	hc       *http.Client
@@ -92,7 +92,7 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 		return Response{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.key) // 绝不记录该字符串
+	req.Header.Set("Authorization", "Bearer "+c.key) //      char  
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("模型调用失败: %w", err)
@@ -103,7 +103,7 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 		return Response{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		// 不回显响应体全文（可能含敏感信息），只给状态码与前 200 字节的**去除换行**片段。
+		//  back   bodysafety (       ), onlygivestatuscodeandbefore 200 charnode **    ** seg. 
 		snippet := strings.ReplaceAll(string(data), "\n", " ")
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
@@ -114,8 +114,8 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 	if err := json.Unmarshal(data, &cr); err != nil {
 		return Response{}, fmt.Errorf("响应不是 OpenAI 兼容 JSON: %w", err)
 	}
-	// ⚠️ **模型替换检测**（Lead 2026-10-03 实测：请求 deepseek-reasoner，响应 model=deepseek-flash）。
-	// 台账若只记"我请求的模型"，model_id 就是假的 ⇒ ASR-MODEL-01 的归因作废。
+	// ⚠️ ** type    **(Lead 2026-10-03   :  require deepseek-reasoner,    model=deepseek-flash). 
+	//   ifonly "  require  type", model_id thenis   ⇒ ASR-MODEL-01  attribution  . 
 	substituted := cr.Model != "" && !strings.EqualFold(cr.Model, c.model)
 	if substituted {
 		log.Printf("模型替换：请求 %s，响应 %s（model_substituted=true）", c.model, cr.Model)
@@ -133,15 +133,15 @@ func (c *chatClient) chat(ctx context.Context, prompt string) (Response, error) 
 	return out, nil
 }
 
-// Registry 是"通道 → 客户端"的只读注册表。
+// Registry is"   -> clientuserend" read-onlynote table. 
 type Registry struct {
 	cfg     Config
 	clients map[Channel]*chatClient
 	tokens  map[Channel]WriteToken
 }
 
-// NewRegistry 校验配置并只为 **enabled** 的通道构建客户端（fail-closed）。
-// key 从 `<APIKeyEnv>` 环境变量读；缺失则报错，绝不内置默认 key。
+// NewRegistry verify  andonlyas **enabled**      clientuserend(fail-closed). 
+// key from `<APIKeyEnv>`   change read;   then  ,   in default key. 
 func NewRegistry(cfg Config) (*Registry, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -155,14 +155,14 @@ func NewRegistry(cfg Config) (*Registry, error) {
 	for _, ch := range AllChannels() {
 		cc := cfg.Channels[string(ch)]
 		if !cc.Enabled {
-			continue // 未启用的通道不建立任何客户端（也就无法被误调）
+			continue //  startuse        clientuserend(alsothenno be call)
 		}
 		timeout := time.Duration(cc.TimeoutMS) * time.Millisecond
 		if timeout <= 0 {
 			timeout = 30 * time.Second
 		}
-		// ⚠️ 必须走 **ResolveModel**（model_id 优先，否则取 tier）——
-		// 只读 cc.ModelID 会让 tier-only 通道发出 **model:""** ⇒ 上游 502（本轮实测根因）。
+		// ⚠️     **ResolveModel**(model_id  first,  thenget tier)--
+		// read-only cc.ModelID    tier-only   sendout **model:""** ⇒ on  502(base   rootbecause). 
 		model, err := r.cfg.ResolveModel(ch)
 		if err != nil {
 			return nil, fmt.Errorf("通道 %q 模型解析失败（fail-closed）: %w", ch, err)
@@ -173,13 +173,13 @@ func NewRegistry(cfg Config) (*Registry, error) {
 	return r, nil
 }
 
-// Enabled 报告某通道是否可用。
+// Enabled      is  use. 
 func (r *Registry) Enabled(ch Channel) bool {
 	_, ok := r.clients[ch]
 	return ok
 }
 
-// Invoke 通过指定通道发起一次调用。未启用的通道一律拒绝（不静默降级到别的通道）。
+// Invoke  edrefer   sendraise  calluse.  startuse     reject(     todiff   ). 
 func (r *Registry) Invoke(ctx context.Context, ch Channel, prompt string) (Response, error) {
 	client, ok := r.clients[ch]
 	if !ok {
@@ -190,9 +190,9 @@ func (r *Registry) Invoke(ctx context.Context, ch Channel, prompt string) (Respo
 		return Response{}, err
 	}
 	resp.Channel = ch
-	// L5：模型标识以配置为准（若上游回显不同，仍记录**配置值**以便归因）。
-	// ⚠️ **不得用配置值覆盖实际模型**（否则 model_id 记的是"我请求的"，不是"实际生效的"）。
-	// 响应没带 model 时才回退配置值；有则一律以**响应权威**为准。
+	// L5:  typetgt by  asapprove(ifon back  same,    **  value**bythenattribution). 
+	// ⚠️ **  use  valueoverwrite   type**( then model_id   is"  require ",  is"  occur  "). 
+	//      model timeonlyback   value; hasthen  by**  authoritative**asapprove. 
 	if resp.ActualModel == "" {
 		resp.ActualModel = r.cfg.Channels[string(ch)].ModelID
 	}
@@ -207,7 +207,7 @@ func (r *Registry) Invoke(ctx context.Context, ch Channel, prompt string) (Respo
 	return resp, nil
 }
 
-// WriteBackToken 只在 learn 通道 enabled 时签发（L2：唯一写回通道）。
+// WriteBackToken only  learn    enabled time send(L2: uniquewriteback  ). 
 func (r *Registry) WriteBackToken(ch Channel) (WriteToken, bool) {
 	if ch != ChannelLearn || !r.Enabled(ChannelLearn) {
 		return WriteToken{}, false
@@ -216,12 +216,12 @@ func (r *Registry) WriteBackToken(ch Channel) (WriteToken, bool) {
 	return t, ok
 }
 
-// modelcenterTransport 构造默认 Transport；仅当显式设置 VHS_INSECURE_TLS=1 时
-// 跳过 TLS 证书验证（2026-10-04 网关证书验证失败导致 LLM 全挂的逃生口）。
+// modelcenterTransport   default Transport; onlycur form   VHS_INSECURE_TLS=1 time
+//  ed TLS     (2026-10-04  close         LLM safety   occur ). 
 func modelcenterTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	if os.Getenv("VHS_INSECURE_TLS") == "1" {
-		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 显式逃生口，默认关闭
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec //  form occur , defaultclose 
 	}
 	return t
 }

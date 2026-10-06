@@ -11,57 +11,57 @@ import (
 	"time"
 )
 
-// sediment.go —— 技能层的**沉淀层**（SK-6 / SK-7 / SK-8）。
+// sediment.go --     **   **(SK-6 / SK-7 / SK-8). 
 //
-// 依据 `tasks/VHS-SKILL-001-技能层接口设计.md:137-139`：
+//  data `tasks/VHS-SKILL-001-   connect   .md:137-139`: 
 //
-//	SK-6  ⭐ **每次调用必须留一条沉淀**（skill_id/version/场景/判断/依据/outcome）
-//	SK-7  `verdict` 未回填 ⇒ 该条沉淀标记为 **pending**，**不得当成"已验证"**
-//	SK-8  `verdict=wrong` ⇒ **必须能转成一条判据**（否则同一个坑会重犯）
-//	（:141「**SK-5 和 SK-8 是这套设计的关键** —— 它们把"技能"从"参考资料"变成"**可校准的能力**"」）
+//	SK-6  ⭐ **  calluse       **(skill_id/version/ scenario/ disconnect/ data/outcome)
+//	SK-7  `verdict`  backfill ⇒     tgt as **pending**, **  curbecome"already  "**
+//	SK-8  `verdict=wrong` ⇒ **    become   data**( thensame    heavy )
+//	(:141"**SK-5 and SK-8 is     close ** --   pipe"  "from"    "changebecome"**  approve   **"")
 //
-// ⚠️ **SK-7 与「未测 ≠ 通过」是同一条原则**，只是对象不同
-// （此处管**技能沉淀条目**；交付物的 pending 语义在台账/审计里，不在此文件）。
+// ⚠️ **SK-7 and"   !=  ed"issame  origthen**, onlyisto  same
+// ( placemanage**     obj**; deliver   pending semantic   /   ,    file). 
 //
-// ⚠️ 现状（2026-10-03 实测）：`skill/` 包**零生产调用**（孤岛）⇒ 本层做好后**仍无调用方**
-// （与 `KnowhowFromRaw` 同一处境）。**这是"准备好了"，不是"用上了"。**
+// ⚠️ nowstatus(2026-10-03   ): `skill/`  ** occurproducecalluse**(  )⇒ this layer  after** nocalluse **
+// (and `KnowhowFromRaw` same place ). ** is"approve  ",  is"useon". **
 
-// Verdict 是沉淀条目的**回填裁决**。
+// Verdict is   obj **backfill decide**. 
 //
-// ⚠️ 零值 `VerdictPending` = **未回填** ⇒ 按 SK-7，**不得当成"已验证"**。
+// ⚠️  value `VerdictPending` = ** backfill** ⇒ by SK-7, **  curbecome"already  "**. 
 type Verdict string
 
-// ⚠️ 取值**照抄规范**（`tasks/VHS-SKILL-001:96`）：`correct|wrong|unverified`
+// ⚠️ getvalue**  rule **(`tasks/VHS-SKILL-001:96`): `correct|wrong|unverified`
 //
-//	我最初自拟成 `right|wrong|pending` —— **与规范不符**（且把 `pending` 张冠李戴到了 verdict 上，
-//	而 `pending` 是 **`outcome`** 的取值）。
+//	  init  become `right|wrong|pending` -- **andrule   **(andpipe `pending`     to verdict on, 
+//	but `pending` is **`outcome`**  getvalue). 
 const (
-	VerdictUnverified Verdict = "unverified" // **未回填（默认值）**
+	VerdictUnverified Verdict = "unverified" // ** backfill(defaultvalue)**
 	VerdictCorrect    Verdict = "correct"
 	VerdictWrong      Verdict = "wrong"
 )
 
-// Sediment 是一条沉淀（SK-6 的字段集）。
-// ⚠️ **字段名与类型照抄规范**（`tasks/VHS-SKILL-001:93-99` 的 jsonl 样例）：
+// Sediment is    (SK-6  charseg ). 
+// ⚠️ **charsegnameandclasstype  rule **(`tasks/VHS-SKILL-001:93-99`   jsonl kindexample): 
 //
 //	{"at":…, "skill_id":…, "skill_version":…, "scenario":…, "judgement":…,
 //	 "basis":[…], "outcome":…, "verdict":…, "evidence_ref":…}
 //
-// 我最初自拟成 ts/version/evidence(string)/无 evidence_ref ⇒ **5 处偏差**，已按规范改回。
+//   init  become ts/version/evidence(string)/no evidence_ref ⇒ **5 place diff**, alreadybyrule modifyback. 
 type Sediment struct {
-	ID           string   `json:"id"` // 本机内部主键（规范样例未含；用于回填寻址）
+	ID           string   `json:"id"` // base in   (rule kindexample  ; useatbackfill  )
 	At           string   `json:"at"`
 	SkillID      string   `json:"skill_id"`
 	SkillVersion string   `json:"skill_version"`
 	Scenario     string   `json:"scenario"`
 	Judgement    string   `json:"judgement"`
-	Basis        []string `json:"basis"` // **数组**（依据列表）
+	Basis        []string `json:"basis"` // **num **( datalisttable)
 	Outcome      string   `json:"outcome"`
 	Verdict      Verdict  `json:"verdict"`
 	EvidenceRef  string   `json:"evidence_ref"`
 }
 
-// Outcome 的取值（规范 `:95`）：`adopted|revised|rejected|pending`。
+// Outcome  getvalue(rule  `:95`): `adopted|revised|rejected|pending`. 
 const (
 	OutcomeAdopted  = "adopted"
 	OutcomeRevised  = "revised"
@@ -69,7 +69,7 @@ const (
 	OutcomePending  = "pending"
 )
 
-// ValidOutcome 报告 outcome 是否在规范枚举内。
+// ValidOutcome    outcome is  rule   in. 
 func ValidOutcome(o string) bool {
 	switch o {
 	case OutcomeAdopted, OutcomeRevised, OutcomeRejected, OutcomePending:
@@ -78,33 +78,33 @@ func ValidOutcome(o string) bool {
 	return false
 }
 
-// IsVerified 报告该条是否**可当已验证**（SK-7：未回填 ⇒ false）。
+// IsVerified     is ** curalready  **(SK-7:  backfill ⇒ false). 
 func (s Sediment) IsVerified() bool { return s.Verdict == VerdictCorrect }
 
-// SedimentStore 是**append-only** 的沉淀存储（usage.jsonl）。
+// SedimentStore is**append-only**    storestore(usage.jsonl). 
 //
-// ⚠️ append-only：回填 verdict **不改写历史行**，而是**追加一条回填记录**
-// （与 `NF-2 append-only` 同一纪律）。
+// ⚠️ append-only: backfill verdict ** modifywrite   **, butis**    backfill  **
+// (and `NF-2 append-only` same   ). 
 type SedimentStore struct {
 	Path string
 	mu   sync.Mutex
 }
 
-// NewSedimentStore 构造。Path 为 usage.jsonl 的路径。
+// NewSedimentStore   . Path as usage.jsonl  path. 
 func NewSedimentStore(path string) *SedimentStore { return &SedimentStore{Path: path} }
 
-// Record 追加一条沉淀（SK-6）。**未回填 ⇒ Verdict 为 pending。**
+// Record       (SK-6). ** backfill ⇒ Verdict as pending. **
 func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 	if strings.TrimSpace(e.SkillID) == "" {
 		return Sediment{}, fmt.Errorf("skill: Record 需要 skill_id（SK-6：沉淀必须可归因）")
 	}
 	if e.Verdict == "" {
-		e.Verdict = VerdictUnverified // 未回填（规范默认）
+		e.Verdict = VerdictUnverified //  backfill(rule default)
 	}
 	if e.At == "" {
 		e.At = time.Now().UTC().Format(time.RFC3339)
 	}
-	// ⚠️ outcome 必须在规范枚举内（不得自由填 ⇒ 那会让"私有评测集"无法统计）
+	// ⚠️ outcome    rule   in(   by  ⇒    " has   "no   )
 	if e.Outcome != "" && !ValidOutcome(e.Outcome) {
 		return Sediment{}, fmt.Errorf("skill: outcome %q 不在规范枚举内（adopted|revised|rejected|pending）", e.Outcome)
 	}
@@ -117,9 +117,9 @@ func (s *SedimentStore) Record(e Sediment) (Sediment, error) {
 	return e, nil
 }
 
-// BackfillVerdict 回填裁决（SK-7）。**追加一条回填记录**（不改写历史）。
+// BackfillVerdict backfill decide(SK-7). **    backfill  **( modifywrite  ). 
 //
-// ⚠️ 回填值非法 ⇒ **报错**（不静默当成 right）。
+// ⚠️ backfillvalue   ⇒ **  **(   curbecome right). 
 func (s *SedimentStore) BackfillVerdict(id string, v Verdict) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("skill: BackfillVerdict 需要 id")
@@ -135,7 +135,7 @@ func (s *SedimentStore) BackfillVerdict(id string, v Verdict) error {
 		"ts": time.Now().UTC().Format(time.RFC3339)})
 }
 
-// Load 读回全部沉淀（应用回填）。返回按写入顺序。
+// Load readbacksafety   ( usebackfill). returnbackbywrite  . 
 func (s *SedimentStore) Load() ([]Sediment, error) {
 	f, err := os.Open(s.Path)
 	if err != nil {
@@ -162,7 +162,7 @@ func (s *SedimentStore) Load() ([]Sediment, error) {
 			Raw     json.RawMessage `json:"-"`
 		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue // 坏行不拖垮整体（append-only 允许尾部半行）
+			continue //       body(append-only  allowtail   )
 		}
 		switch rec.Kind {
 		case "sediment":
@@ -177,7 +177,7 @@ func (s *SedimentStore) Load() ([]Sediment, error) {
 	return out, sc.Err()
 }
 
-// Pending 返回**未回填**的沉淀（SK-7：它们不得当成"已验证"）。
+// Pending returnback** backfill**   (SK-7:     curbecome"already  "). 
 func (s *SedimentStore) Pending() ([]Sediment, error) {
 	all, err := s.Load()
 	if err != nil {
@@ -192,9 +192,9 @@ func (s *SedimentStore) Pending() ([]Sediment, error) {
 	return out, nil
 }
 
-// CriterionFromWrong 把一条 **verdict=wrong** 的沉淀转成判据（SK-8）。
+// CriterionFromWrong pipe   **verdict=wrong**     become data(SK-8). 
 //
-// ⚠️ 非 wrong ⇒ **报错**（SK-8 只对 wrong 生效；不许把 right 也转成判据）。
+// ⚠️   wrong ⇒ **  **(SK-8 onlyto wrong occur ;  allowpipe right also become data). 
 func CriterionFromWrong(e Sediment) (Criterion, error) {
 	if e.Verdict != VerdictWrong {
 		return Criterion{}, fmt.Errorf("skill: SK-8 只对 verdict=wrong 生效（实际 %q）", e.Verdict)
@@ -209,7 +209,7 @@ func CriterionFromWrong(e Sediment) (Criterion, error) {
 		Field:   "judging",
 		Text:    e.Scenario + " ⇒ " + e.Judgement,
 		Check:   "manual",
-		Manual:  true, // ⚠️ 新判据默认**人工**（不得凭空宣称可机械化）
+		Manual:  true, // ⚠️ new datadefault**human**(   empty called   ize)
 	}, nil
 }
 

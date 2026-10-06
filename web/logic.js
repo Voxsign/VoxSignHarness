@@ -1,38 +1,38 @@
 /*
- * VoxSign iOS 壳 · 纯逻辑层（logic.js）
+ * VoxSign iOS   ·     (logic.js)
  * ------------------------------------------------------------------
- * 零依赖、无 DOM、无网络：浏览器挂 window.VSLogic，node 挂 module.exports。
- * 所有"判断/裁决/状态机"集中在这里，便于 node 断言测试与后续 WKWebView 复用。
- * 纯渲染/样式豁免（不在此文件）。
+ *  dependency, no DOM, no  :      window.VSLogic, node   module.exports. 
+ *  has" disconnect/ decide/status " in   , thenat node disconnectlang  andaftercontinue WKWebView  use. 
+ *    /kindform  (   file). 
  */
 (function (global) {
   'use strict';
 
-  /* ================= 终态 / 决策点状态词（对齐 INTERACT-v1） ================= */
+  /* ================= endstate / decision pointstatusword(to  INTERACT-v1) ================= */
 
-  // server 状态词：running → need_ask/need_confirm → running … → done/canceled；
-  // interrupted = 重启前未完成（恢复后不自动续跑）。
+  // server statusword: running -> need_ask/need_confirm -> running … -> done/canceled; 
+  // interrupted = heavystartbefore done(  after   continue ). 
   var TERMINAL = { done: 1, canceled: 1, interrupted: 1 };
   var DECISION = { need_ask: 1, need_confirm: 1 };
 
-  // isTerminal：轮询是否该停。
+  // isTerminal: pollis  stop. 
   function isTerminal(status) { return !!TERMINAL[status]; }
 
-  // isDecision：是否挂起在"一个决策点"上（此时暂停轮询，等用户 answer）。
+  // isDecision: is  raise "  decision point"on( time stoppoll, etcuseuser answer). 
   function isDecision(status) { return !!DECISION[status]; }
 
-  /* ================= request_id（M4 幂等键） ================= */
+  /* ================= request_id(M4  etc ) ================= */
 
-  // genRequestId：客户端生成，重试同一任务时复传 → server 去重（deduped:true）。
+  // genRequestId: clientuserendoccurbecome, heavy same tasktime   -> server  heavy(deduped:true). 
   function genRequestId() {
     return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   }
 
-  /* ================= 回执四行解析（contract.RenderReceipt 的反向解析） =================
+  /* ================= back   resolve (contract.RenderReceipt  revtoresolve ) =================
    *
-   * server 渲染格式恰好四行：
-   *   动作：<action>\n文件：<files>\n结果：<result>\n撤销：<undo>
-   * 容错：行缺失 / 全半角冒号 / 多余行 / 前后空白 都不炸，按行首标签归位。
+   * server    form    : 
+   *     : <action>\nfile: <files>\nclose : <result>\n  : <undo>
+   *   :     / safety   id /     / beforeafterempty  all  , by firsttgt   . 
    */
   function parseReceipt(text) {
     var out = { action: '', files: '', result: '', undo: '' };
@@ -51,12 +51,12 @@
     return out;
   }
 
-  /* ================= 撤销行解析（回执卡第 4 行 → 撤销按钮） =================
+  /* =================    resolve (back    4   ->   by ) =================
    *
-   * 【伪代码逻辑层】（必写：撤销按钮显隐属裁决）
-   *   show = server.reversible===true  且  undo 行不含"不可撤销/不可逆/禁止回滚"。
-   *   backup：undo 行里提取 .bak 文件名（兼容 VHS_BACKUP_PATH: 前缀契约）。
-   *   异常：undo 为空 → show=false，backup=''（不可撤销，不给按钮）。
+   * [pseudocode logic layer]( write:   by     decide)
+   *   show = server.reversible===true  and  undo    "    / reversible/forbidstoprollback". 
+   *   backup: undo    get .bak filename(compat VHS_BACKUP_PATH: before   ). 
+   *   error: undo asempty -> show=false, backup=''(    ,  giveby ). 
    */
   function extractUndo(receiptObj, reversible) {
     var undo = (receiptObj && receiptObj.undo) || '';
@@ -68,7 +68,7 @@
     return { show: show, backup: backup, irreversible: irreversible };
   }
 
-  /* ================= 意图关键词 → 轻标签（从 receipt 动作行压缩） ================= */
+  /* ================= intentclose word ->  tgt (from receipt      ) ================= */
   var INTENT_WORDS = [
     { re: /NOTE|记一下|笔记/i, label: '笔记' },
     { re: /EDIT|改文件|编辑|删除/i, label: '改文件' },
@@ -91,16 +91,16 @@
     return 'blue';
   }
 
-  /* ================= 轻标签压缩（意图/域/风险/状态） =================
+  /* =================  tgt   (intent/domain/risk/status) =================
    *
-   * 【伪代码逻辑层】（必写：徽章从"状态/回执/归因"压缩，内部细节不放大）
-   *   输入 view = GET /v1/tasks/{id} 的响应（不含完整 Outcome，只有 receipt/attribution/reversible）。
-   *   输出 badges[] = 2~4 个小徽章，每个 {kind,label,tone}：
-   *     state   ← status 直接映射（执行中/待回问/待确认/完成/已取消/已中断）
-   *     intent  ← receipt.动作行关键词（笔记/改文件/查询/提交/部署）
-   *     domain  ← receipt.文件行压缩：notes.md→笔记域；有真实对象路径→项目域；无→省略
-   *     risk    ← need_confirm→高风险·待放行；reversible→可逆；done 且 !reversible→不可逆
-   *   原则：绝不展示置信度分数/ASR 原文/纠正明细——只留用户需要的掌控感。
+   * [pseudocode logic layer]( write:   from"status/back /attribution"  , in  node   )
+   *    in view = GET /v1/tasks/{id}    (  finish  Outcome, onlyhas receipt/attribution/reversible). 
+   *    out badges[] = 2~4     ,    {kind,label,tone}: 
+   *     state   ← status  connect  (  in/ clarification/ confirm/done/alreadycancel/alreadyinterrupt)
+   *     intent  ← receipt.   close word(  /modifyfile/  /  /  )
+   *     domain  ← receipt.file   : notes.md->  domain; has  to path-> objdomain; no->  
+   *     risk    ← need_confirm-> risk·   ; reversible->reversible; done and !reversible-> reversible
+   *   origthen:    show   splitnum/ASR orig / pos  --only useuserneedneed    . 
    */
   function compressBadges(view) {
     view = view || {};
@@ -130,17 +130,17 @@
     return badges;
   }
 
-  /* ================= 一屏一个决策点（渲染路由） =================
+  /* =================     decision point(  routeby) =================
    *
-   * 【伪代码逻辑层】（必写：决策点优先级，一次只渲染一个）
-   *   优先级 高→低：
-   *     1. need_confirm → {kind:'confirm', question}            红色确认条（answer:"执行"）
-   *     2. need_ask     → {kind:'ask', question, options[]}     候选按钮（点选 answer:option.id）
-   *     3. canceled/interrupted → {kind:'error', message}       系统错误条
-   *     4. done         → {kind:'receipt', receipt, undo}        绿色回执卡（撤销按钮按 undo.show）
-   *     5. running      → {kind:'running'}                       执行卡滚动步骤
-   *     6. 其他/idle    → {kind:'idle'}
-   *   原则：上一个 done 的回执卡作为历史气泡留在对话流里，底部不再叠加第二个决策控件。
+   * [pseudocode logic layer]( write: decision point first ,   only    )
+   *    first   -> : 
+   *     1. need_confirm -> {kind:'confirm', question}              confirm (answer:"  ")
+   *     2. need_ask     -> {kind:'ask', question, options[]}       by (pt  answer:option.id)
+   *     3. canceled/interrupted -> {kind:'error', message}         error 
+   *     4. done         -> {kind:'receipt', receipt, undo}          back  (  by by undo.show)
+   *     5. running      -> {kind:'running'}                              
+   *     6. its /idle    -> {kind:'idle'}
+   *   origthen: on   done  back   as      to   , bot  again     decide   . 
    */
   function nextDecisionPoint(view) {
     view = view || {};
@@ -161,13 +161,13 @@
     }
   }
 
-  /* ================= 角色映射（M5-3，镜像 server.roleForStatus） =================
+  /* =================     (M5-3,    server.roleForStatus) =================
    *
-   * 【伪代码逻辑层】（必写：阶段→角色裁决）
-   *   planner  = 分类/域裁决/风险分级/确认闸/回问（决策）→ need_ask/need_confirm
-   *   executor = 工具动作执行                              → running
-   *   verifier = 校验/归因/回执                            → done
-   *   其他/canceled/interrupted → 落回 planner。
+   * [pseudocode logic layer]( write: stage->   decide)
+   *   planner  = classify/domain decide/risk grading/confirm /clarification(decide )-> need_ask/need_confirm
+   *   executor =                                     -> running
+   *   verifier = verify/attribution/back                             -> done
+   *   its /canceled/interrupted ->  back planner. 
    */
   function roleForStatus(status) {
     switch (status) {
@@ -184,18 +184,18 @@
   }
   var ROLE_LABELS = { planner: 'Planner', executor: 'Executor', verifier: 'Verifier' };
 
-  /* ================= 打断状态机：说"停" → 红色系统条 =================
+  /* =================  disconnectstatus :  "stop" ->       =================
    *
-   * 【伪代码逻辑层】（必写：停止→已生效/未执行/可继续或撤销）
-   *   输入 view = 当前任务视图（可能 running/need_ask/need_confirm/done）。
-   *   控制流：
-   *     hasEffect = 已有 receipt 且动作/文件非空（done 前已落盘的执行结果）。
-   *     active   = hasEffect ? ['已生效：<action>（<files>）']
-   *                          : ['已生效：尚未产生文件变更']
-   *     blocked  = ['未执行：后续阶段已中止']
-   *     actions  = ['继续'] + (undo.show ? ['撤销'] : [])   // 撤销在最前
-   *   异常：view 为空 → active='没有进行中的任务'，actions=[]。
-   *   注意：系统条只是 UI 呈现；真正的停止由 app.js 调 legacy /v1/cancel 完成。
+   * [pseudocode logic layer]( write: stopstop->alreadyoccur /   / continuecontinueor  )
+   *    in view = curbeforetask  (   running/need_ask/need_confirm/done). 
+   *   control flow: 
+   *     hasEffect = alreadyhas receipt and  /file empty(done beforealready     close ). 
+   *     active   = hasEffect ? ['alreadyoccur : <action>(<files>)']
+   *                          : ['alreadyoccur :   produceoccurfilechangechange']
+   *     blocked  = ['   : aftercontinuestagealreadyinstop']
+   *     actions  = ['continuecontinue'] + (undo.show ? ['  '] : [])   //     before
+   *   error: view asempty -> active=' has  in task', actions=[]. 
+   *   note :    onlyis UI  now;  pos stopstopby app.js call legacy /v1/cancel done. 
    */
   function interruptSystemBar(view) {
     view = view || {};
@@ -214,30 +214,30 @@
     return { title: '已按下停止', active: active, blocked: blocked, actions: actions, closable: true };
   }
 
-  /* ================= 执行卡阶段链（M6：由 SSE stage 事件真实驱动，此为索引表） ================= */
+  /* =================    stagechain(M6: by SSE stage event    ,  as  table) ================= */
   var EXEC_STAGES = ['意图分类', '域裁决', '风险分级', '确认闸', '执行', '校验', '归因'];
 
-  // stageIndex：SSE step（中文阶段名）→ EXEC_STAGES 下标；未知名返回 -1（执行卡不跳）。
+  // stageIndex: SSE step(in stagename)-> EXEC_STAGES undertgt;   namereturnback -1(     ). 
   function stageIndex(stepName) { return EXEC_STAGES.indexOf(stepName); }
 
-  /* ================= SSE 线协议解析（M6，对齐 SSE-v1 契约） =================
+  /* ================= SSE line  resolve (M6, to  SSE-v1   ) =================
    *
-   * 【伪代码逻辑层】（必写：SSE 块解析属协议裁决）
-   * 输入一个以空行结束的完整 SSE 块（可能含 event:/data: 多行）：
+   * [pseudocode logic layer]( write: SSE  resolve     decide)
+   *  in  byempty closeend finish  SSE  (    event:/data:   ): 
    *   event: stage\n
    *   data: {"seq":1,...}\n\n
-   * 规则：
-   *   - 行首 ':' = 注释/keepalive，忽略；
-   *   - 'event:' 缺省 → 'message'；
-   *   - 'data:' 多行 → 用 \n 拼接后 JSON.parse；解析失败 → data={_raw:原文}，不崩；
-   *   - id:/retry: 本客户端忽略（重连用 ?after=<lastSeq>，见契约）。
+   * rule: 
+   *   -  first ':' = note /keepalive,   ; 
+   *   - 'event:'    -> 'message'; 
+   *   - 'data:'    -> use \n  connectafter JSON.parse; resolve    -> data={_raw:orig },   ; 
+   *   - id:/retry: baseclientuserend  (heavylinkuse ?after=<lastSeq>, see  ). 
    */
   function parseSSEBlock(blockText) {
     var ev = { event: 'message', data: null };
     var dataLines = [];
     String(blockText).split(/\r?\n/).forEach(function (line) {
-      if (line === '') return;              // 块末空行由调用方切分
-      if (line.charAt(0) === ':') return;   // 注释/心跳
+      if (line === '') return;              //  endempty bycalluse  split
+      if (line.charAt(0) === ':') return;   // note /  
       var idx = line.indexOf(':');
       var field = idx < 0 ? line : line.slice(0, idx);
       var val = idx < 0 ? '' : line.slice(idx + 1).replace(/^ /, '');
@@ -250,15 +250,15 @@
     return ev;
   }
 
-  /* ================= 重连幂等：按 seq 去重 =================
+  /* ================= heavylink etc: by seq  heavy =================
    *
-   * 【伪代码逻辑层】（必写：断线重连 ?after=<lastSeq> 不重复渲染）
-   *   seen = {seq:1}（已渲染过的序号集合）。
-   *   filterNew(seen, events)：遍历事件；
-   *     seq 缺失 → 直接放行（防御性，不丢事件）；
-   *     seq 已在 seen → 跳过（重放去重）；
-   *     否则记入 seen 并放行。
-   *   返回新事件数组（seen 原地更新）。
+   * [pseudocode logic layer]( write: disconnectlineheavylink ?after=<lastSeq>  heavy   )
+   *   seen = {seq:1}(already  ed  id  ). 
+   *   filterNew(seen, events):   event; 
+   *     seq    ->  connect  (prevent ity,   event); 
+   *     seq already  seen ->  ed(heavy  heavy); 
+   *      then in seen and  . 
+   *   returnbackneweventnum (seen origlychangenew). 
    */
   function filterNew(seen, events) {
     var fresh = [];
@@ -273,13 +273,13 @@
     return fresh;
   }
 
-  /* ================= 打断三语义：SSE interrupt 事件 → 红色系统条 =================
+  /* =================  disconnect semantic: SSE interrupt event ->       =================
    *
-   * 【伪代码逻辑层】（必写：interrupt 事件为即时信号，优先于轮询感知）
+   * [pseudocode logic layer]( write: interrupt eventasi.e.timesignal,  firstatpoll  )
    *   data = {seq, applied:[...], notApplied:[...], canRollback:bool}
-   *   active   = applied.map('已生效：'+x)；空 → '已生效：尚未产生文件变更'
-   *   blocked  = notApplied.map('未执行：'+x)；空 → '未执行：后续阶段已中止'
-   *   actions  = ['继续'] + (canRollback ? ['撤销'] 前置 : [])
+   *   active   = applied.map('alreadyoccur : '+x); empty -> 'alreadyoccur :   produceoccurfilechangechange'
+   *   blocked  = notApplied.map('   : '+x); empty -> '   : aftercontinuestagealreadyinstop'
+   *   actions  = ['continuecontinue'] + (canRollback ? ['  '] before  : [])
    */
   function interruptBarFromEvent(ev) {
     ev = ev || {};
@@ -292,7 +292,7 @@
     return { title: '已按下停止', active: applied, blocked: notApplied, actions: actions, closable: true };
   }
 
-  /* ================= 角色实时（M6：GET /v1/roles [{id,label,active}]） ================= */
+  /* =================    time(M6: GET /v1/roles [{id,label,active}]) ================= */
   function activeRole(roles) {
     if (!Array.isArray(roles)) return '';
     for (var i = 0; i < roles.length; i++) {
@@ -301,8 +301,8 @@
     return '';
   }
 
-  /* ================= 语音识别探测（webkitSpeechRecognition 两态） =================
-   * 返回 'native' | 'webkit' | 'none'。node 测试可 mock global 两态。
+  /* ================= langaudio diff  (webkitSpeechRecognition  state) =================
+   * returnback 'native' | 'webkit' | 'none'. node     mock global  state. 
    */
   function detectRecognition(g) {
     g = g || {};

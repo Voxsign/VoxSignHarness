@@ -1,24 +1,24 @@
-// risk.go —— 工具**风险分级**与「最小风险工具优先」（PM-6）。
+// risk.go --   **risk grading**and"  risk   first"(PM-6). 
 //
-// 动因（Lead 实测 2026-10-03）：强模型对一个"搜索 TODO"的任务选了 `run`（exec/high）
-// 而不是清单里现成的 `search` —— **能调用 ≠ 产出好**；模型天然倾向"挑重的"（看起来更能干，其实更危险）。
+//  because(Lead    2026-10-03):   typeto  "   TODO" task  `run`(exec/high)
+// but islist nowbecome  `search` -- ** calluse != produceout **;  typedayhowever to" heavy "( raise change  , its change risk). 
 //
-// 这是**本机硬复核**，不是提示词建议：提示词是软的，复核是硬的。
+//  is**base    **,  is showword  :  showwordis  ,   is  . 
 package plan
 
 import "strings"
 
-// ToolRisk 是风险等级（数值越大越危险）。
+// ToolRisk isrisketc (numvalue    risk). 
 type ToolRisk int
 
 const (
 	RiskUnknown ToolRisk = iota
-	RiskLow              // 只读：search / read / note
-	RiskMedium           // 写入本域：file(write) / git(commit 之外的写)
-	RiskHigh             // 执行 / 不可逆：run / test / git.commit / deploy
+	RiskLow              // read-only: search / read / note
+	RiskMedium           // writebasedomain: file(write) / git(commit ofout write)
+	RiskHigh             //    /  reversible: run / test / git.commit / deploy
 )
 
-// toolRiskTable 是**显式**风险表（不靠"看着像"）。新工具必须在此登记。
+// toolRiskTable is** form**risktable(  " ing "). new        . 
 var toolRiskTable = map[string]ToolRisk{
 	"search": RiskLow,
 	"read":   RiskLow,
@@ -27,11 +27,11 @@ var toolRiskTable = map[string]ToolRisk{
 	"ask":    RiskLow,
 	"file":   RiskMedium,
 	"git":    RiskMedium,
-	"test":   RiskMedium, // 登记表：test=low/medium（跑测试，边界内）；run=high（任意命令）
+	"test":   RiskMedium, //   table: test=low/medium(   ,  boundaryin); run=high(    )
 	"run":    RiskHigh,
 }
 
-// ToolRiskOf 返回工具风险；未登记 ⇒ RiskUnknown。
+// ToolRiskOf returnback  risk;     ⇒ RiskUnknown. 
 func ToolRiskOf(tool string) ToolRisk {
 	if r, ok := toolRiskTable[tool]; ok {
 		return r
@@ -39,14 +39,14 @@ func ToolRiskOf(tool string) ToolRisk {
 	return RiskUnknown
 }
 
-// searchableWords 是"这其实是查找类任务"的信号词。
+// searchableWords is" its is  classtask" signalword. 
 var searchableWords = []string{"搜索", "查找", "找到", "定位", "列出", "统计", "整理", "汇总", "所有"}
 
-// needsExecWords 是"确实需要执行命令"的信号词（防"一律禁 run"的过度保守）。
+// needsExecWords is"  needneed    " signalword(prevent"  forbid run" ed keep ). 
 var needsExecWords = []string{"执行", "运行命令", "跑命令", "curl", "安装", "编译", "构建命令"}
 
-// lowerRiskAlternative 若存在**更低风险且能覆盖同一意图**的工具，返回它。
-// 只认登记在 risk 表里的工具，避免"猜替代品"。
+// lowerRiskAlternative ifstore **change riskand overwritesame intent**   , returnback . 
+// only     risk table    ,   "    ". 
 func lowerRiskAlternative(chosen string, chosenRisk ToolRisk, m Manifest) (string, bool) {
 	if chosenRisk < RiskHigh {
 		return "", false
@@ -68,11 +68,11 @@ func lowerRiskAlternative(chosen string, chosenRisk ToolRisk, m Manifest) (strin
 	return best, best != ""
 }
 
-// reviewMinRisk 是 PM-6：查找类任务**不得**用高风险工具，若清单里有更低风险的替代。
-// 返回违规说明（空 = 通过）。
+// reviewMinRisk is PM-6:   classtask**  **use risk  , iflist haschange risk   . 
+// returnback rule  (empty =  ed). 
 func reviewMinRisk(goal string, steps []Step, m Manifest) []string {
 	if containsAny(strings.ToLower(goal), needsExecWords...) {
-		return nil // 任务确实需要执行 ⇒ 允许高风险工具（防过度保守）
+		return nil // task  needneed   ⇒  allow risk  (prevented keep )
 	}
 	if !containsAny(goal, searchableWords...) {
 		return nil

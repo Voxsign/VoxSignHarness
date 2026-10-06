@@ -1,12 +1,12 @@
 //
-//  devices.go：云道设备注册表——自建 Harness 机器码机制（设计稿 v3 第 2、4 节）。
+//  devices.go:     note table--   Harness   code restrict(    v3   2, 4 node). 
 //
-//  机器（自建 Harness）装机时生成唯一机器码；启动后向云道注册（name+base）并
-//  每 2 分钟心跳保活。iOS 输入机器码 → POST /v1/devices/lookup → 拿到机器身份与
-//  访问 token：同网直连 base，异网走云道转发（按需，relay 基建后续）。
+//    (   Harness)  timeoccurbecomeunique  code; start afterto  note (name+base)and
+//    2 splitclock  keep . iOS  in  code -> POST /v1/devices/lookup ->  to    and
+//     token: same  link base, diff     send(byneed, relay base aftercontinue). 
 //
-//  鉴权：register/heartbeat 需 Bearer VHS_TOKEN（云端 VHS_TOKEN）；lookup 免鉴权
-//  （机器码本身即凭证，iOS 自建模式下无会话 JWT）。
+//    : register/heartbeat need Bearer VHS_TOKEN( end VHS_TOKEN); lookup    
+//  (  codebase i.e.  , iOS    formunderno   JWT). 
 //
 
 package server
@@ -23,21 +23,21 @@ import (
 	"time"
 )
 
-// DeviceRecord 一台已注册机器的目录条目。
+// DeviceRecord   alreadynote    obj  obj. 
 type DeviceRecord struct {
 	MachineCode  string    `json:"machine_code"`
 	Name         string    `json:"name"`
 	Base         string    `json:"base"`
-	Token        string    `json:"token"` // 云道为该机器下发的访问凭证
+	Token        string    `json:"token"` //   as   undersend     
 	Online       bool      `json:"online"`
 	LastSeen     time.Time `json:"last_seen"`
-	State        string    `json:"state,omitempty"`  // 架构 v1 §5：idle|busy|decision|standby
-	Pending      int       `json:"pending,omitempty"` // 活动任务数（decision/busy 时）
-	Tenant       string    `json:"tenant,omitempty"`  // 归属租户（多租户隔离；本地默认 "default"）
+	State        string    `json:"state,omitempty"`  //    v1 §5: idle|busy|decision|standby
+	Pending      int       `json:"pending,omitempty"` //   tasknum(decision/busy time)
+	Tenant       string    `json:"tenant,omitempty"`  //    user(  user  ; baselydefault "default")
 	RegisteredAt time.Time `json:"registered_at"`
 }
 
-// heartbeatPeriod 状态 → 心跳周期（架构 v1 §5.1 频率映射）。
+// heartbeatPeriod status ->    period(   v1 §5.1 freqrate  ). 
 func heartbeatPeriod(state string) time.Duration {
 	switch state {
 	case "decision":
@@ -51,8 +51,8 @@ func heartbeatPeriod(state string) time.Duration {
 	}
 }
 
-// deviceOnline 窗口化在线判定（架构 v1 §5.3）：now − last_seen < 3×当前周期
-// 才算在线——慢心跳（idle/standby）不会误判离线。
+// deviceOnline   ize line  (   v1 §5.3): now − last_seen < 3×curbefore period
+// only  line--slow  (idle/standby)     line. 
 func deviceOnline(rec *DeviceRecord) bool {
 	if rec == nil || rec.LastSeen.IsZero() {
 		return false
@@ -60,11 +60,11 @@ func deviceOnline(rec *DeviceRecord) bool {
 	return time.Since(rec.LastSeen) < 3*heartbeatPeriod(rec.State)
 }
 
-// deviceRegistry 设备注册表（<log_dir>/devices/devices.json 持久化）。
+// deviceRegistry   note table(<log_dir>/devices/devices.json keep ize). 
 type deviceRegistry struct {
 	mu      sync.Mutex
 	path    string
-	devices map[string]*DeviceRecord // machine_code → record
+	devices map[string]*DeviceRecord // machine_code -> record
 }
 
 func newDeviceRegistry(logDir string) *deviceRegistry {
@@ -100,8 +100,8 @@ func newDeviceToken() string {
 	return hex.EncodeToString(b)
 }
 
-// findByToken 按访问 token 反查设备（设备凭证中间件用）。未命中返回 nil。
-// O(n)：设备数量为手级数（个位数），无需索引。持锁由调用方决定（这里自行加锁，只读安全）。
+// findByToken by   token rev   (    middle use).   inreturnback nil. 
+// O(n):   num as  num(  num), noneed  . keep bycalluse decide (      , read-onlysafesafety). 
 func (r *deviceRegistry) findByToken(tok string) *DeviceRecord {
 	if tok == "" {
 		return nil
@@ -116,17 +116,17 @@ func (r *deviceRegistry) findByToken(tok string) *DeviceRecord {
 	return nil
 }
 
-// deviceToken 设备接口鉴权：Bearer/X-Token == 服务端 VHS_TOKEN。
-// （云道模式下 register/heartbeat 由 Harness 端持有 VHS_TOKEN 调用，不要求会话 JWT。）
+// deviceToken   connect   : Bearer/X-Token == serveserviceend VHS_TOKEN. 
+// (   formunder register/heartbeat by Harness endkeephas VHS_TOKEN calluse,  needrequire   JWT. )
 //
-// 防护顺序（2026-10-05 收尾修复，docs/测试结果报告-云端服务器端功能-20261005.md 问题 2/3）：
-// 先判 s.devices == nil（本地模式，server.New 仅云端模式创建注册表）→ 501。
-// 设备功能按设计仅云端可用；本地模式的问题是"功能未启用"而非"配置错误"，
-// 故先于 token 检查判定，且绝不触碰 s.devices（否则 devices.go 注册处理处 nil deref panic）。
-// 再判 s.cfg.Server.Token == ""（云端模式漏配 VHS_TOKEN）→ 503。
-// 属服务端配置错误——客户端无从提供有效凭证，故不用 401（401 暗示"带正确 token 再来"，
-// 此处根本没有 token 可带）；硬保护堵住"两端凭证都为空即放行 register"的生产风险。
-// 最后正常比较：凭证不匹配 → 401。
+// preventprotect  (2026-10-05 recvtailfix , docs/  close   - endserveservice end  -20261005.md    2/3): 
+// first  s.devices == nil(basely form, server.New only end form  note table)-> 501. 
+//     by  only end use; basely form   is"   startuse"but "  error", 
+// thusfirstat token     , and  trigger  s.devices( then devices.go note handleplace nil deref panic). 
+// again  s.cfg.Server.Token == ""( end form   VHS_TOKEN)-> 503. 
+//  serveserviceend  error--clientuserendnofrom providehas   , thus use 401(401  show" pos  token again ", 
+//  placerootbase has token   );  protect  " end  allasemptyi.e.   register" occurproducerisk. 
+//  afterpos   :       -> 401. 
 func (s *Server) deviceToken(next http.HandlerFunc) http.HandlerFunc {
 	return s.cors(func(w http.ResponseWriter, r *http.Request) {
 		if s.devices == nil {
@@ -149,14 +149,14 @@ func (s *Server) deviceToken(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-// POST /v1/devices/register {machine_code, name, base} → 登记/更新 + {ok, machine_code, token}。
-// 幂等：同一机器码重复注册仅刷新 name/base/在线状态；首次注册签发访问 token。
+// POST /v1/devices/register {machine_code, name, base} ->   /changenew + {ok, machine_code, token}. 
+//  etc: same   codeheavy note only new name/base/ linestatus; first note  send   token. 
 func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MachineCode string `json:"machine_code"`
 		Name        string `json:"name"`
 		Base        string `json:"base"`
-		Token       string `json:"token"` // 可选：显式指定访问 token（云道/Mac 两侧写同一 token）；缺省自动签发
+		Token       string `json:"token"` //   :  formrefer    token(  /Mac  sidewritesame  token);      send
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "body 解析失败"})
@@ -174,7 +174,7 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		rec = &DeviceRecord{MachineCode: in.MachineCode, RegisteredAt: time.Now()}
 		s.devices.devices[in.MachineCode] = rec
 	}
-	// 显式 token 优先覆盖；首次注册且未显式给才自动签发。
+	//  form token  firstoverwrite; first note and  formgiveonly   send. 
 	if in.Token != "" {
 		rec.Token = in.Token
 	} else if rec.Token == "" {
@@ -184,7 +184,7 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 	rec.Base = in.Base
 	rec.Online = true
 	rec.LastSeen = time.Now()
-	// 租户归属：云端经 JWT 注册时按上下文写入；否则默认 "default"（本地/单租户 E2E）。
+	//  user  :  end  JWT note timebyonunder write;  thendefault "default"(basely/  user E2E). 
 	if t := ctxTenant(r.Context()); t != "" {
 		rec.Tenant = t
 	} else if rec.Tenant == "" {
@@ -196,8 +196,8 @@ func (s *Server) handleDevicesRegister(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "machine_code": rec.MachineCode, "token": rec.Token})
 }
 
-// POST /v1/devices/heartbeat {machine_code, state, pending} → 更新在线状态 + 状态；
-// 未注册机器码 → 404 提示先注册。online 判定窗口化（架构 v1 §5.3）。
+// POST /v1/devices/heartbeat {machine_code, state, pending} -> changenew linestatus + status; 
+//  note   code -> 404  showfirstnote . online     ize(   v1 §5.3). 
 func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		MachineCode string `json:"machine_code"`
@@ -225,10 +225,10 @@ func (s *Server) handleDevicesHeartbeat(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "online": true, "state": rec.State})
 }
 
-// POST /v1/devices/lookup {machine_code} → {name, base, online, state, pending, token}。
-// 免鉴权：机器码即凭证。未注册/离线仍返回（iOS 探测直连后决定同网直连或云道转发）。
-// 注意：本路由走 public（不经 deviceToken 中间件），本地模式 s.devices 为 nil，
-// 入口必须自行防护，否则 nil deref panic（与 register/heartbeat 同根因）。
+// POST /v1/devices/lookup {machine_code} -> {name, base, online, state, pending, token}. 
+//    :   codei.e.  .  note / line returnback(iOS    linkafterdecide same  linkor   send). 
+// note : baserouteby  public(   deviceToken middle ), basely form s.devices as nil, 
+// in     preventprotect,  then nil deref panic(and register/heartbeat samerootbecause). 
 func (s *Server) handleDevicesLookup(w http.ResponseWriter, r *http.Request) {
 	if s.devices == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "设备注册表仅云端模式可用（本地模式不支持设备查询）"})

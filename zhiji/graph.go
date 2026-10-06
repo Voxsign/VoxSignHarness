@@ -1,8 +1,8 @@
-// graph.go —— 知己 · 记忆关系图（架构 v1.1 §6.2 / G3 落地）。
+// graph.go --    ·   close  (   v1.1 §6.2 / G3  ly). 
 //
-// 四类有类型边（semantic|temporal|causal|entity）叠在同一组节点上；
-// 节点 ID 复用 MemoryItem.ID / raw 观察 ID（raw-N）。图独立落 graph.json，
-// 不往 MemoryItem 塞 edges（避免双向同步冗余）；空图时 BudgetSearch 退化为 Search 超集。
+//  classhasclasstype (semantic|temporal|causal|entity)  same  nodepton; 
+// nodept ID  use MemoryItem.ID / raw    ID(raw-N).      graph.json, 
+//    MemoryItem   edges(   tosame   ); empty time BudgetSearch  izeas Search   . 
 package zhiji
 
 import (
@@ -10,37 +10,37 @@ import (
 	"sync"
 )
 
-// EdgeRel 边关系类型（四视图：语义/时序/因果/实体）。
+// EdgeRel  close classtype(   : semantic/time /because / body). 
 type EdgeRel string
 
 const (
-	EdgeRelSemantic EdgeRel = "semantic" // 语义相关
-	EdgeRelTemporal EdgeRel = "temporal" // 时间邻近/先后
-	EdgeRelCausal   EdgeRel = "causal"   // 因果（必有向）
-	EdgeRelEntity   EdgeRel = "entity"   // 共享实体
+	EdgeRelSemantic EdgeRel = "semantic" // semantic close
+	EdgeRelTemporal EdgeRel = "temporal" // timetime  /firstafter
+	EdgeRelCausal   EdgeRel = "causal"   // because ( hasto)
+	EdgeRelEntity   EdgeRel = "entity"   //    body
 )
 
-// Edge 一条有类型边（From/To 为节点 ID；causal 必为 Directed=true）。
+// Edge   hasclasstype (From/To asnodept ID; causal  as Directed=true). 
 type Edge struct {
 	From     string  `json:"from"`
 	To       string  `json:"to"`
 	Rel      EdgeRel `json:"rel"`
-	Directed bool    `json:"directed"` // causal 必为 true
-	Weight   float64 `json:"weight"`   // 写入时概率（≥0.6 阈值）/ 时间邻近度
+	Directed bool    `json:"directed"` // causal  as true
+	Weight   float64 `json:"weight"`   // writetime rate(>=0.6  value)/ timetime   
 }
 
-// Graph 关系图（线程安全；独立持久化 graph.json）。
+// Graph close  (line safesafety;   keep ize graph.json). 
 type Graph struct {
 	mu    sync.RWMutex
 	Edges []Edge `json:"edges"`
 }
 
-// NewGraph 空图构造（NewStore load 时若 graph.json 不存在则为空图）。
+// NewGraph empty   (NewStore load timeif graph.json  store thenasempty ). 
 func NewGraph() *Graph {
 	return &Graph{}
 }
 
-// Add 追加一条边；去重键=(From,To,Rel)，同键已存在则加权更新（取较大权重），不重复追加。
+// Add      ;  heavy =(From,To,Rel), same alreadystore then  changenew(get   heavy),  heavy   . 
 func (g *Graph) Add(e Edge) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -56,7 +56,7 @@ func (g *Graph) Add(e Edge) {
 	g.Edges = append(g.Edges, e)
 }
 
-// Neighbors 返回与 id 相连的边（双向都算邻居）；可选按 rel 过滤（多 rel 同时命中）。
+// Neighbors returnbackand id  link  ( toall   );   by rel ed (  rel sametime in). 
 func (g *Graph) Neighbors(id string, rel ...EdgeRel) []Edge {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -83,14 +83,14 @@ func (g *Graph) Neighbors(id string, rel ...EdgeRel) []Edge {
 	return out
 }
 
-// IsEmpty 图是否无边（空图时 BudgetSearch 退化为 Search 超集）。
+// IsEmpty  is no (empty time BudgetSearch  izeas Search   ). 
 func (g *Graph) IsEmpty() bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return len(g.Edges) == 0
 }
 
-// Load 从 path 加载图；文件不存在视为空图（与 store.go 其他四 JSON 一致）。
+// Load from path    ; file store  asempty (and store.go its   JSON   ). 
 func (g *Graph) Load(path string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -103,7 +103,7 @@ func (g *Graph) Load(path string) error {
 	return nil
 }
 
-// Save 落盘 graph.json（风格照 store.go 的 writeJSON：tmp+rename 原子写）。
+// Save    graph.json(    store.go   writeJSON: tmp+rename orig write). 
 func (g *Graph) Save(path string) error {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

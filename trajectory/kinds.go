@@ -1,37 +1,37 @@
-// kinds.go —— 轨迹 kind 的**单一枚举来源**（判据⑪的地基）。
+// kinds.go -- trace kind  **      **( data⑪ lybase). 
 //
-// 动因（Lead 2026-10-03，由实现方警告升级为判据）：
+//  because(Lead 2026-10-03, by now     as data): 
 //
-//	若判据引用了**不存在的 kind 名**，它会"因为匹配不到任何轨迹而空过" ——
-//	**判据看起来在断言，实际断言了一个不存在的符号**。这比一般假绿更隐蔽。
+//	if data use** store   kind name**,   "becauseas   to  tracebutemptyed" --
+//	** data raise  disconnectlang,   disconnectlang   store   id**.       change  . 
 //
-// ⇒ 修的是**结构**：kind 必须有单一枚举；写出时遇到未登记的 kind **必须报错**（不许忽略）。
+// ⇒ fix is**close **: kind   has    ; writeouttime to     kind **    **( allow  ). 
 package trajectory
 
 import "fmt"
 
-// KindIntentSource 记录"意图来源"（值域 asr-intent | text-fallback）。
+// KindIntentSource   "intent  "(valuedomain asr-intent | text-fallback). 
 //
-// ⚠️ **必须在 KindIntent 之前写入**（否则"意图来源"late-bind，读轨迹时看不到因果）。
+// ⚠️ **    KindIntent ofbeforewrite**( then"intent  "late-bind, readtracetime  tobecause ). 
 const KindIntentSource = "intent_source"
 
-// IntentSourceASR / IntentSourceTextFallback 是 KindIntentSource 的**枚举值域**。
+// IntentSourceASR / IntentSourceTextFallback is KindIntentSource  **  valuedomain**. 
 const (
 	IntentSourceASR          = "asr-intent"
 	IntentSourceTextFallback = "text-fallback"
 )
 
-// KindTaskMetrics 记录结构化任务指标（#52 摘要聚合源：loop/net/space/attr/ok）。
-// 由 pipeline.writeTaskMetrics 写入，Summary 按此聚合。
+// KindTaskMetrics   close izetaskrefertgt(#52  need   : loop/net/space/attr/ok). 
+// by pipeline.writeTaskMetrics write, Summary by   . 
 const KindTaskMetrics = "task_metrics"
 
-// Kinds 是全部合法 kind 的**唯一真值**（新增 kind 必须在此登记）。
+// Kinds issafety    kind  **unique value**(newadd kind       ). 
 var Kinds = map[string]bool{
 	KindTaskMetrics:  true,
 	KindInputRaw:     true,
 	KindInputClean:   true,
 	KindInputCorrec:  true,
-	KindIntentSource: true, // 本轮新增
+	KindIntentSource: true, // base newadd
 	KindIntent:       true,
 	KindStart:        true,
 	KindModel:        true,
@@ -39,7 +39,7 @@ var Kinds = map[string]bool{
 	KindReceipts:     true,
 	KindFinal:        true,
 	KindError:        true,
-	// P0-1：13 阶段中间判定事件登记（此前 pipeline 写入点引用这些 kind 但未登记 ⇒ 被 Validate 静默丢弃）。
+	// P0-1: 13 stagemiddle  event  ( before pipeline writept use   kind but    ⇒ be Validate     ). 
 	KindRefer:       true,
 	KindSpaceCheck:  true,
 	KindRisk:        true,
@@ -48,15 +48,15 @@ var Kinds = map[string]bool{
 	KindAttribution: true,
 }
 
-// KnownKind 报告 kind 是否已登记。
+// KnownKind    kind is already  . 
 func KnownKind(kind string) bool { return Kinds[kind] }
 
-// ValidIntentSource 报告意图来源是否在值域内（不许自由文本）。
+// ValidIntentSource   intent  is  valuedomainin( allow by base). 
 func ValidIntentSource(v string) bool {
 	return v == IntentSourceASR || v == IntentSourceTextFallback
 }
 
-// Validate 校验一条轨迹条目；**未登记的 kind ⇒ 报错**（不许静默丢弃/忽略）。
+// Validate verify  trace obj; **     kind ⇒   **( allow    /  ). 
 func Validate(e Entry) error {
 	if e.Kind == "" {
 		return fmt.Errorf("trajectory: kind 为空（必须登记；见 trajectory.Kinds）")

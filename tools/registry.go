@@ -1,7 +1,7 @@
-// Package tools 实现工具契约注册表（六内置契约 + REGISTER_TOOL 语音自举）与六工具执行器。
+// Package tools  now    note table( in    + REGISTER_TOOL langaudio  )and tool execution . 
 //
-// 边界（冻结契约 §tools）：本包【不做】门禁——space_check 与 risk 裁决在 pipeline 层；
-// 本包只负责：契约校验 / 注册落盘 / 按 caps 机械执行。未过门禁的动作 pipeline 根本不会传进来。
+//  boundary(frozen   §tools): this package[  ] forbid--space_check and risk  decide  pipeline  ; 
+// this packageonlyresponsible:   verify / note    / by caps     .  ed forbid    pipeline rootbase     . 
 package tools
 
 import (
@@ -16,15 +16,15 @@ import (
 	"voicesign-harness/contract"
 )
 
-// Registry 是工具契约注册表。Contracts 为 name→契约；dir 为语音注册落盘目录（未导出，
-// 不改变冻结导出形状）。
+// Registry is    note table. Contracts as name->  ; dir aslangaudionote   obj (  out, 
+//  modifychangefrozen out status). 
 type Registry struct {
 	Contracts map[string]contract.ToolContract `json:"contracts"`
 	dir       string
 }
 
-// builtinContracts 返回内置六契约 @1.0（git/file/search/test/run/verify）。
-// risk 逐 cap 覆盖：不可逆动作标 irreversible，供 risk 包与人工确认裁决。
+// builtinContracts returnbackin     @1.0(git/file/search/test/run/verify). 
+// risk   cap overwrite:  reversible  tgt irreversible, provide risk  andhumanconfirm decide. 
 func builtinContracts() []contract.ToolContract {
 	return []contract.ToolContract{
 		{
@@ -85,8 +85,8 @@ func builtinContracts() []contract.ToolContract {
 	}
 }
 
-// LoadContracts 装载注册表：先放内置六契约，再叠加 dir/*.contract.json（语音注册）。
-// dir 缺失/为空 → 仅内置契约（不报错）。
+// LoadContracts   note table: first in    , again   dir/*.contract.json(langaudionote ). 
+// dir   /asempty -> onlyin   (   ). 
 func LoadContracts(dir string) (*Registry, error) {
 	r := &Registry{Contracts: map[string]contract.ToolContract{}, dir: dir}
 	for _, c := range builtinContracts() {
@@ -119,13 +119,13 @@ func LoadContracts(dir string) (*Registry, error) {
 	return r, nil
 }
 
-// Get 按名取契约。
+// Get bynameget  . 
 func (r *Registry) Get(name string) (contract.ToolContract, bool) {
 	c, ok := r.Contracts[name]
 	return c, ok
 }
 
-// All 按名排序返回全部契约（确定性顺序，便于测试与渲染）。
+// All byname  returnbacksafety   (  ity  , thenat  and  ). 
 func (r *Registry) All() []contract.ToolContract {
 	names := make([]string, 0, len(r.Contracts))
 	for n := range r.Contracts {
@@ -143,7 +143,7 @@ var validRiskLevels = map[string]bool{
 	"none": true, "low": true, "medium": true, "high": true, "irreversible": true,
 }
 
-// ValidateContract 校验契约字段完整性：name/version/caps/params 必填，risk 覆盖每个 cap。
+// ValidateContract verify  charsegfinish ity: name/version/caps/params   , risk overwrite   cap. 
 func ValidateContract(c contract.ToolContract) error {
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("契约 name 必填")
@@ -172,7 +172,7 @@ func ValidateContract(c contract.ToolContract) error {
 	return nil
 }
 
-// riskGrade 从契约 risk 映射粗分一个注册风险等级（供人工确认前展示；最终 gate 在 pipeline）。
+// riskGrade from   risk    split  note risketc (providehumanconfirmbefore show;  end gate   pipeline). 
 func riskGrade(c contract.ToolContract) string {
 	for _, lvl := range c.Risk {
 		if lvl == "irreversible" {
@@ -187,20 +187,20 @@ func riskGrade(c contract.ToolContract) string {
 	return "light"
 }
 
-// Register 走 REGISTER_TOOL 自举流程。
+// Register   REGISTER_TOOL   flow. 
 //
-// 【伪代码逻辑层】（必写模块；风险分级矩阵语义搬 VSL，此处只写控制流/拒绝路径）
+// [pseudocode logic layer]( writemodule; risk grading  semantic  VSL,  placeonlywritecontrol flow/rejectpath)
 //
-// 控制流：
-//  1. ValidateContract(c)：缺 name/version/caps/params 或某 cap 缺 risk → 拒绝，不落盘。
-//  2. riskGrade(c)：含 irreversible → human；否则含 high → strong；否则 light。
-//     （仅用于回执/展示；是否放行由 pipeline 的 risk 裁决与人工确认决定。）
-//  3. 人工确认闸：approved == false → 返回错误【且绝不写盘】（用例 9：未批准不落盘）。
-//  4. approved == true：
-//     a. 补 Source="voice"、RegisteredAt=当前时间戳。
-//     b. 写 <dir>/<name>.contract.json（原子写）。
-//     c. 成功后才 upsert 进内存 Contracts（先落盘成功再改内存，防半态）。
-//     拒绝路径：dir 为空（注册表非 LoadContracts 而来）→ 拒绝落盘；写盘失败 → 回滚内存。
+// control flow: 
+//  1. ValidateContract(c):   name/version/caps/params or  cap   risk -> reject,    . 
+//  2. riskGrade(c):   irreversible -> human;  then  high -> strong;  then light. 
+//     (onlyuseatback / show; is   by pipeline   risk  decideandhumanconfirmdecide . )
+//  3. humanconfirm : approved == false -> returnbackerror[and  write ](useexample 9:  approveapprove   ). 
+//  4. approved == true: 
+//     a. patch Source="voice", RegisteredAt=curbeforetimetime . 
+//     b. write <dir>/<name>.contract.json(orig write). 
+//     c. become afteronly upsert  instore Contracts(first  become againmodifyinstore, prevent state). 
+//     rejectpath: dir asempty(note table  LoadContracts but )-> reject  ; write    -> rollbackinstore. 
 func (r *Registry) Register(c contract.ToolContract, approved bool) error {
 	if err := ValidateContract(c); err != nil {
 		return fmt.Errorf("契约校验未过，拒绝注册: %w", err)

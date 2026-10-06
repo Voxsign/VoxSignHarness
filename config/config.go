@@ -1,6 +1,6 @@
-// Package config 加载 harness 五节配置（global / providers / routes / input / memory）：
-// 内置默认值 → JSON 配置文件（VHS_CONFIG 或默认路径）→ 环境变量覆盖（最高优先级）。
-// 本包只依赖标准库，是全部模块的编译基座；不记录任何密钥。
+// Package config    harness  node  (global / providers / routes / input / memory): 
+// in defaultvalue -> JSON   file(VHS_CONFIG ordefaultpath)->   change overwrite(   first ). 
+// this packageonlydependencytgtapprove , issafety module   base ;        . 
 package config
 
 import (
@@ -14,15 +14,15 @@ import (
 )
 
 const (
-	// MockKind 是内置离线 mock provider 的 kind（无 key 跑通闭环，开发/演示用）。
+	// MockKind isin  line mock provider   kind(no key     , opensend/ showuse). 
 	MockKind = "mock"
-	// OpenAIKind 是 OpenAI 兼容端点的 kind。
+	// OpenAIKind is OpenAI compatendpoint  kind. 
 	OpenAIKind = "openai"
-	// LocalProvider 是路由到「本地直通、不调 LLM」的特殊 provider 名（如 TIME）。
+	// LocalProvider isroutebyto"basely  ,  call LLM"    provider name(e.g. TIME). 
 	LocalProvider = "local"
 )
 
-// Config 是五节配置的根结构。
+// Config is node   rootclose . 
 type Config struct {
 	Global    Global     `json:"global"`
 	Providers []Provider `json:"providers"`
@@ -30,123 +30,123 @@ type Config struct {
 	Input     InputCfg   `json:"input"`
 	Memory    MemoryCfg  `json:"memory"`
 
-	// M2 新增节（SPACE 域注册表 / 工具契约 / 四元组缓存 / 手机 API 服务）。
+	// M2 newaddnode(SPACE domainnote table /      /    cache / mobile API serveservice). 
 	Spaces    SpacesCfg    `json:"spaces,omitempty"`
 	Contracts ContractsCfg `json:"contracts,omitempty"`
 	Cache     CacheCfg     `json:"cache,omitempty"`
 	Server    ServerCfg    `json:"server,omitempty"`
 
-	// Cloud 云端模式（VHS_MODE=cloud）：谷歌登录 + 租户配额。nil 字段默认值见 CloudCfg.Default。
+	// Cloud  end form(VHS_MODE=cloud):      +  user  . nil charsegdefaultvaluesee CloudCfg.Default. 
 	Cloud          CloudCfg `json:"cloud,omitempty"`
-	ConfigPath     string   `json:"-"` // 实际加载的配置文件路径
-	Warnings       []string `json:"-"` // 非致命问题（如缺 API key）
-	ForcedRoute    string   `json:"-"` // env VHS_ROUTE：强制路由名
-	ForcedProvider string   `json:"-"` // env VHS_PROVIDER：强制 provider 名
+	ConfigPath     string   `json:"-"` //        filepath
+	Warnings       []string `json:"-"` //      (e.g.  API key)
+	ForcedRoute    string   `json:"-"` // env VHS_ROUTE:  restrictroutebyname
+	ForcedProvider string   `json:"-"` // env VHS_PROVIDER:  restrict provider name
 }
 
-// SpacesCfg 域注册表（.space.json manifest 目录）。
+// SpacesCfg domainnote table(.space.json manifest obj ). 
 type SpacesCfg struct {
-	Dir string `json:"dir,omitempty"` // 默认 <log_dir>/spaces
+	Dir string `json:"dir,omitempty"` // default <log_dir>/spaces
 }
 
-// ContractsCfg 工具契约目录（.contract.json；REGISTER_TOOL 注册落盘处）。
+// ContractsCfg     obj (.contract.json; REGISTER_TOOL note   place). 
 type ContractsCfg struct {
-	Dir string `json:"dir,omitempty"` // 默认 <log_dir>/contracts
+	Dir string `json:"dir,omitempty"` // default <log_dir>/contracts
 }
 
-// CacheCfg 四元组缓存。
+// CacheCfg    cache. 
 type CacheCfg struct {
-	Dir        string `json:"dir,omitempty"`         // 默认 <log_dir>/cache
-	TTLSeconds int    `json:"ttl_seconds,omitempty"` // 默认 86400（1 天）
+	Dir        string `json:"dir,omitempty"`         // default <log_dir>/cache
+	TTLSeconds int    `json:"ttl_seconds,omitempty"` // default 86400(1 day)
 }
 
-// ServerCfg 手机 HTTP API 面（内网 + token 认证）。
+// ServerCfg mobile HTTP API face(in  + token auth). 
 type ServerCfg struct {
-	Token string `json:"token,omitempty"` // 空 = 仅 127.0.0.1 本机访问免 token；非本机绑定必须配 token（启动告警）
-	Bind  string `json:"bind,omitempty"`  // 空 = 取 Global.Addr（默认 127.0.0.1:8765）
-	// UseScheduler env VHS_USE_SCHEDULER（灰度，默认 false）：true=C2 进程内调度器接管任务排队；
-	// false=旧直跑路径逐字节不变（C0 EnableSerialGate 仍生效兜底）。
+	Token string `json:"token,omitempty"` // empty = only 127.0.0.1 base     token;  base       token(start   )
+	Bind  string `json:"bind,omitempty"`  // empty = get Global.Addr(default 127.0.0.1:8765)
+	// UseScheduler env VHS_USE_SCHEDULER(  , default false): true=C2 processincall  connectmanagetask  ; 
+	// false=   path charnode change(C0 EnableSerialGate  occur  bot). 
 	UseScheduler bool `json:"use_scheduler,omitempty"`
-	// MaxConcurrent env VHS_MAX_CONCURRENT（默认 1）：调度器并发上限（sem 容量）。>1 时
-	// 多 Runner 并发（C1+ 目标态），不再被 C0 EnableSerialGate 锁死；=1 时调度器仍串行排队。
+	// MaxConcurrent env VHS_MAX_CONCURRENT(default 1): call  andsendonlimit(sem   ). >1 time
+	//   Runner andsend(C1+ objtgtstate),  againbe C0 EnableSerialGate   ; =1 timecall   serial  . 
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
 
-// CloudCfg 云端模式参数（VHS_MODE=cloud 时启用）。
-// 设计见 docs/云端谷歌登录与发布架构-20261004.md：谷歌账户即租户、配额三档、会话 JWT。
+// CloudCfg  end form num(VHS_MODE=cloud timestartuse). 
+//   see docs/ end    andsend   -20261004.md:    useri.e. user,     ,    JWT. 
 type CloudCfg struct {
-	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID（Web application，code 交换用）
+	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID(Web application, code   use)
 	GoogleClientSecret string `json:"google_client_secret,omitempty"` // env VHS_GOOGLE_CLIENT_SECRET
-	// env VHS_GOOGLE_CLIENT_IDS：逗号分隔的受信 client ID 列表（验签 aud 用）。
-	// iOS 类型 client 签发的 id_token aud 是 iOS client ID，必须列入才可通过验签。
-	// 为空时退回 GoogleClientID（单个）。
+	// env VHS_GOOGLE_CLIENT_IDS:  idsplit  accept  client ID listtable(   aud use). 
+	// iOS classtype client  send  id_token aud is iOS client ID,   listinonly  ed  . 
+	// asemptytime back GoogleClientID(  ). 
 	GoogleClientIDs string `json:"google_client_ids,omitempty"`
-	RedirectURI     string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI，默认 https://voicesign.ai/auth/callback
-	JWTSecret       string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET；缺省首次启动自动生成并持久化 <log_dir>/cloud/jwt-secret
-	FreeDailyTasks  int    `json:"free_daily_tasks,omitempty"`     // 免费档每日任务额度，默认 30
-	TrialDays       int    `json:"trial_days,omitempty"`           // 新租户体验会员天数，默认 15（期间按 Prime 计）
-	TokenTTLHours   int    `json:"token_ttl_hours,omitempty"`      // 会话 JWT 有效期，默认 10
+	RedirectURI     string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI, default https://voicesign.ai/auth/callback
+	JWTSecret       string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET;   first start   occurbecomeandkeep ize <log_dir>/cloud/jwt-secret
+	FreeDailyTasks  int    `json:"free_daily_tasks,omitempty"`     //     daytask  , default 30
+	TrialDays       int    `json:"trial_days,omitempty"`           // new userbody   daynum, default 15(periodtimeby Prime  )
+	TokenTTLHours   int    `json:"token_ttl_hours,omitempty"`      //    JWT has period, default 10
 }
 
-// Global 全局参数。
+// Global global num. 
 type Global struct {
-	LogDir             string `json:"log_dir"`               // 轨迹等日志目录，默认 ~/.voicesign/harness
-	Addr               string `json:"addr"`                  // 本地 HTTP 监听地址，默认 127.0.0.1:8765
-	MaxTurnsDefault    int    `json:"max_turns_default"`     // 默认 max_turns，默认 2
-	LLMTimeoutMs       int    `json:"llm_timeout_ms"`        // 单次 LLM 调用超时，默认 60000
-	ActionTimeoutMs    int    `json:"action_timeout_ms"`     // 单动作默认超时，默认 15000
-	MaxActionTimeoutMs int    `json:"max_action_timeout_ms"` // 动作超时硬上限，默认 120000
-	AllowHighRisk      bool   `json:"allow_high_risk"`       // 高危命令放行（默认 false）
-	MaxOutputChars     int    `json:"max_output_chars"`      // 回执输出截断，默认 4000
-	// FastResponseMs 快速响应阈值：fast 等「快模型」调用墙钟超过它视为慢响应，
-	// 不直接降级而是带 model 名进异常诊断层（区分网络慢/预算排队/参数不当）。
-	// 默认 10000ms；<=0 归一化为 10000。
+	LogDir             string `json:"log_dir"`               // traceetcday obj , default ~/.voicesign/harness
+	Addr               string `json:"addr"`                  // basely HTTP listenly , default 127.0.0.1:8765
+	MaxTurnsDefault    int    `json:"max_turns_default"`     // default max_turns, default 2
+	LLMTimeoutMs       int    `json:"llm_timeout_ms"`        //    LLM calluse time, default 60000
+	ActionTimeoutMs    int    `json:"action_timeout_ms"`     //    default time, default 15000
+	MaxActionTimeoutMs int    `json:"max_action_timeout_ms"` //    time onlimit, default 120000
+	AllowHighRisk      bool   `json:"allow_high_risk"`       //       (default false)
+	MaxOutputChars     int    `json:"max_output_chars"`      // back  out disconnect, default 4000
+	// FastResponseMs fast    value: fast etc"fast type"callusewall-clock ed  asslow  , 
+	//   connect  butis  model name error disconnect ( split  slow/    / num cur). 
+	// default 10000ms; <=0   izeas 10000. 
 	FastResponseMs int `json:"fast_response_ms"`
-	// CloudMode 云端模式开关：env VHS_MODE=cloud（谷歌登录+租户配额）；空/其他值=本地模式。
+	// CloudMode  end formopenclose: env VHS_MODE=cloud(    + user  ); empty/its value=basely form. 
 	CloudMode bool `json:"cloud_mode,omitempty"`
 }
 
-// Provider 一个模型端点（OpenAI 兼容或 mock）。同一网关可声明多个 provider（不同 model）实现按场景选模型。
+// Provider    typeendpoint(OpenAI compator mock). same  close voice    provider( same model) nowby scenario  type. 
 type Provider struct {
 	Name           string         `json:"name"`
 	Kind           string         `json:"kind"`                      // openai | mock
-	Endpoint       string         `json:"endpoint"`                  // openai 必填
-	Model          string         `json:"model"`                     // openai 必填
-	APIKey         string         `json:"api_key,omitempty"`         // 可用 VHS_API_KEY 覆盖
-	ResponseFormat *bool          `json:"response_format,omitempty"` // nil = 默认 true（请求 json_object 模式）
-	TimeoutMs      int            `json:"timeout_ms,omitempty"`      // 0 = 用 Global.LLMTimeoutMs
-	Params         map[string]any `json:"params,omitempty"`          // 按端点透传（如 reasoning_effort）
+	Endpoint       string         `json:"endpoint"`                  // openai   
+	Model          string         `json:"model"`                     // openai   
+	APIKey         string         `json:"api_key,omitempty"`         //  use VHS_API_KEY overwrite
+	ResponseFormat *bool          `json:"response_format,omitempty"` // nil = default true( require json_object  form)
+	TimeoutMs      int            `json:"timeout_ms,omitempty"`      // 0 = use Global.LLMTimeoutMs
+	Params         map[string]any `json:"params,omitempty"`          // byendpoint  (e.g. reasoning_effort)
 }
 
-// Route 一条路由：按 意图 + 关键词 命中，先命中先得，Default 兜底。
+// Route   routeby: by intent + close word  in, first infirst , Default  bot. 
 type Route struct {
 	Name     string   `json:"name"`
-	Intent   []string `json:"intent,omitempty"`    // 命中 contract.Intent.Intent 类别
-	Match    []string `json:"match,omitempty"`     // 命中提示词关键词（大小写不敏感子串）
-	Provider string   `json:"provider"`            // provider 名或 local
-	MaxTurns int      `json:"max_turns,omitempty"` // 0 = 用 Global.MaxTurnsDefault
-	Default  bool     `json:"default,omitempty"`   // 兜底路由
+	Intent   []string `json:"intent,omitempty"`    //  in contract.Intent.Intent classdiff
+	Match    []string `json:"match,omitempty"`     //  in showwordclose word(  write     )
+	Provider string   `json:"provider"`            // provider nameor local
+	MaxTurns int      `json:"max_turns,omitempty"` // 0 = use Global.MaxTurnsDefault
+	Default  bool     `json:"default,omitempty"`   //  botrouteby
 }
 
-// InputCfg 输入容错层参数。
+// InputCfg  in    num. 
 type InputCfg struct {
-	IntentConf     float64  `json:"intent_conf,omitempty"`     // 意图置信度阈值，默认 0.6
-	LowConfAction  string   `json:"low_conf_action,omitempty"` // ask | model，默认 ask（model 澄清编排在后续里程碑）
-	DictionaryPath string   `json:"dictionary_path,omitempty"` // 空 = <memory.dir>/dictionary.json
-	Fillers        []string `json:"fillers,omitempty"`         // 覆盖默认填充词表
+	IntentConf     float64  `json:"intent_conf,omitempty"`     // intent    value, default 0.6
+	LowConfAction  string   `json:"low_conf_action,omitempty"` // ask | model, default ask(model   orchestrate aftercontinue   )
+	DictionaryPath string   `json:"dictionary_path,omitempty"` // empty = <memory.dir>/dictionary.json
+	Fillers        []string `json:"fillers,omitempty"`         // overwritedefault fillwordtable
 }
 
-// MemoryCfg 记忆层参数。
+// MemoryCfg     num. 
 type MemoryCfg struct {
-	Dir        string `json:"dir,omitempty"`         // 默认 ~/.voicesign/harness/memory
-	FactsLimit int    `json:"facts_limit,omitempty"` // 事实注入条数上限，默认 20
+	Dir        string `json:"dir,omitempty"`         // default ~/.voicesign/harness/memory
+	FactsLimit int    `json:"facts_limit,omitempty"` //   notein numonlimit, default 20
 }
 
-// Default 返回内置默认配置（含文档 §6 的示例 providers/routes）。
-// 注意：派生目录（Memory/Spaces/Contracts/Cache 的 Dir）此处留空，
-// 由 Load→validate() 在最终 Global.LogDir 确定后统一推导——
-// 否则 VHS_LOG_DIR 覆盖 LogDir 时派生目录仍停留在旧默认 ~/.voicesign/harness/*，
-// env 隔离运行会把注册表/缓存/契约读写进用户真实目录（M3 config bug 修复）。
+// Default returnbackin default  (    §6  showexample providers/routes). 
+// note :  occurobj (Memory/Spaces/Contracts/Cache   Dir) place empty, 
+// by Load->validate()   end Global.LogDir   after    --
+//  then VHS_LOG_DIR overwrite LogDir time occurobj  stop   default ~/.voicesign/harness/*, 
+// env      pipenote table/cache/  readwrite useuser  obj (M3 config bug fix ). 
 func Default() Config {
 	home, _ := os.UserHomeDir()
 	logDir := filepath.Join(home, ".voicesign", "harness")
@@ -165,16 +165,16 @@ func Default() Config {
 		},
 		Providers: []Provider{
 
-			// 2026-10-03 裸调实测：use_max_completion_tokens 作为顶层字段会使 aiops 网关 502（0.9s）
-			// ——已从 Params 移除；MaxTokens 上限也会令模型用满 token 致网关 60s 504，harness 不传上限。
+			// 2026-10-03  call  : use_max_completion_tokens  astop charseg   aiops  close 502(0.9s)
+			// --alreadyfrom Params   ; MaxTokens onlimitalso   typeusefull token   close 60s 504, harness   onlimit. 
 			{Name: "center", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-v4-pro", ResponseFormat: &trueVal},
 			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
-				// 模型调度（docs/模型调度-设计.md）：gpt-mini = 线上最弱兜底（gpt-4o-mini 实测 10s 可用）；
-				// deepseek 系列若 402 欠费 → ChatWithFallback 一次即 down → 自动切 gpt-mini，不再卡死。
+				//  typecall (docs/ typecall -  .md): gpt-mini = lineon   bot(gpt-4o-mini    10s  use); 
+				// deepseek  listif 402    -> ChatWithFallback   i.e. down ->     gpt-mini,  again  . 
 				{Name: "gpt-mini", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
-				// 2026-10-03 质量链：gpt4o（gpt-4o）裸调实测 6s/3461 字符生成成功，编译质量优于 gpt-4o-mini。
+				// 2026-10-03   chain: gpt4o(gpt-4o) call   6s/3461 char occurbecomebecome ,      at gpt-4o-mini. 
 				{Name: "gpt4o", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o", ResponseFormat: &trueVal},
 
 			{Name: "openai", Kind: OpenAIKind, Endpoint: "https://api.openai.com/v1", Model: "gpt-5.4-mini", ResponseFormat: &trueVal},
@@ -203,8 +203,8 @@ func Default() Config {
 	}
 }
 
-// Load 解析配置：默认值 → 配置文件（VHS_CONFIG，或 ~/.voicesign/harness.json、./voicesign-harness.json）→ 环境变量。
-// 显式指定 configPath 但文件不存在 → 报错；未显式指定且默认路径都不存在 → 纯默认值。
+// Load resolve   : defaultvalue ->   file(VHS_CONFIG, or ~/.voicesign/harness.json, ./voicesign-harness.json)->   change . 
+//  formrefer  configPath butfile store  ->   ;   formrefer anddefaultpathall store  ->  defaultvalue. 
 func Load(configPath string) (Config, error) {
 	cfg := Default()
 	if configPath == "" {
@@ -227,9 +227,9 @@ func Load(configPath string) (Config, error) {
 		if err != nil {
 			return cfg, fmt.Errorf("读取配置文件 %s 失败: %w", configPath, err)
 		}
-		// 先解析到 raw map 再按节覆盖：切片节（providers/routes）必须整体替换，
-		// 避免 encoding/json 对非空切片"就地复用已有元素、逐字段覆盖"导致默认值泄漏
-		// （如默认 provider center 的 endpoint 混入文件声明的 provider）。
+		// firstresolve to raw map againbynodeoverwrite:   node(providers/routes)   body  , 
+		//    encoding/json to empty  "thenly usealreadyhas  ,  charsegoverwrite"  defaultvalue  
+		// (e.g.default provider center   endpoint  infilevoice   provider). 
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(data, &raw); err != nil {
 			return cfg, fmt.Errorf("解析配置文件 %s 失败: %w", configPath, err)
@@ -286,13 +286,13 @@ func Load(configPath string) (Config, error) {
 		cfg.ConfigPath = configPath
 	}
 
-	// 环境变量覆盖（仅当已设置）。
+	//   change overwrite(onlycuralready  ). 
 	if v := os.Getenv("VHS_API_KEY"); v != "" {
 		for i := range cfg.Providers {
 			cfg.Providers[i].APIKey = v
 		}
 	} else if v := os.Getenv("AIOPS_KEY"); v != "" {
-		// 2026-10-04 兼容旧变量名（此前 harness 一直用 AIOPS_KEY 传网关读 Key）。
+		// 2026-10-04 compat change name( before harness   use AIOPS_KEY   closeread Key). 
 		for i := range cfg.Providers {
 			cfg.Providers[i].APIKey = v
 		}
@@ -312,7 +312,7 @@ func Load(configPath string) (Config, error) {
 	envString(&cfg.Server.Token, "VHS_TOKEN")
 	envBool(&cfg.Server.UseScheduler, "VHS_USE_SCHEDULER")
 	envInt(&cfg.Server.MaxConcurrent, "VHS_MAX_CONCURRENT")
-	// 云端模式：VHS_MODE=cloud 启用谷歌登录/租户/配额。
+	//  end form: VHS_MODE=cloud startuse    / user/  . 
 	if os.Getenv("VHS_MODE") == "cloud" {
 		cfg.Global.CloudMode = true
 	}
@@ -325,7 +325,7 @@ func Load(configPath string) (Config, error) {
 	envInt(&cfg.Cloud.TrialDays, "VHS_TRIAL_DAYS")
 	envInt(&cfg.Cloud.TokenTTLHours, "VHS_TOKEN_TTL_HOURS")
 
-	// 校验与归一化。
+	// verifyand  ize. 
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}
@@ -397,7 +397,7 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.Server.Bind) == "" {
 		c.Server.Bind = c.Global.Addr
 	}
-	// 非本机绑定必须配 token（内网暴露边界，SPEC v2 缺口 32 裁决：监听范围 + token）。
+	//  base       token(in    boundary, SPEC v2    32  decide: listen   + token). 
 	if c.Server.Token == "" && !isLocalhost(c.Server.Bind) {
 		c.Warnings = append(c.Warnings,
 			fmt.Sprintf("server 绑定 %s 但未配置 token（VHS_TOKEN）：内网可访问且无认证，建议设置 token", c.Server.Bind))
@@ -458,7 +458,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// ProviderByName 按名查找 provider。
+// ProviderByName byname   provider. 
 func (c *Config) ProviderByName(name string) (Provider, bool) {
 	for _, p := range c.Providers {
 		if p.Name == name {
@@ -468,20 +468,20 @@ func (c *Config) ProviderByName(name string) (Provider, bool) {
 	return Provider{}, false
 }
 
-// IsMockProvider 报告 provider 是否为内置 mock。
+// IsMockProvider    provider is asin  mock. 
 func (c *Config) IsMockProvider(name string) bool {
 	p, ok := c.ProviderByName(name)
 	return ok && p.Kind == MockKind
 }
 
-// DiagProvider 返回 name=="diag" 的「问题定位模型」provider（异常自愈层 ② 环）。
-// 未配置（ok=false）→ 诊断层零开销跳过，主链行为不变。diag.Endpoint 可在配置里覆盖
-// 为模型中心专用诊断端点；缺省即模型中心 OpenAI 兼容通道。
+// DiagProvider returnback name=="diag"  "     type"provider(error    ②  ). 
+//    (ok=false)->  disconnect  open  ed,  chain as change. diag.Endpoint      overwrite
+// as typein  use disconnectendpoint;   i.e. typein  OpenAI compat  . 
 func (c *Config) DiagProvider() (Provider, bool) {
 	return c.ProviderByName("diag")
 }
 
-// EffectiveMaxTurns 返回路由生效的 max_turns（0 = local 直通）。
+// EffectiveMaxTurns returnbackroutebyoccur   max_turns(0 = local   ). 
 func (c *Config) EffectiveMaxTurns(r Route) int {
 	if r.Provider == LocalProvider {
 		return 0
@@ -492,12 +492,12 @@ func (c *Config) EffectiveMaxTurns(r Route) int {
 	return c.Global.MaxTurnsDefault
 }
 
-// EffectiveResponseFormat 返回 provider 生效的 json_object 开关（nil = true）。
+// EffectiveResponseFormat returnback provider occur   json_object openclose(nil = true). 
 func (c *Config) EffectiveResponseFormat(p Provider) bool {
 	return p.ResponseFormat == nil || *p.ResponseFormat
 }
 
-// EffectiveTimeoutMs 返回 provider 生效的调用超时。
+// EffectiveTimeoutMs returnback provider occur  calluse time. 
 func (c *Config) EffectiveTimeoutMs(p Provider) int {
 	if p.TimeoutMs > 0 {
 		return p.TimeoutMs
@@ -505,7 +505,7 @@ func (c *Config) EffectiveTimeoutMs(p Provider) int {
 	return c.Global.LLMTimeoutMs
 }
 
-// DictionaryPath 返回生效的个人词典路径。
+// DictionaryPath returnbackoccur    word path. 
 func (c *Config) DictionaryPath() string {
 	if strings.TrimSpace(c.Input.DictionaryPath) != "" {
 		return c.Input.DictionaryPath
@@ -513,27 +513,27 @@ func (c *Config) DictionaryPath() string {
 	return filepath.Join(c.Memory.Dir, "dictionary.json")
 }
 
-// SpacesDir 返回生效的域注册表目录（.space.json）。
+// SpacesDir returnbackoccur  domainnote tableobj (.space.json). 
 func (c *Config) SpacesDir() string {
 	return c.Spaces.Dir
 }
 
-// ContractsDir 返回生效的工具契约目录（.contract.json）。
+// ContractsDir returnbackoccur      obj (.contract.json). 
 func (c *Config) ContractsDir() string {
 	return c.Contracts.Dir
 }
 
-// CacheDir 返回生效的四元组缓存目录。
+// CacheDir returnbackoccur     cacheobj . 
 func (c *Config) CacheDir() string {
 	return c.Cache.Dir
 }
 
-// ServerBind 返回生效的手机 API 监听地址。
+// ServerBind returnbackoccur  mobile API listenly . 
 func (c *Config) ServerBind() string {
 	return c.Server.Bind
 }
 
-// isLocalhost 报告 host 是否为回环地址（127.0.0.1 / ::1 / localhost / 空 host）。
+// isLocalhost    host is asback ly (127.0.0.1 / ::1 / localhost / empty host). 
 func isLocalhost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

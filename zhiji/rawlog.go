@@ -1,8 +1,8 @@
-// rawlog.go —— 知己 · 原始观察 append-only 日志（架构 v1.1 §6.5 / G1 落地）。
+// rawlog.go --    · origstart   append-only day (   v1.1 §6.5 / G1  ly). 
 //
-// OnInput 每条原始观察整行落 raw.jsonl，永不删、永不改、永不覆写；
-// 与 STM 滚动窗口互补：STM 是工作记忆（窗口外可丢），raw.jsonl 是外化全量资产。
-// detail survival 探针细节只要写进去过，结构上不可能再丢。
+// OnInput   origstart      raw.jsonl,    ,   modify,    write; 
+// and STM      patch: STM is    (  out  ), raw.jsonl isoutizesafety  produce. 
+// detail survival    nodeonlyneedwrite  ed, close on   again . 
 package zhiji
 
 import (
@@ -15,23 +15,23 @@ import (
 	"time"
 )
 
-// RawObs 一条原始观察（原文不摘要；Provenance 匿名内嵌=Go 的 inline，字段提升到顶层 JSON）。
+// RawObs   origstart  (orig   need; Provenance  namein =Go   inline, charseg  totop  JSON). 
 type RawObs struct {
-	ID     string    `json:"id"` // raw-N 自增
+	ID     string    `json:"id"` // raw-N  add
 	At     time.Time `json:"at"`
 	TurnID string    `json:"turn_id,omitempty"`
-	Text   string    `json:"text"` // 原文，不摘要
-	Provenance       // 匿名内嵌：origin/model/confidence/derived_from 提升到顶层（外层 TurnID 优先）
+	Text   string    `json:"text"` // orig ,   need
+	Provenance       //  namein : origin/model/confidence/derived_from   totop (out  TurnID  first)
 }
 
-// RawLog 原始观察追加日志（JSONL 一行一条，绝不覆写已有内容）。
+// RawLog origstart    day (JSONL     ,    writealreadyhasin ). 
 type RawLog struct {
 	path    string
 	mu      sync.Mutex
 	nextRaw int
 }
 
-// NewRawLog 打开/创建 raw.jsonl；文件不存在则新建；存在则按行数推算 nextRaw 自增起点。
+// NewRawLog  open/   raw.jsonl; file store thennew ; store thenby num   nextRaw  addraisept. 
 func NewRawLog(path string) *RawLog {
 	l := &RawLog{path: path, nextRaw: 1}
 	if path == "" {
@@ -39,7 +39,7 @@ func NewRawLog(path string) *RawLog {
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		// 文件不存在 → Append 时 O_CREATE 新建
+		// file store  -> Append time O_CREATE new 
 		return l
 	}
 	n := 0
@@ -52,7 +52,7 @@ func NewRawLog(path string) *RawLog {
 	return l
 }
 
-// Append 纯追加一行 JSONL（O_APPEND|O_CREATE|O_WRONLY），绝不修改/删除/覆写已有行。
+// Append       JSONL(O_APPEND|O_CREATE|O_WRONLY),   modify/delete/ writealreadyhas . 
 func (l *RawLog) Append(o RawObs) error {
 	if l == nil || l.path == "" {
 		return errors.New("zhiji: rawlog 未配置")
@@ -79,7 +79,7 @@ func (l *RawLog) Append(o RawObs) error {
 	return err
 }
 
-// Len 当前 raw 观察条数（扫文件行数）。
+// Len curbefore raw    num( file num). 
 func (l *RawLog) Len() int {
 	if l == nil || l.path == "" {
 		return 0

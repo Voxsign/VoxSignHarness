@@ -1,12 +1,12 @@
-// Package modelcenter —— 模型中心三条调用通道的配置与调用（ASR-MODEL-02）。
+// Package modelcenter --  typein   calluse     andcalluse(ASR-MODEL-02). 
 //
-// 通道名**固定**：default / diagnose / learn（L1）；底层模型**从配置读**、可变。
-// 本轮只启用 default（模型 `deepseek-flash`，ASR-EXT-006 §2 实测修正）；
-// diagnose / learn 未获 Peter 指定模型 → `enabled:false`（fail-closed，C3）。
+//   name**  **: default / diagnose / learn(L1); bot  type**from  read**,  change. 
+// base onlystartuse default( type `deepseek-flash`, ASR-EXT-006 §2   fixpos); 
+// diagnose / learn    Peter refer  type -> `enabled:false`(fail-closed, C3). 
 //
-// 安全纪律（ASR-EXT-006 §4）：
-//   - key **只从环境变量 / .env 读**，绝不硬编码、绝不写日志/commit/测试夹具；
-//   - 配置是 JSON（明令不用 YAML）。
+// safesafety  (ASR-EXT-006 §4): 
+//   - key **onlyfrom  change  / .env read**,     code,   writeday /commit/    ; 
+//   -   is JSON(   use YAML). 
 package modelcenter
 
 import (
@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-// Channel 是固定的三条通道名（L1）。
+// Channel is       name(L1). 
 type Channel string
 
 const (
@@ -28,40 +28,40 @@ const (
 	ChannelLearn    Channel = "learn"
 )
 
-// Channels 返回全部合法通道名。
+// Channels returnbacksafety     name. 
 func AllChannels() []Channel {
 	return []Channel{ChannelDefault, ChannelPlan, ChannelResearch, ChannelDiagnose, ChannelLearn}
 }
 
-// ChannelConfig 是单条通道的配置。
+// ChannelConfig is       . 
 type ChannelConfig struct {
 	Enabled        bool   `json:"enabled"`
 	Provider       string `json:"provider"`
-	ModelID        string `json:"model_id"` // 可变；未定必须留空或 TBD 且 enabled:false（C3）
+	ModelID        string `json:"model_id"` //  change;      emptyor TBD and enabled:false(C3)
 	TimeoutMS      int    `json:"timeout_ms"`
 	MaxConcurrency int    `json:"max_concurrency"`
-	WriteBack      bool   `json:"write_back"` // L2：只有 learn 可为 true（C2）
-	// Tier 是**档位**（fast/quality）：与"用途（通道）"分开，避免把两件事塞进同一列。
+	WriteBack      bool   `json:"write_back"` // L2: onlyhas learn  as true(C2)
+	// Tier is**  **(fast/quality): and"useway(  )"splitopen,   pipe     same list. 
 	Tier string `json:"tier"`
 }
 
-// GatewayConfig 是统一入口（AIOps）配置。ChatPath 用**实测路径**，不猜（A5）。
+// GatewayConfig is  in (AIOps)  . ChatPath use**  path**,   (A5). 
 type GatewayConfig struct {
 	BaseURL   string `json:"base_url"`
 	ChatPath  string `json:"chat_path"`
-	APIKeyEnv string `json:"api_key_env"` // 只存**变量名**，不存 key
+	APIKeyEnv string `json:"api_key_env"` // onlystore**change name**,  store key
 }
 
-// Config 是模型中心配置。
+// Config is typein   . 
 type Config struct {
 	ContractVersion string        `json:"contract_version"`
 	Gateway         GatewayConfig `json:"gateway"`
-	// Tiers 是档位 → 模型 id（换"什么算高质量" ⇒ 只改这里）。
+	// Tiers is   ->  type id( "      " ⇒ onlymodify  ). 
 	Tiers    map[string]string        `json:"tiers"`
 	Channels map[string]ChannelConfig `json:"channels"`
 }
 
-// Load 读 JSON 配置并校验（C1–C5）。YAML 一律拒绝（C4）。
+// Load read JSON   andverify(C1–C5). YAML   reject(C4). 
 func Load(path string) (Config, error) {
 	if !strings.EqualFold(filepath.Ext(path), ".json") {
 		return Config{}, fmt.Errorf("C4 违反：配置必须是 .json（明令不用 YAML）: %s", path)
@@ -81,15 +81,15 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// Validate 执行 ASR-MODEL-02 的 C1–C5（fail-closed：不合法即拒绝启动）。
-// TierQuality 是高档位名（判据：default 通道**不得**指向它）。
+// Validate    ASR-MODEL-02   C1–C5(fail-closed:    i.e.rejectstart ). 
+// TierQuality is   name( data: default   **  **referto ). 
 const TierQuality = "quality"
 
-// TierFast 是快档位名。
+// TierFast isfast  name. 
 const TierFast = "fast"
 
-// ResolveModel 返回某通道实际使用的模型 id：通道显式 model_id 优先，否则取 tier。
-// **fail-closed**：引用了不存在的 tier ⇒ 报错（不许静默取默认）。
+// ResolveModel returnback      use  type id:    form model_id  first,  thenget tier. 
+// **fail-closed**:  use store   tier ⇒   ( allow  getdefault). 
 func (c Config) ResolveModel(ch Channel) (string, error) {
 	cc, ok := c.Channels[string(ch)]
 	if !ok {
@@ -109,7 +109,7 @@ func (c Config) ResolveModel(ch Channel) (string, error) {
 }
 
 func (c Config) Validate() error {
-	// C1：通道名恰好是三个，多一个少一个都拒。
+	// C1:   name  is  ,       allreject. 
 	for name, cc := range c.Channels {
 		if cc.Tier != "" {
 			if _, ok := c.Tiers[cc.Tier]; !ok {
@@ -117,7 +117,7 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	// ⑤ **分档不得退化**：default 通道不得指向 quality 档。
+	// ⑤ **split    ize**: default     referto quality  . 
 	if cc, ok := c.Channels[string(ChannelDefault)]; ok && cc.Tier == TierQuality {
 		return fmt.Errorf("C6 违反：default 通道不得指向 %s 档（连常规调用都走最贵的 ⇒ 分档失效）", TierQuality)
 	}
@@ -129,7 +129,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("C1 违反：缺少通道 %q", ch)
 		}
 	}
-	// C2：只有 learn 可以写回。
+	// C2: onlyhas learn  bywriteback. 
 	if c.Channels[string(ChannelDefault)].WriteBack {
 		return fmt.Errorf("C2 违反：default.write_back 必须为 false")
 	}
@@ -139,22 +139,22 @@ func (c Config) Validate() error {
 	if !c.Channels[string(ChannelLearn)].WriteBack {
 		return fmt.Errorf("C2 违反：learn.write_back 必须为 true")
 	}
-	// C3：enabled ⇒ model_id 非空且非 TBD（无 model_id 的调用不可归因）。
+	// C3: enabled ⇒ model_id  emptyand  TBD(no model_id  calluse  attribution). 
 	for _, ch := range AllChannels() {
 		cc := c.Channels[string(ch)]
 		if !cc.Enabled {
 			continue
 		}
-		// 模型可由 model_id 指定，**或**由 tier 解析（档位+用途两层）。
+		//  type by model_id refer , **or**by tier resolve (  +useway  ). 
 		if (strings.TrimSpace(cc.ModelID) == "" || strings.EqualFold(cc.ModelID, "TBD")) && cc.Tier == "" {
 			return fmt.Errorf("C3 违反：通道 %q enabled 但既无 model_id 也无 tier（未指定模型不得启用）", ch)
 		}
 	}
-	// C5：learn 单写者。
+	// C5: learn  writeer. 
 	if c.Channels[string(ChannelLearn)].MaxConcurrency != 1 {
 		return fmt.Errorf("C5 违反：learn.max_concurrency 必须为 1（单一写者）")
 	}
-	// 入口必须可调用。
+	// in    calluse. 
 	if strings.TrimSpace(c.Gateway.BaseURL) == "" || strings.TrimSpace(c.Gateway.ChatPath) == "" {
 		return fmt.Errorf("入口配置不全：gateway.base_url / gateway.chat_path 必填")
 	}
@@ -164,8 +164,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// LoadDotEnv 读 `.env`（KEY=VALUE 行）并**只填充未设置**的环境变量。
-// 返回填充条数；**绝不返回、记录或打印任何 value**。
+// LoadDotEnv read `.env`(KEY=VALUE  )and**only fill   **   change . 
+// returnbackfillfill num; **  returnback,   or     value**. 
 func LoadDotEnv(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -187,7 +187,7 @@ func LoadDotEnv(path string) (int, error) {
 			continue
 		}
 		if os.Getenv(k) != "" {
-			continue // 真实环境变量优先
+			continue //     change  first
 		}
 		if err := os.Setenv(k, v); err != nil {
 			return n, err

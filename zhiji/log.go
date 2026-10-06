@@ -1,7 +1,7 @@
-// log.go —— 知己 · 全量调用日志与 detail survival 探针（架构 v1.0 §12 落地）。
+// log.go --    · safety calluseday and detail survival   (   v1.0 §12  ly). 
 //
-// 调用日志 JSONL 追加写（task_profile/model/outcome/cost/retry 全量埋点，
-// 是路由/压缩自举训练集的原料）；探针统计由 store 侧承载（SurvivalRate）。
+// calluseday  JSONL   write(task_profile/model/outcome/cost/retry safety  pt, 
+// isrouteby/        orig );     by store side  (SurvivalRate). 
 package zhiji
 
 import (
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// CallLogStore 调用日志存储（JSONL 追加，进程内并发安全）。
+// CallLogStore calluseday storestore(JSONL   , processinandsendsafesafety). 
 type CallLogStore struct {
 	path string
 	mu   sync.Mutex
@@ -23,7 +23,7 @@ type CallLogStore struct {
 	w    *bufio.Writer
 }
 
-// NewCallLogStore 打开/创建日志文件（JSONL 追加模式）。
+// NewCallLogStore  open/  day file(JSONL    form). 
 func NewCallLogStore(dir string) (*CallLogStore, error) {
 	if dir == "" {
 		return nil, errors.New("zhiji: 日志目录不能为空")
@@ -39,7 +39,7 @@ func NewCallLogStore(dir string) (*CallLogStore, error) {
 	return &CallLogStore{path: path, f: f, w: bufio.NewWriter(f)}, nil
 }
 
-// Append 追加一条调用日志（JSONL 一行一条）。
+// Append     calluseday (JSONL     ). 
 func (l *CallLogStore) Append(log CallLog) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -59,14 +59,14 @@ func (l *CallLogStore) Append(log CallLog) error {
 	return l.w.Flush()
 }
 
-// Flush 强制落盘。
+// Flush  restrict  . 
 func (l *CallLogStore) Flush() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Flush()
 }
 
-// Close 关闭日志文件。
+// Close close day file. 
 func (l *CallLogStore) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -74,7 +74,7 @@ func (l *CallLogStore) Close() error {
 	return l.f.Close()
 }
 
-// Count 当前日志条数（自举训练集规模统计用）。
+// Count curbeforeday  num(     rule   use). 
 func (l *CallLogStore) Count() (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -97,7 +97,7 @@ func (l *CallLogStore) Count() (int, error) {
 	return n, sc.Err()
 }
 
-// callID 日志 ID 生成（纳秒时间戳，进程内唯一）。
+// callID day  ID occurbecome( sectimetime , processinunique). 
 func callID() string {
 	return fmt.Sprintf("call-%d", time.Now().UnixNano())
 }

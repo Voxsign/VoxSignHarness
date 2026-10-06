@@ -1,6 +1,6 @@
-// Package search 实现纯 Go 递归代码扫描（search 契约，M2 任务卡 #7 / 验收冒烟）。
-// 零第三方依赖、不调外部 grep：自己 filepath.Walk + 行级匹配。尊重 ignore glob。
-// 本包为薄封装，豁免伪代码逻辑层关卡。
+// Package search  now  Go    code  (search   , M2 task  #7 /  recv  ). 
+//     dependency,  callout  grep:    filepath.Walk +     .  heavy ignore glob. 
+// this packageas   ,   pseudocode logic layerclose . 
 package search
 
 import (
@@ -12,16 +12,16 @@ import (
 	"strings"
 )
 
-// Hit 是一次命中：文件 + 行号（1-based）+ 该行原文 + 命中种类。
+// Hit is   in: file +  id(1-based)+   orig  +  inkindclass. 
 type Hit struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
 	LineText string `json:"line_text"`
-	Kind     string `json:"kind"` // symbol: func|type|const|var；text: "text"
+	Kind     string `json:"kind"` // symbol: func|type|const|var; text: "text"
 }
 
-// Options 扫描选项。Roots 空 → "."；Ignore 按路径段 glob（filepath.Match）过滤；
-// MaxFiles/MaxHits 为防御性上限（<=0 取默认）。
+// Options     . Roots empty -> "."; Ignore bypathseg glob(filepath.Match)ed ; 
+// MaxFiles/MaxHits asprevent ityonlimit(<=0 getdefault). 
 type Options struct {
 	Roots    []string
 	Ignore   []string
@@ -34,8 +34,8 @@ const (
 	defaultMaxHits  = 1000
 )
 
-// isIgnored 判断某个路径段（目录/文件名）是否命中 ignore glob。
-// 命中任一 ignore 模式即跳过（连同其子树）。
+// isIgnored  disconnect  pathseg(obj /filename)is  in ignore glob. 
+//  in   ignore  formi.e. ed(linksameits  ). 
 func isIgnored(name string, ignore []string) bool {
 	for _, pat := range ignore {
 		pat = strings.TrimSpace(pat)
@@ -45,7 +45,7 @@ func isIgnored(name string, ignore []string) bool {
 		if ok, _ := filepath.Match(pat, name); ok {
 			return true
 		}
-		// 支持 "**/vendor" 这类：末段匹配即可
+		//  keep "**/vendor"  class: endseg  i.e. 
 		if idx := strings.LastIndex(pat, "/"); idx >= 0 {
 			if ok, _ := filepath.Match(pat[idx+1:], name); ok {
 				return true
@@ -55,7 +55,7 @@ func isIgnored(name string, ignore []string) bool {
 	return false
 }
 
-// collectFiles 收集 roots 下常规文件路径，尊重 ignore 与 maxFiles。
+// collectFiles recv  roots under rulefilepath,  heavy ignore and maxFiles. 
 func collectFiles(opts Options, goOnly bool) ([]string, error) {
 	roots := opts.Roots
 	if len(roots) == 0 {
@@ -81,7 +81,7 @@ func collectFiles(opts Options, goOnly bool) ([]string, error) {
 		}
 		err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return nil // 跳过无权限项
+				return nil //  edno limit 
 			}
 			base := info.Name()
 			if info.IsDir() {
@@ -98,7 +98,7 @@ func collectFiles(opts Options, goOnly bool) ([]string, error) {
 			}
 			out = append(out, path)
 			if len(out) >= maxFiles {
-				return errMaxHits // 触发提前中止
+				return errMaxHits // triggersend beforeinstop
 			}
 			return nil
 		})
@@ -109,7 +109,7 @@ func collectFiles(opts Options, goOnly bool) ([]string, error) {
 
 var errMaxHits = fmt.Errorf("达到文件数上限")
 
-// lineCount 返回命中截断后的最大命中数。
+// lineCount returnback in disconnectafter    innum. 
 func hitCap(opts Options) int {
 	if opts.MaxHits > 0 {
 		return opts.MaxHits
@@ -117,7 +117,7 @@ func hitCap(opts Options) int {
 	return defaultMaxHits
 }
 
-// FindSymbol 定位 Go 标识符定义（func/type/const/var），纯 Go 扫描，尊重 ignore。
+// FindSymbol    Go tgt  define(func/type/const/var),   Go   ,  heavy ignore. 
 func FindSymbol(name string, opts Options) ([]Hit, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("符号名为空")
@@ -147,7 +147,7 @@ func FindSymbol(name string, opts Options) ([]Hit, error) {
 	return hits, nil
 }
 
-// appendSymbolHits 在单个文件里逐行跑四类声明正则。
+// appendSymbolHits    file     classvoice posthen. 
 func appendSymbolHits(path string, patterns []struct {
 	kind string
 	re   *regexp.Regexp
@@ -173,7 +173,7 @@ func appendSymbolHits(path string, patterns []struct {
 	}
 }
 
-// FindText 子串匹配（rune 安全由 strings.Contains 承担），尊重 ignore。
+// FindText     (rune safesafetyby strings.Contains   ),  heavy ignore. 
 func FindText(pattern string, opts Options) ([]Hit, error) {
 	if pattern == "" {
 		return nil, fmt.Errorf("搜索模式为空")
@@ -189,7 +189,7 @@ func FindText(pattern string, opts Options) ([]Hit, error) {
 		if err != nil {
 			continue
 		}
-		// 跳过疑似二进制文件
+		//  ed    restrictfile
 		if bytesContainsNUL(data) {
 			continue
 		}

@@ -1,11 +1,11 @@
-// compress.go —— 知己 · 上下文压缩器（架构 v1.0 §6.4 / §08 compress / ADR-004 落地）。
+// compress.go --    · onunder    (   v1.0 §6.4 / §08 compress / ADR-004  ly). 
 //
-// 压缩策略（ADR-004）：
-//   - 保留决策要件：目标/规则/未决问题（不压）
-//   - tool-result-clearing 先行：中间工具结果优先清除
-//   - 队尾递归摘要：其余文本按"保首尾、摘要中间"递归压缩
-//   - 北极星：任务成功率 + detail survival rate（不追压缩率）——探针联动
-// Phase 0 实现为确定性压缩（无小模型）；Phase 2 由压缩教师（LoRA 蒸馏）替换 CompressFn。
+//     (ADR-004): 
+//   - keep decide need : objtgt/rule/ decide  (  )
+//   - tool-result-clearing first : middle  close  first  
+//   -  tail   need: its  baseby"keepfirsttail,  needmiddle"    
+//   -    : taskbecome rate + detail survival rate(    rate)--    
+// Phase 0  nowas  ity  (no  type); Phase 2 by    (LoRA   )   CompressFn. 
 package zhiji
 
 import (
@@ -14,40 +14,40 @@ import (
 	"strings"
 )
 
-// CompressInput 压缩输入。
+// CompressInput    in. 
 type CompressInput struct {
-	Full    string // 完整上下文（轨迹/消息序列）
-	Segment string // 本段文本（如最近 N 轮对话）
+	Full    string // finish onunder (trace/   list)
+	Segment string // baseseg base(e.g.   N  to )
 }
 
-// CompressedContext 压缩产物（决策要件原样保留）。
+// CompressedContext   artifact(decide need origkindkeep ). 
 type CompressedContext struct {
-	Goals          []string `json:"goals"`            // 目标层（决策要件，不压）
-	Rules          []string `json:"rules"`            // 规则层（决策要件，不压）
-	Pending        []string `json:"pending"`          // 未决问题（决策要件，不压）
-	Summary        string   `json:"summary"`          // 压缩后的主体摘要
-	DroppedToolResult int   `json:"dropped_tool_result"` // 清除的工具结果块数
-	DetailSurvival float64  `json:"detail_survival"`  // 探针召回率（北极星）
+	Goals          []string `json:"goals"`            // objtgt (decide need ,   )
+	Rules          []string `json:"rules"`            // rule (decide need ,   )
+	Pending        []string `json:"pending"`          //  decide  (decide need ,   )
+	Summary        string   `json:"summary"`          //   after  body need
+	DroppedToolResult int   `json:"dropped_tool_result"` //      close  num
+	DetailSurvival float64  `json:"detail_survival"`  //    backrate(   )
 }
 
-// CompressFn 压缩执行体（Phase 2 由压缩教师替换；签名不变）。
+// CompressFn     body(Phase 2 by      ; signature change). 
 type CompressFn func(ctx context.Context, in CompressInput) (CompressedContext, error)
 
-// Compressor 上下文压缩器。
+// Compressor onunder    . 
 type Compressor struct {
 	store     *Store
 	MaxSummaryTokens int
 	Fn        CompressFn
 }
 
-// NewCompressor 构造压缩器（默认确定性实现）。
+// NewCompressor      (default  ity now). 
 func NewCompressor(store *Store) *Compressor {
 	c := &Compressor{store: store, MaxSummaryTokens: 4000}
 	c.Fn = c.defaultCompress
 	return c
 }
 
-// Compress 执行压缩（探针预埋 → 压缩 → 召回统计）。
+// Compress     (     ->    ->  back  ). 
 func (c *Compressor) Compress(ctx context.Context, in CompressInput) (CompressedContext, error) {
 	if err := ctx.Err(); err != nil {
 		return CompressedContext{}, err
@@ -56,18 +56,18 @@ func (c *Compressor) Compress(ctx context.Context, in CompressInput) (Compressed
 	if err != nil {
 		return out, err
 	}
-	// 探针召回：压缩后对预埋细节做一次检索验证（survival rate 北极星）。
+	//    back:   afterto   node       (survival rate    ). 
 	if c.store != nil {
-		// v1.1 钩子：压缩产物里若出现预埋探针的 KeyDetail → 标记召回。
-		// 骨架实现只增不删，不改变既有压缩输出；P1 换成 BudgetSearch 显式召回 decayed 探针。
+		// v1.1   :   artifact ifoutnow      KeyDetail -> tgt  back. 
+		//    nowonlyadd  ,  modifychange has   out; P1  become BudgetSearch  form back decayed   . 
 		c.markProbeHits(out.Summary)
 		out.DetailSurvival = c.store.SurvivalRate()
 	}
 	return out, nil
 }
 
-// markProbeHits 粗匹配：压缩后文本里出现某探针的 KeyDetail → 标记该探针已召回。
-// 只动探针 Recalled 状态，不改压缩输出；先快照 probes 再调 ProbeRecall（避免 RLock→Lock 死锁）。
+// markProbeHits    :   after base outnow     KeyDetail -> tgt    already back. 
+// only    Recalled status,  modify   out; firstfast  probes againcall ProbeRecall(   RLock->Lock   ). 
 func (c *Compressor) markProbeHits(compressed string) {
 	if compressed == "" || c.store == nil {
 		return
@@ -85,10 +85,10 @@ func (c *Compressor) markProbeHits(compressed string) {
 	}
 }
 
-// defaultCompress Phase 0 确定性压缩：
-//  1. 提取 [goal]/[rule]/[pending] 决策要件（原样保留）
-//  2. tool-result 块整体清除（标记 DroppedToolResult）
-//  3. 其余文本保首尾、中段摘要（按 token 预算截断 + 保留结构）
+// defaultCompress Phase 0   ity  : 
+//  1.  get [goal]/[rule]/[pending] decide need (origkindkeep )
+//  2. tool-result   body  (tgt  DroppedToolResult)
+//  3. its  basekeepfirsttail, inseg need(by token    disconnect + keep close )
 func (c *Compressor) defaultCompress(ctx context.Context, in CompressInput) (CompressedContext, error) {
 	if err := ctx.Err(); err != nil {
 		return CompressedContext{}, err
@@ -106,17 +106,17 @@ func (c *Compressor) defaultCompress(ctx context.Context, in CompressInput) (Com
 		case strings.HasPrefix(trimmed, "[pending]"):
 			out.Pending = append(out.Pending, strings.TrimPrefix(trimmed, "[pending]"))
 		case strings.Contains(trimmed, "tool-result") || strings.HasPrefix(trimmed, "tool_result:"):
-			out.DroppedToolResult++ // tool-result-clearing：清除，不进入摘要
+			out.DroppedToolResult++ // tool-result-clearing:   ,   in need
 		default:
 			if trimmed != "" {
 				rest = append(rest, trimmed)
 			}
 		}
 	}
-	// 队尾递归摘要：保首尾、摘要中间（token 预算按字符粗估 4 字符≈1 token）。
+	//  tail   need: keepfirsttail,  needmiddle(token   bychar    4 char ~=1 token). 
 	budget := c.MaxSummaryTokens * 4
 	head := rest
-	if len(rest) > 200 { // 超出块数 → 保留首 100 行 + 尾 50 行，中间压缩为一行摘要
+	if len(rest) > 200 { //  out num -> keep first 100   + tail 50  , middle  as   need
 		head = append(append([]string{}, rest[:100]...), rest[len(rest)-50:]...)
 	}
 	joined := strings.Join(head, "\n")

@@ -1,30 +1,30 @@
-// edges_rules.go —— 知己 · semantic / causal 规则版自动落边（P2 任务）。
+// edges_rules.go --    · semantic / causal rule     (P2 task). 
 //
-// 纯代码判断、不调任何外部模型/网络；边一律走 Graph.Add（自动去重加权，同 from,to,rel
-// 取大权重）。temporal / entity 两类边已在别处落地，本文件只新增 semantic 与 causal：
+//   code disconnect,  call  out  type/  ;      Graph.Add(   heavy  , same from,to,rel
+// get  heavy). temporal / entity  class already diffplace ly, basefileonlynewadd semantic and causal: 
 //
-//	semantic：两段文本「关键词∪实体」共享 >=2 → 无向边（Weight=0.6）
-//	causal  ：同一文本命中因果连接词且能切出原因/结果两侧 → 有向边（Weight=0.7）
+//	semantic:  seg base"close word∪ body"   >=2 -> noto (Weight=0.6)
+//	causal  : same  base inbecause linkconnectwordand  outorigbecause/close  side -> hasto (Weight=0.7)
 //
-// P0 全是粗规则（无分词器/无 NER），P2 换模型做子句级归因与实体抽取。
+// P0 safetyis rule(nosplitword /no NER), P2   type  sent attributionand body get. 
 package zhiji
 
 import "strings"
 
-// causalWords 因果连接词表（P0 冻结；与 systemone.go Route 的因果词是超集）。
+// causalWords because linkconnectwordtable(P0 frozen; and systemone.go Route  because wordis  ). 
 var causalWords = []string{"因为", "所以", "导致", "使得", "因此", "于是", "从而", "鉴于", "造成"}
 
-// effectLeadWords 结果侧引导词：命中即把该子句从该处切成 [原因侧 | 结果侧]。
+// effectLeadWords close side  word:  ini.e.pipe  sentfrom place become [origbecauseside | close side]. 
 var effectLeadWords = []string{"所以", "因此", "于是", "从而", "导致", "使得", "造成"}
 
-// causeLeadWords 原因侧引导词：命中则其后续子句视为结果侧。
+// causeLeadWords origbecauseside  word:  inthenitsaftercontinue sent asclose side. 
 var causeLeadWords = []string{"因为", "鉴于"}
 
-// clauseSplitterChars 中文/英文标点：按它们把整段文本切成子句。
+// clauseSplitterChars in /  tgtpt: by  pipe seg base become sent. 
 const clauseSplitterChars = "，。！？；、,."
 
-// cnStopRunes 中文停用字：抽词时一旦出现即视为边界（且本身绝不入词/入实体）。
-// 注意：是「切分边界」不是「删除后桥接」——否则「昨天的咖啡」删字后会拼出噪声 bigram「天咖」。
+// cnStopRunes in stopusechar:  wordtime  outnowi.e. as boundary(andbase   inword/in body). 
+// note : is" split boundary" is"deleteafter connect"-- then" day   " charafter  out voice bigram"day ". 
 var cnStopRunes = map[rune]bool{
 	'我': true, '你': true, '他': true, '她': true, '它': true, '们': true,
 	'的': true, '了': true, '是': true, '在': true, '和': true, '与': true,
@@ -37,7 +37,7 @@ var cnStopRunes = map[rune]bool{
 	'吧': true, '啊': true, '说': true, '去': true, '来': true, '做': true,
 }
 
-// enStopWords 英文停用词（小写形式匹配；数字串与大写英文专名不受此表影响）。
+// enStopWords   stopuseword( write form  ; numchar and write   name accept table  ). 
 var enStopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "is": true, "are": true,
 	"was": true, "were": true, "and": true, "or": true, "of": true,
@@ -46,14 +46,14 @@ var enStopWords = map[string]bool{
 	"its": true, "this": true, "that": true, "be": true, "been": true,
 }
 
-// isCJK 是否 CJK 统一表意文字（P0 粗判，不含扩展区）。
+// isCJK is  CJK   table  char(P0   ,      ). 
 func isCJK(r rune) bool { return r >= 0x4e00 && r <= 0x9fff }
 
-// extractKeywords 从一段文本抽「关键词集合」（去重，顺序不定）：
+// extractKeywords from seg base "close word  "( heavy,     ): 
 //
-//	英文：连续字母数字串小写化，长度>=2 且不在英文停用词表（数字串 230sar/5g 照常保留）；
-//	中文：按标点/英文/数字/中文停用字切句，段内对连续汉字滑二元组（bigram）。
-//	      含停用字的 bigram 天然不产生（停用字即切分点），纯停用字段直接丢弃。
+//	  : linkcontinuechar numchar  writeize,   >=2 and    stopusewordtable(numchar  230sar/5g   keep ); 
+//	in : bytgtpt/  /numchar/in stopusechar sent, segintolinkcontinue char    (bigram). 
+//	       stopusechar  bigram dayhowever produceoccur(stopusechari.e. splitpt),  stopusecharseg connect  . 
 func extractKeywords(text string) []string {
 	seen := map[string]struct{}{}
 	add := func(w string) {
@@ -80,7 +80,7 @@ func extractKeywords(text string) []string {
 		rs := []rune(cjk.String())
 		cjk.Reset()
 		for i := 0; i+1 < len(rs); i++ {
-			add(string(rs[i : i+2])) // 缓冲里已无停用字，bigram 必干净
+			add(string(rs[i : i+2])) //    alreadynostopusechar, bigram    
 		}
 	}
 	for _, r := range text {
@@ -89,13 +89,13 @@ func extractKeywords(text string) []string {
 			flushCJK()
 			ascii.WriteRune(r)
 		case isCJK(r):
-			if cnStopRunes[r] { // 停用字=切分边界，绝不入词
+			if cnStopRunes[r] { // stopusechar= split boundary,   inword
 				flushCJK()
 				continue
 			}
 			flushASCII()
 			cjk.WriteRune(r)
-		default: // 标点/空白/符号：两种缓冲都切一刀
+		default: // tgtpt/empty / id:  kind  all   
 			flushASCII()
 			flushCJK()
 		}
@@ -109,12 +109,12 @@ func extractKeywords(text string) []string {
 	return out
 }
 
-// extractEntities 从一段文本抽「实体集合」（P0 粗抽，去重）：
+// extractEntities from seg base " body  "(P0   ,  heavy): 
 //
-//	大写英文专名：连续 >=2 个大写字母，如 STC / CPE / DNA；
-//	中文专名片段：按非汉字/停用字切段，段长>=2 的连续汉字串（整段一个实体）。
+//	 write   name: linkcontinue >=2   writechar , e.g. STC / CPE / DNA; 
+//	in  name seg: by  char/stopusechar seg, seg >=2  linkcontinue char ( seg   body). 
 //
-// P0 占位启发式；P2 换 NER 模型。
+// P0   startsendform; P2   NER  type. 
 func extractEntities(text string) []string {
 	seen := map[string]struct{}{}
 	var upper strings.Builder
@@ -145,7 +145,7 @@ func extractEntities(text string) []string {
 			buf = nil
 		}
 		for _, r := range []rune(seg) {
-			if cnStopRunes[r] { // 停用字处断开，不桥接
+			if cnStopRunes[r] { // stopusecharplacedisconnectopen,   connect
 				emit()
 				continue
 			}
@@ -160,8 +160,8 @@ func extractEntities(text string) []string {
 	return out
 }
 
-// sharedUnionSize 计算两段文本「关键词∪实体」小写化后的去重共享元素个数。
-// 英文专名（STC）在关键词侧小写化为 stc、实体侧小写化也为 stc，并集自动合并不重复计数。
+// sharedUnionSize    seg base"close word∪ body" writeizeafter  heavy     num. 
+//    name(STC) close wordside writeizeas stc,  bodyside writeizealsoas stc, and    and heavy  num. 
 func sharedUnionSize(textA, textB string) int {
 	setA := map[string]struct{}{}
 	for _, w := range extractKeywords(textA) {
@@ -175,7 +175,7 @@ func sharedUnionSize(textA, textB string) int {
 		k := strings.ToLower(w)
 		if _, ok := setA[k]; ok {
 			n++
-			delete(setA, k) // 去重：同一元素只计一次
+			delete(setA, k) //  heavy: same   only   
 		}
 	}
 	for _, w := range extractKeywords(textB) {
@@ -187,8 +187,8 @@ func sharedUnionSize(textA, textB string) int {
 	return n
 }
 
-// MaybeAddSemantic 若 A、B 两段文本「关键词+实体」并集共享 >=2 个元素，
-// 落一条无向 semantic 边（Weight=0.6）；否则图不动。空文本/同节点安全不落边。
+// MaybeAddSemantic if A, B  seg base"close word+ body"and    >=2    , 
+//    noto semantic  (Weight=0.6);  then   . empty base/samenodeptsafesafety   . 
 func MaybeAddSemantic(g *Graph, idA, idB string, textA, textB string) {
 	if g == nil || idA == "" || idB == "" || idA == idB {
 		return
@@ -198,23 +198,23 @@ func MaybeAddSemantic(g *Graph, idA, idB string, textA, textB string) {
 	}
 }
 
-// MaybeAddCausal 若文本命中因果连接词且能切出原因/结果两侧，
-// 即认为 fromNode（原因侧）导致 toNode（结果侧），落一条有向 causal 边（Weight=0.7）。
-// 方向由调用方按子句先后给出；纯并列/无连接词/只有连接词无两侧内容 → 不落边。
+// MaybeAddCausal if base inbecause linkconnectwordand  outorigbecause/close  side, 
+// i.e. as fromNode(origbecauseside)   toNode(close side),    hasto causal  (Weight=0.7). 
+//  tobycalluse by sentfirstaftergiveout;  andlist/nolinkconnectword/onlyhaslinkconnectwordno sidein  ->    . 
 func MaybeAddCausal(g *Graph, fromNode, toNode string, text string) {
 	if g == nil || fromNode == "" || toNode == "" || fromNode == toNode {
 		return
 	}
-	if !hasAny(text, causalWords) { // 复用 systemone.go 的大小写不敏感包含判断
+	if !hasAny(text, causalWords) { //  use systemone.go    write      disconnect
 		return
 	}
-	if _, _, ok := splitCausalClauses(text); !ok { // 只有连接词、无两侧内容 → 不落
+	if _, _, ok := splitCausalClauses(text); !ok { // onlyhaslinkconnectword, no sidein  ->   
 		return
 	}
 	g.Add(Edge{From: fromNode, To: toNode, Rel: EdgeRelCausal, Directed: true, Weight: 0.7})
 }
 
-// splitClauses 按中英文标点把整段切成子句（去空白、丢空段）。
+// splitClauses byin  tgtptpipe seg become sent( empty ,  emptyseg). 
 func splitClauses(text string) []string {
 	f := func(r rune) bool { return strings.ContainsRune(clauseSplitterChars, r) }
 	var out []string
@@ -226,7 +226,7 @@ func splitClauses(text string) []string {
 	return out
 }
 
-// stripConns 清掉子句里残留的连接词字（P0 粗切后两半更干净）。
+// stripConns    sent    linkconnectwordchar(P0   after  change  ). 
 func stripConns(s string) string {
 	for _, w := range causalWords {
 		s = strings.ReplaceAll(s, w, "")
@@ -234,19 +234,19 @@ func stripConns(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// splitCausalClauses 先按标点切子句，再在含连接词的那对子句间粗切 [原因侧 | 结果侧]：
+// splitCausalClauses firstbytgtpt  sent, again  linkconnectword  to senttime   [origbecauseside | close side]: 
 //
-//	结果侧引导词（所以/因此/于是/从而/导致/使得/造成）：
-//	    连接词左侧（同子句优先，空则取上一子句）= 原因侧，连接词右侧 = 结果侧。
-//	    例：「今天停电，导致工厂停工一天」→ cause=今天停电 / effect=工厂停工一天。
-//	原因侧引导词（因为/鉴于）：连接词右侧=原因侧，下一子句=结果侧。
-//	两半都非空才 ok=true；无连接词 / 只有连接词无两侧 → ok=false。
+//	close side  word( by/because /atis/frombut/  /  / become): 
+//	    linkconnectword side(same sent first, emptythengeton  sent)= origbecauseside, linkconnectword side = close side. 
+//	    example: " daystop ,     stop  day"-> cause= daystop  / effect=  stop  day. 
+//	origbecauseside  word(becauseas/ at): linkconnectword side=origbecauseside, under  sent=close side. 
+//	  all emptyonly ok=true; nolinkconnectword / onlyhaslinkconnectwordno side -> ok=false. 
 //
-// 注释：P0 是按标点+连接词位置的粗切，不做子句依存分析；P2 换模型做精确因果归因。
+// note : P0 isbytgtpt+linkconnectword     ,    sent storesplit ; P2   type   because attribution. 
 func splitCausalClauses(text string) (cause, effect string, ok bool) {
 	clauses := splitClauses(text)
 	for i, c := range clauses {
-		// 结果侧引导词：取最靠左的命中
+		// close side  word: get     in
 		p, pHit := -1, ""
 		for _, conn := range effectLeadWords {
 			if j := strings.Index(c, conn); j >= 0 && (p < 0 || j < p) {
@@ -256,12 +256,12 @@ func splitCausalClauses(text string) (cause, effect string, ok bool) {
 		if p >= 0 {
 			effect = stripConns(c[p+len(pHit):])
 			cause = stripConns(c[:p])
-			if cause == "" && i > 0 { // 同子句左侧为空 → 借上一子句当原因侧
+			if cause == "" && i > 0 { // same sent sideasempty ->  on  sentcurorigbecauseside
 				cause = stripConns(clauses[i-1])
 			}
 			return cause, effect, cause != "" && effect != ""
 		}
-		// 原因侧引导词：取最靠左的命中
+		// origbecauseside  word: get     in
 		q, qHit := -1, ""
 		for _, conn := range causeLeadWords {
 			if j := strings.Index(c, conn); j >= 0 && (q < 0 || j < q) {

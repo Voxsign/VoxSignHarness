@@ -1,46 +1,46 @@
-// Package refer 是指代消解层（设计 v2 §14）：把口语里的模糊表述（"它/那个文件/上次"）
-// 逐层消解为具体实体：词典层(100%) → 上下文规则层 → 语言层(可选) → 低置信回问。
-// 规则层低置信绝不静默吃掉：要么交 ModelFn，要么显式 Ask；跨域歧义必须回问"哪个域？"。
-// 本包只依赖标准库 + contract + memory。
+// Package refer iscoreference resolution (   v2 §14): pipe lang    table (" /  file/on ")
+//    resolveas body body: word  (100%) -> onunder rule  -> langlang (  ) -> low-confidenceclarification. 
+// rule low-confidence      : need   ModelFn, need  form Ask;  domain    clarification"  domain ". 
+// this packageonlydependencytgtapprove  + contract + memory. 
 package refer
 
-// 【伪代码逻辑层】（评审关卡产物；分层消解权威定义在设计 v2 §14.1，
-//  本层只描述单模块控制流/分支/拒绝路径/异常处理，规则语义标注"搬 VSL"。）
+// [pseudocode logic layer](review gateartifact; split  resolveauthoritative definition    v2 §14.1, 
+//  this layeronlydescribe modulecontrol flow/branch/rejectpath/errorhandle, rule semanticstgtnote"  VSL". )
 //
-// Resolve(intent, spaceID) -> *Intent：
-//   0. 若 intent.Target.Entity 已显式（explicit）：仅走词典层规范化，直接返回（不回问）。
-//   1. 词典层（搬 VSL：实体词典 100%）：
-//      在 CorrectedText 中命中词典 Term/Variant → Target.Entity=Term, RefType="dict"，返回。
-//   2. 指代触发检测（搬 VSL：它/那个文件/这个/上次/之前那个）：
-//      若无指代词 → 无需消解，原样返回。
-//   3. 上下文规则层（搬 VSL：作用域内最近实体）：
-//      cands = r.Recent 按 kind 过滤（"那个文件"→file；"它"→优先 file，兜底任意）
-//      排序键：(space==spaceID 优先, Ts 倒序=新者优先)
-//      if cands 空 → 跳 4（语言层/Ask）
-//      if 最优唯一（spaceID 命中 或 新 Ts 明显领先）→ 取之为 Target, RefType="anaphora"，返回
-//      if cands 跨多个 space 且无 spaceID 命中（跨域歧义）→ Ask「你说的是哪个域？」
-//      if 顶级平局（同 space 同 Ts / 多候选并列）→ Ask，不猜
-//   4. 语言层（可选，搬 VSL：候选+置信度）：
+// Resolve(intent, spaceID) -> *Intent: 
+//   0. if intent.Target.Entity already form(explicit): only word  rule ize,  connectreturnback( clarification). 
+//   1. word  (  VSL:  bodyword  100%): 
+//        CorrectedText in inword  Term/Variant -> Target.Entity=Term, RefType="dict", returnback. 
+//   2. coreferencetriggersend  (  VSL:  /  file/  /on /ofbefore  ): 
+//      ifnocoreferenceword -> noneed resolve, origkindreturnback. 
+//   3. onunder rule (  VSL:  usedomainin   body): 
+//      cands = r.Recent by kind ed ("  file"->file; " "-> first file,  bot  )
+//         : (space==spaceID  first, Ts   =newer first)
+//      if cands empty ->   4(langlang /Ask)
+//      if   unique(spaceID  in or new Ts    first)-> getofas Target, RefType="anaphora", returnback
+//      if cands     space andno spaceID  in( domain  )-> Ask"   is  domain "
+//      if top   (same space same Ts /    andlist)-> Ask,   
+//   4. langlang (  ,   VSL:   +   ): 
 //      if r.ModelFn != nil:
-//         entity, conf = r.ModelFn(CorrectedText, 候选实体名)
-//         if conf >= 阈值: Target=entity, RefType="model"，返回
-//      // 规则层低置信不许静默吃掉：落到这里必须 Ask
-//      Ask「你说的「<代词>」指的是哪个？」
-//   异常：Dict 为 nil → 词典层跳过（不报错）；Recent 为空 → 直接走语言层/Ask。
+//         entity, conf = r.ModelFn(CorrectedText,    bodyname)
+//         if conf >=  value: Target=entity, RefType="model", returnback
+//      // rule low-confidence allow    :  to     Ask
+//      Ask"   "< word>"refer is   "
+//   error: Dict as nil -> word   ed(   ); Recent asempty ->  connect langlang /Ask. 
 //
-// Solidify(entity, variant) -> error：
-//   确认后的别名固化进个人词典（memory.Dictionary.AddTerm，source=model）。
+// Solidify(entity, variant) -> error: 
+//   confirmafter diffname ize   word (memory.Dictionary.AddTerm, source=model). 
 //
-// ResolveOptions(intent, spaceID) -> (*Intent, []Option, error)【M4 选项按钮化】：
-//   // 与 Resolve 同一套分层；歧义回问时额外产出结构化候选（2-4 个，供手机端点选续跑）。
-//   候选来源优先级（搬 VSL：模糊→精确）：
-//     1) 词典命中项：文本命中的词典 Term → Option{ID:"dict:"+term, Label:term+"（词典）"}
-//     2) 上下文最近实体：r.Recent 按 (spaceID 优先, Ts 新) 排序后取前 N
-//        → Option{ID:"rec:"+entity, Label:kind 前缀+实体+(跨域时标注 域:xxx)}
-//   数量上限 4；按 ID 去重；词典候选排前、最近实体随后。
-//   仅在【歧义回问分支】产出候选：跨域歧义 / 顶级平局。
-//   目标不存在或无候选（Recent 空 + 词典无命中）→ Options=[]，仅 Ask 文本（不伪造选项）。
-//   Resolve 保留冻结签名，内部转调本函数并丢弃 Options。
+// ResolveOptions(intent, spaceID) -> (*Intent, []Option, error)[M4   by ize]: 
+//   // and Resolve same  split ;   clarificationtime outproduceoutclose ize  (2-4  , providemobile clientpt continue ). 
+//        first (  VSL:   ->  ): 
+//     1) word  in :  base in word  Term -> Option{ID:"dict:"+term, Label:term+"(word )"}
+//     2) onunder    body: r.Recent by (spaceID  first, Ts new)   aftergetbefore N
+//        -> Option{ID:"rec:"+entity, Label:kind before + body+( domaintimetgtnote domain:xxx)}
+//   num onlimit 4; by ID  heavy; word    before,    body after. 
+//   only [  clarificationbranch]produceout  :  domain   / top   . 
+//   objtgt store orno  (Recent empty + word no in)-> Options=[], only Ask  base(     ). 
+//   Resolve keep frozen signature, in  callbase numand   Options. 
 
 import (
 	"sort"
@@ -50,43 +50,43 @@ import (
 	"voicesign-harness/memory"
 )
 
-// RecentEntity 是 pipeline 注入的最近实体（按时间追加；指代消解的上下文来源）。
+// RecentEntity is pipeline notein    body(bytimetime  ; coreference resolution onunder   ). 
 type RecentEntity struct {
-	Space  string // 所属域
-	Entity string // 具体实体（文件名/项目名/人名）
+	Space  string //   domain
+	Entity string //  body body(filename/ objname/ name)
 	Kind   string // file | project | person | space
-	Ts     string // ISO 时间戳（字符串倒序即"更新"，要求调用方给可字典序比较的格式）
+	Ts     string // ISO timetime (char    i.e."changenew", needrequirecalluse give char      form)
 }
 
-// Resolver 是指代消解器：词典层 + 上下文规则层 + 可选语言层。
+// Resolver iscoreference resolution : word   + onunder rule  +   langlang . 
 type Resolver struct {
 	Dict    *memory.Dictionary
 	Recent  []RecentEntity
 	ModelFn func(q string, cands []string) (entity string, conf float64)
 }
 
-// Option 是一个可点选的候选目标（M4 选项按钮化；D 消费为 AskOption{ID,Label}）。
-// ID 稳定可测（"dict:"+term / "rec:"+entity）；Label 中文可读。
+// Option is   pt    objtgt(M4   by ize; D   as AskOption{ID,Label}). 
+// ID     ("dict:"+term / "rec:"+entity); Label in  read. 
 type Option struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 }
 
-// New 构造消解器（dict 可为 nil，词典层自动跳过）。
+// New    resolve (dict  as nil, word     ed). 
 func New(dict *memory.Dictionary) *Resolver {
 	return &Resolver{Dict: dict}
 }
 
-// anaphoraTriggers 是中文口语指代词（长词优先，CJK 无词边界，子串匹配）。
+// anaphoraTriggers isin  langcoreferenceword( word first, CJK noword boundary,     ). 
 var anaphoraTriggers = []string{
 	"那个文件", "那个客户", "那个项目", "上次那个", "之前那个",
 	"上次", "之前", "那个", "这个文件", "这个", "它", "他",
 }
 
-// fileTriggers 表示指代指向"文件"类实体。
+// fileTriggers tableshowcoreferencereferto"file"class body. 
 var fileTriggers = []string{"那个文件", "这个文件", "它"}
 
-// modelConfThreshold 是语言层放行阈值。
+// modelConfThreshold islanglang    value. 
 const modelConfThreshold = 0.6
 
 func hasAny(text string, words []string) (string, bool) {
@@ -98,7 +98,7 @@ func hasAny(text string, words []string) (string, bool) {
 	return "", false
 }
 
-// dictLookup 在文本中查词典命中（返回规范词；未命中返回空）。
+// dictLookup   basein word  in(returnbackrule word;   inreturnbackempty). 
 func (r *Resolver) dictLookup(text string) string {
 	if r.Dict == nil {
 		return ""
@@ -117,7 +117,7 @@ func (r *Resolver) dictLookup(text string) string {
 	return ""
 }
 
-// rankCands 按 (spaceID 优先, Ts 倒序) 排序候选，返回排好序的切片。
+// rankCands by (spaceID  first, Ts   )     , returnback      . 
 func rankCands(cands []RecentEntity, spaceID string) []RecentEntity {
 	out := make([]RecentEntity, len(cands))
 	copy(out, cands)
@@ -125,28 +125,28 @@ func rankCands(cands []RecentEntity, spaceID string) []RecentEntity {
 		si := out[i].Space == spaceID
 		sj := out[j].Space == spaceID
 		if si != sj {
-			return si // space 命中者优先
+			return si // space  iner first
 		}
-		return out[i].Ts > out[j].Ts // Ts 倒序（新者优先；ISO 字符串字典序=时间序）
+		return out[i].Ts > out[j].Ts // Ts   (newer first; ISO char  char  =timetime )
 	})
 	return out
 }
 
-// Resolve 执行分层消解，回填 intent.Target；歧义时写 intent.Ask（不猜执行）。
-// 保留 M2 冻结签名；结构化候选见 ResolveOptions。
+// Resolve   split  resolve, backfill intent.Target;   timewrite intent.Ask(    ). 
+// keep  M2 frozen signature; close ize  see ResolveOptions. 
 func (r *Resolver) Resolve(it *contract.Intent, spaceID string) (*contract.Intent, error) {
 	got, _, err := r.ResolveOptions(it, spaceID)
 	return got, err
 }
 
-// ResolveOptions 与 Resolve 同一套分层；歧义回问时额外返回 2-4 个结构化候选目标（M4）。
+// ResolveOptions and Resolve same  split ;   clarificationtime outreturnback 2-4  close ize  objtgt(M4). 
 func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contract.Intent, []Option, error) {
 	if it == nil {
 		return nil, nil, nil
 	}
 	var opts []Option
 
-	// 0. 已显式目标：仅词典规范化，不回问
+	// 0. already formobjtgt: onlyword rule ize,  clarification
 	if it.Target != nil && it.Target.Entity != "" {
 		if canon := r.dictLookup(it.CorrectedText); canon != "" {
 			it.Target.Entity = canon
@@ -156,46 +156,46 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 
 	text := it.CorrectedText
 
-	// 缺口 G4：UNKNOWN 的澄清原因**不得**被指代回问覆写。
+	//    G4: UNKNOWN    origbecause**  **becoreferenceclarification write. 
 	//
-	// 分类器判 UNKNOWN 时会写「你是想让我做什么？」——这是用户最需要知道的信息。
-	// 若 refer 把它改写成「你说的「那个」指的是哪个？」，用户会被问一个**错误的问题**。
+	// classify   UNKNOWN time write" is       "-- isuseuser needneed     . 
+	// if refer pipe modifywritebecome"   "  "refer is   ", useuser be   **error   **. 
 	//
-	// 但不能一刀切（既有回归 pipeline.TestCodexNineRegressions#1 要求
-	// 「我现在想认真开始测…把这个哈…推进起来…」这一句**必须**保留 refer 的指代回问）。
-	// 区分标准：是不是**操作指代**。
-	//   - 「把 这个…」→ 操作指代，refer 的澄清有价值 → 放行；
-	//   - 「嗯 那个 呃 记一下」→ 语气词，不是操作对象 → 保留分类器的澄清原因。
+	// but     ( hasback  pipeline.TestCodexNineRegressions#1 needrequire
+	// " now    openstart …pipe   …  raise …"  sent**  **keep  refer  coreferenceclarification). 
+	//  splittgtapprove: is is**  coreference**. 
+	//   - "pipe   …"->   coreference, refer    has value ->   ; 
+	//   - "         under"-> lang word,  is  to  -> keep classify    origbecause. 
 	if it.Intent == contract.IntentUnknown && it.Ask != "" && !anyOperationAnaphora(text) {
 		return it, opts, nil
 	}
 
-	// 缺口 G9：NOTE 句里的**内容指代**不是操作指代。
+	//    G9: NOTE sent  **in coreference** is  coreference. 
 	//
-	// 笔记是自由文本：「记一下：这次要修的是报价页那个错别字」里的"那个"
-	// 是内容的一部分，追问"指的是哪个"既无意义（用户就是这么说的）又打断他。
+	//   is by base: "  under:   needfix is      diffchar"  "  "
+	// isin    split,   "refer is  " no  (useuserthenis    )again disconnect . 
 	//
-	// 边界（既有回归 pipeline.TestCodexNineRegressions#7）：`记一下 这个`
-	// 里指代**就是全部内容**，此时确实不知道记什么 —— 必须保持追问。
+	//  boundary( hasback  pipeline.TestCodexNineRegressions#7): `  under   `
+	//  coreference**thenissafety in **,  time         --   keepkeep  . 
 	if it.Intent == contract.IntentNote {
 		if trigger, ok := hasAny(text, anaphoraTriggers); ok && !notePayloadIsJustPronoun(text, trigger) {
 			return it, opts, nil
 		}
 	}
 
-	// 1. 词典层（100%）
+	// 1. word  (100%)
 	if canon := r.dictLookup(text); canon != "" {
 		it.Target = &contract.Target{Entity: canon, RefType: "dict"}
 		return it, opts, nil
 	}
 
-	// 2. 指代触发检测
+	// 2. coreferencetriggersend  
 	trigger, ok := hasAny(text, anaphoraTriggers)
 	if !ok {
-		return it, opts, nil // 无指代，无需消解
+		return it, opts, nil // nocoreference, noneed resolve
 	}
 
-	// 3. 上下文规则层：按 kind 过滤
+	// 3. onunder rule : by kind ed 
 	wantKind := ""
 	if _, isFile := hasAny(text, fileTriggers); isFile {
 		wantKind = "file"
@@ -206,7 +206,7 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 			pool = append(pool, e)
 		}
 	}
-	if len(pool) == 0 && wantKind != "" { // 文件类无命中 → 兜底任意
+	if len(pool) == 0 && wantKind != "" { // fileclassno in ->  bot  
 		for _, e := range r.Recent {
 			pool = append(pool, e)
 		}
@@ -215,13 +215,13 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 	if len(pool) > 0 {
 		ranked := rankCands(pool, spaceID)
 		top := ranked[0]
-		// 跨域歧义：没有任何候选命中 spaceID，且候选分布在 >1 个域
+		//  domain  :  has     in spaceID, and  split   >1  domain
 		spaces := map[string]bool{}
 		for _, e := range ranked {
 			spaces[e.Space] = true
 		}
 		matchedSpace := top.Space == spaceID
-		// 顶级平局：次优与最优同 space 同 Ts
+		// top   :   and  same space same Ts
 		tie := len(ranked) > 1 &&
 			ranked[1].Space == top.Space && ranked[1].Ts == top.Ts
 		switch {
@@ -237,13 +237,13 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 			opts = r.buildOptions(text, ranked)
 			return it, opts, nil
 		default:
-			// 单候选（虽跨域但唯一）→ 直接消解
+			//    (  domainbutunique)->  connect resolve
 			it.Target = &contract.Target{Entity: top.Entity, RefType: "anaphora"}
 			return it, opts, nil
 		}
 	}
 
-	// 4. 语言层（可选）
+	// 4. langlang (  )
 	if r.ModelFn != nil {
 		candNames := make([]string, 0, len(r.Recent))
 		for _, e := range r.Recent {
@@ -255,12 +255,12 @@ func (r *Resolver) ResolveOptions(it *contract.Intent, spaceID string) (*contrac
 		}
 	}
 
-	// 规则层低置信不许静默吃掉 → 显式回问（无候选则 Options 为空）
+	// rule low-confidence allow     ->  formclarification(no  then Options asempty)
 	it.Ask = "你说的「" + trigger + "」指的是哪个？请再说清楚一点"
 	return it, opts, nil
 }
 
-// kindPrefix 按实体类型给中文可读前缀。
+// kindPrefix by bodyclasstypegivein  readbefore . 
 func kindPrefix(kind string) string {
 	switch kind {
 	case "file":
@@ -276,11 +276,11 @@ func kindPrefix(kind string) string {
 	}
 }
 
-// buildOptions 从词典命中 + 排序后的最近实体构造 2-4 个结构化候选（去重、上限 4）。
+// buildOptions fromword  in +   after    body   2-4  close ize  ( heavy, onlimit 4). 
 func (r *Resolver) buildOptions(text string, ranked []RecentEntity) []Option {
 	seen := map[string]bool{}
 	var opts []Option
-	// 1) 词典命中项排前
+	// 1) word  in  before
 	if r.Dict != nil {
 		low := strings.ToLower(text)
 		for _, t := range r.Dict.Terms {
@@ -294,7 +294,7 @@ func (r *Resolver) buildOptions(text string, ranked []RecentEntity) []Option {
 			}
 		}
 	}
-	// 2) 上下文最近实体
+	// 2) onunder    body
 	for _, e := range ranked {
 		id := "rec:" + e.Entity
 		if seen[id] {
@@ -313,7 +313,7 @@ func (r *Resolver) buildOptions(text string, ranked []RecentEntity) []Option {
 	return opts
 }
 
-// Solidify 把确认后的别名固化进个人词典（AddTerm，source=voice）。
+// Solidify pipeconfirmafter diffname ize   word (AddTerm, source=voice). 
 func (r *Resolver) Solidify(entity, variant string) error {
 	if r.Dict == nil {
 		return nil
@@ -328,14 +328,14 @@ func (r *Resolver) Solidify(entity, variant string) error {
 	return nil
 }
 
-// operationVerbs 是指代词后紧跟时说明它是"操作对象"的动词。
+// operationVerbs iscoreferencewordafter  time   is"  to "  word. 
 var operationVerbs = []rune("发删改查看开关跑修记提部打建写读")
 
-// operationAnaphora 报告某个指代词是否构成"操作指代"。
+// operationAnaphora     coreferencewordis  become"  coreference". 
 //
-//	把 这个 改一下     → 前一字是"把"          → 是操作指代
-//	那个文件 改一下     → 后一字是动词"改"       → 是操作指代
-//	嗯 那个 呃 记一下   → 前后都不是操作语境      → 只是语气词，不是操作对象
+//	pipe    modify under     -> before charis"pipe"          -> is  coreference
+//	  file modify under     -> after charis word"modify"       -> is  coreference
+//	         under   -> beforeafterall is  lang       -> onlyislang word,  is  to 
 func operationAnaphora(text, trigger string) bool {
 	i := strings.Index(text, trigger)
 	if i < 0 {
@@ -349,7 +349,7 @@ func operationAnaphora(text, trigger string) bool {
 			case '把', '将', '对', '给':
 				return true
 			}
-			// 动词在指代词之前：「打开它」「删除这个」——它仍是操作对象。
+			//  word coreferencewordofbefore: " open ""delete  "--  is  to . 
 			for _, v := range operationVerbs {
 				if p == v {
 					return true
@@ -368,10 +368,10 @@ func operationAnaphora(text, trigger string) bool {
 	return false
 }
 
-// anyOperationAnaphora 报告文本中是否存在**任意**一个操作指代。
+// anyOperationAnaphora    baseinis store **  **    coreference. 
 //
-// 注意必须遍历全部候选：hasAny 按词表顺序返回首个命中，而词表顺序与出现位置无关，
-// 长句里可能先命中语气词"那个"，却漏掉更早出现的操作指代"把这个"。
+// note     safety   : hasAny bywordtable  returnbackfirst  in, butwordtable  andoutnow  noclose, 
+//  sent   first inlang word"  ", but  change outnow   coreference"pipe  ". 
 func anyOperationAnaphora(text string) bool {
 	for _, t := range anaphoraTriggers {
 		if strings.Contains(text, t) && operationAnaphora(text, t) {
@@ -381,16 +381,16 @@ func anyOperationAnaphora(text string) bool {
 	return false
 }
 
-// noteTriggersForRefer 是 NOTE 意图的触发词（与 input 层保持一致；refer 不 import input，
-// 故此处独立列出，只用于判断"剥掉后是否什么都不剩"）。
+// noteTriggersForRefer is NOTE intent triggersendword(and input  keepkeep  ; refer   import input, 
+// thus place  listout, onlyuseat disconnect"  afteris   all  "). 
 var noteTriggersForRefer = []string{
 	"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
 }
 
-// notePayloadIsJustPronoun 报告 NOTE 句里剥掉指代与触发词后是否**什么都不剩**。
+// notePayloadIsJustPronoun    NOTE sent   coreferenceandtriggersendwordafteris **  all  **. 
 //
-//	记一下 这个                        → 剩空 → true （指代就是全部内容，必须追问）
-//	记一下：这次要修的是报价页那个错别字   → 剩"：这次要修的是报价页错别字" → false（是内容，不追问）
+//	  under                           ->  empty -> true (coreferencethenissafety in ,     )
+//	  under:   needfix is      diffchar   ->  ":   needfix is    diffchar" -> false(isin ,    )
 func notePayloadIsJustPronoun(text, trigger string) bool {
 	rest := strings.Replace(text, trigger, "", 1)
 	for _, w := range noteTriggersForRefer {

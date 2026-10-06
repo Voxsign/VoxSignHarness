@@ -1,11 +1,11 @@
-// blacklist.go —— 用户显式「这个改错了」的动态黑名单（§5.1 第 5 件；验收 A10）。
+// blacklist.go -- useuser form"  modify "  state name (§5.1   5  ;  recv A10). 
 //
-// 语义（与 rewrite_scope.go 的静态登记互补）：
-//   - rewrite_scope.go 是**内置静态**通用词登记：通用词可路由、不可改写；
-//   - 本文件是**用户驱动动态**黑名单：点〔这个改错了〕后，该词不再参与文本改写；
-//   - **路由不受影响**（改写与路由两用途分离，见 rewrite_scope.go 头注）。
+// semantic(and rewrite_scope.go   state   patch): 
+//   - rewrite_scope.go is**in  state** useword  :  useword routeby,   modifywrite; 
+//   - basefileis**useuser   state** name : pt   modify  after,  word again and basemodifywrite; 
+//   - **routeby accept  **(modifywriteandrouteby usewaysplit , see rewrite_scope.go headnote). 
 //
-// 持久化：JSON map（term → 登记原因），L1 风格；重启后 LoadBlacklist 恢复。
+// keep ize: JSON map(term ->   origbecause), L1   ; heavystartafter LoadBlacklist   . 
 package hotcache
 
 import (
@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-// Blacklist 把 term 加入改写黑名单并落盘。空词拒绝；重复登记幂等（覆盖原因）。
+// Blacklist pipe term  inmodifywrite name and  . emptywordreject; heavy    etc(overwriteorigbecause). 
 func (c *Cache) Blacklist(term, note string) error {
 	term = strings.TrimSpace(term)
 	if term == "" {
@@ -32,7 +32,7 @@ func (c *Cache) Blacklist(term, note string) error {
 	return c.SaveBlacklist()
 }
 
-// Unblacklist 撤销一条黑名单（幂等；原本不存在返回 false）。
+// Unblacklist      name ( etc; origbase store returnback false). 
 func (c *Cache) Unblacklist(term string) bool {
 	s := c.state()
 	s.mu.Lock()
@@ -47,7 +47,7 @@ func (c *Cache) Unblacklist(term string) bool {
 	return ok
 }
 
-// Blacklisted 返回当前黑名单快照（term → 原因），供审计与判据。
+// Blacklisted returnbackcurbefore name fast (term -> origbecause), provide  and data. 
 func (c *Cache) Blacklisted() map[string]string {
 	s := c.state()
 	s.mu.Lock()
@@ -59,7 +59,7 @@ func (c *Cache) Blacklisted() map[string]string {
 	return out
 }
 
-// isBlacklisted 报告 term 是否在黑名单中（改写用途的查询要拦它）。
+// isBlacklisted    term is   name in(modifywriteuseway   need  ). 
 func (c *Cache) isBlacklisted(term string) bool {
 	s := c.state()
 	s.mu.Lock()
@@ -68,13 +68,13 @@ func (c *Cache) isBlacklisted(term string) bool {
 	return ok
 }
 
-// SetBlacklistPath 设置黑名单落盘路径（装配期调用）。
+// SetBlacklistPath    name   path(  periodcalluse). 
 func (c *Cache) SetBlacklistPath(p string) { c.blacklistPath = p }
 
-// BlacklistPath 返回黑名单落盘路径（持久化判据用）。
+// BlacklistPath returnback name   path(keep ize datause). 
 func (c *Cache) BlacklistPath() string { return c.blacklistPath }
 
-// SaveBlacklist 把黑名单落盘（缺失目录自动创建；与 Save 同纪律）。
+// SaveBlacklist pipe name   (  obj     ; and Save same  ). 
 func (c *Cache) SaveBlacklist() error {
 	if c.blacklistPath == "" {
 		return nil
@@ -92,7 +92,7 @@ func (c *Cache) SaveBlacklist() error {
 	return os.WriteFile(c.blacklistPath, b, 0o600)
 }
 
-// LoadBlacklist 从磁盘恢复黑名单（缺失不报错 —— 缺失能降级不崩溃，与 K6 同纪律）。
+// LoadBlacklist from     name (      --         , and K6 same  ). 
 func (c *Cache) LoadBlacklist() error {
 	if c.blacklistPath == "" {
 		return nil

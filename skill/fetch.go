@@ -1,4 +1,4 @@
-// fetch.go —— 技能拉取器（真调 /api/skill/*）+ **可注入的调用计数**（为 SK-1 提供断言点）。
+// fetch.go --    get ( call /api/skill/*)+ ** notein calluse num**(as SK-1  providedisconnectlangpt). 
 package skill
 
 import (
@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-// Fetcher 是只读拉取器。Calls 指向调用计数（SK-1 断言"远端调用数=0"）。
+// Fetcher isread-only get . Calls refertocalluse num(SK-1 disconnectlang" endcallusenum=0"). 
 type Fetcher struct {
-	BaseURL string // 例如 https://aiops.peterzou.com
-	APIKey  string // 只从环境/.env 读；不打印不落盘
+	BaseURL string // examplee.g. https://aiops.peterzou.com
+	APIKey  string // onlyfrom  /.env read;       
 	HTTP    *http.Client
 	Calls   *int
 }
 
 func (f *Fetcher) get(ctx context.Context, path string) ([]byte, error) {
 	if f.Calls != nil {
-		*f.Calls++ // 计数每一次出网（**断言点**）
+		*f.Calls++ //  num   out (**disconnectlangpt**)
 	}
 	hc := f.HTTP
 	if hc == nil {
@@ -45,7 +45,7 @@ func (f *Fetcher) get(ctx context.Context, path string) ([]byte, error) {
 	return b, nil
 }
 
-// List 拉取技能列表。
+// List  get  listtable. 
 func (f *Fetcher) List(ctx context.Context) ([]Skill, error) {
 	b, err := f.get(ctx, "/api/skill/skills")
 	if err != nil {
@@ -55,7 +55,7 @@ func (f *Fetcher) List(ctx context.Context) ([]Skill, error) {
 		Skills []Skill `json:"skills"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
-		// 容错：也可能直接是数组
+		//   : also   connectisnum 
 		var arr []Skill
 		if err2 := json.Unmarshal(b, &arr); err2 != nil {
 			return nil, fmt.Errorf("解析失败（按不可用处理）: %w", err)
@@ -65,7 +65,7 @@ func (f *Fetcher) List(ctx context.Context) ([]Skill, error) {
 	return out.Skills, nil
 }
 
-// Get 拉取单个技能 manifest 原文。
+// Get  get     manifest orig . 
 func (f *Fetcher) Get(ctx context.Context, id string) (json.RawMessage, error) {
 	b, err := f.get(ctx, "/api/skill/skills/"+id)
 	if err != nil {
@@ -74,7 +74,7 @@ func (f *Fetcher) Get(ctx context.Context, id string) (json.RawMessage, error) {
 	return json.RawMessage(b), nil
 }
 
-// Internalize 把**白名单内**的技能内化到本机（元数据 + 内容）。返回内化条数。
+// Internalize pipe** name in**   inizetobase ( numdata + in ). returnbackinize num. 
 func Internalize(ctx context.Context, f *Fetcher, st *Store, allow map[string]bool) (int, error) {
 	all, err := f.List(ctx)
 	if err != nil {
@@ -88,7 +88,7 @@ func Internalize(ctx context.Context, f *Fetcher, st *Store, allow map[string]bo
 	for _, s := range sel.Included {
 		raw, err := f.Get(ctx, s.ID)
 		if err != nil {
-			continue // 单个失败不拖垮整体；索引已落盘，缺失项读取时标 unknown
+			continue //         body;   already  ,    readgettimetgt unknown
 		}
 		if err := st.SaveManifest(Manifest{ID: s.ID, Version: s.Version, Source: "remote:/api/skill", Raw: raw}); err != nil {
 			return n, err
@@ -98,10 +98,10 @@ func Internalize(ctx context.Context, f *Fetcher, st *Store, allow map[string]bo
 	return n, nil
 }
 
-// ListOffline 返回技能列表：**内化存在 ⇒ 一律走本地（远端调用数=0）**；否则回退拉取。
+// ListOffline returnback  listtable: **inizestore  ⇒    basely( endcallusenum=0)**;  thenback  get. 
 func ListOffline(ctx context.Context, st *Store, f *Fetcher) ([]Skill, string, error) {
 	if idx, status, err := st.LoadIndex(); err == nil {
-		return idx.Skills, status, nil // 内化了就不联网（SK-1）
+		return idx.Skills, status, nil // inizethen   (SK-1)
 	}
 	if f == nil {
 		return nil, StatusUnknown, fmt.Errorf("无内化且无拉取器")

@@ -1,8 +1,8 @@
-// Package cache 实现「不再问」四元组缓存（M2 任务卡 #8 / 设计 v2 §14.1）。
+// Package cache  now" again "   cache(M2 task  #8 /    v2 §14.1). 
 //
-// 命中语义：当 (意图, 域, 权限, 指代已消解) 四元组完全复现上次已确认的情形时，
-// 直接复用上一次的决策（"不再问"），避免确认疲劳。策略/契约/域版本一变 → 全失效。
-// 持久化为单个 JSON 文件，带 policy version 与 per-entry TTL。零第三方依赖。
+//  insemantic: cur (intent, domain,  limit, coreferencealready resolve)    finishsafety nowon alreadyconfirm case time, 
+//  connect useon   decide (" again "),   confirm  .   /  /domain base change -> safety  . 
+// keep izeas   JSON file,   policy version and per-entry TTL.     dependency. 
 package cache
 
 import (
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// QuadKey 是四元组主键：意图 / 域 / 权限 / 指代（已消解）。四元全等才算同一情形。
+// QuadKey is     : intent / domain /  limit / coreference(already resolve).   safetyetconly same case . 
 type QuadKey struct {
 	Intent string `json:"intent"`
 	Space  string `json:"space"`
@@ -22,7 +22,7 @@ type QuadKey struct {
 	Ref    string `json:"ref"`
 }
 
-// Entry 是一条缓存的确认决策。Version = 写入时的 policy 版本（版本漂移即整条失效）。
+// Entry is  cache confirmdecide . Version = writetime  policy  base( base  i.e.    ). 
 type Entry struct {
 	Key       QuadKey   `json:"key"`
 	Decision  string    `json:"decision"`
@@ -30,8 +30,8 @@ type Entry struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// Store 是四元组缓存的持久句柄。Path 为 JSON 文件路径；Version 为当前 policy 版本；
-// TTL 为每条 entry 的有效期。entries/mu 为实现细节（未导出，不破坏冻结 API 形状）。
+// Store is   cache keep sent . Path as JSON filepath; Version ascurbefore policy  base; 
+// TTL as   entry  has period. entries/mu as now node(  out,    frozen API  status). 
 type Store struct {
 	Path    string        `json:"path"`
 	Version int           `json:"version"`
@@ -41,13 +41,13 @@ type Store struct {
 	entries map[QuadKey]Entry
 }
 
-// diskFormat 是落盘 JSON 形态。
+// diskFormat is   JSON  state. 
 type diskFormat struct {
 	Version int     `json:"version"`
 	Entries []Entry `json:"entries"`
 }
 
-// Open 打开（或新建）四元组缓存。文件不存在 → 空缓存、Version=1；存在则恢复。
+// Open  open(ornew )   cache. file store  -> emptycache, Version=1; store then  . 
 func Open(path string, ttl time.Duration) (*Store, error) {
 	if filepath.Ext(path) == "" {
 		return nil, fmt.Errorf("cache 路径应指向 .json 文件: %q", path)
@@ -72,7 +72,7 @@ func Open(path string, ttl time.Duration) (*Store, error) {
 	return s, nil
 }
 
-// persist 把当前状态原子落盘（写临时文件再 rename，避免半截 JSON）。
+// persist pipecurbeforestatusorig   (write timefileagain rename,      JSON). 
 func (s *Store) persist() error {
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return fmt.Errorf("创建缓存目录失败: %w", err)
@@ -95,19 +95,19 @@ func (s *Store) persist() error {
 	return nil
 }
 
-// Get 查四元组决策。
+// Get     decide . 
 //
-// 【伪代码逻辑层】（必写模块；命中/失效规则语义搬 VSL，此处只写控制流与拒绝路径）
+// [pseudocode logic layer]( writemodule;  in/  rule semantics  VSL,  placeonlywritecontrol flowandrejectpath)
 //
-// 控制流：
-//  1. RLock；查 map[QuadKey]Entry。
-//  2. 未命中 → ("", false)。
-//  3. 命中后两道失效闸（任一不过即 miss，并惰性剔除该条）：
-//     a. 版本闸：entry.Version != s.Version → 策略/契约/域版本变过，整条作废 → miss。
-//     b. TTL 闸：now >= entry.ExpiresAt → 过期 → miss。
-//  4. 两闸都过 → (entry.Decision, true)，pipeline 据此"不再问"。
+// control flow: 
+//  1. RLock;   map[QuadKey]Entry. 
+//  2.   in -> ("", false). 
+//  3.  inafter     (   edi.e. miss, and ity    ): 
+//     a.  base : entry.Version != s.Version ->   /  /domain basechangeed,      -> miss. 
+//     b. TTL  : now >= entry.ExpiresAt -> edperiod -> miss. 
+//  4.   alled -> (entry.Decision, true), pipeline data " again ". 
 //
-// 异常：读盘失败不在这里（Open 已加载）；惰性剔除后不强制落盘（下次 Set/Bump 顺带持久化）。
+// error: read       (Open already  );  ity  after  restrict  (under  Set/Bump   keep ize). 
 func (s *Store) Get(k QuadKey) (string, bool) {
 	s.mu.RLock()
 	e, ok := s.entries[k]
@@ -126,20 +126,20 @@ func (s *Store) Get(k QuadKey) (string, bool) {
 	return e.Decision, true
 }
 
-// invalidate 惰性删除单条（写锁）。
+// invalidate  itydelete  (write ). 
 func (s *Store) invalidate(k QuadKey) {
 	s.mu.Lock()
 	delete(s.entries, k)
 	s.mu.Unlock()
 }
 
-// Set 写入/覆盖一条四元组决策，带当前 policy 版本与 TTL，随后持久化。
+// Set write/overwrite     decide ,  curbefore policy  baseand TTL,  afterkeep ize. 
 //
-// 【伪代码逻辑层】
-//  1. Lock；now := time.Now()。
-//  2. upsert：entries[k] = Entry{Key:k, Decision, Version:s.Version, ExpiresAt: now+TTL}。
-//  3. persist() 落盘（原子 rename）。
-//  4. 失败 → 返回错误（不静默丢）。
+// [pseudocode logic layer]
+//  1. Lock; now := time.Now(). 
+//  2. upsert: entries[k] = Entry{Key:k, Decision, Version:s.Version, ExpiresAt: now+TTL}. 
+//  3. persist()   (orig  rename). 
+//  4.    -> returnbackerror(    ). 
 func (s *Store) Set(k QuadKey, decision string) error {
 	s.mu.Lock()
 	s.entries[k] = Entry{
@@ -156,12 +156,12 @@ func (s *Store) Set(k QuadKey, decision string) error {
 	return nil
 }
 
-// InvalidateSpace 作废某域的全部缓存（该域 manifest 漂移/重建时调用）。
+// InvalidateSpace    domain safety cache( domain manifest   /heavy timecalluse). 
 //
-// 【伪代码逻辑层】
-//  1. Lock。
-//  2. 遍历 entries：Key.Space == space → delete。
-//  3. persist() 落盘。
+// [pseudocode logic layer]
+//  1. Lock. 
+//  2.    entries: Key.Space == space -> delete. 
+//  3. persist()   . 
 func (s *Store) InvalidateSpace(space string) error {
 	s.mu.Lock()
 	for k := range s.entries {
@@ -174,12 +174,12 @@ func (s *Store) InvalidateSpace(space string) error {
 	return err
 }
 
-// BumpPolicyVersion 策略/契约/域版本变化 → 全失效。
+// BumpPolicyVersion   /  /domain basechangeize -> safety  . 
 //
-// 【伪代码逻辑层】
-//  1. Lock。
-//  2. s.Version++（旧 entries 携带旧版本号，Get 的版本闸会把它们全部判为 miss）。
-//  3. persist() 落盘新版本号（entries 保留但逻辑上全失效，便于审计）。
+// [pseudocode logic layer]
+//  1. Lock. 
+//  2. s.Version++(  entries     baseid, Get   base  pipe  safety  as miss). 
+//  3. persist()   new baseid(entries keep but  onsafety  , thenat  ). 
 func (s *Store) BumpPolicyVersion() error {
 	s.mu.Lock()
 	s.Version++

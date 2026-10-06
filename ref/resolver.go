@@ -1,11 +1,11 @@
-// resolver.go —— 代指三层（VHS-ZHIJI-001 R1–R8）。
+// resolver.go --  refer  (VHS-ZHIJI-001 R1–R8). 
 //
-//	① 会话内（本轮说过什么）
-//	② 工作记忆（四块板；依赖 P2）
-//	③ 知己（**只读**视图；key 从环境读，写回未实现）
+//	①   in(base  ed  )
+//	②     (   ; dependency P2)
+//	③   (**read-only**  ; key from  read, writeback  now)
 //
-// 硬判据：**唯一才消解**；多候选/无候选/低置信 ⇒ **回问**（且**必须给候选**）；
-// **每次消解留依据**；**来源冲突 ⇒ 中断**；**禁止脑补**。
+//   data: **uniqueonly resolve**;    /no  /low-confidence ⇒ **clarification**(and**  give  **); 
+// **   resolve  data**; **     ⇒ interrupt**; **forbidstop patch**. 
 package ref
 
 import (
@@ -17,31 +17,31 @@ import (
 	"voicesign-harness/plan"
 )
 
-// Evidence 是一条消解依据（R：每次消解留依据）。
+// Evidence is   resolve data(R:    resolve  data). 
 type Evidence struct {
 	Layer  string `json:"layer"` // session | working_memory | zhiji
 	Detail string `json:"detail"`
 }
 
-// Resolution 是一次代指消解结果。
+// Resolution is   refer resolveclose . 
 type Resolution struct {
 	Mention    string
 	Canonical  string
-	Ok         bool     // 唯一命中才为 true
-	AskBack    bool     // 需要回问用户
-	Candidates []string // **回问必须给候选**（ASK-3b）
+	Ok         bool     // unique inonlyas true
+	AskBack    bool     // needneedclarificationuseuser
+	Candidates []string // **clarification  give  **(ASK-3b)
 	Evidence   []Evidence
-	Conflict   bool // 来源冲突 ⇒ 中断
+	Conflict   bool //      ⇒ interrupt
 	Reason     string
 }
 
-// SessionMemory 是第①层：会话内提及（谁在本轮/近几轮说过）。
+// SessionMemory is ① :   in and(  base /    ed). 
 type SessionMemory struct {
 	mu    sync.Mutex
-	items map[string][]string // mention → 候选（按出现顺序去重）
+	items map[string][]string // mention ->   (byoutnow   heavy)
 }
 
-// Mention 记一次提及。
+// Mention     and. 
 func (s *SessionMemory) Mention(mention, canonical string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -56,21 +56,21 @@ func (s *SessionMemory) Mention(mention, canonical string) {
 	s.items[mention] = append(s.items[mention], canonical)
 }
 
-// Candidates 返回该提及在会话内的候选。
+// Candidates returnback  and   in   . 
 func (s *SessionMemory) Candidates(mention string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.items[mention]...)
 }
 
-// Resolver 串起三层。
+// Resolver  raise  . 
 type Resolver struct {
 	Session *SessionMemory
 	WM      *plan.WorkingMemory
 	Zhiji   ZhijiSource
 }
 
-// Resolve 消解一个代指。
+// Resolve  resolve   refer. 
 func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 	res := Resolution{Mention: mention}
 	var layers []struct {
@@ -130,7 +130,7 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 		res.Reason = "三层都无候选：回问用户（不脑补）"
 		return res
 	}
-	// 收集各层候选并做冲突检测
+	// recv     and     
 	for _, l := range layers {
 		res.Evidence = append(res.Evidence, l.ev)
 		for _, c := range l.cands {
@@ -139,7 +139,7 @@ func (r *Resolver) Resolve(ctx context.Context, mention string) Resolution {
 	}
 	res.Candidates = dedupSorted(res.Candidates)
 
-	// 来源冲突：不同层给出**不同**的候选 ⇒ 中断，交人裁决
+	//     :  same giveout** same**    ⇒ interrupt,    decide
 	if len(layers) > 1 {
 		first := strings.Join(layers[0].cands, "|")
 		for _, l := range layers[1:] {

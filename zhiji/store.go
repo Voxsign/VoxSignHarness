@@ -1,11 +1,11 @@
-// store.go —— 知己 · 意识缓存存储层（架构 v1.0 §6/§12 落地）。
+// store.go --    ·   cachestorestore (   v1.0 §6/§12  ly). 
 //
-// 本机 JSON 文件存储（假设：文件系统 JSON/轻量索引，无数据库）：
-//   self_model.json  四层自我模型（版本化，superseded 不静默覆盖）
-//   stm.json         STM 热区（当前目标/激活规则/最近 N 轮事件）
-//   ltm.json         LTM 归档（情节事件 + 语义条目）
-//   probes.jsonl     detail survival 探针
-// 写操作原子化（tmp+rename）；三因子打分检索；遗忘=降权可恢复（不硬删）。
+// base  JSON filestorestore(  : file   JSON/    , nonumdata ): 
+//   self_model.json       type( baseize, superseded    overwrite)
+//   stm.json         STM   (curbeforeobjtgt/  rule/   N  event)
+//   ltm.json         LTM   (casenodeevent + semantic obj)
+//   probes.jsonl     detail survival   
+// write  orig ize(tmp+rename);  because  split  ;   =     (   ). 
 package zhiji
 
 import (
@@ -21,34 +21,34 @@ import (
 	"time"
 )
 
-// ErrNotFound 检索/读取无结果。
+// ErrNotFound   /readgetnoclose . 
 var ErrNotFound = errors.New("zhiji: not found")
 
-// Default 检索权重（架构 §12：w1·Recency + w2·Importance + w3·Relevance）。
+// Default    heavy(   §12: w1·Recency + w2·Importance + w3·Relevance). 
 const (
 	WRecency     = 0.4
 	WImportance  = 0.35
 	WRelevance   = 0.25
-	RecencyHalfLife = 30 * time.Minute // 幂律衰减半衰期
+	RecencyHalfLife = 30 * time.Minute //    reduce  period
 )
 
-// Store 意识缓存存储（线程安全）。
+// Store   cachestorestore(line safesafety). 
 type Store struct {
 	dir string
 
 	mu          sync.RWMutex
-	selfModel   []SelfItem  // 四层自我模型（含 superseded 历史）
-	stm         []MemoryItem // STM 热区（按 LastSeen 降序滚动）
-	ltm         []MemoryItem // LTM 归档
+	selfModel   []SelfItem  //      type(  superseded   )
+	stm         []MemoryItem // STM   (by LastSeen     )
+	ltm         []MemoryItem // LTM   
 	probes      []SurvivalProbe
-	Graph       *Graph      // v1.1 关系图（graph.json；空图时 BudgetSearch 退化）
-	Vec         *VectorIndex // v1.2 可选向量索引（nil 退化为纯词法；BudgetSearch 混合锚点）
-	lastInputAt time.Time   // 输入门控信号（有输入才更新）
-	importance  float64     // 当前累计重要性（触发深反思阈值判断）
+	Graph       *Graph      // v1.1 close  (graph.json; empty time BudgetSearch  ize)
+	Vec         *VectorIndex // v1.2   to   (nil  izeas word ; BudgetSearch    pt)
+	lastInputAt time.Time   //  in  signal(has inonlychangenew)
+	importance  float64     // curbefore  heavyneedity(triggersend rev  value disconnect)
 	nextID      int
 }
 
-// NewStore 创建/加载存储。dir 不存在会自动创建。
+// NewStore   /  storestore. dir  store      . 
 func NewStore(dir string) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("zhiji: dir 不能为空")
@@ -63,7 +63,7 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
-// ---- 持久化 ----
+// ---- keep ize ----
 
 func (s *Store) load() error {
 	s.mu.Lock()
@@ -80,7 +80,7 @@ func (s *Store) load() error {
 	if err := readJSON(filepath.Join(s.dir, "probes.json"), &s.probes); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// v1.1 关系图（graph.json 不存在视为空图，与其他四 JSON 一致）
+	// v1.1 close  (graph.json  store  asempty , andits   JSON   )
 	if s.Graph == nil {
 		s.Graph = NewGraph()
 	}
@@ -96,7 +96,7 @@ func (s *Store) load() error {
 	return nil
 }
 
-// SaveAll 原子写全量（后台整理/反思固化后调用）。
+// SaveAll orig writesafety (after   /rev  izeaftercalluse). 
 func (s *Store) SaveAll() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -112,17 +112,17 @@ func (s *Store) SaveAll() error {
 	if err := writeJSON(filepath.Join(s.dir, "probes.json"), s.probes); err != nil {
 		return err
 	}
-	// v1.1 关系图（独立 graph.json；前面四个 JSON 写失败即返回，不影响它们）
+	// v1.1 close  (   graph.json; beforeface   JSON write  i.e.returnback,      )
 	if s.Graph != nil {
 		return s.Graph.Save(filepath.Join(s.dir, "graph.json"))
 	}
 	return nil
 }
 
-// ---- 自我模型 ----
+// ----    type ----
 
-// UpsertSelf 写一条自我模型（ADD/UPDATE 语义，架构 §12 写入纪律）：
-// 同 layer+text 则版本递增（旧版标 superseded，不静默覆盖）。
+// UpsertSelf write     type(ADD/UPDATE semantic,    §12 write  ): 
+// same layer+text then base add(  tgt superseded,    overwrite). 
 func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,10 +133,10 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	item.UpdatedAt = time.Now()
 	item.Confidence = clamp01(item.Confidence)
 	if item.Status == "" {
-		item.Status = StatusActive // 新建条目默认 active；superseded 替换逻辑见下（旧条目置 superseded，新条目保持 active）
+		item.Status = StatusActive // new  objdefault active; superseded     seeunder(  obj  superseded, new objkeepkeep active)
 	}
 
-	// 查找同层同文本旧条目 → superseded
+	//   same same base  obj -> superseded
 	for i := range s.selfModel {
 		old := &s.selfModel[i]
 		if old.Layer == item.Layer && strings.EqualFold(old.Text, item.Text) && old.Status != StatusSuperseded {
@@ -153,7 +153,7 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 	return item, nil
 }
 
-// SelfModel 返回当前版本的四层自我模型（含层过滤）。
+// SelfModel returnbackcurbefore base      type(  ed ). 
 func (s *Store) SelfModel(layer Layer) []SelfItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -169,7 +169,7 @@ func (s *Store) SelfModel(layer Layer) []SelfItem {
 	return out
 }
 
-// Baseline 生成注入基线块（架构 §07：目标+规则常驻，≤800–1200 token 量级）。
+// Baseline occurbecomenoteinbaseline (   §07: objtgt+rule  , <=800–1200 token   ). 
 func (s *Store) Baseline() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -185,12 +185,12 @@ func (s *Store) Baseline() string {
 	return strings.TrimSpace(b.String())
 }
 
-// ---- 记忆条目 ----
+// ----    obj ----
 
-// WriteMemory 写一条记忆（行为层教训/机制层策略；写前验证见 reflect.go）。
-// v1.2：append 到 ltm 后自动把 (id,text) 喂进向量索引（Vec==nil 时零额外开销）。
-// 锁纪律：持 s.mu 写锁期间只做内存追加；(id,text) 在锁内快照后立即放锁，再调 Vec.Upsert，
-// 避免持写锁做外部调用（Vec.Upsert 自带锁且不回调 Store，无锁序环）。
+// WriteMemory write    ( as   / restrict   ; writebefore  see reflect.go). 
+// v1.2: append to ltm after  pipe (id,text)   to   (Vec==nil time  outopen ). 
+//    : keep s.mu write periodtimeonly instore  ; (id,text)   infast after i.e.  , againcall Vec.Upsert, 
+//   keepwrite  out calluse(Vec.Upsert    and backcall Store, no   ). 
 func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 	s.mu.Lock()
 	if item.ID == "" {
@@ -208,14 +208,14 @@ func (s *Store) WriteMemory(item MemoryItem) (MemoryItem, error) {
 		item.Domain = DomainSession
 	}
 	s.ltm = append(s.ltm, item)
-	idxID, idxText := item.ID, item.Text // 锁内快照
+	idxID, idxText := item.ID, item.Text //  infast 
 	s.mu.Unlock()
 	s.indexUpsert(idxID, idxText)
 	return item, nil
 }
 
-// indexUpsert 把刚写入的记忆条目同步进可选向量索引（v1.2 写路径自动接通）。
-// 调用约定：进入前必须已释放 s.mu；idxID/idxText 为锁内快照。Vec==nil 时一行返回、零开销。
+// indexUpsert pipe write    objsame    to   (v1.2 writepath  connect ). 
+// calluse  :  inbefore  already   s.mu; idxID/idxText as infast . Vec==nil time  returnback,  open . 
 func (s *Store) indexUpsert(idxID, idxText string) {
 	if s.Vec == nil {
 		return
@@ -223,8 +223,8 @@ func (s *Store) indexUpsert(idxID, idxText string) {
 	s.Vec.Upsert(idxID, idxText)
 }
 
-// TouchSTM 向 STM 热区写事件（每轮消息后异步抽取调用；滚动窗口）。
-// v1.2：append + 滚动裁剪 + 重要性累计全部完成后，(id,text) 锁内快照、放锁再喂向量索引。
+// TouchSTM to STM   writeevent(    afterdiff  getcalluse;     ). 
+// v1.2: append +      + heavyneedity  safety doneafter, (id,text)  infast ,   again to   . 
 func (s *Store) TouchSTM(item MemoryItem, window int) {
 	s.mu.Lock()
 	if item.ID == "" {
@@ -233,59 +233,59 @@ func (s *Store) TouchSTM(item MemoryItem, window int) {
 	}
 	item.LastSeen = time.Now()
 	if item.Status == "" {
-		item.Status = StatusActive // STM 热区=激活态；否则 Search/写前验证/外化全部跳过它（写不进去=检索不到）
+		item.Status = StatusActive // STM   =  state;  then Search/writebefore  /outizesafety  ed (write   =   to)
 	}
 	s.stm = append(s.stm, item)
-	// 滚动窗口：保留最近 window 条（架构 §6.3 浅扫=工作记忆滚动更新）
+	//     : keep    window  (   §6.3   =      changenew)
 	if window > 0 && len(s.stm) > window {
 		drop := len(s.stm) - window
 		s.stm = append([]MemoryItem(nil), s.stm[drop:]...)
 	}
-	// 重要性累计（触发深反思阈值判断）
+	// heavyneedity  (triggersend rev  value disconnect)
 	s.importance += item.Importance
-	idxID, idxText := item.ID, item.Text // 锁内快照
+	idxID, idxText := item.ID, item.Text //  infast 
 	s.mu.Unlock()
 	s.indexUpsert(idxID, idxText)
 }
 
-// MarkInput 输入门控信号（架构 2026-10-05 决策：无新输入跳过反思）。
+// MarkInput  in  signal(   2026-10-05 decide : nonew in edrev ). 
 func (s *Store) MarkInput() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastInputAt = time.Now()
 }
 
-// LastInput 最近输入时间。
+// LastInput    intimetime. 
 func (s *Store) LastInput() time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastInputAt
 }
 
-// ImportanceScore 当前累计重要性（供 reflect-tick 阈值判断）。
+// ImportanceScore curbefore  heavyneedity(provide reflect-tick  value disconnect). 
 func (s *Store) ImportanceScore() float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.importance
 }
 
-// ResetImportance 深反思后清零累计（架构 §6.3：超阈值才深反思）。
+// ResetImportance  rev after    (   §6.3:   valueonly rev ). 
 func (s *Store) ResetImportance() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.importance = 0
 }
 
-// scoreItem 三因子打分（从 Search 内部抽出复用；公式与权重逐位不变：0.4/0.35/0.25，半衰期 30min）。
-// rec = 0.5^((now-LastSeen)/HalfLife)；score = 0.4·rec + 0.35·(importance/10) + 0.25·relevance。
+// scoreItem  because  split(from Search in  out use;  formand heavy   change: 0.4/0.35/0.25,   period 30min). 
+// rec = 0.5^((now-LastSeen)/HalfLife); score = 0.4·rec + 0.35·(importance/10) + 0.25·relevance. 
 func (s *Store) scoreItem(it MemoryItem, query string, now time.Time) float64 {
 	rec := math.Pow(0.5, float64(now.Sub(it.LastSeen))/float64(RecencyHalfLife))
 	rel := it.Relevance(query)
 	return WRecency*rec + WImportance*clampImportance(it.Importance)/10 + WRelevance*rel
 }
 
-// Search 三因子打分检索（架构 §12：w1·Recency + w2·Importance + w3·Relevance）。
-// 检索范围：LTM（行为/机制层）+ STM 热区；进程内，微秒级。行为与 v1.0 逐位一致。
+// Search  because  split  (   §12: w1·Recency + w2·Importance + w3·Relevance). 
+//     : LTM( as/ restrict )+ STM   ; processin,  sec .  asand v1.0     . 
 func (s *Store) Search(query string, k int, now time.Time) []MemoryItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -317,28 +317,28 @@ func (s *Store) Search(query string, k int, now time.Time) []MemoryItem {
 	return out
 }
 
-// ---- v1.1 预算检索闭环（架构 v1.1 §7.2）----
+// ---- v1.1       (   v1.1 §7.2)----
 
-// 默认检索预算（知己小库适配；空值字段取这些常量）。
+// default    (      ; emptyvaluecharsegget    ). 
 const (
-	DefaultBudgetMaxItems = 24              // 总条目上限（远小于 Jev-Mem 的 60）
-	DefaultBudgetMaxHops  = 3               // 图扩展跳数上限（远小于 Jev-Mem 的 8）
-	DefaultBudgetDeadline = 2 * time.Second // 死线（主循环每轮都注入，比 Jev-Mem 的 15s 紧）
-	DefaultBudgetMinScore = 0.1             // 候选低于此分不再扩展
-	DefaultSeedCount      = 12              // 词法锚点数（Jev-Mem 30）
-	DefaultExpandTopK     = 3               // 每轮沿激活视图扩 top-3 邻居
+	DefaultBudgetMaxItems = 24              //   objonlimit(  at Jev-Mem   60)
+	DefaultBudgetMaxHops  = 3               //     numonlimit(  at Jev-Mem   8)
+	DefaultBudgetDeadline = 2 * time.Second //  line(     allnotein,   Jev-Mem   15s  )
+	DefaultBudgetMinScore = 0.1             //    at split again  
+	DefaultSeedCount      = 12              // word  ptnum(Jev-Mem 30)
+	DefaultExpandTopK     = 3               //          top-3   
 )
 
-// RetrieveBudget 预算检索的硬约束（触顶必停）。
+// RetrieveBudget        end(triggertop stop). 
 type RetrieveBudget struct {
-	MaxItems  int           // 总条目上限（默认 24）
-	MaxTokens int           // 注入 token 预算（对齐 800–1200；P0 不强制截断）
-	MaxHops   int           // 图扩展跳数上限（默认 3）
-	Deadline  time.Duration // 死线（默认 2s）
-	MinScore  float64       // 候选低于此分不再扩展（默认 0.1）
+	MaxItems  int           //   objonlimit(default 24)
+	MaxTokens int           // notein token   (to  800–1200; P0   restrict disconnect)
+	MaxHops   int           //     numonlimit(default 3)
+	Deadline  time.Duration //  line(default 2s)
+	MinScore  float64       //    at split again  (default 0.1)
 }
 
-// normalize 零值补默认常量。
+// normalize  valuepatchdefault  . 
 func (b *RetrieveBudget) normalize() {
 	if b.MaxItems <= 0 {
 		b.MaxItems = DefaultBudgetMaxItems
@@ -354,7 +354,7 @@ func (b *RetrieveBudget) normalize() {
 	}
 }
 
-// Trace 预算检索闭环轨迹（落 decision JSONL；影子模式可审计对比线上 Search）。
+// Trace       trace(  decision JSONL;    form   to lineon Search). 
 type Trace struct {
 	SeedCount  int        `json:"seed_count"`
 	Hops       int        `json:"hops"`
@@ -362,7 +362,7 @@ type Trace struct {
 	StopReason string     `json:"stop_reason"` // enough|low_value|budget|deadline
 }
 
-// RetrieveSeeds 词法种子（复用 scoreItem 排序取前 n；STM∪LTM active 合并，与 Search 同源）。
+// RetrieveSeeds word kind ( use scoreItem   getbefore n; STM∪LTM active  and, and Search same ). 
 func (s *Store) RetrieveSeeds(query string, n int, now time.Time) []MemoryItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -392,9 +392,9 @@ func (s *Store) RetrieveSeeds(query string, n int, now time.Time) []MemoryItem {
 	return out
 }
 
-// hybridSeeds 混合锚点：词法种子 ∪ 向量召回种子（按 nodeID 去重，词法打分顺序在前）。
-// Vec==nil 或向量无召回时，逐位返回 RetrieveSeeds 结果——现有 BudgetSearch 行为零变化。
-// 老路径一行不动；向量召回的 nodeID 回填到 ltm/stm 里对应 active 条目，未入库即跳过。
+// hybridSeeds    pt: word kind  ∪ to  backkind (by nodeID  heavy, word  split   before). 
+// Vec==nil orto no backtime,   returnback RetrieveSeeds close --nowhas BudgetSearch  as changeize. 
+//  path    ; to  back  nodeID backfillto ltm/stm  to  active  obj,  in i.e. ed. 
 func (s *Store) hybridSeeds(query string, n int, now time.Time) []MemoryItem {
 	base := s.RetrieveSeeds(query, n, now)
 	if s.Vec == nil {
@@ -404,7 +404,7 @@ func (s *Store) hybridSeeds(query string, n int, now time.Time) []MemoryItem {
 	if len(vhits) == 0 {
 		return base
 	}
-	// 建 nodeID -> active 条目视图（ltm∪stm）；RetrieveSeeds 已释放读锁，这里重新取锁，不嵌套。
+	//   nodeID -> active  obj  (ltm∪stm); RetrieveSeeds already  read ,   heavynewget ,    . 
 	s.mu.RLock()
 	byID := map[string]MemoryItem{}
 	for _, it := range s.ltm {
@@ -438,8 +438,8 @@ func (s *Store) hybridSeeds(query string, n int, now time.Time) []MemoryItem {
 	return out
 }
 
-// ExpandByGraph 沿图边找 seedID 的邻居（rel=0 表示不按视图过滤），
-// 回填到 ltm/stm 里对应 ID 的条目；找不到则空（图上邻居 ID 未入库即跳过）。
+// ExpandByGraph      seedID    (rel=0 tableshow by  ed ), 
+// backfillto ltm/stm  to  ID   obj;   tothenempty( on   ID  in i.e. ed). 
 func (s *Store) ExpandByGraph(seedID string, rel EdgeRel, limit int) []MemoryItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -487,21 +487,21 @@ func (s *Store) ExpandByGraph(seedID string, rel EdgeRel, limit int) []MemoryIte
 	return out
 }
 
-// BudgetSearch 预算检索闭环（架构 v1.1 §7.2：Route → 取 12 种子 → 循环打分/Assess/沿激活视图扩 top-3 邻居 → 硬预算触顶必停）。
-// 停止原因：enough（证据够）| low_value（再搜没用）| budget（条目/跳数触顶）| deadline（超时）。
-// 空图时退化为 Search 超集（结果不比 Search 差）。
+// BudgetSearch       (   v1.1 §7.2: Route -> get 12 kind  ->    split/Assess/       top-3    ->    triggertop stop). 
+// stopstoporigbecause: enough( data )| low_value(again  use)| budget( obj/ numtriggertop)| deadline( time). 
+// empty time izeas Search   (close    Search diff). 
 func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]MemoryItem, Trace) {
 	b.normalize()
 	trace := Trace{StopReason: "budget"}
 
-	// 空图退化：直接退化为 Search 超集（MaxItems 上限内全部 active 条目）
+	// empty  ize:  connect izeas Search   (MaxItems onlimitinsafety  active  obj)
 	if s.Graph == nil || s.Graph.IsEmpty() {
 		out := s.Search(query, b.MaxItems, now)
 		trace.SeedCount = len(out)
 		return out, trace
 	}
 
-	// 路由（P0 规则版）
+	// routeby(P0 rule )
 	one := &DefaultSystemOne{}
 	views, hops := one.Route(query)
 	if hops <= 0 {
@@ -519,7 +519,7 @@ func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]M
 	seeds := s.hybridSeeds(query, DefaultSeedCount, now)
 	trace.SeedCount = len(seeds)
 
-	// 闭环 beam：去重收集（按 scoreItem 最终排序收口）
+	//    beam:  heavyrecv (by scoreItem  end  recv )
 	collected := map[string]MemoryItem{}
 	var order []string
 	add := func(it MemoryItem) bool {
@@ -544,7 +544,7 @@ func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]M
 			trace.StopReason = "budget"
 			break
 		}
-		// 沿激活视图扩 top-3 邻居
+		//        top-3   
 		newIDs := []string{}
 		for _, it := range current {
 			for rel, w := range views {
@@ -568,7 +568,7 @@ func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]M
 			}
 		}
 		trace.Hops++
-		// Assess：基于当前全部证据做停止决策
+		// Assess: baseatcurbeforesafety  data stopstopdecide 
 		var ev []MemoryItem
 		for _, id := range order {
 			ev = append(ev, collected[id])
@@ -583,18 +583,18 @@ func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]M
 			break
 		}
 		if len(newIDs) == 0 {
-			// 图上无新邻居可扩 → 停
+			//  onnonew     -> stop
 			trace.StopReason = "budget"
 			break
 		}
-		// 下一轮从新加入的条目继续扩展
+		// under  fromnew in  objcontinuecontinue  
 		current = current[:0]
 		for _, id := range newIDs {
 			current = append(current, collected[id])
 		}
 	}
 
-	// 收口：按 scoreItem 降序，截到 MaxItems
+	// recv : by scoreItem   ,  to MaxItems
 	type scoredItem struct {
 		it    MemoryItem
 		score float64
@@ -615,8 +615,8 @@ func (s *Store) BudgetSearch(query string, b RetrieveBudget, now time.Time) ([]M
 	return out, trace
 }
 
-// DecayAndEvict 遗忘（架构 §12 遗忘纪律）：低分区降权可恢复，不硬删。
-// lowThreshold=0.15 默认；active 条目分数低于阈值标 StatusDecayed（可恢复）。
+// DecayAndEvict   (   §12     ):  split      ,    . 
+// lowThreshold=0.15 default; active  objsplitnum at valuetgt StatusDecayed(   ). 
 func (s *Store) DecayAndEvict(now time.Time, lowThreshold float64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -626,7 +626,7 @@ func (s *Store) DecayAndEvict(now time.Time, lowThreshold float64) int {
 	n := 0
 	for i := range s.ltm {
 		it := &s.ltm[i]
-		if it.Status != StatusActive || it.Domain == DomainUser { // 用户级最持久不降权
+		if it.Status != StatusActive || it.Domain == DomainUser { // useuser  keep    
 			continue
 		}
 		rec := math.Pow(0.5, float64(now.Sub(it.LastSeen))/float64(RecencyHalfLife))
@@ -639,7 +639,7 @@ func (s *Store) DecayAndEvict(now time.Time, lowThreshold float64) int {
 	return n
 }
 
-// Probe 记录 detail survival 探针（预埋低显著关键细节）。
+// Probe    detail survival   (     close  node). 
 func (s *Store) Probe(slot, keyDetail string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -652,7 +652,7 @@ func (s *Store) Probe(slot, keyDetail string) {
 	s.nextID++
 }
 
-// ProbeRecall 标记探针已召回（compaction 后测 detail survival rate）。
+// ProbeRecall tgt   already back(compaction after  detail survival rate). 
 func (s *Store) ProbeRecall(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -665,7 +665,7 @@ func (s *Store) ProbeRecall(id string) bool {
 	return false
 }
 
-// SurvivalRate detail survival rate（架构 §04 北极星之一）。
+// SurvivalRate detail survival rate(   §04    of ). 
 func (s *Store) SurvivalRate() float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -681,7 +681,7 @@ func (s *Store) SurvivalRate() float64 {
 	return float64(recalled) / float64(len(s.probes))
 }
 
-// ---- 工具 ----
+// ----    ----
 
 func readJSON(path string, v any) error {
 	b, err := os.ReadFile(path)

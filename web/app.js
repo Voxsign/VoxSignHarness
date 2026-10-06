@@ -1,16 +1,16 @@
 /*
- * VoxSign iOS 壳 · app.js（M6-1b：SSE 流式消费 + 角色实时 + 打断即时 + 轮询兜底）
+ * VoxSign iOS   · app.js(M6-1b: SSE  form   +    time +  disconnecti.e.time + poll bot)
  * ------------------------------------------------------------------
- * 纯判断/状态机集中在 logic.js（VSLogic）；本文件做 DOM 渲染、HTTP/SSE 对接、事件编排。
+ *   disconnect/status  in  logic.js(VSLogic); basefile  DOM   , HTTP/SSE toconnect, eventorchestrate. 
  *
- * SSE 说明：契约要求 Authorization: Bearer，原生 EventSource 不能自定义请求头，
- *   故用 fetch + ReadableStream 手写 SSE 客户端（可带头、可手动 ?after=<lastSeq> 重连）。
+ * SSE   :   needrequire Authorization: Bearer, origoccur EventSource    define requirehead, 
+ *   thususe fetch + ReadableStream  write SSE clientuserend(  head,     ?after=<lastSeq> heavylink). 
  */
 (function () {
   'use strict';
   var L = window.VSLogic;
 
-  /* ================= 设置 ================= */
+  /* =================    ================= */
   var LS_KEY = 'vhs-web-settings';
   var settings = loadSettings();
   function loadSettings() {
@@ -40,12 +40,12 @@
     });
   }
 
-  /* ================= DOM 句柄 ================= */
+  /* ================= DOM sent  ================= */
   var $ = function (id) { return document.getElementById(id); };
   var chat = $('chat'), decisionZone = $('decisionZone'),
       systemBar = $('systemBar'), input = $('textInput');
 
-  /* ================= 对话流渲染 ================= */
+  /* ================= to     ================= */
   function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
   function el(tag, cls, html) {
     var d = document.createElement(tag);

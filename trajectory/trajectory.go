@@ -1,6 +1,6 @@
-// Package trajectory 提供 append-only JSONL 轨迹日志（架构 §10）。
-// 这是任何架构方案下都需要的硬底座：无条件保留 ASR 原文（先于一切处理落盘）、
-// 逐轮记录模型/动作/回执；按 request_id 可完整重放一次指令的「原文→理解→动作→结果」。
+// Package trajectory  provide append-only JSONL traceday (   §10). 
+//  is      underallneedneed  bot : no  keep  ASR orig (firstat  handle  ), 
+//      type/  /back ; by request_id  finish heavy   refer  "orig -> resolve->  ->close ". 
 package trajectory
 
 import (
@@ -14,30 +14,30 @@ import (
 	"voicesign-harness/contract"
 )
 
-// 轨迹条目类型（kind）。
+// trace objclasstype(kind). 
 const (
-	KindInputRaw    = "input_raw"     // ASR 原文（原始证据，必须先于任何处理写入）
-	KindInputClean  = "input_clean"   // 清洗后
-	KindInputCorrec = "input_correct" // 纠错后
-	KindIntent      = "intent"        // 意图 JSON
-	KindStart       = "start"         // 一次请求开始（含 model/prompt_hash）
-	KindModel       = "model"         // 模型原始输出
-	KindActions     = "actions"       // 模型请求的动作计划
-	KindReceipts    = "receipts"      // 动作回执
-	KindFinal       = "final"         // 最终答复
-	KindError       = "error"         // 错误
+	KindInputRaw    = "input_raw"     // ASR orig (origstart data,   firstat  handlewrite)
+	KindInputClean  = "input_clean"   // cleanafter
+	KindInputCorrec = "input_correct" // correctionafter
+	KindIntent      = "intent"        // intent JSON
+	KindStart       = "start"         //    requireopenstart(  model/prompt_hash)
+	KindModel       = "model"         //  typeorigstart out
+	KindActions     = "actions"       //  type require     
+	KindReceipts    = "receipts"      //   back 
+	KindFinal       = "final"         //  end  
+	KindError       = "error"         // error
 
-	// 13 阶段中间判定事件（P0-1 登记：此前 pipeline 写入但未登记，被 Validate 静默丢弃）。
-	// 这些 kind 在 pipeline.go 编排链路上逐阶段落盘，是 §10 可观测性的关键因果证据。
-	KindRefer       = "refer"       // 阶段⑤ 指代消解后意图（歧义/回问因果）
-	KindSpaceCheck  = "space_check" // 阶段⑥ 空间门禁判定（越界拦截因果）
-	KindRisk        = "risk"        // 阶段⑦ 风险分级决策
-	KindConfirm     = "confirm"     // 阶段⑧ 确认放行结果（level/approved）
-	KindVerify      = "verify"      // 阶段⑩ 独立校验结论
-	KindAttribution = "attribution" // 归因回写（discuss 结论）
+	// 13 stagemiddle  event(P0-1   :  before pipeline writebut   , be Validate     ). 
+	//    kind   pipeline.go orchestratechainrouteon stage  , is §10    ity close because  data. 
+	KindRefer       = "refer"       // stage⑤ coreference resolutionafterintent(  /clarificationbecause )
+	KindSpaceCheck  = "space_check" // stage⑥ emptytime forbid  (out-of-scopeblockbecause )
+	KindRisk        = "risk"        // stage⑦ risk gradingdecide 
+	KindConfirm     = "confirm"     // stage⑧ confirm  close (level/approved)
+	KindVerify      = "verify"      // stage⑩ independent verificationclose 
+	KindAttribution = "attribution" // attributionwrite-back(discuss close )
 )
 
-// Entry 是一条轨迹事件。Content 与结构化字段（Intent/Actions/Receipts）按 kind 二选一或并存。
+// Entry is  traceevent. Content andclose izecharseg(Intent/Actions/Receipts)by kind    orandstore. 
 type Entry struct {
 	Ts         string             `json:"ts"`
 	RequestID  string             `json:"request_id"`
@@ -53,13 +53,13 @@ type Entry struct {
 	Err        string             `json:"err,omitempty"`
 }
 
-// Trajectory 是 append-only JSONL 写入器（0600，逐条落盘，可并发）。
+// Trajectory is append-only JSONL write (0600,     ,  andsend). 
 type Trajectory struct {
 	mu sync.Mutex
 	f  *os.File
 }
 
-// Open 打开（或创建）当日轨迹文件 trajectory-YYYYMMDD.jsonl。
+// Open  open(or  )curdaytracefile trajectory-YYYYMMDD.jsonl. 
 func Open(dir string) (*Trajectory, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("创建轨迹目录 %s 失败: %w", dir, err)
@@ -72,9 +72,9 @@ func Open(dir string) (*Trajectory, error) {
 	return &Trajectory{f: f}, nil
 }
 
-// Write 追加一条事件（直接写盘，不缓冲，保证崩溃后已写条目完整）。
+// Write     event( connectwrite ,    , keep   afteralreadywrite objfinish ). 
 func (t *Trajectory) Write(e Entry) error {
-	// 判据⑪：**未登记的 kind 必须报错**（不许静默写入 —— 否则判据会"因为 kind 名不存在而空过"）。
+	//  data⑪: **     kind     **( allow  write --  then data "becauseas kind name store butemptyed"). 
 	if err := Validate(e); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (t *Trajectory) Write(e Entry) error {
 	return nil
 }
 
-// Close 关闭轨迹文件。
+// Close close tracefile. 
 func (t *Trajectory) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
