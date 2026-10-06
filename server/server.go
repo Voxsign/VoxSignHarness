@@ -1204,11 +1204,13 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				// mobilesidebypoll GET /v1/tasks/{id}   receipt asapprove,   modify View.Result,  modify event  occur . 
 				out.View.Action = "(needs clarification)"
 				out.View.Result = receipt
+				out.Reply = receipt // Phase 1：done 必带自然语言回答（此处 pipeline 出口时 View.Result 尚不是友好文案）
 				ts.Outcome = &out
 				s.markStatus(ts, stDone)
 				s.emitEvent(ts, "done", map[string]any{
 					"receipt":     contract.RenderReceipt(out.View),
 					"attribution": out.Attribution,
+					"reply":       out.Reply,
 				})
 				s.persist(ts)
 				return
@@ -1251,10 +1253,12 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				}
 			}
 			s.emitEvent(ts, "done", map[string]any{
-				"receipt":     contract.RenderReceipt(out.View),
-				"attribution": out.Attribution,
-				"reversible":  ts.Reversible,
-				"role":        ts.Role,
+				"receipt":            contract.RenderReceipt(out.View),
+				"attribution":        out.Attribution,
+				"reversible":         ts.Reversible,
+				"role":               ts.Role,
+				"reply":              out.Reply, // Phase 1：自然语言回答（D0 契约）
+				"termination_reason": out.TerminationReason,
 			})
 			s.persist(ts)
 		}
@@ -1568,6 +1572,13 @@ func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
 		body["attribution"] = ts.Outcome.Attribution
 		if ts.Reversible {
 			body["reversible"] = true
+		}
+		// Phase 1（D0 契约）：done 必带自然语言回答 reply；生成失败时带可读终止原因。
+		if ts.Outcome.Reply != "" {
+			body["reply"] = ts.Outcome.Reply
+		}
+		if ts.Outcome.TerminationReason != "" {
+			body["termination_reason"] = ts.Outcome.TerminationReason
 		}
 	}
 	s.mu.Unlock()

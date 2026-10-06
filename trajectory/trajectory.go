@@ -27,14 +27,19 @@ const (
 	KindFinal       = "final"         //  end  
 	KindError       = "error"         // error
 
-	// 13 stagemiddle  event(P0-1   :  before pipeline writebut   , be Validate     ). 
-	//    kind   pipeline.go orchestratechainrouteon stage  , is §10    ity close because  data. 
-	KindRefer       = "refer"       // stage⑤ coreference resolutionafterintent(  /clarificationbecause )
-	KindSpaceCheck  = "space_check" // stage⑥ emptytime forbid  (out-of-scopeblockbecause )
-	KindRisk        = "risk"        // stage⑦ risk gradingdecide 
-	KindConfirm     = "confirm"     // stage⑧ confirm  close (level/approved)
-	KindVerify      = "verify"      // stage⑩ independent verificationclose 
-	KindAttribution = "attribution" // attributionwrite-back(discuss close )
+	// 13 阶段中间判定事件（P0-1 登记：此前 pipeline 写入但未登记，被 Validate 静默丢弃）。
+	// 这些 kind 在 pipeline.go 编排链路上逐阶段落盘，是 §10 可观测性的关键因果证据。
+	KindRefer       = "refer"       // 阶段⑤ 指代消解后意图（歧义/回问因果）
+	KindSpaceCheck  = "space_check" // 阶段⑥ 空间门禁判定（越界拦截因果）
+	KindRisk        = "risk"        // 阶段⑦ 风险分级决策
+	KindConfirm     = "confirm"     // 阶段⑧ 确认放行结果（level/approved）
+	KindVerify      = "verify"      // 阶段⑩ 独立校验结论
+	KindAttribution = "attribution" // 归因回写（discuss 结论）
+
+	// KindReplyGen（Phase 1 回答生成）：工具执行完成后，provider 生成自然语言回答的
+	// 调用日志（model/latency/回答正文或可读失败原因）。必须在 kinds.go Kinds 登记——
+	// 否则 Validate 报错、write 打 warning（Q3「未登记 kind 静默丢弃」前科）。
+	KindReplyGen = "reply_gen"
 )
 
 // Entry is  traceevent. Content andclose izecharseg(Intent/Actions/Receipts)by kind    orandstore. 
