@@ -58,6 +58,8 @@ package zhiji
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 // HarnessHooks is zhiji to pipeline            (  nil-safe). 
@@ -234,4 +236,87 @@ func (h *HarnessHooks) OnTaskEndView(ctx context.Context, v OutcomeView) error {
 		_ = h.z.Contract.LogFeedback(ctx, v.RequestID, sig.Outcome, sig.Confidence)
 	}
 	return nil
+}
+
+// ActiveEntities 返回所有 active 实体的描述字符串，用于注入 LLM context。
+// nil-safe。
+func (h *HarnessHooks) ActiveEntities() string {
+	if h == nil || h.z == nil || h.z.Entities == nil {
+		return ""
+	}
+	es := h.z.Entities.AllActive()
+	if len(es) == 0 {
+		return ""
+	}
+	out := ""
+	for _, e := range es {
+		line := e.Canonical
+		if len(e.Aliases) > 0 {
+			line += " (代指: " + strings.Join(e.Aliases, "/") + ")"
+		}
+		if e.Desc != "" {
+			line += " — " + e.Desc
+		}
+		out += "  - " + line + "\n"
+	}
+	return out
+}
+
+// LearnEntity 记录一个新实体（用户说"X是Y"时调用）。
+func (h *HarnessHooks) LearnEntity(canonical, desc string, aliases []string) {
+	if h == nil || h.z == nil || h.z.Entities == nil {
+		return
+	}
+	h.z.Entities.Upsert(Entity{
+		Type:       EntityPerson,
+		Canonical:  canonical,
+		Aliases:    aliases,
+		Desc:       desc,
+		Confidence: 0.9,
+	})
+}
+
+// RecentCandidates 返回最近提到的 topN 实体（用于代指 resolve）。
+// 如果用户说"那个项目"，这些就是候选。
+func (h *HarnessHooks) RecentCandidates(topN int) []string {
+	if h == nil || h.z == nil || h.z.Entities == nil || h.z.Mentions == nil {
+		return nil
+	}
+	var canonicals []string
+	for _, e := range h.z.Entities.AllActive() {
+		canonicals = append(canonicals, e.Canonical)
+	}
+	return h.z.Mentions.TopCandidates(canonicals, topN)
+}
+
+// RecordMention 记录一次实体提及。
+func (h *HarnessHooks) RecordMention(canonical string) {
+	if h == nil || h.z == nil || h.z.Mentions == nil {
+		return
+	}
+	h.z.Mentions.Record(canonical)
+}
+
+// RecentDialogue 返回最近 N 轮用户输入，用于代指 resolve。
+func (h *HarnessHooks) RecentDialogue(n int) string {
+	if h == nil || h.z == nil || h.z.RawLog == nil {
+		return ""
+	}
+	entries := h.z.RawLog.Recent(n)
+	if len(entries) == 0 {
+		return ""
+	}
+	out := ""
+	for i, e := range entries {
+		out += fmt.Sprintf("  [%d] 用户说: %s\n", i+1, truncateStr(e, 60))
+	}
+	return out
+}
+
+func truncateStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
 }

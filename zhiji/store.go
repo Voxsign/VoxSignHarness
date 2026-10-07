@@ -136,14 +136,24 @@ func (s *Store) UpsertSelf(item SelfItem) (SelfItem, error) {
 		item.Status = StatusActive // new  objdefault active; superseded     seeunder(  obj  superseded, new objkeepkeep active)
 	}
 
-	//   same same base  obj -> superseded
+	// 同 layer 的同类条目自动 supersede：
+	// - 完全相同 text → version+1
+	// - 用户姓名类（layer=goal 且 text 以"用户姓名："开头）→ 新名字来了旧名字自动失效
 	for i := range s.selfModel {
 		old := &s.selfModel[i]
-		if old.Layer == item.Layer && strings.EqualFold(old.Text, item.Text) && old.Status != StatusSuperseded {
+		if old.Status == StatusSuperseded {
+			continue
+		}
+		sameText := old.Layer == item.Layer && strings.EqualFold(old.Text, item.Text)
+		nameOverride := old.Layer == LayerGoal && item.Layer == LayerGoal &&
+			strings.HasPrefix(old.Text, "用户姓名：") && strings.HasPrefix(item.Text, "用户姓名：")
+		if sameText || nameOverride {
 			item.Version = old.Version + 1
 			old.SupersededBy = item.ID
 			old.Status = StatusSuperseded
-			break
+			if sameText {
+				break
+			}
 		}
 	}
 	if item.Version == 0 {
