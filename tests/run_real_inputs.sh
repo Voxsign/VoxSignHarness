@@ -47,11 +47,11 @@ echo ""
 
 # === A. 用户身份（截图真实对话）===
 echo "=== A. 用户身份记忆（截图真实场景）==="
-run "A1 自我介绍ASR错+breakdown" "我叫周永明，呃，某个地方的某，某个形容词的某，某个时间的某" "<USER_NAME>"
-run "A2 ASR错周勇明" "我的名字叫做周勇明，某个地方的某，某个形容词的某，某个时间的某" "<USER_NAME>"
+run "A1 自我介绍ASR错+breakdown" "我叫张大山，呃，某个地方的某，某个形容词的某，某个时间的某" "<USER_NAME>"
+run "A2 ASR错张大山" "我的名字叫做张大山，某个地方的某，某个形容词的某，某个时间的某" "<USER_NAME>"
 run "A3 用户抱怨逻辑错" "你明显是逻辑错了嘛，我后面解释那么清楚，你还搞错了" "<USER_NAME>"
-run "A4 ASR错周永勇" "我叫周永勇" "<USER_NAME>"
-run "A5 拼字母ZOU" "这个叫周永明，Z O U，对吧？" "<USER_NAME>"
+run "A4 ASR错张大山" "我叫张大山" "<USER_NAME>"
+run "A5 拼字母ZOU" "这个叫张大山，Z O U，对吧？" "<USER_NAME>"
 run "A6 问名字" "我叫什么名字？" "<USER_NAME>"
 
 # === B. 实体 resolve（用户真实提到的人）===
