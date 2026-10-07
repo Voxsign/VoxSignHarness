@@ -335,6 +335,10 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		if stm := o.Zhiji.RecentSTM(5); stm != "" {
 			intent.Context = append(intent.Context, "[remembered facts]\n"+stm)
 		}
+		// 注入最近提到的实体（代指resolve："那个""这个"）
+		if rc := o.Zhiji.RecentCandidates(3); len(rc) > 0 {
+			intent.Context = append(intent.Context, "[最近提到的实体]\n  - "+strings.Join(rc, "\n  - ")+"\n")
+		}
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
 
