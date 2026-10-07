@@ -331,6 +331,10 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		if recent := o.Zhiji.RecentDialogue(10); recent != "" {
 			intent.Context = append(intent.Context, "[recent dialogue]\n"+recent)
 		}
+		// 注入STM事实记忆（用户说过的偏好/事实）
+		if stm := o.Zhiji.RecentSTM(5); stm != "" {
+			intent.Context = append(intent.Context, "[remembered facts]\n"+stm)
+		}
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
 
