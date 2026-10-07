@@ -80,8 +80,6 @@ final class SettingsStore: ObservableObject {
     private let serversKey = "vhs-ios-servers"
     private let activeKey = "vhs-ios-active"
     private let modeKey = "vhs-ios-mode"
-    /// 首次播种 UniFusion 示例组织的标记（只播一次，用户删除后不再复活）。
-    private let unifusionSeededKey = "vhs-ios-unifusion-seeded"
 
     /// 连接模式（云道默认 / 自建），持久化。
     @Published var mode: ConnectionMode = .cloud
@@ -173,42 +171,26 @@ final class SettingsStore: ObservableObject {
         if let saved, servers.contains(where: { $0.id == saved }) {
             activeServerID = saved
         }
-        seedExampleUniFusionOrgsOnce()
+        // 独立部署条目只来自后端 refresh upsert + 用户手动添加；全新安装不播种占位行
+        // （否则任何用户都会先看到 fallback 占位，破坏按客户/部署实例的隔离）。
         loadAuth()
     }
 
-    /// 首次启动播种示例组织条目（仅一次）：把占位目录里的组织落成可编辑/删除的机器条目，
-    /// 让「添加→切换→探测→报错」全流程在真机可验收。不切换模式、不改 activeServerID。
-    /// TODO(org-source): 待真实组织数据源就绪后，改为按后端返回增量补条目、缺组织不硬删用户配置。
-    private func seedExampleUniFusionOrgsOnce() {
-        guard !defaults.bool(forKey: unifusionSeededKey) else { return }
-        for org in availableUniFusionOrgs where !servers.contains(where: { $0.orgId == org.orgId }) {
-            let cfg = ServerConfig(id: UUID().uuidString,
-                                   name: org.orgName,
-                                   base: org.suggestedBase,
-                                   token: "",
-                                   machineCode: nil,
-                                   viaRelay: false,
-                                   orgId: org.orgId,
-                                   orgName: org.orgName)
-            servers.append(cfg)
-        }
-        defaults.set(true, forKey: unifusionSeededKey)
-        persist()
-    }
+    // MARK: - 独立部署（组织目录后端联动）
 
-    // MARK: - UniFusion 组织目录后端联动
-
-    /// 从活动 base 拉取组织目录（GET /v1/orgs）并按 orgId 同步机器条目：
-    /// - 后端为权威：已存在条目 → 更新 orgName/base/viaRelay（保留用户已填 token）；
-    ///   新组织 → 自动新增条目。
-    /// - 拉取失败 / 404 / 空 → 不动现有条目，不崩（云道暂无端点时优雅回退）。
-    /// - 不删除后端不再返回的条目（保守，避免误删；后续按需再加清理策略）。
+    /// 从活动 base 拉取组织目录（GET /v1/orgs）并按 orgId 同步机器条目（后端权威）：
+    /// - 成功且返回非空：已存在条目 → 更新 orgName/base/viaRelay（保留用户已填 token）；
+    ///   新组织 → 自动新增；后端不再返回的组织条目 → 删除（用户被移出组织/换账号时条目消失）。
+    ///   manual-* 手动条目不受后端清理影响。
+    /// - 拉取失败 / 404 / 空列表 → 保留全部现有条目，不崩（云道暂无端点时优雅回退）。
     func refreshUniFusionOrgs() async {
         let entries = await APIClient.shared.getOrgs()
         backendOrgs = entries.map {
             UniFusionOrg(orgId: $0.orgId, orgName: $0.orgName, suggestedBase: $0.base)
         }
+        // 失败/空列表：不动现有条目，不误删用户配置。
+        guard !entries.isEmpty else { return }
+        let liveIDs = Set(entries.map { $0.orgId })
         for e in entries {
             if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {
                 servers[idx].orgName = e.orgName
@@ -221,6 +203,11 @@ final class SettingsStore: ObservableObject {
                                             machineCode: nil, viaRelay: e.viaRelay ?? false,
                                             orgId: e.orgId, orgName: e.orgName))
             }
+        }
+        // 后端权威清理：删除后端不再返回的组织条目（保留 manual-* 手动条目）。
+        servers.removeAll { srv in
+            guard let oid = srv.orgId else { return false }
+            return !oid.hasPrefix("manual-") && !liveIDs.contains(oid)
         }
         persist()
     }

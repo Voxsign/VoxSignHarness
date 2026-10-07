@@ -116,4 +116,23 @@ final class SettingsStoreOrgTests: XCTestCase {
         XCTAssertTrue(store.unifusionServers.contains(where: { $0.orgId == "unifusion" }),
                       "拉取空/失败不应删除已有条目")
     }
+
+    /// 后端成功返回但缺一组织 → 该组织条目被清除（换账号/被移出组织时隔离）；
+    /// manual-* 手动条目不受后端清理影响。
+    func testBackendRemovesMissingOrgKeepsManual() async {
+        let store = makeStore()
+        let api = APIClient.shared
+        api.settings = store
+        seedEntry(store, orgId: "acme", base: "https://acme", token: "t")
+        seedEntry(store, orgId: "oldorg", base: "https://old", token: "t")
+        seedEntry(store, orgId: "manual-x", base: "http://x", token: "t")
+
+        api.orgsMock = [OrgEntry(orgId: "acme", orgName: "Acme", base: "https://acme", viaRelay: false)]
+        await store.refreshUniFusionOrgs()
+
+        let ids = Set(store.unifusionServers.compactMap { $0.orgId })
+        XCTAssertTrue(ids.contains("acme"), "后端仍有的条目保留")
+        XCTAssertFalse(ids.contains("oldorg"), "后端不再返回的组织条目应被清除")
+        XCTAssertTrue(ids.contains("manual-x"), "manual-* 手动条目不应被后端清理")
+    }
 }
