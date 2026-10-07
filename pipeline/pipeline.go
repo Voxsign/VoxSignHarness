@@ -3264,6 +3264,7 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 		"- 如果一句话里有多个任务，就说'好的，我先做A，再做B，再做C'\n" +
 		"- 如果用户说'继续推进''接着干''继续'，就是接着上次的任务继续做\n" +
 		"- 如果没有具体目标，就根据最近对话推测目标\n" +
+		"- 如果你从用户话里学到了新实体（人/项目/公司），在回复最后加一行：LEARN_ENTITY: canonical=名字, desc=描述\n" +
 		"口语化，一句话。绝对不要说'没理解''再说一遍''你是想让我做什么'。"
 	userMsg := "用户说：" + text + "\n\n记住的用户信息：\n" + strings.Join(baselineCtx, "\n")
 	// 直连网关，绕过 provider 层 temperature/response_format 兼容问题
@@ -3296,6 +3297,30 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 		return ""
 	}
 	out := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// 解析LEARN_ENTITY行——LLM从用户话里学到的新实体
+	if idx := strings.Index(out, "LEARN_ENTITY:"); idx >= 0 {
+		line := out[idx+len("LEARN_ENTITY:"):]
+		if nl := strings.Index(line, "\n"); nl > 0 {
+			line = line[:nl]
+		}
+		line = strings.TrimSpace(line)
+		// 解析 canonical=..., desc=...
+		var canonical, desc string
+		for _, part := range strings.Split(line, ",") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "canonical=") {
+				canonical = strings.TrimPrefix(part, "canonical=")
+			} else if strings.HasPrefix(part, "desc=") {
+				desc = strings.TrimPrefix(part, "desc=")
+			}
+		}
+		if canonical != "" && o.Zhiji != nil {
+			o.Zhiji.LearnEntity(canonical, desc, nil)
+			log.Printf("[llmNaturalReply] learned entity: %s = %s", canonical, desc)
+		}
+		// 从输出里删掉LEARN_ENTITY行，用户看不到
+		out = strings.TrimSpace(out[:idx])
+	}
 	log.Printf("[llmNaturalReply] reply=%q", out)
 	return out
 }
