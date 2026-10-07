@@ -99,9 +99,13 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestLoadAPIKeyEnvOverrides  2026-10-08 (distillation R2): explicit per-provider api_key
+// now takes precedence over the VHS_API_KEY / AIOPS_KEY blanket env override — otherwise a
+// single env key would clobber the distinct keys of every provider (local Strata vs cloud
+// qwen gateway). The env var only fills providers that carry no explicit key.
 func TestLoadAPIKeyEnvOverrides(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "harness.json")
-	if err := os.WriteFile(p, []byte(`{"providers":[{"name":"a","kind":"openai","endpoint":"https://x","model":"m","api_key":"filekey"},{"name":"mock","kind":"mock"}],"routes":[{"name":"default","provider":"a","default":true}]}`), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(`{"providers":[{"name":"a","kind":"openai","endpoint":"https://x","model":"m","api_key":"filekey"},{"name":"b","kind":"openai","endpoint":"https://y","model":"m2"},{"name":"mock","kind":"mock"}],"routes":[{"name":"default","provider":"a","default":true}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("VHS_CONFIG", p)
@@ -111,8 +115,12 @@ func TestLoadAPIKeyEnvOverrides(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	a, _ := c.ProviderByName("a")
-	if a.APIKey != "envkey" {
-		t.Fatalf("VHS_API_KEY 应覆盖文件 key: %q", a.APIKey)
+	if a.APIKey != "filekey" {
+		t.Fatalf("显式 per-provider key 应优先于 VHS_API_KEY: %q", a.APIKey)
+	}
+	b, _ := c.ProviderByName("b")
+	if b.APIKey != "envkey" {
+		t.Fatalf("无显式 key 的 provider 应由 VHS_API_KEY 兜底: %q", b.APIKey)
 	}
 }
 
