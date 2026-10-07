@@ -313,6 +313,27 @@ func (h *HarnessHooks) RecentDialogue(n int) string {
 	return out
 }
 
+// RecentSTM 返回最近 N 条 self_model 记忆（用户偏好/事实）。
+func (h *HarnessHooks) RecentSTM(n int) string {
+	if h == nil || h.z == nil || h.z.Store == nil {
+		return ""
+	}
+	selfs := h.z.Store.SelfModel("")
+	if len(selfs) == 0 {
+		return ""
+	}
+	out := ""
+	count := 0
+	for i := len(selfs) - 1; i >= 0 && count < n; i-- {
+		s := selfs[i]
+		if s.Status == StatusActive {
+			out += "  - " + truncateStr(s.Text, 80) + "\n"
+			count++
+		}
+	}
+	return out
+}
+
 func truncateStr(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
