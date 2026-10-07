@@ -122,7 +122,7 @@ func buildRequestBody(c *openaiClient, req ChatRequest) ([]byte, error) {
 	}
 	// gpt-6-luna etcnew type connectaccept temperature=0(only allowdefaultvalue 1,    400); 
 	//   ityby max_completion_tokens + response_format keep , thus class type send temperature. 
-	if c.params["use_max_completion_tokens"] != true {
+	if c.params["use_max_completion_tokens"] != true && c.params["no_temperature"] != true {
 		body["temperature"] = 0 // harness needrequire  ity out
 	}
 	if req.MaxTokens > 0 {

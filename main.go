@@ -30,6 +30,7 @@ import (
 	"voicesign-harness/tools"
 	"voicesign-harness/trajectory"
 	"voicesign-harness/verify"
+	"voicesign-harness/zhiji"
 )
 
 const version = "0.2.0"
@@ -135,6 +136,14 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 	selfheal.PrepareDiagKey(cfg)
 	if reg, err := provider.NewRegistry(cfg); err == nil {
 		opts.Providers = reg
+	}
+	// zhiji: 接 STM/LTM/SelfModel/Reflect 记忆系统。数据目录 LogDir/zhiji。
+	// 失败时降级为 nil hooks（pipeline 全部 no-op），不影响主流程。
+	zhijiDir := filepath.Join(cfg.Global.LogDir, "zhiji")
+	if zh, err := zhiji.NewZhiji(zhijiDir, nil); err == nil {
+		opts.Zhiji = zhiji.NewHarnessHooks(zh)
+	} else {
+		log.Printf("[main] zhiji init failed (degraded to no-op): %v", err)
 	}
 	return opts
 }

@@ -271,8 +271,9 @@ func (r *Reflector) verifySelf(s SelfItem) bool {
 func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, error) {
 	//  ize:  rev   byon (   ) write STM timesame     ; 
 	// default nowfrom STM   importance    event as  ize  . 
-	top := s.Search("", 5, time.Now())
+	top := s.Search("", 10, time.Now())
 	var mems []MemoryItem
+	var selfs []SelfItem
 	for _, it := range top {
 		if it.Importance >= DeepReflectMinImp && it.Layer == LayerBehavior {
 			mems = append(mems, MemoryItem{
@@ -283,8 +284,76 @@ func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, er
 				Source:     "reflect:stm",
 			})
 		}
+		// identity extraction: "我叫X" -> SelfItem{layer=goal}
+		if name := extractIdentityName(it.Text); name != "" {
+			selfs = append(selfs, SelfItem{
+				Layer:       LayerGoal,
+				Text:        "用户姓名：" + name,
+				SourceTrajectory: "reflect:identity",
+				Confidence:  0.9,
+				Status:      StatusActive,
+			})
+		}
 	}
-	return mems, nil, nil
+	return mems, selfs, nil
+}
+
+// extractIdentityName 从用户自我介绍里抽姓名（"我叫<USER_NAME>"等）。
+func extractIdentityName(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	for _, p := range []string{"我叫", "名字叫", "我是", "，叫", ",叫", "我姓"} {
+		pr := []rune(p)
+		idx := indexRuneSeq(runes, pr)
+		if idx < 0 {
+			continue
+		}
+		rest := runes[idx+len(pr):]
+		var name []rune
+		for i, ch := range rest {
+			if i >= 5 {
+				break
+			}
+			if ch == '，' || ch == ',' || ch == '。' || ch == '.' || ch == ' ' || ch == '、' || ch == '的' || ch == '？' || ch == '?' || ch == '做' || ch == '是' {
+				break
+			}
+			if ch >= '0' && ch <= '9' {
+				break
+			}
+			if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+				break
+			}
+			name = append(name, ch)
+		}
+		// 排除疑问词误抽："什么"、"谁"、"咋"、"怎"
+		ns := string(name)
+		if ns == "什么" || ns == "谁" || strings.HasPrefix(ns, "什么") || strings.HasPrefix(ns, "怎") {
+			continue
+		}
+		if len(name) >= 2 && len(name) <= 4 {
+			return string(name)
+		}
+	}
+	return ""
+}
+
+func indexRuneSeq(haystack, needle []rune) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j, n := range needle {
+			if haystack[i+j] != n {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 // contentHash FNV-1a in   (writebefore   heavyuse,    restrict). 
