@@ -49,6 +49,10 @@ struct SettingsView: View {
     @State private var mcRelay = false
     @State private var mcError = ""
 
+    // UniFusion 组织部署条目 添加/编辑弹层
+    @State private var showUniFusionAdd = false
+    @State private var unifusionEditID: String?
+
     private enum AddStep { case method, ip, machine }
 
     /// 机器码粘贴净化：从粘贴文本中提取 XXXX-XXXX-XXXX 形态的机器码（忽略大小写，统一大写），丢弃其余文字。
@@ -141,6 +145,17 @@ struct SettingsView: View {
                 Button("完成") { dismiss() }
             }
             .sheet(isPresented: $showAdd) { addServerSheet }
+            .sheet(isPresented: $showUniFusionAdd) {
+                UniFusionEditView(mode: .add)
+                    .environmentObject(settings)
+            }
+            .sheet(item: Binding(
+                get: { unifusionEditID.map { UniFusionIdentifiableID(id: $0) } },
+                set: { unifusionEditID = $0?.id }
+            )) { item in
+                UniFusionEditView(mode: .edit(item.id))
+                    .environmentObject(settings)
+            }
             .alert("Google 登录失败", isPresented: $showGoogleAlert) {
                 Button("好", role: .cancel) {}
             } message: {
@@ -209,8 +224,9 @@ struct SettingsView: View {
 
     private var selfHostedSection: some View {
         Group {
+            // —— 普通自建机器（不含 UniFusion 组织条目）——
             Section("服务器（自建）") {
-                if settings.servers.isEmpty {
+                if settings.selfHostedServers.isEmpty {
                     VStack(spacing: 6) {
                         Text("还没有自建服务器")
                             .font(.system(size: 14, weight: .medium))
@@ -221,7 +237,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 6)
                 } else {
-                    ForEach(settings.servers) { srv in
+                    ForEach(settings.selfHostedServers) { srv in
                         ServerRowView(srv: srv, settings: settings, conn: conn)
                     }
                 }
@@ -230,9 +246,44 @@ struct SettingsView: View {
                 } label: {
                     Label("添加服务器", systemImage: "plus.circle")
                 }
+                .accessibilityIdentifier("vhs.selfhost.add")
             }
 
-            if let active = settings.servers.first(where: { $0.id == settings.activeServerID }) {
+            // —— UniFusion 独立部署（按用户组织归属，一台组织一台）——
+            Section {
+                if settings.unifusionServers.isEmpty {
+                    VStack(spacing: 6) {
+                        Text("尚未配置企业部署")
+                            .font(.system(size: 14, weight: .medium))
+                            .padding(.top, 6)
+                        Text("添加你所属组织的私有化部署地址")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 6)
+                } else {
+                    ForEach(settings.unifusionServers) { srv in
+                        UniFusionRowView(srv: srv, settings: settings) {
+                            unifusionEditID = srv.id
+                        }
+                    }
+                }
+                if !settings.availableOrgsToAdd.isEmpty {
+                    Button {
+                        showUniFusionAdd = true
+                    } label: {
+                        Label("添加企业部署地址", systemImage: "building.2")
+                    }
+                    .accessibilityIdentifier("vhs.unifusion.add")
+                }
+            } header: {
+                Text("UniFusion 独立部署")
+            } footer: {
+                Text("企业私有化部署入口 · 按你所属组织提供。")
+            }
+
+            // 当前活动自建服务器的快捷编辑（仅普通自建机器；组织条目走 UniFusionEditView）。
+            if let active = settings.selfHostedServers.first(where: { $0.id == settings.activeServerID }) {
                 Section("当前：\(active.name)") {
                     TextField("名称", text: Binding(
                         get: { active.name },
@@ -662,4 +713,63 @@ private struct ServerRowView: View {
             .foregroundColor(color)
             .cornerRadius(4)
     }
+}
+
+
+// MARK: - UniFusion 组织部署行（设置页）
+
+/// 一个组织一台的 UniFusion 条目：显示组织名/地址 + 「当前」标记 + 编辑入口。
+struct UniFusionRowView: View {
+    let srv: ServerConfig
+    @ObservedObject var settings: SettingsStore
+    /// 点「编辑」回调（由父视图弹 UniFusionEditView）。
+    let onEdit: () -> Void
+
+    var body: some View {
+        HStack {
+            Image(systemName: "building.2")
+                .foregroundColor(.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(srv.name).font(.system(size: 14, weight: .medium))
+                Text(srv.base).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
+                HStack(spacing: 4) {
+                    chip(srv.orgName ?? "组织", .purple)
+                    chip(srv.usesRelay ? "云道转发" : "直连", srv.usesRelay ? .blue : .green)
+                }
+            }
+            Spacer()
+            if srv.id == settings.activeServerID {
+                Text("当前").font(.system(size: 11)).foregroundColor(.green)
+            }
+            Button {
+                onEdit()
+            } label: {
+                Label("编辑", systemImage: "pencil")
+            }
+            .accessibilityIdentifier("vhs.unifusion.edit.\(srv.orgId ?? srv.id)")
+        }
+        .swipeActions {
+            Button(role: .destructive) {
+                settings.removeServer(srv.id)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+            .accessibilityIdentifier("vhs.unifusion.delete.\(srv.orgId ?? srv.id)")
+        }
+        .accessibilityIdentifier("vhs.unifusion.row.\(srv.orgId ?? srv.id)")
+    }
+
+    private func chip(_ text: String, _ color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 5).padding(.vertical, 1.5)
+            .background(color.opacity(0.12))
+            .foregroundColor(color)
+            .cornerRadius(4)
+    }
+}
+
+/// 包裹 String 以适配 sheet(item:) 的 Identifiable。
+private struct UniFusionIdentifiableID: Identifiable {
+    let id: String
 }

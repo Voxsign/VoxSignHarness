@@ -46,14 +46,17 @@ final class DeliveryQueueTests: XCTestCase {
     }
 
     func testFlushSuccessRemovesAll() async {
-        var submitted: [String] = []
-        queue.submitter = { item in submitted.append(item.text) }
-        queue.enqueue(PendingSubmission(text: "a", mode: "text"))
+        var submitted: [(text: String, mode: String)] = []
+        queue.submitter = { item in submitted.append((item.text, item.mode)) }
+        queue.enqueue(PendingSubmission(text: "a", mode: "voice"))
         queue.enqueue(PendingSubmission(text: "b", mode: "voice"))
 
         let n = await queue.flush()
         XCTAssertEqual(n, 2)
-        XCTAssertEqual(submitted, ["a", "b"])
+        XCTAssertEqual(submitted.map(\.text), ["a", "b"])
+        // v1 契约：离线补投与在线同一 submitTask 链路，通道记录 mode=voice
+        // （wire body 由 submitTask 下发 mode="voice"，服务端自动放行确认闸）。
+        XCTAssertEqual(submitted.map(\.mode), ["voice", "voice"])
         XCTAssertTrue(queue.isEmpty)
     }
 

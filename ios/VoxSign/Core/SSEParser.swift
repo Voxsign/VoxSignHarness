@@ -15,7 +15,7 @@ enum SSEEvent: Equatable {
     case stage(seq: Int, role: String?, phase: String?, step: String?)
     case ask(seq: Int, question: String, options: [TaskOption])
     case confirm(seq: Int, question: String)
-    case done(seq: Int, receipt: String?, attribution: String?, reversible: Bool?, role: String?)
+    case done(seq: Int, receipt: String?, attribution: String?, reversible: Bool?, role: String?, reply: String?)
     case failed(seq: Int, error: String?)
     case interrupt(seq: Int, applied: [String], notApplied: [String], canRollback: Bool)
     case canceled(seq: Int)
@@ -25,7 +25,7 @@ enum SSEEvent: Equatable {
     var seq: Int? {
         switch self {
         case .stage(let s, _, _, _), .ask(let s, _, _), .confirm(let s, _),
-             .done(let s, _, _, _, _), .failed(let s, _), .interrupt(let s, _, _, _),
+             .done(let s, _, _, _, _, _), .failed(let s, _), .interrupt(let s, _, _, _),
              .canceled(let s):
             return s
         case .unknown(_, let s):
@@ -79,7 +79,8 @@ enum SSEDecoder {
                          receipt: dict["receipt"] as? String,
                          attribution: dict["attribution"] as? String,
                          reversible: dict["reversible"] as? Bool,
-                         role: dict["role"] as? String)
+                         role: dict["role"] as? String,
+                         reply: VSLogic.normalizeReply(dict["reply"]))
         case "failed":
             return .failed(seq: seq, error: dict["error"] as? String)
         case "interrupt":

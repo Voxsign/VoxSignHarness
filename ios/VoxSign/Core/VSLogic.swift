@@ -43,6 +43,32 @@ enum VSLogic {
         return "req-" + UUID().uuidString.lowercased()
     }
 
+    // MARK: - D0 契约：outcome.reply 规范化（Phase 1）
+    //
+    /**
+     * 【伪代码逻辑层】（必写：reply 是服务端下发的"回答正文"，客户端唯一可信来源）
+     *   wire 形态 Phase1 = 纯文本字符串：  "reply": "今天天气晴"
+     *   防御性兼容对象形态：              "reply": {"text": "今天天气晴"}
+     *   规则：
+     *     - 字符串：非空即直取；
+     *     - 字典：取 ["text"] 字符串；
+     *     - 其余 / 空串 → nil（上层按"无回答"诚实渲染，禁止伪造完成）。
+     *   注意：本函数不做任何"补全/润色/造文案"——服务端没给回答就是没给。
+     */
+    static func normalizeReply(_ any: Any?) -> String? {
+        if let s = any as? String {
+            // 纯空白按"无回答"处理（trim 后判空；非空则原样返回，不改写正文）。
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : s
+        }
+        if let dict = any as? [String: Any],
+           let s = dict["text"] as? String {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : s
+        }
+        return nil
+    }
+
     // MARK: - 回执四行解析（contract.RenderReceipt 的反向解析）
     //
     /// server 渲染恰好四行：动作/文件/结果/撤销。

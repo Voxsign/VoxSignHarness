@@ -53,6 +53,8 @@ final class DeliveryQueue {
     private let queueURL = "DeliveryQueue.jsonl"
 
     init() {
+        // v1 契约对齐：补投复用 APIClient.submitTask——其 body 已下发 mode="voice"
+        // （服务端 voice=确认闸自动放行）；item.mode 仅作持久化通道元数据，不另发 text。
         submitter = { [weak self] item in
             _ = try await APIClient.shared.submitTask(text: item.text, requestId: item.requestId)
         }

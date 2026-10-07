@@ -8,16 +8,25 @@
 //    条目记录绑定方式与连接方式（直连 / 云端转发）。
 //  下游（APIClient/SSEClient）继续用 base/token 计算属性，无需改动。
 //
+//  UniFusion（v3.x）：企业私有化部署按「用户组织归属」呈现——
+//  每属于一个组织，机器列表就多一台该组织的 UniFusion 机器（机器名=组织名，
+//  如「UniFusion · BSC」），条目自带 base/token/直连或云道转发。
+//  实现上与自建机器共用 ServerConfig，仅以 orgId/orgName 标记区分，
+//  add/switch/remove/连通探测全部复用既有 servers 机制，base/token 零改动。
+//
+//  TODO(org-source): 组织归属数据源（后端 orgs 接口 / 认证返回）尚未确认。
+//  当前 availableUniFusionOrgs 为占位目录（BSC / PeterZou 两个示例组织），
+//  首次启动播种为可编辑/删除的机器条目；待数据源确认后替换该方法即可。
 
 import Foundation
 
-/// 连接模式：云道（默认）/ 自建。
+/// 连接模式：云道（默认）/ 自建（含 UniFusion 组织条目——二者都走 activeServer 取 base/token）。
 enum ConnectionMode: String, Codable, CaseIterable {
     case cloud        // 云道 · 默认：Google 登录即用，零配置
-    case selfHosted   // 自建：自己添加服务器
+    case selfHosted   // 自建 + UniFusion 组织条目：自己/组织添加服务器
 }
 
-/// 一台可连接的 Harness 服务器（自建）。
+/// 一台可连接的 Harness 服务器（自建机器 / UniFusion 组织条目共用）。
 struct ServerConfig: Identifiable, Codable, Equatable {
     var id: String
     var name: String
@@ -27,9 +36,25 @@ struct ServerConfig: Identifiable, Codable, Equatable {
     var machineCode: String?
     /// 云端转发（内网服务器经云道中转；nil = 直连）。
     var viaRelay: Bool?
+    /// UniFusion 组织条目标记：非 nil = 该条目是某组织的私有化部署入口；
+    /// nil = 普通自建机器。老版本数据无这两个字段 → 解码为 nil（向后兼容，老用户零影响）。
+    var orgId: String?
+    var orgName: String?
 
     var isMachineBound: Bool { machineCode != nil }
     var usesRelay: Bool { viaRelay ?? false }
+    /// 是否为 UniFusion 组织条目（机器列表据此分区渲染）。
+    var isUniFusion: Bool { orgId != nil }
+}
+
+/// 一个用户所属组织的 UniFusion 部署目录项（占位数据源）。
+/// 机器切换面板按组织归属渲染：属于几个组织就出现几台 UniFusion 机器。
+struct UniFusionOrg: Identifiable, Equatable {
+    let orgId: String
+    let orgName: String
+    /// 该组织私有化部署前端的默认地址（添加时预填，用户可改）。
+    let suggestedBase: String
+    var id: String { orgId }
 }
 
 /// Google 登录态（云道模式：租户 = Google sub）。
@@ -55,6 +80,8 @@ final class SettingsStore: ObservableObject {
     private let serversKey = "vhs-ios-servers"
     private let activeKey = "vhs-ios-active"
     private let modeKey = "vhs-ios-mode"
+    /// 首次播种 UniFusion 示例组织的标记（只播一次，用户删除后不再复活）。
+    private let unifusionSeededKey = "vhs-ios-unifusion-seeded"
 
     /// 连接模式（云道默认 / 自建），持久化。
     @Published var mode: ConnectionMode = .cloud
@@ -68,6 +95,40 @@ final class SettingsStore: ObservableObject {
 
     /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
     var cloudBase: String { "https://voxsign.ai" }
+
+    // MARK: - UniFusion 组织目录（占位数据源，待后端确认）
+
+    /// 用户所属组织的 UniFusion 部署目录。
+    /// TODO(org-source): 当前硬编码 2 个示例组织，仅供真机走通「添加→切换→探测→报错」全流程；
+    /// 待后端/认证返回真实 orgs 列表后，把此计算属性替换为真实数据源即可（UI 无需改动）。
+    var availableUniFusionOrgs: [UniFusionOrg] {
+        [
+            UniFusionOrg(orgId: "bsc", orgName: "BSC",
+                         suggestedBase: "https://unifusion-bsc.com"),
+            UniFusionOrg(orgId: "peterzou", orgName: "PeterZou",
+                         suggestedBase: "https://unifusion.peterzou.com"),
+        ]
+    }
+
+    /// 已是机器条目的组织 id（避免「添加组织」重复添加同一组织）。
+    var existingUniFusionOrgIDs: Set<String> {
+        Set(servers.compactMap { $0.orgId })
+    }
+
+    /// 尚未添加的可选组织目录项（「添加组织部署」下拉用）。
+    var availableOrgsToAdd: [UniFusionOrg] {
+        availableUniFusionOrgs.filter { !existingUniFusionOrgIDs.contains($0.orgId) }
+    }
+
+    /// 当前 UniFusion 组织机器条目（机器切换面板「UniFusion」分区渲染用）。
+    var unifusionServers: [ServerConfig] {
+        servers.filter { $0.isUniFusion }
+    }
+
+    /// 普通自建机器条目（不含 UniFusion 组织条目）。
+    var selfHostedServers: [ServerConfig] {
+        servers.filter { !$0.isUniFusion }
+    }
 
     /// 当前活动服务器（自建模式；云道 / 无选中 → nil）。
     var activeServerConfig: ServerConfig? { activeServer() }
@@ -101,7 +162,28 @@ final class SettingsStore: ObservableObject {
         if let saved, servers.contains(where: { $0.id == saved }) {
             activeServerID = saved
         }
+        seedExampleUniFusionOrgsOnce()
         loadAuth()
+    }
+
+    /// 首次启动播种示例组织条目（仅一次）：把占位目录里的组织落成可编辑/删除的机器条目，
+    /// 让「添加→切换→探测→报错」全流程在真机可验收。不切换模式、不改 activeServerID。
+    /// TODO(org-source): 待真实组织数据源就绪后，改为按后端返回增量补条目、缺组织不硬删用户配置。
+    private func seedExampleUniFusionOrgsOnce() {
+        guard !defaults.bool(forKey: unifusionSeededKey) else { return }
+        for org in availableUniFusionOrgs where !servers.contains(where: { $0.orgId == org.orgId }) {
+            let cfg = ServerConfig(id: UUID().uuidString,
+                                   name: "UniFusion · \(org.orgName)",
+                                   base: org.suggestedBase,
+                                   token: "",
+                                   machineCode: nil,
+                                   viaRelay: false,
+                                   orgId: org.orgId,
+                                   orgName: org.orgName)
+            servers.append(cfg)
+        }
+        defaults.set(true, forKey: unifusionSeededKey)
+        persist()
     }
 
     // MARK: - 模式
@@ -117,12 +199,27 @@ final class SettingsStore: ObservableObject {
     // MARK: - 自建服务器管理
 
     func addServer(name: String, base: String, token: String,
-                   machineCode: String? = nil, viaRelay: Bool = false) {
+                   machineCode: String? = nil, viaRelay: Bool = false,
+                   orgId: String? = nil, orgName: String? = nil) {
         let cfg = ServerConfig(id: UUID().uuidString, name: name, base: base, token: token,
-                               machineCode: machineCode, viaRelay: viaRelay)
+                               machineCode: machineCode, viaRelay: viaRelay,
+                               orgId: orgId, orgName: orgName)
         servers.append(cfg)
         activeServerID = cfg.id   // 新加的即切换过去（豆包式：添加即连接）
+        mode = .selfHosted        // UniFusion 条目也走自建通道取 base/token
         persist()
+        ConnectivityService.shared.reset()
+    }
+
+    /// 更新某个 UniFusion 组织条目的地址/token/转发方式（设置页编辑表单保存用）。
+    func updateUniFusion(id: String, name: String, base: String, token: String, viaRelay: Bool) {
+        guard let idx = servers.firstIndex(where: { $0.id == id }) else { return }
+        servers[idx].name = name
+        servers[idx].base = base
+        servers[idx].token = token
+        servers[idx].viaRelay = viaRelay
+        persist()
+        ConnectivityService.shared.reset()
     }
 
     func switchServer(_ id: String) {

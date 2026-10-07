@@ -18,6 +18,10 @@ struct TaskView: Equatable {
     var attribution: String?
     var reversible: Bool?
     var error: String?
+    /// D0 冻结契约（Phase 1）：outcome.reply = 服务端给用户的「回答正文」。
+    /// 已在网络层规范化为纯文本（字符串直取 / 对象取 .text）；缺失为 nil。
+    /// done 时作为回答内容的**首选渲染源**（替代正则拆『结果：』），receipt 仅作回退。
+    var reply: String?
 
     /// 容错构造：把任意字典合成为视图（测试与 SSE done 事件复用）。
     init(taskId: String? = nil,
@@ -27,7 +31,8 @@ struct TaskView: Equatable {
          receipt: String? = nil,
          attribution: String? = nil,
          reversible: Bool? = nil,
-         error: String? = nil) {
+         error: String? = nil,
+         reply: String? = nil) {
         self.taskId = taskId
         self.status = status
         self.question = question
@@ -36,6 +41,7 @@ struct TaskView: Equatable {
         self.attribution = attribution
         self.reversible = reversible
         self.error = error
+        self.reply = reply
     }
 }
 

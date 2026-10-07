@@ -47,6 +47,8 @@ final class SSEClient {
             let url = after > 0 ? SSEParser.reconnectURL(base: baseURL, after: after) : baseURL
             var req = URLRequest(url: url)
             req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            // D0 贯穿 trace：SSE 流同样携带 X-Request-Id（每次连接一个新 UUID）。
+            req.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
             if !self.settings.token.isEmpty {
                 req.setValue("Bearer \(self.settings.token)", forHTTPHeaderField: "Authorization")
             }

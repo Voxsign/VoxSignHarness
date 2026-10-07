@@ -312,7 +312,9 @@ final class AppModel: ObservableObject {
                 // T2 连接感知：提交前探测——不在线不傻等 15s 超时，直接进离线队列。
                 guard await ConnectivityService.shared.isReachable() else {
                     removeTyping()
-                    if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "text")) {
+                    // v1 契约对齐：离线补投与在线同一 submitTask 链路（已下发 mode="voice"），
+                    // 队列记录的通道元数据同步记 voice，不再记 text（服务端 voice=确认闸自动放行）。
+                    if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "voice")) {
                         DiagLogger.shared.log("QUEUE", "离线直接入队 reqId=\(reqId) 队列=\(DeliveryQueue.shared.count)条")
                         appendHarness("当前不在线（\(ConnectivityService.shared.lastError)），指令已进入离线队列（\(DeliveryQueue.shared.count) 条待投递），联网后自动补投。",
                                       view: TaskView(status: "canceled"))
@@ -331,6 +333,11 @@ final class AppModel: ObservableObject {
                 decision = nil
                 execCardRowId = nil
                 currentTaskId = res.taskId
+                // D0：seq 作用域 = per-task_id 从 0 计数。新任务开始前必须重置 lastSeq，
+                //     否则上一任务的 lastSeq 会作为 ?after= 传给本任务 → 服务端只重放 seq>old，
+                //     本任务从 seq=1 起的早期事件被全部跳过（执行卡/回执漏渲染）。
+                //     answer() 续跑同一任务时不走到这里，保留累计 lastSeq 供断线重连。
+                lastSeq = 0
                 currentView = TaskView(taskId: res.taskId, status: res.status)
                 ensureExecCard()
                 DiagLogger.shared.log("SUBMIT", "新任务 task=\(res.taskId) status=\(res.status ?? "-") reqId=\(reqId)")
@@ -341,7 +348,8 @@ final class AppModel: ObservableObject {
                 // T1 后台能力：提交失败（断网/服务不可达/后台挂起）→ 入投递队列，
                 // 网络恢复后按 request_id 幂等补投；不丢语音输入。
                 removeTyping()
-                if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "text")) {
+                // v1 契约对齐：补投走同一 submitTask 链路（mode="voice"），记录通道元数据同步记 voice。
+                if DeliveryQueue.shared.enqueue(PendingSubmission(requestId: reqId, text: text, mode: "voice")) {
                     DiagLogger.shared.log("QUEUE", "提交失败已入队 reqId=\(reqId) 队列=\(DeliveryQueue.shared.count)条 err=\(error.localizedDescription)")
                     appendHarness("网络暂不可达，已进入离线队列（\(DeliveryQueue.shared.count) 条待投递），恢复后自动补投。",
                                   view: TaskView(status: "canceled"))
@@ -449,7 +457,7 @@ final class AppModel: ObservableObject {
             }
             DiagLogger.shared.log("ROUTE", "decision.kind=\(String(describing: decision?.kind)) options=\(decision?.options.count ?? 0)")
         case "done":
-            DiagLogger.shared.log("ROUTE", "done → 回执")
+            DiagLogger.shared.log("ROUTE", "done → 回执 reply=\(view.reply == nil ? "无" : "有")")
             stopPolling()
             sseTask?.cancel()
             // UI v3：任务完成 → 顶栏状态点回 idle（灰）。
@@ -457,12 +465,9 @@ final class AppModel: ObservableObject {
             syncRole(VSLogic.roleForStatus(view.status))
             closeExecCard()
             decision = nil
-            renderReceipt(view)
-            // 兜底：QUERY 等无四行 receipt 的任务，receipt 卡可能为空 → 补一条可见完成气泡，杜绝"done 了但界面无反应"。
-            if view.receipt == nil || view.receipt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                let text = view.question?.isEmpty == false ? "完成：\(view.question!)" : "完成（server 已返回 done）"
-                appendHarness(text, view: view, spoken: true)
-            }
+            // D0：done 渲染统一走 renderDone（reply 优先 / receipt 回退 / 都空则诚实文案），
+            //     不再本地伪造"完成（server 已返回 done）"。
+            renderDone(view)
         case "canceled", "interrupted":
             DiagLogger.shared.log("ROUTE", "\(view.status) → 错误条")
             stopPolling()
@@ -559,15 +564,15 @@ final class AppModel: ObservableObject {
             NotificationService.shared.routeEvent("need_confirm", taskId: taskId, seq: 0,
                                                   payload: ["question": question ?? ""])
 
-        case .done(_, let receipt, let attribution, let reversible, let role):
+        case .done(_, let receipt, let attribution, let reversible, let role, let reply):
             let view = TaskView(taskId: taskId, status: "done",
                                  receipt: receipt, attribution: attribution,
-                                 reversible: reversible)
+                                 reversible: reversible, reply: reply)
             currentView = view
             if let role = role { syncRole(role) }
             closeExecCard()
             decision = nil
-            renderReceipt(view)
+            renderDone(view)
             NotificationService.shared.routeEvent("done", taskId: taskId, seq: 0, payload: [:])
 
         case .failed(_, let error):
@@ -792,19 +797,42 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func renderReceipt(_ view: TaskView) {
+    /// 统一 done 渲染（轮询 route(done) 与 SSE .done 两路共用）。
+    /// D0 冻结契约：
+    ///   1) reply 存在 → 作为"回答内容"上屏，覆盖正则拆出的『结果：』行（唯一可信渲染源）；
+    ///      动作/文件/撤销仍来自 receipt 解析（回退）。
+    ///   2) reply 缺失 → receipt 四行有实质内容则按回执卡渲染。
+    ///   3) reply 与 receipt 都空 → 诚实"无回答"文案，禁止本地伪造"完成"。
+    private func renderDone(_ view: TaskView) {
         let dp = VSLogic.nextDecisionPoint(view)
         guard dp.kind == .receipt else { return }
         var receipt = dp.receipt
         // v2.3（用户需求：微信式"已处理 X 秒"）：记录本轮耗时，气泡上方显示。
         receipt.elapsedSec = Date().timeIntervalSince(lastSubmitAt)
-        rows.append(.receipt(ReceiptRow(receipt: receipt,
-                                        undo: dp.undo,
-                                        badges: VSLogic.compressBadges(view))))
-        scrollTick += 1
-        // T3 豆包式：朗读回复内容（v2.3 去"已完成，动作。"前缀，用户原话：已完成什么东西）。
-        let summary = receipt.result
-        speak(summary)
+        let badges = VSLogic.compressBadges(view)
+
+        // 1) reply 优先：服务端给的回答正文。
+        if let reply = view.reply, !reply.isEmpty {
+            receipt.result = reply
+            rows.append(.receipt(ReceiptRow(receipt: receipt, undo: dp.undo, badges: badges)))
+            scrollTick += 1
+            // T3 豆包式：朗读回答正文。
+            speak(reply)
+            return
+        }
+
+        // 2) 无 reply：receipt 有动作/文件/结果任一实质内容 → 正常回执卡。
+        let hasReceiptContent = !receipt.action.isEmpty || !receipt.files.isEmpty || !receipt.result.isEmpty
+        if hasReceiptContent {
+            rows.append(.receipt(ReceiptRow(receipt: receipt, undo: dp.undo, badges: badges)))
+            scrollTick += 1
+            speak(receipt.result)
+            return
+        }
+
+        // 3) 都空：诚实提示，不伪造完成。
+        DiagLogger.shared.log("DONE", "done 但 reply/receipt 均空 → 诚实文案，不伪造完成")
+        appendHarness("任务已结束，但暂未返回回答，请稍后重试。", view: view, spoken: true)
     }
 
     // MARK: - v2.4 附件（资料）
@@ -944,6 +972,7 @@ final class AppModel: ObservableObject {
         currentTaskId = nil
         currentView = nil
         execCardRowId = nil
+        lastSeq = 0   // seq 按任务隔离；切会话清残留基线
         longTaskTimer?.cancel()
         scrollTick += 1
     }

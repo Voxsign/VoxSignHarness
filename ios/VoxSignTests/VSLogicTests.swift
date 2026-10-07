@@ -141,4 +141,21 @@ final class VSLogicTests: XCTestCase {
         // 换行压成空格
         XCTAssertEqual(VSLogic.autoTitle(from: "第一行\n第二行第三行第四行第五行"), "第一行 第二行第三行第四…")
     }
+
+    // MARK: - 10. D0 reply 规范化（normalizeReply）
+
+    func testNormalizeReply() {
+        // 纯文本字符串：非空直取
+        XCTAssertEqual(VSLogic.normalizeReply("今天北京晴，12℃"), "今天北京晴，12℃")
+        // 对象形态 {"text": ...}：防御性容错，解出 text
+        XCTAssertEqual(VSLogic.normalizeReply(["text": "已把想法记到 notes.md"] as [String: Any]),
+                       "已把想法记到 notes.md")
+        // 空串 / 纯空白 → nil（上层走 receipt 回退或诚实文案，绝不伪造回答）
+        XCTAssertNil(VSLogic.normalizeReply(""))
+        XCTAssertNil(VSLogic.normalizeReply("   "))
+        // nil / 无 text 字段的对象 / 数字等异常形态 → nil，不崩
+        XCTAssertNil(VSLogic.normalizeReply(nil))
+        XCTAssertNil(VSLogic.normalizeReply(["class": "model", "detail": "x"] as [String: Any]))
+        XCTAssertNil(VSLogic.normalizeReply(123))
+    }
 }

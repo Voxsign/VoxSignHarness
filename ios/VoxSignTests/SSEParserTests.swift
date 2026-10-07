@@ -41,7 +41,7 @@ final class SSEParserTests: XCTestCase {
         XCTAssertEqual(p.feed("event: done\ndata: {\"seq\":5,\"receipt\":\"动作：X\"}").count, 0)
         let evts = p.feed("\n\n")
         XCTAssertEqual(evts.count, 1)
-        guard case .done(let seq, let receipt, _, _, _) = evts[0] else { return XCTFail() }
+        guard case .done(let seq, let receipt, _, _, _, _) = evts[0] else { return XCTFail() }
         XCTAssertEqual(seq, 5)
         XCTAssertEqual(receipt, "动作：X")
         XCTAssertTrue(evts[0].isTerminal)
@@ -98,5 +98,45 @@ final class SSEParserTests: XCTestCase {
         let base = URL(string: "http://1.2.3.4:8765/v1/tasks/t1/events")!
         let url = SSEParser.reconnectURL(base: base, after: 7)
         XCTAssertTrue(url.absoluteString.contains("after=7"))
+    }
+
+    /// D0 容错：done 事件带 reply/termination_reason 新字段 + attribution 对象 + 未知扩充字段，
+    /// 仍正确解析、不崩、不影响既有 receipt/reply 提取。
+    func testDoneEventToleratesNewFields() {
+        let p = SSEParser()
+        let evts = p.feed(
+            "event: done\n" +
+            "data: {\"seq\":21,\"receipt\":\"动作：NOTE\\n文件：notes.md\\n结果：OK\"," +
+            "\"attribution\":{\"class\":\"model\",\"detail\":\"x\"},\"reversible\":false," +
+            "\"role\":\"verifier\",\"reply\":\"已把想法记到 notes.md\",\"termination_reason\":\"\"," +
+            "\"extra_entity\":{\"ref\":\"Unifashion\"},\"trace\":\"req-abc\"}\n\n"
+        )
+        XCTAssertEqual(evts.count, 1)
+        guard case .done(let seq, let receipt, _, _, _, let reply) = evts[0] else {
+            return XCTFail("应为 done 事件")
+        }
+        XCTAssertEqual(seq, 21)
+        XCTAssertEqual(reply, "已把想法记到 notes.md")
+        XCTAssertTrue(receipt?.contains("NOTE") ?? false)
+        XCTAssertTrue(evts[0].isTerminal)
+    }
+
+    /// D0 容错：done 事件 reply 为对象形态 {"text":...} → normalizeReply 解出文本。
+    func testDoneEventReplyObjectShape() {
+        let p = SSEParser()
+        let evts = p.feed(
+            "event: done\n" +
+            "data: {\"seq\":22,\"reply\":{\"text\":\"北京明天多云转晴\"},\"receipt\":\"动作：QUERY\"}\n\n"
+        )
+        guard case .done(_, _, _, _, _, let reply) = evts[0] else { return XCTFail() }
+        XCTAssertEqual(reply, "北京明天多云转晴")
+    }
+
+    /// D0 回退：done 事件无 reply → reply=nil（上层走 receipt 回退/诚实文案，不伪造完成）。
+    func testDoneEventReplyMissingFallsBack() {
+        let p = SSEParser()
+        let evts = p.feed("event: done\ndata: {\"seq\":23,\"receipt\":\"动作：NOTE\\n结果：OK\"}\n\n")
+        guard case .done(_, _, _, _, _, let reply) = evts[0] else { return XCTFail() }
+        XCTAssertNil(reply)
     }
 }

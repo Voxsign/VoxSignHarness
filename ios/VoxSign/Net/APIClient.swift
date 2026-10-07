@@ -75,10 +75,13 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // D0 贯穿 trace：每个 HTTP 请求带一个 X-Request-Id（UUID），与服务端日志对齐排障。
+        req.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
         if !settings.token.isEmpty {
             req.setValue("Bearer \(settings.token)", forHTTPHeaderField: "Authorization")
         }
-        DiagLogger.shared.log("NET", "\(method) \(url.absoluteString) token=\(settings.token.isEmpty ? "无" : "有(\(settings.token))")")
+        // A4（验收硬指标）：诊断日志不再输出 Bearer token 明文，只记"有/无"。
+        DiagLogger.shared.log("NET", "\(method) \(url.absoluteString) token=\(settings.token.isEmpty ? "无" : "有")")
         if let body = body {
             req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         }
@@ -102,12 +105,29 @@ final class APIClient {
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
+    /// A4 脱敏：机器码等准敏感标识 → 仅记前后各 2 位，中间打码（短串一律 ***）。
+    private static func masked(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard t.count > 4 else { return "***" }
+        return "\(t.prefix(2))***\(t.suffix(2))"
+    }
+
+    /// 服务端 deduped 实测下发为字符串 "true"（map[string]string，非 JSON bool）；
+    /// 同时兼容布尔形态，避免客户端恒解析为 nil。
+    private static func normalizeDeduped(_ any: Any?) -> Bool? {
+        if let b = any as? Bool { return b }
+        if let s = any as? String { return s == "true" }
+        return nil
+    }
+
     // MARK: - 端点
 
-    /// POST /v1/tasks {text, space?, request_id?, attachments?} → 202 {task_id,status}；同 request_id → 200 deduped。
+    /// POST /v1/tasks {text, mode, space?, request_id?, attachments?} → 202 {task_id,status}；同 request_id → 200 deduped。
+    /// v1 冻结契约（acc-harness 实测）：body 必带 mode="voice"——voice 网关确认闸自动放行；
+    /// 服务端对缺省 mode 同样按 voice 处理，这里显式下发以与契约逐字段对齐。
     /// v2.4：attachments 非空时随 body 提交资料（服务端忽略未知字段）。
     func submitTask(text: String, space: String? = nil, requestId: String, attachments: [Attachment] = []) async throws -> CreateTaskResponse {
-        var body: [String: Any] = ["text": text, "request_id": requestId]
+        var body: [String: Any] = ["text": text, "mode": "voice", "request_id": requestId]
         if let space = space { body["space"] = space }
         if !attachments.isEmpty {
             body["attachments"] = attachments.map { a -> [String: Any] in
@@ -124,7 +144,7 @@ final class APIClient {
         }
         return CreateTaskResponse(taskId: tid,
                                   status: j["status"] as? String,
-                                  deduped: j["deduped"] as? Bool)
+                                  deduped: Self.normalizeDeduped(j["deduped"]))
     }
 
     /// GET /v1/tasks/{id} → 轮询视图。
@@ -148,7 +168,8 @@ final class APIClient {
                         receipt: j["receipt"] as? String,
                         attribution: j["attribution"] as? String,
                         reversible: j["reversible"] as? Bool,
-                        error: j["error"] as? String)
+                        error: j["error"] as? String,
+                        reply: VSLogic.normalizeReply(j["reply"]))
     }
 
     /// POST /v1/tasks/{id}/answer {answer}（候选 id 或 "执行"）。409 = 当前无待回答决策点。
@@ -285,7 +306,7 @@ final class APIClient {
     /// 固定打云道地址（cloudBase），不依赖自建模式当前选中的服务器。
     func lookupMachine(code: String) async throws -> MachineInfo {
         if Self.machineLookupMock {
-            DiagLogger.shared.log("NET", "lookupMachine mock: code=\(code)")
+            DiagLogger.shared.log("NET", "lookupMachine mock: code=\(Self.masked(code))")
             return MachineInfo(name: "办公室 Mac", base: "http://192.168.8.186:8897", online: true, token: "m7-token")
         }
         let clean = settings.cloudBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -295,15 +316,17 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["machine_code": code])
-        DiagLogger.shared.log("NET", "lookupMachine \(url.absoluteString) code=\(code)")
+        DiagLogger.shared.log("NET", "lookupMachine \(url.absoluteString) code=\(Self.masked(code))")
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else {
             throw APIError.transport("无 HTTP 响应")
         }
         let j = decodeJSON(data)
         guard (200...299).contains(http.statusCode), let base = j["base"] as? String else {
-            DiagLogger.shared.log("NET", "lookupMachine → \(http.statusCode) \(String(decoding: data, as: UTF8.self))")
+            // 响应体含访问凭证(token)，诊断日志不落 body（A4 脱敏）。
+            DiagLogger.shared.log("NET", "lookupMachine → \(http.statusCode)（响应体含凭证，已脱敏）")
             throw APIError.http(http.statusCode, String(decoding: data, as: UTF8.self))
         }
         return MachineInfo(name: j["name"] as? String ?? "服务器",
@@ -319,6 +342,7 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 4
+        req.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
         do {
             let (_, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { return false }
