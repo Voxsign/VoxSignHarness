@@ -76,7 +76,7 @@ struct GoogleAuthState: Codable, Equatable {
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let serversKey = "vhs-ios-servers"
     private let activeKey = "vhs-ios-active"
     private let modeKey = "vhs-ios-mode"
@@ -93,22 +93,19 @@ final class SettingsStore: ObservableObject {
     /// 当前活动服务器 id（自建模式），持久化。
     @Published var activeServerID: String = ""
 
+    /// 从后端 /v1/orgs 拉到的组织目录（权威来源；空 = 未拉到/无归属）。
+    /// UniFusion 区按此渲染并自动同步为机器条目；手动添加兜底始终可用。
+    @Published var backendOrgs: [UniFusionOrg] = []
+
     /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
     var cloudBase: String { "https://voxsign.ai" }
 
-    // MARK: - UniFusion 组织目录（占位数据源，待后端确认）
+    // MARK: - UniFusion 组织目录（从后端 /v1/orgs 拉取）
 
-    /// 用户所属组织的 UniFusion 部署目录。
-    /// TODO(org-source): 当前硬编码 2 个示例组织，仅供真机走通「添加→切换→探测→报错」全流程；
-    /// 待后端/认证返回真实 orgs 列表后，把此计算属性替换为真实数据源即可（UI 无需改动）。
-    var availableUniFusionOrgs: [UniFusionOrg] {
-        [
-            UniFusionOrg(orgId: "bsc", orgName: "BSC",
-                         suggestedBase: "https://unifusion-bsc.com"),
-            UniFusionOrg(orgId: "peterzou", orgName: "PeterZou",
-                         suggestedBase: "https://unifusion.peterzou.com"),
-        ]
-    }
+    /// 用户所属组织的 UniFusion 部署目录（权威来源 = 后端 /v1/orgs）。
+    /// 登录成功 / 切换自建机器后由 refreshUniFusionOrgs() 填充；
+    /// 拉取失败 / 404 / 无归属 → 为空，此时不自动生成条目，保留手动添加兜底。
+    var availableUniFusionOrgs: [UniFusionOrg] { backendOrgs }
 
     /// 已是机器条目的组织 id（避免「添加组织」重复添加同一组织）。
     var existingUniFusionOrgIDs: Set<String> {
@@ -148,7 +145,8 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let raw = defaults.string(forKey: modeKey), let m = ConnectionMode(rawValue: raw) {
             mode = m
         }
@@ -186,6 +184,35 @@ final class SettingsStore: ObservableObject {
         persist()
     }
 
+    // MARK: - UniFusion 组织目录后端联动
+
+    /// 从活动 base 拉取组织目录（GET /v1/orgs）并按 orgId 同步机器条目：
+    /// - 后端为权威：已存在条目 → 更新 orgName/base/viaRelay（保留用户已填 token）；
+    ///   新组织 → 自动新增条目。
+    /// - 拉取失败 / 404 / 空 → 不动现有条目，不崩（云道暂无端点时优雅回退）。
+    /// - 不删除后端不再返回的条目（保守，避免误删；后续按需再加清理策略）。
+    func refreshUniFusionOrgs() async {
+        let entries = await APIClient.shared.getOrgs()
+        backendOrgs = entries.map {
+            UniFusionOrg(orgId: $0.orgId, orgName: $0.orgName, suggestedBase: $0.base)
+        }
+        for e in entries {
+            if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {
+                servers[idx].orgName = e.orgName
+                servers[idx].name = "UniFusion · \(e.orgName)"
+                servers[idx].base = e.base
+                servers[idx].viaRelay = e.viaRelay
+            } else {
+                servers.append(ServerConfig(id: UUID().uuidString,
+                                            name: "UniFusion · \(e.orgName)",
+                                            base: e.base, token: "",
+                                            machineCode: nil, viaRelay: e.viaRelay ?? false,
+                                            orgId: e.orgId, orgName: e.orgName))
+            }
+        }
+        persist()
+    }
+
     // MARK: - 模式
 
     func setMode(_ m: ConnectionMode) {
@@ -194,6 +221,8 @@ final class SettingsStore: ObservableObject {
         // V6.3 切换即重探：状态点与机器名必须跟随"实际连接目标"。
         // 否则会出现"设置点了自建、实际还连云端，名字却已变"的错位。
         ConnectivityService.shared.reset()
+        // 切换连接目标后，重新拉取该 base 下用户所属组织目录。
+        Task { await refreshUniFusionOrgs() }
     }
 
     // MARK: - 自建服务器管理
@@ -209,6 +238,7 @@ final class SettingsStore: ObservableObject {
         mode = .selfHosted        // UniFusion 条目也走自建通道取 base/token
         persist()
         ConnectivityService.shared.reset()
+        Task { await refreshUniFusionOrgs() }
     }
 
     /// 更新某个 UniFusion 组织条目的地址/token/转发方式（设置页编辑表单保存用）。
@@ -228,6 +258,7 @@ final class SettingsStore: ObservableObject {
         persist()
         // v2.1 I16：切换即触发一次即时连通性探测（胶囊立即反馈，不等 30s 心跳）。
         Task { await ConnectivityService.shared.probe() }
+        Task { await refreshUniFusionOrgs() }
     }
 
     func removeServer(_ id: String) {

@@ -268,14 +268,12 @@ struct SettingsView: View {
                         }
                     }
                 }
-                if !settings.availableOrgsToAdd.isEmpty {
-                    Button {
-                        showUniFusionAdd = true
-                    } label: {
-                        Label("添加企业部署地址", systemImage: "building.2")
-                    }
-                    .accessibilityIdentifier("vhs.unifusion.add")
+                Button {
+                    showUniFusionAdd = true
+                } label: {
+                    Label("添加企业部署地址", systemImage: "building.2")
                 }
+                .accessibilityIdentifier("vhs.unifusion.add")
             } header: {
                 Text("UniFusion 独立部署")
             } footer: {
@@ -575,6 +573,8 @@ struct SettingsView: View {
                 let result = try await APIClient.shared.loginGoogleIDToken(idToken)
                 settings.setGoogleLogin(result, base: settings.base)
                 conn.probe()
+                // 云道登录成功后拉取用户所属组织目录（UniFusion 自动出现在机器列表）。
+                Task { await settings.refreshUniFusionOrgs() }
             } catch {
                 googleError = error.localizedDescription
                 showGoogleAlert = true

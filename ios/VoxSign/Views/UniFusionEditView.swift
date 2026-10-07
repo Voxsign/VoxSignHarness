@@ -42,8 +42,8 @@ struct UniFusionEditView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("组织部署") {
-                    if case .add = mode {
+                Section {
+                    if case .add = mode, !settings.availableOrgsToAdd.isEmpty {
                         Picker("组织", selection: $orgID) {
                             ForEach(settings.availableOrgsToAdd) { org in
                                 Text("UniFusion · \(org.orgName)").tag(org.orgId)
@@ -63,6 +63,12 @@ struct UniFusionEditView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("vhs.unifusion.form.token")
+                    if case .add = mode, settings.availableOrgsToAdd.isEmpty {
+                        Text("未从后端获取到组织目录，可手动填写企业部署地址。")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                    }
+                } header: {
+                    Text("组织部署")
                 }
                 Section {
                     Toggle("经云道转发访问", isOn: $viaRelay)
@@ -83,7 +89,7 @@ struct UniFusionEditView: View {
                             Text("保存并检测连接").frame(maxWidth: .infinity)
                         }
                     }
-                    .disabled(busy || base.isEmpty || (!isEdit && orgID.isEmpty))
+                    .disabled(busy || base.isEmpty)
                     .accessibilityIdentifier("vhs.unifusion.form.save")
                     if !error.isEmpty {
                         Text(error)
@@ -160,10 +166,13 @@ struct UniFusionEditView: View {
             }
             switch mode {
             case .add:
+                // 若用户从目录选了组织则用其 orgId/orgName；否则视为手动兜底（生成独立 orgId）。
+                let finalOrgID = orgID.isEmpty ? "manual-\(UUID().uuidString.prefix(8))" : orgID
+                let finalOrgName = orgName.isEmpty ? name : orgName
                 settings.addServer(name: name.isEmpty ? "UniFusion" : name,
                                    base: base, token: token,
                                    viaRelay: viaRelay,
-                                   orgId: orgID, orgName: orgName)
+                                   orgId: finalOrgID, orgName: finalOrgName)
             case .edit(let id):
                 settings.updateUniFusion(id: id, name: name, base: base, token: token, viaRelay: viaRelay)
             }

@@ -52,12 +52,25 @@ struct MachineInfo: Equatable {
     let token: String
 }
 
+/// GET /v1/orgs 返回的一个用户所属组织的 UniFusion 部署条目。
+struct OrgEntry: Equatable {
+    let orgId: String
+    let orgName: String
+    /// 该组织私有化部署前端地址。
+    let base: String
+    /// 经云道转发（nil = 直连）。
+    let viaRelay: Bool?
+}
+
 final class APIClient {
     static let shared = APIClient()
     var settings: SettingsStore = .shared
 
     /// 机器码查询走真实云道接口（POST /v1/devices/lookup，免鉴权）。
     static var machineLookupMock = false
+
+    /// 测试钩子：非 nil 时 getOrgs() 直接返回该值，不走网络。
+    var orgsMock: [OrgEntry]?
 
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -301,6 +314,33 @@ final class APIClient {
     }
 
     // MARK: - 机器码绑定（自建）
+
+    /// GET /v1/orgs → 当前用户所属组织的 UniFusion 部署目录（向活动 base 发，带会话 Bearer）。
+    /// 容错契约：200 → 解析 ors 数组（未知字段忽略）；401/404/空/网络错/解析错 → 一律返回空数组，
+    /// 绝不抛出。云道 voxsign.ai 暂无此端点（404）→ 优雅回退为空，由 SettingsStore 保留手动添加兜底。
+    func getOrgs() async -> [OrgEntry] {
+        if let mock = orgsMock { return mock }
+        do {
+            let (code, data) = try await request("GET", "/v1/orgs")
+            guard (200...299).contains(code) else {
+                DiagLogger.shared.log("NET", "orgs → \(code)（无归属或端点未支持，按空处理）")
+                return []
+            }
+            let j = decodeJSON(data)
+            let list = (j["orgs"] as? [[String: Any]])?.compactMap { o -> OrgEntry? in
+                guard let orgId = o["orgId"] as? String, !orgId.isEmpty else { return nil }
+                return OrgEntry(orgId: orgId,
+                                orgName: o["orgName"] as? String ?? orgId,
+                                base: o["base"] as? String ?? "",
+                                viaRelay: o["viaRelay"] as? Bool)
+            } ?? []
+            DiagLogger.shared.log("NET", "orgs → \(list.count) 个组织")
+            return list
+        } catch {
+            DiagLogger.shared.log("NET", "orgs 拉取失败：\(error.localizedDescription)（按空处理）")
+            return []
+        }
+    }
 
     /// POST /v1/devices/lookup {machine_code} → 云道定位机器（身份 + 内网地址 + 在线状态）。
     /// 固定打云道地址（cloudBase），不依赖自建模式当前选中的服务器。
