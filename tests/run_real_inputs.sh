@@ -16,7 +16,7 @@ cat > $VHS_LOG_DIR/zhiji/entities.json <<'JSON'
 [
   {"id":"e-1","type":"person","canonical":"Amber","aliases":["冀总","老冀"],"desc":"consultant 客户","confidence":0.9,"status":"active"},
   {"id":"e-2","type":"person","canonical":"Peter","aliases":["老Peter"],"desc":"商业伙伴，物流SaaS项目","confidence":0.9,"status":"active"},
-  {"id":"e-3","type":"person","canonical":"Mansour","aliases":["美墅"],"desc":"用户本人，在沙特常住","confidence":0.9,"status":"active"},
+  {"id":"e-3","type":"person","canonical":"<USER>","aliases":["<ALIAS>"],"desc":"用户本人，在沙特常住","confidence":0.9,"status":"active"},
   {"id":"e-4","type":"project","canonical":"UniFusion","aliases":["unifusion-bsc.com"],"desc":"Sofia的项目，Google OAuth归属","confidence":0.9,"status":"active"}
 ]
 JSON
@@ -59,7 +59,7 @@ echo "=== B. 实体理解 ==="
 run "B1 问冀总是谁" "冀总是谁来着？" "Amber"
 run "B2 问老冀" "老冀那边怎么样了？" "Amber"
 run "B3 问Peter" "Peter是谁？" "物流"
-run "B4 问美墅是谁" "美墅是谁？" "Mansour"
+run "B4 问<ALIAS>是谁" "<ALIAS>是谁？" "<USER>"
 run "B5 问UniFusion" "UniFusion是什么项目？" "Sofia"
 
 # === C. 代指理解 ===

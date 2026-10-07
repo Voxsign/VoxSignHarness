@@ -16,7 +16,7 @@ cat > $VHS_LOG_DIR/zhiji/entities.json <<'JSON'
 [
   {"id":"e-1","type":"person","canonical":"Amber","aliases":["冀总","老冀"],"desc":"consultant 客户","confidence":0.9,"status":"active"},
   {"id":"e-2","type":"person","canonical":"Peter","aliases":["老Peter"],"desc":"商业伙伴，物流SaaS","confidence":0.9,"status":"active"},
-  {"id":"e-3","type":"person","canonical":"Mansour","aliases":["美墅"],"desc":"用户本人，在沙特","confidence":0.9,"status":"active"}
+  {"id":"e-3","type":"person","canonical":"<USER>","aliases":["<ALIAS>"],"desc":"用户本人，在沙特","confidence":0.9,"status":"active"}
 ]
 JSON
 
