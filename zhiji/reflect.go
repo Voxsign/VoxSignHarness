@@ -298,7 +298,7 @@ func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, er
 	return mems, selfs, nil
 }
 
-// extractIdentityName 从用户自我介绍里抽姓名（"我叫邹勇明"等）。
+// extractIdentityName 从用户自我介绍里抽姓名（"我叫<USER_NAME>"等）。
 func extractIdentityName(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
