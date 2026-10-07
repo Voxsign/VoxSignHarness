@@ -760,6 +760,19 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			}
 			return []contract.Receipt{o.run(tool, args)}
 		}
+		// 2026-10-08 (distillation R4): note-read requests ("读一下笔记" / "read my notes")
+		// resolve to the session note file instead of a generic LLM search answer.
+		if isNotesReferent(it.CorrectedText) &&
+			(strings.Contains(it.CorrectedText, "读") || strings.Contains(it.CorrectedText, "看") ||
+				strings.Contains(strings.ToLower(it.CorrectedText), "read")) {
+			path := filepath.Join(logDir, "notes.md")
+			args := map[string]any{"action": "read", "path": path, "log_dir": logDir}
+			recv := o.run("file", args)
+			if !recv.OK || strings.TrimSpace(recv.Stdout) == "" {
+				recv.Stdout = "笔记为空或文件不可读：" + path
+			}
+			return []contract.Receipt{recv}
+		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
 			pattern = it.Params["object"]
@@ -899,10 +912,37 @@ func isNotesReferent(text string) bool {
 	return hasAnySubstr(strings.ToLower(text), []string{"笔记", "备忘", "记录", "notes", "note"})
 }
 
-// extractReplacePair parses "把[refer]A改成B" / "把A换成B" into (old, new).
-// Returns ("", "") when no replace pair can be found.
+// extractReplacePair parses "把[refer]A改成B" / "把A换成B" into (old, new), plus the
+// 2026-10-08 (distillation R4) English forms "change X to Y" / "replace X with Y" and
+// Chinese "把A改为B". Returns ("", "") when no replace pair can be found.
 func extractReplacePair(text string) (string, string) {
-	for _, verb := range []string{"改成", "换成"} {
+	// English: change/replace (case-insensitive) with a to/with separator.
+	lower := strings.ToLower(text)
+	for _, e := range []struct{ verb, sep string }{
+		{"change", " to "}, {"replace", " with "},
+	} {
+		vi := strings.Index(lower, e.verb)
+		if vi < 0 {
+			continue
+		}
+		si := strings.Index(lower[vi+len(e.verb):], e.sep)
+		if si < 0 {
+			continue
+		}
+		before := text[vi+len(e.verb) : vi+len(e.verb)+si]
+		after := text[vi+len(e.verb)+si+len(e.sep):]
+		before = strings.TrimSpace(before)
+		after = strings.TrimSpace(after)
+		for _, p := range []string{" in my notes", " in the notes", " in notes", " in my notebook"} {
+			before = strings.Replace(before, p, "", 1)
+		}
+		before = strings.Trim(before, " \"“”'‘’")
+		after = strings.Trim(after, " \"“”'‘’")
+		if before != "" {
+			return before, after
+		}
+	}
+	for _, verb := range []string{"改成", "换成", "改为"} {
 		if idx := strings.Index(text, verb); idx >= 0 {
 			before := strings.TrimSpace(text[:idx])
 			after := strings.TrimSpace(text[idx+len(verb):])
@@ -3206,6 +3246,13 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 // ("  under    "   in"    " backreferbefore  body). 
 func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
+	// 2026-10-08 (distillation R4): "读一下笔记" / "read my notes" is a complete note-read
+	// request resolved in execActions; do not bounce it into a refer clarification
+	// ("要查哪个项目/文件？") even though "读" is now a file-op verb.
+	if isNotesReferent(text) &&
+		(strings.Contains(text, "读") || strings.Contains(strings.ToLower(text), "read")) {
+		return false
+	}
 	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
 	}
@@ -3234,7 +3281,11 @@ func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 }
 
 // fileOpVerbs file/     word (Codex  disconnect 2026-10-02):  in as"  coreference" signal. 
-var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名"}
+// fileOpVerbs file/     word (Codex  disconnect 2026-10-02):  in as"  coreference" signal. 
+// 2026-10-08 (distillation R4): "读" added — note-read requests ("读一下笔记") must stay
+// rule-handled (note-read branch in QUERY) instead of being sent to the LLM classifier.
+// ("看" was deliberately NOT added: "随便看看" is chit-chat, not a file operation.)
+var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名", "读"}
 
 // hasAnySubstr     (input.containsAny as  has, pipeline usesamesemanticbasely now). 
 func hasAnySubstr(text string, keywords []string) bool {
@@ -3432,6 +3483,13 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 		contract.IntentEdit: true, contract.IntentCommit: true,
 	}
 	if !valid[parsed.Intent] {
+		return it
+	}
+	// 2026-10-08 (distillation R4): a low-confidence LLM label on a high-risk intent
+	// (commit/deploy) would trip the human-confirm gate and stall casual chatter
+	// ("就这样吧" -> COMMIT 0.3 -> need_confirm forever). Keep the rule UNKNOWN instead.
+	if parsed.Confidence < 0.6 &&
+		(parsed.Intent == contract.IntentCommit || parsed.Intent == contract.IntentDeploy) {
 		return it
 	}
 	it.Intent = parsed.Intent
