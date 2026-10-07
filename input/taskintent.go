@@ -98,7 +98,10 @@ var (
 	thoughtWords   = []string{"想法", "备忘"}
 	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
 	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
-	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
+	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
+		// 2026-10-08 (distillation R2): "记一条：明天上午9点开会" fell to UNKNOWN because
+		// "记一条" was missing from the note table. Added for NOTE capability baseline (U3).
+		"记一条", "记个条", "记个想法", "记条"}
 	// reminderTriggers: reminder/alarm/timed prompts. Must be matched BEFORE noteTriggers,
 	// otherwise "记个提醒：明天八点开会" trips "记个" and the whole sentence is misrouted to
 	// NOTE (appended verbatim into notes.md) — the repo has no cron/scheduler at all.
@@ -107,13 +110,19 @@ var (
 		"几点", "几点钟", "什么时间", "几号", "星期几", "周几",
 		// 2026-10-04   control  seg:   formtriggersendword empty , only"   ls/   cat"class in, 
 		//    "    pos  "(noempty   in). 
-		"运行 ", "执行 ", "帮我跑 ", "截个图", "截图"}
+		"运行 ", "执行 ", "帮我跑 ", "截个图", "截图",
+		// 2026-10-08 (distillation R2): arithmetic / email drafting / translation are content
+		// generation requests; route them to QUERY instead of UNKNOWN (U5/U6/A5 baseline).
+		"算一下", "等于多少", "多少", "等于", "邮件", "写一封", "翻译", "translate", "翻译成"}
 	editTriggers    = []string{"改成", "换成", "改一下", "修改", "替换", "改"}
 	debugTriggers   = []string{"报错", "为什么失败", "崩溃", "闪退", "出错", "bug", "修一下", "修这个", "修那个", "修一修", "修"}
 	testTriggers    = []string{"跑测试", "跑一下", "测一下", "跑个测试", "测试"}
 	commitTriggers  = []string{"提交", "推上去", "推到"}
 	deployTriggers  = []string{"部署", "上线", "生成报表", "发到", "发布"}
-	askTriggers     = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何"}
+	askTriggers     = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何",
+		// 2026-10-08 (distillation R2): "那个东西怎么样了" is an ambiguous referent question;
+		// route to ask so the harness asks which item instead of guessing (U4 baseline).
+		"怎么样了", "怎么样"}
 	defaultExcludes = []string{".env*", "node_modules"}
 )
 
