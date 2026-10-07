@@ -138,6 +138,19 @@ func (z *Zhiji) OnInput(summary string, importance float64) {
 		}
 		_ = z.Store.SaveAll()
 	}
+	// 同步事实抽取："我喜欢X""我有X""我在X"立即存到self_model
+	if facts := extractFacts(summary); len(facts) > 0 {
+		for _, f := range facts {
+			_, _ = z.Store.UpsertSelf(SelfItem{
+				Layer:            LayerGoal,
+				Text:             f,
+				SourceTrajectory: "oninput:fact",
+				Confidence:       0.7,
+				Status:           StatusActive,
+			})
+		}
+		_ = z.Store.SaveAll()
+	}
 	// 自动记录已知实体提及（用于代指 resolve 的时间衰减）
 	if z.Entities != nil && z.Mentions != nil {
 		for _, e := range z.Entities.AllActive() {

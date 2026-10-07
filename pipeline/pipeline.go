@@ -331,6 +331,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		if recent := o.Zhiji.RecentDialogue(10); recent != "" {
 			intent.Context = append(intent.Context, "[recent dialogue]\n"+recent)
 		}
+		// 注入STM事实记忆（用户说过的偏好/事实）
+		if stm := o.Zhiji.RecentSTM(5); stm != "" {
+			intent.Context = append(intent.Context, "[remembered facts]\n"+stm)
+		}
+		// 注入最近提到的实体（代指resolve："那个""这个"）
+		if rc := o.Zhiji.RecentCandidates(3); len(rc) > 0 {
+			intent.Context = append(intent.Context, "[最近提到的实体]\n  - "+strings.Join(rc, "\n  - ")+"\n")
+		}
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
 
@@ -3386,6 +3394,28 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 		return ""
 	}
 	out := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// 解析LEARN_ENTITY行——LLM从用户话里学到的新实体
+	if idx := strings.Index(out, "LEARN_ENTITY:"); idx >= 0 {
+		line := out[idx+len("LEARN_ENTITY:"):]
+		if nl := strings.Index(line, "\n"); nl > 0 {
+			line = line[:nl]
+		}
+		line = strings.TrimSpace(line)
+		var canonical, desc string
+		for _, part := range strings.Split(line, ",") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "canonical=") {
+				canonical = strings.TrimPrefix(part, "canonical=")
+			} else if strings.HasPrefix(part, "desc=") {
+				desc = strings.TrimPrefix(part, "desc=")
+			}
+		}
+		if canonical != "" && o.Zhiji != nil {
+			o.Zhiji.LearnEntity(canonical, desc, nil)
+			log.Printf("[llmNaturalReply] learned entity: %s = %s", canonical, desc)
+		}
+		out = strings.TrimSpace(out[:idx])
+	}
 	log.Printf("[llmNaturalReply] reply=%q", out)
 	return out
 }

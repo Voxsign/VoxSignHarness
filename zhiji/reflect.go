@@ -294,8 +294,37 @@ func DefaultReflect(ctx context.Context, s *Store) ([]MemoryItem, []SelfItem, er
 				Status:      StatusActive,
 			})
 		}
+		// 通用事实抽取："我喜欢X""我有X""我在X"都存到self_model
+		if facts := extractFacts(it.Text); len(facts) > 0 {
+			for _, f := range facts {
+				selfs = append(selfs, SelfItem{
+					Layer:       LayerGoal,
+					Text:        f,
+					SourceTrajectory: "reflect:fact",
+					Confidence:  0.7,
+					Status:      StatusActive,
+				})
+			}
+		}
 	}
 	return mems, selfs, nil
+}
+
+// extractFacts 从用户陈述里抽通用事实（"我喜欢X""我有X""我在X"）。
+func extractFacts(text string) []string {
+	var facts []string
+	for _, p := range []string{"我喜欢", "我有", "我在", "我住在", "我喝", "我吃", "我用"} {
+		if idx := strings.Index(text, p); idx >= 0 {
+			rest := text[idx+len(p):]
+			// 截取前20个字
+			r := []rune(rest)
+			if len(r) > 20 {
+				r = r[:20]
+			}
+			facts = append(facts, p+string(r))
+		}
+	}
+	return facts
 }
 
 // extractIdentityName 从用户自我介绍里抽姓名（"我叫<USER_NAME>"等）。
