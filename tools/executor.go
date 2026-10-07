@@ -239,6 +239,37 @@ func (e *Executor) execFile(args map[string]any) (string, string, bool) {
 			out += "\n" + BackupMarker + " " + backupPath
 		}
 		return out, "", true
+	case "replace":
+		// 2026-10-08 (distillation R3): conversational edit "把笔记里的A改成B" / "把X换成Y".
+		// Reads the target, backs it up, replaces all occurrences of old with new, writes back.
+		// Returns the backup path in the receipt for rollback.
+		old, new := str(args, "old"), str(args, "new")
+		if old == "" {
+			return "", "replace missing old", false
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return "", err.Error(), false
+		}
+		updated := strings.ReplaceAll(string(data), old, new)
+		if updated == string(data) {
+			return "replace: no occurrence of target text in " + rel, "", true
+		}
+		backupPath := ""
+		if logDir := str(args, "log_dir"); logDir != "" {
+			bdir := filepath.Join(logDir, "backups")
+			_ = os.MkdirAll(bdir, 0o755)
+			backupPath = filepath.Join(bdir, backupName(rel))
+			_ = os.WriteFile(backupPath, data, 0o644)
+		}
+		if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
+			return "", err.Error(), false
+		}
+		out := "replaced in: " + rel
+		if backupPath != "" {
+			out += "\n" + BackupMarker + " " + backupPath
+		}
+		return out, "", true
 	}
 	return "", "unknown file action: " + action, false
 }
