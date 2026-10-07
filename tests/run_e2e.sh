@@ -49,7 +49,7 @@ echo ""
 
 # === 组1: 用户身份记忆 + ASR 纠错 ===
 echo "=== 组1: 用户身份记忆 + ASR 同音字纠错 ==="
-run_case 1.1 "自我介绍(ASR错+breakdown)" "我叫周永明，山东邹县的邹，勇敢的勇，明天的明" "<USER_NAME>"
+run_case 1.1 "自我介绍(ASR错+breakdown)" "我叫周永明，某个地方的某，某个形容词的某，某个时间的某" "<USER_NAME>"
 run_case 1.2 "ASR错'周勇明'(应拦住)" "我叫周勇明" "<USER_NAME>"
 run_case 1.3 "ASR错'周永勇'(应拦住)" "我叫周永勇" "<USER_NAME>"
 run_case 1.4 "问名字" "我叫什么名字？" "<USER_NAME>"

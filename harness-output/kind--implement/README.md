@@ -8,7 +8,7 @@ go build -o name-server .
 数据目录默认当前工作目录，可用 -data-dir 指定。
 
 二、端点
-POST /v1/set_name    请求体 JSON {"name":"周勇明","breakdown":"勇敢的勇，明天的明"}，写入 user_profile.json，返回已保存的姓名。
+POST /v1/set_name    请求体 JSON {"name":"周勇明","breakdown":"正确的字"}，写入 user_profile.json，返回已保存的姓名。
 GET  /v1/get_name    返回当前记住的姓名；未设置时返回 {"name":"","hint":"未设置"}。
 GET  /v1/health      返回 {"status":"ok"}。
 POST /v1/process     文本处理主入口，JSON 请求/响应，覆盖动作识别、复合指令拆解、指代消解等能力。
@@ -18,7 +18,7 @@ POST /v1/process     文本处理主入口，JSON 请求/响应，覆盖动作�
                         有历史时从最近记录补全 target，不使用默认值。
 
 三、调用示例
-curl -X POST http://127.0.0.1:8099/v1/set_name -H "Content-Type: application/json" -d "{\"name\":\"周勇明\",\"breakdown\":\"勇敢的勇，明天的明\"}"
+curl -X POST http://127.0.0.1:8099/v1/set_name -H "Content-Type: application/json" -d "{\"name\":\"周勇明\",\"breakdown\":\"正确的字\"}"
 curl http://127.0.0.1:8099/v1/get_name
 curl http://127.0.0.1:8099/v1/health
 
