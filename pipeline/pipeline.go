@@ -733,11 +733,17 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		}
 		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentReminder:
-		// Reminder/alarm is not implemented (no cron/scheduler anywhere in the repo).
-		// Report an explicit "not executed" failure — never fall through to NOTE's
-		// append to notes.md (previously "记个提醒…" was silently misrouted to a note).
-		return []contract.Receipt{{Tool: "reminder", OK: false,
-			Err: "提醒/闹钟功能当前未实现（本机无 cron/scheduler），未执行；如需备忘我可以帮你记到笔记里"}}
+		// 2026-10-08 (distillation R3): no cron/scheduler in the repo; degrade to a structured
+		// reminder line in notes.md instead of a hard failure (previous behavior). The
+		// receipt stays OK=true so the turn completes, and the content carries the reminder.
+		path := filepath.Join(logDir, "notes.md")
+		args := map[string]any{
+			"action":  "append",
+			"path":    path,
+			"content": "\n- [提醒 " + time.Now().Format("2006-01-02 15:04") + "] " + it.CorrectedText + "\n",
+			"log_dir": logDir,
+		}
+		return []contract.Receipt{o.run("file", args)}
 	case contract.IntentQuery, contract.IntentAsk:
 		//      seg(2026-10-04): langaudio  note       first  . 
 		//  base inalreadynote   (e.g."  control  ")-> call     ,  againback"no   control". 
@@ -753,6 +759,19 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 				"log_dir": logDir,
 			}
 			return []contract.Receipt{o.run(tool, args)}
+		}
+		// 2026-10-08 (distillation R4): note-read requests ("读一下笔记" / "read my notes")
+		// resolve to the session note file instead of a generic LLM search answer.
+		if isNotesReferent(it.CorrectedText) &&
+			(strings.Contains(it.CorrectedText, "读") || strings.Contains(it.CorrectedText, "看") ||
+				strings.Contains(strings.ToLower(it.CorrectedText), "read")) {
+			path := filepath.Join(logDir, "notes.md")
+			args := map[string]any{"action": "read", "path": path, "log_dir": logDir}
+			recv := o.run("file", args)
+			if !recv.OK || strings.TrimSpace(recv.Stdout) == "" {
+				recv.Stdout = "笔记为空或文件不可读：" + path
+			}
+			return []contract.Receipt{recv}
 		}
 		pattern := it.CorrectedText
 		if it.Params != nil && it.Params["object"] != "" {
@@ -786,8 +805,21 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// "    type     ly"). pathfrom"writeto/write/keepstoreto"after get. 
 		path, content := extractWriteTarget(it.CorrectedText)
 		if path == "" {
+			// 2026-10-08 (distillation R3): conversational referents — "笔记/备忘/记录/notes"
+			// resolve to the session note file with replace semantics for "把A改成B"/"把A换成B";
+			// otherwise ask gracefully instead of a cryptic FAILED.
+			if isNotesReferent(it.CorrectedText) {
+				old, new := extractReplacePair(it.CorrectedText)
+				if old == "" {
+					return []contract.Receipt{{Tool: "file", OK: false,
+						Err: "笔记编辑：未识别到要替换的原文。请说清楚，例如：把笔记里的\u0022旧文字\u0022改成\u0022新文字\u0022"}}
+				}
+				args := map[string]any{"action": "replace", "path": filepath.Join(logDir, "notes.md"),
+					"old": old, "new": new, "log_dir": logDir}
+				return []contract.Receipt{o.run("file", args)}
+			}
 			return []contract.Receipt{{Tool: "file", OK: false,
-				Err: "could not identify target file path (say \u0022write XX to /path/to/file\u0022)"}}
+				Err: "未识别到目标文件。请说明目标文件路径（例如：把笔记里的\u0022…\u0022改成\u0022…\u0022；或 write XX to /path/to/file）"}}
 		}
 		args := map[string]any{"action": "write", "path": path, "content": content, "log_dir": logDir}
 		return []contract.Receipt{o.run("file", args)}
@@ -872,6 +904,61 @@ func extractWriteTarget(text string) (string, string) {
 	}
 	content := strings.TrimSpace(strings.TrimPrefix(text, "把")) + " " + rest
 	return path, strings.TrimSpace(content)
+}
+
+// isNotesReferent reports whether the edit text refers to the session note file.
+// 2026-10-08 (distillation R3): "把笔记里的…改成…" / "改一下备忘" resolve to notes.md.
+func isNotesReferent(text string) bool {
+	return hasAnySubstr(strings.ToLower(text), []string{"笔记", "备忘", "记录", "notes", "note"})
+}
+
+// extractReplacePair parses "把[refer]A改成B" / "把A换成B" into (old, new), plus the
+// 2026-10-08 (distillation R4) English forms "change X to Y" / "replace X with Y" and
+// Chinese "把A改为B". Returns ("", "") when no replace pair can be found.
+func extractReplacePair(text string) (string, string) {
+	// English: change/replace (case-insensitive) with a to/with separator.
+	lower := strings.ToLower(text)
+	for _, e := range []struct{ verb, sep string }{
+		{"change", " to "}, {"replace", " with "},
+	} {
+		vi := strings.Index(lower, e.verb)
+		if vi < 0 {
+			continue
+		}
+		si := strings.Index(lower[vi+len(e.verb):], e.sep)
+		if si < 0 {
+			continue
+		}
+		before := text[vi+len(e.verb) : vi+len(e.verb)+si]
+		after := text[vi+len(e.verb)+si+len(e.sep):]
+		before = strings.TrimSpace(before)
+		after = strings.TrimSpace(after)
+		for _, p := range []string{" in my notes", " in the notes", " in notes", " in my notebook"} {
+			before = strings.Replace(before, p, "", 1)
+		}
+		before = strings.Trim(before, " \"“”'‘’")
+		after = strings.Trim(after, " \"“”'‘’")
+		if before != "" {
+			return before, after
+		}
+	}
+	for _, verb := range []string{"改成", "换成", "改为"} {
+		if idx := strings.Index(text, verb); idx >= 0 {
+			before := strings.TrimSpace(text[:idx])
+			after := strings.TrimSpace(text[idx+len(verb):])
+			before = strings.TrimLeft(before, "把将")
+			for _, p := range []string{"笔记里的", "笔记中", "笔记里", "记录里的", "备忘里的", "记录中"} {
+				before = strings.Replace(before, p, "", 1)
+			}
+			before = strings.Trim(before, " \"“”'‘’")
+			after = strings.Trim(after, " \"“”'‘’")
+			if before == "" {
+				return "", ""
+			}
+			return before, after
+		}
+	}
+	return "", ""
 }
 
 // matchVoiceContract    lang baseis  inlangaudio  note      (Source=="voice"). 
@@ -3159,6 +3246,13 @@ func referToAskOptions(referOpts []refer.Option) []AskOption {
 // ("  under    "   in"    " backreferbefore  body). 
 func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 	text := it.CorrectedText
+	// 2026-10-08 (distillation R4): "读一下笔记" / "read my notes" is a complete note-read
+	// request resolved in execActions; do not bounce it into a refer clarification
+	// ("要查哪个项目/文件？") even though "读" is now a file-op verb.
+	if isNotesReferent(text) &&
+		(strings.Contains(text, "读") || strings.Contains(strings.ToLower(text), "read")) {
+		return false
+	}
 	if strings.ContainsAny(text, "?？吗呢怎么如何为什么哪") {
 		return false
 	}
@@ -3187,7 +3281,11 @@ func shouldResolveRefer(it *contract.Intent, hasRecent bool) bool {
 }
 
 // fileOpVerbs file/     word (Codex  disconnect 2026-10-02):  in as"  coreference" signal. 
-var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名"}
+// fileOpVerbs file/     word (Codex  disconnect 2026-10-02):  in as"  coreference" signal. 
+// 2026-10-08 (distillation R4): "读" added — note-read requests ("读一下笔记") must stay
+// rule-handled (note-read branch in QUERY) instead of being sent to the LLM classifier.
+// ("看" was deliberately NOT added: "随便看看" is chit-chat, not a file operation.)
+var fileOpVerbs = []string{"把", "将", "打开", "改", "修", "提交", "删", "建", "换", "设", "存", "写", "跑", "记", "部署", "上线", "发布", "复制", "移动", "重命名", "读"}
 
 // hasAnySubstr     (input.containsAny as  has, pipeline usesamesemanticbasely now). 
 func hasAnySubstr(text string, keywords []string) bool {
@@ -3324,14 +3422,29 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if it.Conflict != "" && it.Ask != "" {
 		return it
 	}
-	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪")
+	hasQ := strings.ContainsAny(text, "?？吗呢怎么如何为什么哪多少几算翻译translate写查")
 	// M7   patch :   sent  time, rule   QUERY(UNKNOWN/low-confidence/  its intente.g. NOTE)
 	//   call LLM   --ruleword to lang  sent   (22:04   : " now    under…      kind"
 	// berule  NOTE    , ifonly low-confidencethen fallback   triggersend). alreadyis QUERY then connect  rule. 
-	if !hasQ {
+	//
+	// 2026-10-08 (distillation R2): previously the fallback only ran when the text contained a
+	// question word, so substantive commands without one ("帮我算一下 23 乘以 17", "记一条：…",
+	// "帮我写一封…邮件", "Translate this into Arabic") stayed UNKNOWN -> need_ask. New gate:
+	//   - conflict-confirm state is never overridden (unchanged);
+	//   - confident rule intents (>=0.6) are kept — no wasted LLM call;
+	//   - low-confidence non-UNKNOWN without question words is kept (chat/INFO safety);
+	//   - UNKNOWN, and low-confidence texts WITH question words, go to the LLM classifier;
+	//   - bare referents ("那个…" with nothing after) and file-op verbs stay rule-handled.
+	if it.Intent == contract.IntentQuery {
 		return it
 	}
-	if it.Intent == contract.IntentQuery {
+	if it.Intent != contract.IntentUnknown && it.Confidence >= 0.6 {
+		return it
+	}
+	if it.Intent != contract.IntentUnknown && !hasQ {
+		return it
+	}
+	if isBareReferent(text) || hasFileOpVerb(text) {
 		return it
 	}
 	p, err := o.Providers.Get("fast")
@@ -3343,7 +3456,9 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交。"},
 			{Role: "user", Content: text},
 		},
-		MaxTokens: 64,
+		// 2026-10-08 (distillation, local reasoning model): budget 64 is consumed by chain-of-thought
+		// before any JSON appears -> raise to 256 so the answer actually materializes.
+		MaxTokens: 256,
 	})
 	if err != nil || resp.Content == "" {
 		return it
@@ -3353,7 +3468,14 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 		Intent     string  `json:"intent"`
 		Confidence float64 `json:"confidence"`
 	}
-	if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
+	// 2026-10-08 (distillation, local on-prem model): response_format json_object is pathological
+	// on Strata (llama.cpp grammar ~1.4s/token), so local providers run with response_format off and
+	// the model may wrap the JSON in prose or code fences. Extract the first {...} object leniently.
+	content := strings.TrimSpace(resp.Content)
+	if !json.Valid([]byte(content)) {
+		content = extractJSONObject(content)
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
 		return it
 	}
 	valid := map[string]bool{
@@ -3361,6 +3483,13 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 		contract.IntentEdit: true, contract.IntentCommit: true,
 	}
 	if !valid[parsed.Intent] {
+		return it
+	}
+	// 2026-10-08 (distillation R4): a low-confidence LLM label on a high-risk intent
+	// (commit/deploy) would trip the human-confirm gate and stall casual chatter
+	// ("就这样吧" -> COMMIT 0.3 -> need_confirm forever). Keep the rule UNKNOWN instead.
+	if parsed.Confidence < 0.6 &&
+		(parsed.Intent == contract.IntentCommit || parsed.Intent == contract.IntentDeploy) {
 		return it
 	}
 	it.Intent = parsed.Intent
@@ -3377,6 +3506,51 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 func noJSON() *bool {
 	v := false
 	return &v
+}
+
+// extractJSONObject pulls the first balanced {...} object out of arbitrary model text
+// (prose, markdown fences, reasoning leftovers) and validates it as JSON.
+// Returns "" when no valid object is found.
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	esc := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if esc {
+				esc = false
+				continue
+			}
+			switch c {
+			case '\\':
+				esc = true
+			case '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				cand := s[start : i+1]
+				if json.Valid([]byte(cand)) {
+					return cand
+				}
+				return ""
+			}
+		}
+	}
+	return ""
 }
 
 // queryLLMAnswer(M7 ②): QUERY   aftercall fast occurbecome howeverlanglanganswer. 

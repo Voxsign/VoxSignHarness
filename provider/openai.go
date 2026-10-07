@@ -27,6 +27,7 @@ type openaiClient struct {
 	responseFormat bool           // is  require json_object  form
 	timeoutMs      int            //   calluse  time( heavy )
 	params         map[string]any // endpoint    charseg(e.g. reasoning_effort)
+	userAgent      string         // per-provider param "user_agent": some on-prem gateways (e.g. UniFusion Strata) reject non-curl UAs with 403/conn-reset
 	httpClient     *http.Client
 }
 
@@ -40,6 +41,7 @@ func newOpenAIClient(p config.Provider, cfg *config.Config) *openaiClient {
 		responseFormat: cfg.EffectiveResponseFormat(p),
 		timeoutMs:      cfg.EffectiveTimeoutMs(p),
 		params:         p.Params,
+		userAgent:      paramString(p.Params["user_agent"]),
 		//  timeby context   control(see Chat),      Transport    time, 
 		// by and ctx  time   becomesemantic  . 
 		// VHS_INSECURE_TLS=1 time ed TLS     (in /   close occur , defaultclose ). 
@@ -145,7 +147,11 @@ func buildRequestBody(c *openaiClient, req ChatRequest) ([]byte, error) {
 		body["response_format"] = map[string]any{"type": "json_object"}
 	}
 	// endpoint   num  (e.g. DeepSeek   reasoning_effort:"none"),    afterbythenoverwrite. 
+	// "user_agent" is a transport-level param: applied as HTTP header only, never sent in body.
 	for k, v := range c.params {
+		if k == "user_agent" {
+			continue
+		}
 		body[k] = v
 	}
 	return json.Marshal(body)
@@ -172,6 +178,9 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	if c.apiKey != "" {
 		// 2026-10-04 fix : voxsign  close  headis X-AIops-Key(read key),   Authorization Bearer
 		//(    : Bearer 401 "missing or invalid read X-AIops-Key"; curl   X-AIops-Key 200). 
@@ -225,6 +234,14 @@ func (c *openaiClient) doOnce(ctx context.Context, body []byte) (resp ChatRespon
 		FinishReason: choice.FinishReason,
 		Usage:        parsed.Usage,
 	}, false, nil
+}
+
+// paramString extracts a string value from an optional param (e.g. "user_agent"). 
+func paramString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // truncateResp pipe  body seg disconnectto n char ,   error  ed   trace. 
