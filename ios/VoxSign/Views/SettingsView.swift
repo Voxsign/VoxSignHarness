@@ -249,14 +249,14 @@ struct SettingsView: View {
                 .accessibilityIdentifier("vhs.selfhost.add")
             }
 
-            // —— UniFusion 独立部署（按用户组织归属，一台组织一台）——
+            // —— 独立部署（按客户/部署实例，一台客户一条目）——
             Section {
                 if settings.unifusionServers.isEmpty {
                     VStack(spacing: 6) {
                         Text("尚未配置企业部署")
                             .font(.system(size: 14, weight: .medium))
                             .padding(.top, 6)
-                        Text("添加你所属组织的私有化部署地址")
+                        Text("添加客户/部署实例的私有化部署地址")
                             .font(.system(size: 11)).foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity)
@@ -275,9 +275,9 @@ struct SettingsView: View {
                 }
                 .accessibilityIdentifier("vhs.unifusion.add")
             } header: {
-                Text("UniFusion 独立部署")
+                Text("独立部署")
             } footer: {
-                Text("企业私有化部署入口 · 按你所属组织提供。")
+                Text("企业私有化部署入口 · 按客户/部署实例提供。")
             }
 
             // 当前活动自建服务器的快捷编辑（仅普通自建机器；组织条目走 UniFusionEditView）。

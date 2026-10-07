@@ -8,15 +8,15 @@
 //    条目记录绑定方式与连接方式（直连 / 云端转发）。
 //  下游（APIClient/SSEClient）继续用 base/token 计算属性，无需改动。
 //
-//  UniFusion（v3.x）：企业私有化部署按「用户组织归属」呈现——
-//  每属于一个组织，机器列表就多一台该组织的 UniFusion 机器（机器名=组织名，
-//  如「UniFusion · BSC」），条目自带 base/token/直连或云道转发。
+//  「独立部署」（v3.x）：企业私有化部署按「客户/部署实例」呈现——
+//  分区名=「独立部署」；每属于一个客户/组织，机器列表就多一台该客户的部署条目
+//  （条目名=客户名本身，不加品牌前缀，如「UniFusion」「PeterZou」平级排列），
+//  条目自带 base/token/直连或云道转发。
 //  实现上与自建机器共用 ServerConfig，仅以 orgId/orgName 标记区分，
 //  add/switch/remove/连通探测全部复用既有 servers 机制，base/token 零改动。
 //
-//  TODO(org-source): 组织归属数据源（后端 orgs 接口 / 认证返回）尚未确认。
-//  当前 availableUniFusionOrgs 为占位目录（BSC / PeterZou 两个示例组织），
-//  首次启动播种为可编辑/删除的机器条目；待数据源确认后替换该方法即可。
+//  组织目录来源：后端 /v1/orgs（权威）；后端不可用时用内置占位目录兜底（首次启动播种，
+//  可编辑/删除）。orgId/orgName 语义=客户/部署实例，字段名不改。
 
 import Foundation
 
@@ -100,12 +100,25 @@ final class SettingsStore: ObservableObject {
     /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
     var cloudBase: String { "https://voxsign.ai" }
 
-    // MARK: - UniFusion 组织目录（从后端 /v1/orgs 拉取）
+    // MARK: - 独立部署（组织目录：后端 /v1/orgs 权威，失败用内置占位兜底）
 
-    /// 用户所属组织的 UniFusion 部署目录（权威来源 = 后端 /v1/orgs）。
+    /// 内置占位目录（后端不可达 / 无归属时兜底；首次启动播种为可编辑/删除条目）。
+    /// orgId/orgName = 客户/部署实例；条目名直接显示客户名，不加品牌前缀。
+    private var fallbackUniFusionOrgs: [UniFusionOrg] {
+        [
+            UniFusionOrg(orgId: "unifusion", orgName: "UniFusion",
+                         suggestedBase: "https://unifusion-bsc.com"),
+            UniFusionOrg(orgId: "peterzou", orgName: "PeterZou",
+                         suggestedBase: "https://unifusion.peterzou.com"),
+        ]
+    }
+
+    /// 用户所属组织的部署目录（权威 = 后端 /v1/orgs）。
     /// 登录成功 / 切换自建机器后由 refreshUniFusionOrgs() 填充；
-    /// 拉取失败 / 404 / 无归属 → 为空，此时不自动生成条目，保留手动添加兜底。
-    var availableUniFusionOrgs: [UniFusionOrg] { backendOrgs }
+    /// 拉取失败 / 404 / 无归属 → 回退到内置占位目录，保留手动添加兜底。
+    var availableUniFusionOrgs: [UniFusionOrg] {
+        backendOrgs.isEmpty ? fallbackUniFusionOrgs : backendOrgs
+    }
 
     /// 已是机器条目的组织 id（避免「添加组织」重复添加同一组织）。
     var existingUniFusionOrgIDs: Set<String> {
@@ -117,7 +130,7 @@ final class SettingsStore: ObservableObject {
         availableUniFusionOrgs.filter { !existingUniFusionOrgIDs.contains($0.orgId) }
     }
 
-    /// 当前 UniFusion 组织机器条目（机器切换面板「UniFusion」分区渲染用）。
+    /// 当前「独立部署」条目（机器切换面板对应分区渲染用）。
     var unifusionServers: [ServerConfig] {
         servers.filter { $0.isUniFusion }
     }
@@ -171,7 +184,7 @@ final class SettingsStore: ObservableObject {
         guard !defaults.bool(forKey: unifusionSeededKey) else { return }
         for org in availableUniFusionOrgs where !servers.contains(where: { $0.orgId == org.orgId }) {
             let cfg = ServerConfig(id: UUID().uuidString,
-                                   name: "UniFusion · \(org.orgName)",
+                                   name: org.orgName,
                                    base: org.suggestedBase,
                                    token: "",
                                    machineCode: nil,
@@ -199,13 +212,12 @@ final class SettingsStore: ObservableObject {
         for e in entries {
             if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {
                 servers[idx].orgName = e.orgName
-                servers[idx].name = "UniFusion · \(e.orgName)"
+                servers[idx].name = e.orgName
                 servers[idx].base = e.base
                 servers[idx].viaRelay = e.viaRelay
             } else {
                 servers.append(ServerConfig(id: UUID().uuidString,
-                                            name: "UniFusion · \(e.orgName)",
-                                            base: e.base, token: "",
+                                            name: e.orgName, base: e.base, token: "",
                                             machineCode: nil, viaRelay: e.viaRelay ?? false,
                                             orgId: e.orgId, orgName: e.orgName))
             }

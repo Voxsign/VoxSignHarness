@@ -2,14 +2,13 @@
 //  UniFusionEditView.swift
 //  VoxSign
 //
-//  UniFusion 组织部署条目「添加 / 编辑」表单（企业私有化部署，按用户组织归属）：
-//  - 添加：从组织目录选一个所属组织 → 预填名称/地址 → 补 Token → 保存前必检连通
-//  - 编辑：改已有组织条目的名称 / 地址 / Token / 直连或云道转发
+//  独立部署条目「添加 / 编辑」表单（企业私有化部署，按客户/部署实例）：
+//  - 添加：从目录选一个客户 → 预填名称/地址 → 补 Token → 保存前必检连通
+//  - 编辑：改已有条目的名称 / 地址 / Token / 直连或云道转发
 //  - 保存并检测连接：复用 APIClient.healthCheck（直连；开启云道转发则同时探 cloudBase）
 //  - 失败给中文报错文案，绝不静默崩溃；token 不入日志/注释。
 //
-//  注：组织归属数据源（后端 orgs 接口 / 认证返回）尚未确认，
-//  当前组织目录来自 SettingsStore.availableUniFusionOrgs 占位（BSC / PeterZou）。
+//  注：目录来自 SettingsStore.availableUniFusionOrgs（后端 /v1/orgs 权威，失败用内置占位兜底）。
 
 import SwiftUI
 
@@ -46,7 +45,7 @@ struct UniFusionEditView: View {
                     if case .add = mode, !settings.availableOrgsToAdd.isEmpty {
                         Picker("组织", selection: $orgID) {
                             ForEach(settings.availableOrgsToAdd) { org in
-                                Text("UniFusion · \(org.orgName)").tag(org.orgId)
+                                Text(org.orgName).tag(org.orgId)
                             }
                         }
                         .onChange(of: orgID) { _ in applyOrgPrefill() }
@@ -146,7 +145,7 @@ struct UniFusionEditView: View {
     private func applyOrgPrefill() {
         guard let org = settings.availableUniFusionOrgs.first(where: { $0.orgId == orgID }) else { return }
         orgName = org.orgName
-        name = "UniFusion · \(org.orgName)"
+        name = org.orgName
         base = org.suggestedBase
     }
 

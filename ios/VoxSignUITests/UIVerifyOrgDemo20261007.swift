@@ -1,6 +1,6 @@
 import XCTest
 
-/// UniFusion 组织目录端到端演示（用户 A：demo-org-a → bsc + peterzou）。
+/// 独立部署目录端到端演示（用户 A：demo-org-a → unifusion + peterzou）。
 /// 跑法：先装新 Debug 包并注入 demo-org-a 的 auth + 本地演示机器，再
 /// TEST_TARGET_NAME=VoxSign xcodebuild test -only-testing:VoxSignUITests/OrgDemoUserA
 final class OrgDemoUserA: XCTestCase {
@@ -24,12 +24,12 @@ final class OrgDemoUserA: XCTestCase {
         }
         sleep(6)       // 等 refreshUniFusionOrgs 完成（本地 harness 快）
 
-        // 重新打开面板：UniFusion 区应出现后端返回的组织条目
+        // 重新打开面板：独立部署区应出现后端返回的条目
         machineBtn.tap()
-        let rowBSC = app.descendants(matching: .any)["vhs.unifusion.row.bsc"].firstMatch
+        let rowUF  = app.descendants(matching: .any)["vhs.unifusion.row.unifusion"].firstMatch
         let rowPZ  = app.descendants(matching: .any)["vhs.unifusion.row.peterzou"].firstMatch
-        XCTAssertTrue(rowBSC.waitForExistence(timeout: 12), "UniFusion·BSC 应来自后端 /v1/orgs")
-        XCTAssertTrue(rowPZ.exists, "UniFusion·PeterZou 应来自后端 /v1/orgs")
+        XCTAssertTrue(rowUF.waitForExistence(timeout: 12), "UniFusion 条目应来自后端 /v1/orgs")
+        XCTAssertTrue(rowPZ.exists, "PeterZou 条目应来自后端 /v1/orgs")
 
         let listShot = XCTAttachment(screenshot: app.screenshot())
         listShot.name = "unifusion-org-list"
@@ -101,11 +101,11 @@ final class OrgDemoUserB: XCTestCase {
         sleep(6)
 
         machineBtn.tap()
-        // 只应有 healthex，绝无 bsc/peterzou（按组织隔离）
+        // 只应有 healthex，绝无 unifusion/peterzou（按客户/部署实例隔离）
         let rowHE  = app.descendants(matching: .any)["vhs.unifusion.row.healthex"].firstMatch
-        XCTAssertTrue(rowHE.waitForExistence(timeout: 12), "UniFusion·HealthEx 应来自后端")
-        XCTAssertFalse(app.descendants(matching: .any)["vhs.unifusion.row.bsc"].exists, "B 用户不应看到 bsc 组织")
-        XCTAssertFalse(app.descendants(matching: .any)["vhs.unifusion.row.peterzou"].exists, "B 用户不应看到 peterzou 组织")
+        XCTAssertTrue(rowHE.waitForExistence(timeout: 12), "HealthEx 应来自后端")
+        XCTAssertFalse(app.descendants(matching: .any)["vhs.unifusion.row.unifusion"].exists, "B 用户不应看到 unifusion 条目")
+        XCTAssertFalse(app.descendants(matching: .any)["vhs.unifusion.row.peterzou"].exists, "B 用户不应看到 peterzou 条目")
 
         let isoShot = XCTAttachment(screenshot: app.screenshot())
         isoShot.name = "unifusion-isolation"

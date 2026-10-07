@@ -5,7 +5,7 @@
 //  机器切换面板（点顶栏机器名打开）：
 //  - 云道（默认）：零配置，点击即切换
 //  - 自建服务器列表：点击切换（机器码/直连/云端转发均可）
-//  - UniFusion 独立部署：按用户所属组织各一台（机器名=组织名），点击切换，可编辑/删除
+//  - 独立部署：按客户/部署实例各一台（条目名=客户名），点击切换，可编辑/删除
 //  - 右上「管理」→ 设置页（添加/管理服务器）
 //
 
@@ -89,7 +89,7 @@ struct MachinePickerView: View {
                     Text("自建机器")
                 }
 
-                // UniFusion 独立部署（按用户组织归属，一台组织一台）
+                // 独立部署（按客户/部署实例，一台客户一条目）
                 Section {
                     if settings.unifusionServers.isEmpty {
                         Button {
@@ -108,7 +108,7 @@ struct MachinePickerView: View {
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(s.name.isEmpty ? "UniFusion" : s.name)
+                                        Text(s.name.isEmpty ? "独立部署" : s.name)
                                             .font(.system(size: 15))
                                             .foregroundColor(.primary)
                                         Text(s.base)
@@ -142,9 +142,9 @@ struct MachinePickerView: View {
                         }
                     }
                 } header: {
-                    Text("UniFusion 独立部署")
+                    Text("独立部署")
                 } footer: {
-                    Text("按你所属组织提供的私有化部署入口。")
+                    Text("按客户/部署实例提供的私有化部署入口。")
                 }
             }
             .navigationTitle("选择机器")

@@ -3,8 +3,8 @@
 //  目的：2026-10-07 phase1-reply-ios 真机/模拟器验收闭环。
 //   1) 云端模式冒烟：键盘输入「研究一下 Unifashion 客户后台状况」→ 发送 → 等回执，
 //      断言回复气泡非空、非旧模板「我没太确定」、非 E_MODEL_EMPTY。
-//   2) UniFusion 机器切换面板：断言 vhs.machine.cloud / vhs.unifusion.row.bsc /
-//      vhs.unifusion.row.peterzou 出现，点 BSC 行切换。
+//   2) 独立部署机器切换面板：断言 vhs.machine.cloud / vhs.unifusion.row.unifusion /
+//      vhs.unifusion.row.peterzou 出现，点 UniFusion 行切换。
 //   3) 设置页 → vhs.unifusion.add → 表单填占位不可达地址 → 保存 → 断言中文报错
 //      （vhs.unifusion.form.error），非静默崩溃。
 //   4) 无回归截图：侧栏/新建会话/按住说话/设置页。
@@ -86,23 +86,23 @@ final class UIVerify20261007: XCTestCase {
             allText.range(of: "[\\u4e00-\\u9fa5]{15,}", options: .regularExpression) != nil
         XCTAssertTrue(hasNatural, "未见豆包式自然回复（无 Unifashion / 长中文气泡）")
 
-        // —— 机器切换面板：UniFusion 分区 ——
+        // —— 机器切换面板：独立部署分区 ——
         dismissSystemAlerts()
         let machine = app.buttons["vhs.machine"]
         XCTAssertTrue(machine.waitForExistence(timeout: 5), "vhs.machine 未出现")
         machine.tap()
         sleep(1)
         XCTAssertTrue(app.buttons["vhs.machine.cloud"].waitForExistence(timeout: 5), "vhs.machine.cloud 缺失")
-        XCTAssertTrue(app.buttons["vhs.unifusion.row.bsc"].waitForExistence(timeout: 5), "vhs.unifusion.row.bsc 缺失")
+        XCTAssertTrue(app.buttons["vhs.unifusion.row.unifusion"].waitForExistence(timeout: 5), "vhs.unifusion.row.unifusion 缺失")
         XCTAssertTrue(app.buttons["vhs.unifusion.row.peterzou"].waitForExistence(timeout: 5), "vhs.unifusion.row.peterzou 缺失")
         shot("02-machine-switch-panel")
 
-        // 点 BSC 行 → 切换
-        app.buttons["vhs.unifusion.row.bsc"].tap()
+        // 点 UniFusion 行 → 切换
+        app.buttons["vhs.unifusion.row.unifusion"].tap()
         sleep(1)
-        shot("03-unifusion-switched-bsc")
+        shot("03-unifusion-switched")
 
-        // 关闭面板（点云道行回云端，避免后续设置探测走 BSC 占位）
+        // 关闭面板（点云道行回云端，避免后续设置探测走占位地址）
         if app.buttons["vhs.machine.cloud"].exists {
             app.buttons["vhs.machine.cloud"].tap()
             sleep(1)
