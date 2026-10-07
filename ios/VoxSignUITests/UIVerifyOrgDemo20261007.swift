@@ -54,16 +54,31 @@ final class AddFormDemo: XCTestCase {
         let machineBtn = app.buttons["vhs.machine"].firstMatch
         XCTAssertTrue(machineBtn.waitForExistence(timeout: 20), "顶栏机器名应存在")
         machineBtn.tap()
-        // 面板右上「管理」→ 设置页
+        // 先切到本地自建机（selfHosted 模式）：设置页的「独立部署」分区仅在自建模式渲染
+        let localRow = app.descendants(matching: .any)["vhs.selfhost.row.local-8898"].firstMatch
+        if !localRow.waitForExistence(timeout: 10) {
+            let byText = app.staticTexts["本地演示"].firstMatch
+            XCTAssertTrue(byText.waitForExistence(timeout: 10), "本地演示自建机行应存在")
+            byText.tap()
+        } else {
+            localRow.tap()
+        }
+        sleep(2)
+        // 重新打开面板（切换后面板已关闭），再点右上「管理」→ 设置页
+        machineBtn.tap()
         let gear = app.buttons["管理"].firstMatch
         XCTAssertTrue(gear.waitForExistence(timeout: 6), "面板「管理」按钮应存在")
         gear.tap()
         sleep(2)
         // 设置页「添加企业部署地址」（页面下方，需滚动）
         let addBtn = app.descendants(matching: .any)["vhs.unifusion.add"].firstMatch
-        var found = addBtn.waitForExistence(timeout: 5)
-        for _ in 0..<6 where !found {
-            app.swipeUp()
+        let settingsList = app.collectionViews.firstMatch
+        XCTAssertTrue(settingsList.waitForExistence(timeout: 5), "设置页列表应存在")
+        var found = addBtn.waitForExistence(timeout: 3)
+        for _ in 0..<10 where !found {
+            let start = settingsList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+            let end = settingsList.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+            start.press(forDuration: 0.05, thenDragTo: end)
             sleep(1)
             found = addBtn.waitForExistence(timeout: 2)
         }
