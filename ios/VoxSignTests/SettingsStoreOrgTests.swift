@@ -2,10 +2,11 @@
 //  SettingsStoreOrgTests.swift
 //  VoxSignTests
 //
-//  独立部署（组织目录）后端联动单测：
+//  独立部署（组织目录）后端联动单测（build 13 后端权威语义）：
 //  - mock /v1/orgs 返回 → store 自动出现对应条目（按 orgId upsert，base/viaRelay 以后端为准）
 //  - 条目名 = 客户名（orgName），不加品牌前缀
-//  - 空组织 / 拉取失败 → 不崩、不清空已有条目，手动添加兜底仍可用
+//  - 空组织 / 零权限 / 未登录401 / 拉取失败 → 不崩；非 manual-* 同步条目被清除（落到空态），
+//    manual-* 手动兜底条目保留
 //  用独立 UserDefaults suite 隔离；APIClient 注入测试 store + orgsMock，不走真实网络。
 //
 
@@ -101,20 +102,56 @@ final class SettingsStoreOrgTests: XCTestCase {
         XCTAssertTrue(store.unifusionServers.contains(where: { $0.orgId == "manual-1" }))
     }
 
-    func testFailureDoesNotWipeExistingEntries() async {
+    func testEmptyOrgsClearsSyncedKeepsManual() async {
         let store = makeStore()
         let api = APIClient.shared
         api.settings = store
-        // 先成功同步一组
+        // 先成功同步一组后端条目
         api.orgsMock = [OrgEntry(orgId: "unifusion", orgName: "UniFusion", base: "https://unifusion.example", viaRelay: false)]
         await store.refreshUniFusionOrgs()
         XCTAssertTrue(store.unifusionServers.contains(where: { $0.orgId == "unifusion" }))
 
-        // 再失败/空：既有条目不被清空
+        // 再空列表（零权限/未登录401/端点未支持/拉取失败）：后端权威——
+        // 同步来的非 manual 条目被清除，界面落到空态「暂无可用独立部署」。
         api.orgsMock = []
         await store.refreshUniFusionOrgs()
-        XCTAssertTrue(store.unifusionServers.contains(where: { $0.orgId == "unifusion" }),
-                      "拉取空/失败不应删除已有条目")
+        XCTAssertEqual(store.backendOrgs, [])
+        XCTAssertFalse(store.unifusionServers.contains(where: { $0.orgId == "unifusion" }),
+                       "空列表（零权限/失败）应清除后端同步条目，使独立部署区落到空态")
+        XCTAssertTrue(store.unifusionServers.isEmpty, "无手动条目时独立部署区应为空（空态文案触发）")
+    }
+
+    /// 空列表权威清理时，manual-* 手动兜底条目保留（手动添加入口仍可达）。
+    func testEmptyOrgsKeepsManualEntries() async {
+        let store = makeStore()
+        let api = APIClient.shared
+        api.settings = store
+        // 先有一个后端同步条目 + 一个手动条目
+        api.orgsMock = [OrgEntry(orgId: "acme", orgName: "Acme", base: "https://acme", viaRelay: false)]
+        await store.refreshUniFusionOrgs()
+        seedEntry(store, orgId: "manual-1", base: "http://10.0.0.9:8897", token: "t")
+
+        // 空列表：acme（后端同步）被清除，manual-1（手动兜底）保留
+        api.orgsMock = []
+        await store.refreshUniFusionOrgs()
+        let ids = Set(store.unifusionServers.compactMap { $0.orgId })
+        XCTAssertFalse(ids.contains("acme"), "后端不再返回的同步条目应清除")
+        XCTAssertTrue(ids.contains("manual-1"), "manual-* 手动条目不应被空列表清理")
+    }
+
+    /// 后端为空时不再回退到硬编码占位客户目录（UniFusion/PeterZou）。
+    func testEmptyOrgsDoesNotFallBackToHardcodedCatalog() async {
+        let store = makeStore()
+        let api = APIClient.shared
+        api.settings = store
+        api.orgsMock = []
+        await store.refreshUniFusionOrgs()
+
+        XCTAssertEqual(store.availableUniFusionOrgs, [], "后端空时目录应为空，不再硬编码兜底客户")
+        XCTAssertFalse(store.availableOrgsToAdd.contains { $0.orgId == "unifusion" },
+                       "不应再出现硬编码占位 unifusion")
+        XCTAssertFalse(store.availableOrgsToAdd.contains { $0.orgId == "peterzou" },
+                       "不应再出现硬编码占位 peterzou")
     }
 
     /// 后端成功返回但缺一组织 → 该组织条目被清除（换账号/被移出组织时隔离）；

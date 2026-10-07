@@ -15,8 +15,10 @@
 //  实现上与自建机器共用 ServerConfig，仅以 orgId/orgName 标记区分，
 //  add/switch/remove/连通探测全部复用既有 servers 机制，base/token 零改动。
 //
-//  组织目录来源：后端 /v1/orgs（权威）；后端不可用时用内置占位目录兜底（首次启动播种，
-//  可编辑/删除）。orgId/orgName 语义=客户/部署实例，字段名不改。
+//  组织目录来源：后端 /v1/orgs（唯一权威）。后端返回空 / 零权限 / 未登录401 / 拉取失败
+//  → 一律视为「当前用户无可用独立部署」，界面落到空态文案「暂无可用独立部署」，
+//  绝不崩溃、不再内置任何硬编码占位客户。手动添加降级为空态内的兜底入口（manual-* 前缀）。
+//  orgId/orgName 语义=客户/部署实例，字段名不改。
 
 import Foundation
 
@@ -98,24 +100,14 @@ final class SettingsStore: ObservableObject {
     /// 云道地址（正式域名 voxsign.ai，nginx 转发 /v1 → 云端 harness 8898）。
     var cloudBase: String { "https://voxsign.ai" }
 
-    // MARK: - 独立部署（组织目录：后端 /v1/orgs 权威，失败用内置占位兜底）
+    // MARK: - 独立部署（组织目录：后端 /v1/orgs 唯一权威）
 
-    /// 内置占位目录（后端不可达 / 无归属时兜底；首次启动播种为可编辑/删除条目）。
-    /// orgId/orgName = 客户/部署实例；条目名直接显示客户名，不加品牌前缀。
-    private var fallbackUniFusionOrgs: [UniFusionOrg] {
-        [
-            UniFusionOrg(orgId: "unifusion", orgName: "UniFusion",
-                         suggestedBase: "https://unifusion-bsc.com"),
-            UniFusionOrg(orgId: "peterzou", orgName: "PeterZou",
-                         suggestedBase: "https://unifusion.peterzou.com"),
-        ]
-    }
-
-    /// 用户所属组织的部署目录（权威 = 后端 /v1/orgs）。
+    /// 用户所属组织的部署目录（唯一权威 = 后端 /v1/orgs）。
     /// 登录成功 / 切换自建机器后由 refreshUniFusionOrgs() 填充；
-    /// 拉取失败 / 404 / 无归属 → 回退到内置占位目录，保留手动添加兜底。
+    /// 拉取失败 / 401 / 空列表 → 返回空数组，界面落到空态文案，保留手动添加兜底。
+    /// （build 13 起移除硬编码占位客户目录——任何用户不再先看到 UniFusion/PeterZou 占位。）
     var availableUniFusionOrgs: [UniFusionOrg] {
-        backendOrgs.isEmpty ? fallbackUniFusionOrgs : backendOrgs
+        backendOrgs
     }
 
     /// 已是机器条目的组织 id（避免「添加组织」重复添加同一组织）。
@@ -182,14 +174,15 @@ final class SettingsStore: ObservableObject {
     /// - 成功且返回非空：已存在条目 → 更新 orgName/base/viaRelay（保留用户已填 token）；
     ///   新组织 → 自动新增；后端不再返回的组织条目 → 删除（用户被移出组织/换账号时条目消失）。
     ///   manual-* 手动条目不受后端清理影响。
-    /// - 拉取失败 / 404 / 空列表 → 保留全部现有条目，不崩（云道暂无端点时优雅回退）。
+    /// - 空列表（零权限 / 未登录401 / 端点未支持404 / 拉取失败）：同样按后端权威处理——
+    ///   liveIDs 为空 → 清除全部非 manual-* 组织条目，界面落到空态「暂无可用独立部署」。
+    ///   getOrgs() 内部绝不抛错，故此处永不因网络问题崩溃。
     func refreshUniFusionOrgs() async {
         let entries = await APIClient.shared.getOrgs()
         backendOrgs = entries.map {
             UniFusionOrg(orgId: $0.orgId, orgName: $0.orgName, suggestedBase: $0.base)
         }
-        // 失败/空列表：不动现有条目，不误删用户配置。
-        guard !entries.isEmpty else { return }
+        // 空列表时 liveIDs=空集：清理掉所有非 manual-* 的组织条目（手动兜底保留）。
         let liveIDs = Set(entries.map { $0.orgId })
         for e in entries {
             if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {

@@ -8,7 +8,8 @@
 //  - 保存并检测连接：复用 APIClient.healthCheck（直连；开启云道转发则同时探 cloudBase）
 //  - 失败给中文报错文案，绝不静默崩溃；token 不入日志/注释。
 //
-//  注：目录来自 SettingsStore.availableUniFusionOrgs（后端 /v1/orgs 权威，失败用内置占位兜底）。
+//  注：目录来自 SettingsStore.availableUniFusionOrgs（后端 /v1/orgs 唯一权威；
+//  后端为空时无目录可预选，用户可手动填写企业部署地址作为兜底）。
 
 import SwiftUI
 
