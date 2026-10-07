@@ -110,37 +110,56 @@ func TestIntentFallbackExemptsArbitrationAsks(t *testing.T) {
 	}
 }
 
-// TestIntentFallbackStillReachableWhenAskEmpty   classdiff ②: 
-// Conflict  emptybut Ask asempty **     path**  beclose ity     -- back  needsendoccur. 
+// TestIntentFallbackStillReachableWhenAskEmpty   classdiff ②:
+// Conflict  emptybut Ask asempty **     path**  beclose ity     -- back  needsendoccur.
+//
+// 2026-10-08 (distillation R2): the gate was rewritten. Ask=="" no longer blocks the
+// LLM fallback for UNKNOWN/low-confidence inputs (that is the regression this test pins);
+// at the same time confident rule hits (>=0.6) are kept without a wasted LLM call, so a
+// high-confidence EDIT/NOTE/ASK with an empty Ask stays rule-handled.
 func TestIntentFallbackStillReachableWhenAskEmpty(t *testing.T) {
 	o, calls := fallbackFixture(t)
 	ctx := context.Background()
 	const questionLike = "这样行吗？"
 
-	cases := []struct {
-		name string
-		it   contract.Intent
-	}{
-		// delete  : Intent=EDIT + Ask empty, byunder domain/risk forbidmanage,      be . 
-		{"delete", contract.Intent{Intent: contract.IntentEdit, Conflict: contract.ConflictDelete,
-			Confidence: 0.9, Ask: ""}},
-		{"note_vs_deploy", contract.Intent{Intent: contract.IntentNote, Conflict: contract.ConflictNoteVsDeploy,
-			Confidence: 0.9, Ask: ""}},
-		{"ask_vs_op", contract.Intent{Intent: contract.IntentAsk, Conflict: contract.ConflictAskVsOp,
-			Confidence: 0.9, Ask: ""}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			before := atomic.LoadInt32(calls)
-			got := o.llmIntentFallback(ctx, tc.it, questionLike)
-			if atomic.LoadInt32(calls) == before {
-				t.Fatalf("Ask 为空的合法路径被错误挡在回退之外: %s 未触发 LLM", tc.name)
-			}
-			if got.Intent != contract.IntentQuery {
-				t.Errorf("%s 回退应覆写意图为 QUERY, got %s", tc.name, got.Intent)
-			}
-		})
-	}
+	t.Run("unknown_ask_empty_still_falls_back", func(t *testing.T) {
+		before := atomic.LoadInt32(calls)
+		got := o.llmIntentFallback(ctx, contract.Intent{
+			Intent: contract.IntentUnknown, Confidence: 0.3, Ask: "",
+		}, questionLike)
+		if atomic.LoadInt32(calls) == before {
+			t.Fatalf("Ask 为空不应阻断 LLM 回退: UNKNOWN 未触发 LLM（蒸馏 R2 门禁回归）")
+		}
+		if got.Intent == contract.IntentUnknown {
+			t.Errorf("回退后意图仍为 UNKNOWN, 应被覆写为 QUERY")
+		}
+	})
+
+	t.Run("confident_rule_kept_no_wasted_call", func(t *testing.T) {
+		cases := []struct {
+			name string
+			it   contract.Intent
+		}{
+			{"delete", contract.Intent{Intent: contract.IntentEdit, Conflict: contract.ConflictDelete,
+				Confidence: 0.9, Ask: ""}},
+			{"note_vs_deploy", contract.Intent{Intent: contract.IntentNote, Conflict: contract.ConflictNoteVsDeploy,
+				Confidence: 0.9, Ask: ""}},
+			{"ask_vs_op", contract.Intent{Intent: contract.IntentAsk, Conflict: contract.ConflictAskVsOp,
+				Confidence: 0.9, Ask: ""}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				before := atomic.LoadInt32(calls)
+				got := o.llmIntentFallback(ctx, tc.it, questionLike)
+				if atomic.LoadInt32(calls) != before {
+					t.Fatalf("高置信规则命中不应浪费 LLM 调用（蒸馏 R2 门禁）: %s", tc.name)
+				}
+				if got.Intent != tc.it.Intent {
+					t.Errorf("%s 规则意图不应被覆写, got %s", tc.name, got.Intent)
+				}
+			})
+		}
+	})
 }
 
 // TestIntentFallbackRescuesDefaultUnknown   classdiff ④(base  thus  connectback ): 
