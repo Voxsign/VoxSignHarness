@@ -5,7 +5,7 @@ set -e
 export PATH=/Users/sofia/.local/go/bin:$PATH
 cd /Users/sofia/voxsign-work/VoxSignHarness
 
-export AIOPS_KEY=aiops-mac-sophia-8cdec6c75e5a1528f2efed609fbbb05f
+export AIOPS_KEY=$AIOPS_KEY
 export VHS_LOG_DIR=/tmp/vhs-corpus-full
 rm -rf $VHS_LOG_DIR
 mkdir -p $VHS_LOG_DIR/zhiji

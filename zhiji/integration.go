@@ -120,7 +120,7 @@ func (z *Zhiji) OnInput(summary string, importance float64) {
 	correctedName, conf, _ := NameCorrection(summary)
 	if correctedName != "" {
 		// ASR 同音字纠错：查现有 active 姓名，如果新名字是同音字且不是明确纠正，
-		// 保留已锁定字（"邹勇明"被 ASR 识别成"周勇明"时不覆盖）。
+		// 保留已锁定字（"<USER_NAME>"被 ASR 识别成"周勇明"时不覆盖）。
 		// 但如果 conf >= 0.9（有 breakdown 确认字），直接覆盖——用户自己解释过字了。
 		lockedName := z.currentLockedName()
 		isASRHomophone := lockedName != "" && samePersonName(lockedName, correctedName)

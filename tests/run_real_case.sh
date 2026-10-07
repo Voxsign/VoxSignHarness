@@ -9,7 +9,7 @@ set -e
 export PATH=/Users/sofia/.local/go/bin:$PATH
 cd /Users/sofia/voxsign-work/VoxSignHarness
 
-export AIOPS_KEY=aiops-mac-sophia-8cdec6c75e5a1528f2efed609fbbb05f
+export AIOPS_KEY=$AIOPS_KEY
 export VHS_LOG_DIR=/tmp/vhs-real-screenshot
 rm -rf $VHS_LOG_DIR
 mkdir -p $VHS_LOG_DIR/zhiji
@@ -42,27 +42,27 @@ echo ""
 # 截图里的真实序列（ASR 转写就是这些）
 run_step "1. ASR错'周永明'+breakdown解释" \
   "我叫周永明，呃，山东那个邹县的邹，勇敢的勇，明天的明" \
-  "邹勇明"
+  "<USER_NAME>"
 
 run_step "2. ASR错'周勇明'(系统不应横跳)" \
   "我的名字叫做周勇明，山东邹县的邹，勇敢的勇，明天的明" \
-  "邹勇明"
+  "<USER_NAME>"
 
 run_step "3. 用户抱怨系统逻辑错(不应再错)" \
   "你明显是逻辑错了嘛，我后面解释那么清楚，你还搞错了" \
-  "邹勇明"
+  "<USER_NAME>"
 
 run_step "4. ASR错'周永勇'(应拦住)" \
   "好，确认了！你是周永勇" \
-  "邹勇明"
+  "<USER_NAME>"
 
 run_step "5. 用户拼字母ZOU(应识别)" \
   "这个叫周永明，Z O U，对吧？" \
-  "邹勇明"
+  "<USER_NAME>"
 
 run_step "6. 问名字(最终答案)" \
   "记住了吗？我叫什么？" \
-  "邹勇明"
+  "<USER_NAME>"
 
 echo "=========================================="
 echo "结果: $PASS PASS, $FAIL FAIL"

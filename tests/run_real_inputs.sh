@@ -6,7 +6,7 @@ set -e
 export PATH=/Users/sofia/.local/go/bin:$PATH
 cd /Users/sofia/voxsign-work/VoxSignHarness
 
-export AIOPS_KEY=aiops-mac-sophia-8cdec6c75e5a1528f2efed609fbbb05f
+export AIOPS_KEY=$AIOPS_KEY
 export VHS_LOG_DIR=/tmp/vhs-real-inputs
 rm -rf $VHS_LOG_DIR
 mkdir -p $VHS_LOG_DIR/zhiji
@@ -47,12 +47,12 @@ echo ""
 
 # === A. 用户身份（截图真实对话）===
 echo "=== A. 用户身份记忆（截图真实场景）==="
-run "A1 自我介绍ASR错+breakdown" "我叫周永明，呃，山东那个邹县的邹，勇敢的勇，明天的明" "邹勇明"
-run "A2 ASR错周勇明" "我的名字叫做周勇明，山东邹县的邹，勇敢的勇，明天的明" "邹勇明"
-run "A3 用户抱怨逻辑错" "你明显是逻辑错了嘛，我后面解释那么清楚，你还搞错了" "邹勇明"
-run "A4 ASR错周永勇" "我叫周永勇" "邹勇明"
-run "A5 拼字母ZOU" "这个叫周永明，Z O U，对吧？" "邹勇明"
-run "A6 问名字" "我叫什么名字？" "邹勇明"
+run "A1 自我介绍ASR错+breakdown" "我叫周永明，呃，山东那个邹县的邹，勇敢的勇，明天的明" "<USER_NAME>"
+run "A2 ASR错周勇明" "我的名字叫做周勇明，山东邹县的邹，勇敢的勇，明天的明" "<USER_NAME>"
+run "A3 用户抱怨逻辑错" "你明显是逻辑错了嘛，我后面解释那么清楚，你还搞错了" "<USER_NAME>"
+run "A4 ASR错周永勇" "我叫周永勇" "<USER_NAME>"
+run "A5 拼字母ZOU" "这个叫周永明，Z O U，对吧？" "<USER_NAME>"
+run "A6 问名字" "我叫什么名字？" "<USER_NAME>"
 
 # === B. 实体 resolve（用户真实提到的人）===
 echo "=== B. 实体理解 ==="

@@ -9,7 +9,7 @@ export PATH=/Users/sofia/.local/go/bin:$PATH
 HARNESS=/Users/sofia/voxsign-work/VoxSignHarness
 cd $HARNESS
 
-export AIOPS_KEY=aiops-mac-sophia-8cdec6c75e5a1528f2efed609fbbb05f
+export AIOPS_KEY=$AIOPS_KEY
 export VHS_LOG_DIR=/tmp/vhs-test-suite
 rm -rf $VHS_LOG_DIR
 mkdir -p $VHS_LOG_DIR/zhiji
@@ -49,10 +49,10 @@ echo ""
 
 # === 组1: 用户身份记忆 + ASR 纠错 ===
 echo "=== 组1: 用户身份记忆 + ASR 同音字纠错 ==="
-run_case 1.1 "自我介绍(ASR错+breakdown)" "我叫周永明，山东邹县的邹，勇敢的勇，明天的明" "邹勇明"
-run_case 1.2 "ASR错'周勇明'(应拦住)" "我叫周勇明" "邹勇明"
-run_case 1.3 "ASR错'周永勇'(应拦住)" "我叫周永勇" "邹勇明"
-run_case 1.4 "问名字" "我叫什么名字？" "邹勇明"
+run_case 1.1 "自我介绍(ASR错+breakdown)" "我叫周永明，山东邹县的邹，勇敢的勇，明天的明" "<USER_NAME>"
+run_case 1.2 "ASR错'周勇明'(应拦住)" "我叫周勇明" "<USER_NAME>"
+run_case 1.3 "ASR错'周永勇'(应拦住)" "我叫周永勇" "<USER_NAME>"
+run_case 1.4 "问名字" "我叫什么名字？" "<USER_NAME>"
 
 # === 组2: 实体 resolve ===
 echo "=== 组2: 命名实体 resolve ==="
