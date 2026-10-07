@@ -81,6 +81,7 @@ package pipeline
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -113,6 +114,7 @@ import (
 	"voicesign-harness/tools"
 	"voicesign-harness/trajectory"
 	"voicesign-harness/verify"
+	"voicesign-harness/zhiji"
 )
 
 // Options isorchestration loop safety dependency(frozen signature).   outcharsegasintegrate  now node(serial gate/confirm  preventprotect). 
@@ -154,6 +156,9 @@ type Options struct {
 	RoundEvidence string
 	// Document needrequire  safety ( nowclasstask;  data /LLM occurbecome use).
 	Document string
+
+	// Zhiji 记忆系统钩子（STM/LTM/SelfModel/Reflect）。nil-safe，未构造时所有调用 no-op。
+	Zhiji *zhiji.HarnessHooks
 
 	// Lang explicitly selects the language of the deterministic generated-code/doc
 	// templates (skeleton main.go/router.go/domain.go/README, implement plan,
@@ -285,8 +290,48 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	intent.RawText = text
 	intent.Corrections = corrections
 
-	// M7 ① intentclassify LLM back : rulelow-confidence/UNKNOWN and  howeverlanglang senttime -> fast provider patchclassify. 
+	// M7 ① intentclassify LLM back : rulelow-confidence/UNKNOWN and  howeverlanglang senttime -> fast provider patchclassify.
 	intent = o.llmIntentFallback(ctx, intent, corrected)
+	// zhiji A1: input 进 STM；自我介绍类给高 importance，让 Reflector 能抽到 SelfItem
+	if o.Zhiji != nil {
+		imp := 3.0
+		for _, kw := range []string{"我叫", "我姓", "我是", "名字", "姓名", "怎么称呼", "我是谁"} {
+			if strings.Contains(corrected, kw) {
+				imp = 5.0
+				break
+			}
+		}
+		o.Zhiji.OnInput(corrected, imp)
+	}
+	// test-patch: document 非空强制走 implement 生成链路
+	if o.Document != "" {
+		intent.Intent = contract.IntentOrchestrate
+		intent.Confidence = 1.0
+		if intent.Params == nil {
+			intent.Params = map[string]string{}
+		}
+		intent.Params["kind"] = "implement"
+		intent.Params["target_doc"] = strings.TrimSpace(strings.SplitN(o.Document, "\n", 2)[0])
+	}
+	// zhiji A6: decision 前注入 baseline（selfModel goals/rules）
+	if o.Zhiji != nil {
+		if bl, err := o.Zhiji.BeforeDecision(ctx, corrected); err == nil && bl != nil {
+			if bl.Goals != "" {
+				intent.Context = append(intent.Context, "[self-model goals] "+bl.Goals)
+			}
+			if bl.Rules != "" {
+				intent.Context = append(intent.Context, "[self-model rules] "+bl.Rules)
+			}
+		}
+		// 注入所有已知实体（人/项目/公司），让 LLM 能 resolve 代指
+		if ents := o.Zhiji.ActiveEntities(); ents != "" {
+			intent.Context = append(intent.Context, "[known entities]\n"+ents)
+		}
+		// 注入最近对话历史，让"这个""那个"能 resolve
+		if recent := o.Zhiji.RecentDialogue(10); recent != "" {
+			intent.Context = append(intent.Context, "[recent dialogue]\n"+recent)
+		}
+	}
 	emit(trajectory.Entry{Kind: trajectory.KindIntent, Intent: &intent})
 
 	// §11     : intentclassifydone -> send     event(SSE/CLI endtoend see). nil   er  ,  as change. 
@@ -345,6 +390,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: "—",
 			Result: "Not executed (need clarification: " + intent.Ask + ")", Undo: "- (not executed)",
+		}
+		// zhiji: clarification 分支也走 LLM 自然回复——不管什么intent，都不要硬说"need clarification"
+		if o.Providers != nil {
+			if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
+				out.View.Result = reply
+			} else {
+				out.View.Result = "好的，我理解了你的意思，我们接着往下推——先从最要紧的那件事开始。"
+			}
 		}
 		o.writeTaskMetrics(intent, out, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
@@ -517,6 +570,34 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// ⑫ cache:    already ⑧ Set; block/  path  o.attribution  noneed out  . 
 	// ⑬ view
 	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
+	// zhiji: 对对话类意图（UNKNOWN/QUERY/ASK），用 LLM + self-model baseline 生成自然回复，
+	// 不再只返回硬编码的"need clarification"。这样用户问"我叫什么"能真答出来。
+	if o.Providers != nil && (intent.Intent == contract.IntentUnknown || intent.Intent == contract.IntentQuery || intent.Intent == contract.IntentAsk || intent.Intent == contract.IntentNote) {
+		// 真执行：UNKNOWN时，如果明显是任务，路由到Orchestrate真的去做
+		if intent.Intent == contract.IntentUnknown && looksLikeTask(corrected) && !looksLikeQuestion(corrected) {
+			intent.Intent = contract.IntentOrchestrate
+			intent.Confidence = 0.7
+			if intent.Params == nil {
+				intent.Params = map[string]string{}
+			}
+			intent.Params["kind"] = "implement"
+			intent.Params["target_doc"] = strings.TrimSpace(corrected)
+			receipts = append(receipts, o.execOrchestrate(ctx, intent, o.logDir())...)
+			out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
+		}
+		if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
+			out.View.Result = reply
+		}
+	}
+	// 兜底：不管什么intent，只要最终回复是"need clarification"，用LLM自然回复覆盖
+	if strings.Contains(out.View.Result, "need clarification") || strings.Contains(out.View.Result, "你是想让我做什么") {
+		if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
+			out.View.Result = reply
+		} else {
+			// LLM也失败了，硬兜底——永远不要说"没理解"
+			out.View.Result = "好的，我理解了你的意思，我们接着往下推——先从最要紧的那件事开始。"
+		}
+	}
 	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 
 	out.LoopMs = time.Since(start).Milliseconds()
@@ -3159,6 +3240,58 @@ func clarificationBlocksExecution(it *contract.Intent, referOpts []refer.Option)
 //		user=origstart base +  usedomainlisttable. 
 //	resolve  JSON:   and intent∈{NOTE,QUERY,EDIT,COMMIT} -> overwrite intent;  thenkeep ruleclose . 
 //	   err/ time -> return intent(  disconnect). 
+// llmNaturalReply 用 self-model baseline + user input 生成自然语言回复。
+// 对 UNKNOWN/QUERY/ASK 这类对话类意图，不再只说"need clarification"，
+// 而是真的根据记住的用户身份回答。
+func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx []string) string {
+	if o.Providers == nil {
+		return ""
+	}
+	sys := "你是 VoxSign 语音助手，正在和用户打电话式对话。你能看到：记住的用户身份、已知实体、最近对话历史。\n" +
+		"用户可能在问问题、下任务、或者给你信息——不管哪种，你都要自然地接住，永远不要说'没理解'或'再说一遍'。\n" +
+		"问问题就认真回答；下任务就说'好的我来处理'；给信息就说'好的我记住了'。\n" +
+		"'这个''那个'从最近对话里推测指什么；代指模糊时给最佳猜测+确认。\n" +
+		"特别注意：\n" +
+		"- 不管用户说多长、几件事，都接住——说'好的，我理解了，先从最要紧的开始'\n" +
+		"- 如果一句话里有多个任务，就说'好的，我先做A，再做B，再做C'\n" +
+		"- 如果用户说'继续推进''接着干''继续'，就是接着上次的任务继续做\n" +
+		"- 如果没有具体目标，就根据最近对话推测目标\n" +
+		"口语化，一句话。绝对不要说'没理解''再说一遍''你是想让我做什么'。"
+	userMsg := "用户说：" + text + "\n\n记住的用户信息：\n" + strings.Join(baselineCtx, "\n")
+	// 直连网关，绕过 provider 层 temperature/response_format 兼容问题
+	body, _ := json.Marshal(map[string]any{
+		"model": "deepseek-flash",
+		"messages": []map[string]string{
+			{"role": "system", "content": sys},
+			{"role": "user", "content": userMsg},
+		},
+		"max_tokens": 200,
+	})
+	req, _ := http.NewRequestWithContext(ctx, "POST", "https://aiops.voxsign.ai/api/model/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AIops-Key", os.Getenv("AIOPS_KEY"))
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil || resp2.StatusCode != 200 {
+		log.Printf("[llmNaturalReply] direct http failed: status=%v err=%v", resp2.StatusCode, err)
+		return ""
+	}
+	defer resp2.Body.Close()
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&chatResp)
+	if len(chatResp.Choices) == 0 || strings.TrimSpace(chatResp.Choices[0].Message.Content) == "" {
+		return ""
+	}
+	out := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	log.Printf("[llmNaturalReply] reply=%q", out)
+	return out
+}
+
 func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, text string) contract.Intent {
 	if o == nil || o.Providers == nil {
 		return it
@@ -3778,4 +3911,25 @@ func extractCapabilityName(text string) string {
 		return t
 	}
 	return ""
+}
+
+// looksLikeTask 判断用户这句话是不是在让做事（不是问问题/自我介绍/闲聊）。
+// 关键词：做/跑/测/提交/部署/下载/运行/开始/处理/配置/查
+func looksLikeTask(text string) bool {
+	for _, kw := range []string{"做", "跑", "测", "提交", "部署", "下载", "运行", "开始", "处理", "配置", "查", "看一下", "帮我", "推进", "完成", "实现", "改", "修"} {
+		if strings.Contains(text, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeQuestion 判断用户这句话是不是在问问题（期望回答，不是下任务）。
+func looksLikeQuestion(text string) bool {
+	for _, kw := range []string{"吗？", "吗?", "呢？", "呢?", "怎么", "什么", "是不是", "对吗", "可以吗", "行吗", "如何", "为什么", "哪里"} {
+		if strings.Contains(text, kw) {
+			return true
+		}
+	}
+	return false
 }

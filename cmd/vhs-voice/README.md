@@ -46,14 +46,14 @@ PASS=14 FAIL=0（12 判据 + 2 补充子断言）
 
 ```bash
 curl -X POST localhost:8950/v1/voice/run -d '{
-  "text": "拉取 GitHub 仓库 smithpeter/voicesign-harness 最新版，跑测试用例",
+  "text": "拉取 GitHub 仓库 VoxSign/voxsign 最新版，跑测试用例",
   "conversation_id": "c2"
 }'
 ```
 
 ```json
 {"summary":{"done":2,"failed":0,"need_ask":0,"total":2},
- "tasks":[{"seq":1,"action":"拉取","target":"GitHub 仓库 smithpeter/voicesign-harness",
+ "tasks":[{"seq":1,"action":"拉取","target":"GitHub 仓库 VoxSign/voxsign",
           "task_id":"t-2","status":"done","result":"任务完成"},
           {"seq":2,"action":"跑","target":"测试用例","task_id":"t-3","status":"done",
           "result":"任务完成"}],"next":[]}

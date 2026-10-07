@@ -13,7 +13,8 @@
       "model_id": "deepseek-flash",
       "timeout_ms": 30000,
       "max_concurrency": 4,
-      "write_back": false
+      "write_back": false,
+      "params": {"no_temperature": true}
     },
     "diagnose": {
       "enabled": true,

@@ -98,3 +98,31 @@ func (l *RawLog) Len() int {
 	}
 	return n
 }
+
+// Recent 返回最近 n 条用户输入文本。
+func (l *RawLog) Recent(n int) []string {
+	if l == nil || l.path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(l.path)
+	if err != nil {
+		return nil
+	}
+	var texts []string
+	lines := strings.Split(string(b), "\n")
+	start := len(lines) - n
+	if start < 0 {
+		start = 0
+	}
+	for _, line := range lines[start:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var obs RawObs
+		if json.Unmarshal([]byte(line), &obs) == nil && obs.Text != "" {
+			texts = append(texts, obs.Text)
+		}
+	}
+	return texts
+}

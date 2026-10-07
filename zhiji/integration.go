@@ -30,6 +30,8 @@ type Zhiji struct {
 	Vault      VaultWriter
 	Reflector  *Reflector
 	RawLog     *RawLog // v1.1 origstart   append-only(raw.jsonl)
+	Entities   *EntityStore
+	Mentions   *MentionTracker
 
 	runCancel context.CancelFunc
 }
@@ -58,6 +60,7 @@ func NewZhiji(dir string, vault VaultWriter) (*Zhiji, error) {
 	compressor := NewCompressor(store)
 	reflector := NewReflector(store)
 	contract := NewContract(store, log)
+	entities, _ := NewEntityStore(dir)
 	return &Zhiji{
 		Store:      store,
 		Log:        log,
@@ -68,6 +71,8 @@ func NewZhiji(dir string, vault VaultWriter) (*Zhiji, error) {
 		Vault:      vault,
 		Reflector:  reflector,
 		RawLog:     NewRawLog(filepath.Join(dir, "raw.jsonl")),
+		Entities:   entities,
+		Mentions:   NewMentionTracker(dir),
 	}, nil
 }
 
@@ -108,7 +113,61 @@ func (z *Zhiji) OnInput(summary string, importance float64) {
 		}
 	}
 	z.Store.TouchSTM(item, 10)
-	z.Store.MarkInput() //  in  : has in  , rev line pos node 
+	z.Store.MarkInput() //  in  : has in  , rev line pos node
+	// 同步持久化（一次性 CLI 进程 reflector goroutine 不会跑，必须立即落盘）
+	_ = z.Store.SaveAll()
+	// 同步 identity 抽取：用 NameCorrection 融合 ASR + breakdown + 字母拼写
+	correctedName, conf, _ := NameCorrection(summary)
+	if correctedName != "" {
+		// ASR 同音字纠错：查现有 active 姓名，如果新名字是同音字且不是明确纠正，
+		// 保留已锁定字（"<USER_NAME>"被 ASR 识别成"张大山"时不覆盖）。
+		// 但如果 conf >= 0.9（有 breakdown 确认字），直接覆盖——用户自己解释过字了。
+		lockedName := z.currentLockedName()
+		isASRHomophone := lockedName != "" && samePersonName(lockedName, correctedName)
+		isExplicit := explicitCorrection(summary)
+		if isASRHomophone && conf < 0.9 && !isExplicit {
+			// ASR 误识，保留旧字
+		} else {
+			_, _ = z.Store.UpsertSelf(SelfItem{
+				Layer:            LayerGoal,
+				Text:             "用户姓名：" + correctedName,
+				SourceTrajectory: "oninput:identity",
+				Confidence:       conf,
+				Status:           StatusActive,
+			})
+		}
+		_ = z.Store.SaveAll()
+	}
+	// 自动记录已知实体提及（用于代指 resolve 的时间衰减）
+	if z.Entities != nil && z.Mentions != nil {
+		for _, e := range z.Entities.AllActive() {
+			// 如果文本里提到了 canonical 或任何 alias，记录 mention
+			if containsRune(summary, e.Canonical) {
+				z.Mentions.Record(e.Canonical)
+			} else {
+				for _, a := range e.Aliases {
+					if a != "" && containsRune(summary, a) {
+						z.Mentions.Record(e.Canonical)
+						break
+					}
+				}
+			}
+		}
+	}
+}
+
+// currentLockedName 返回当前 active 的"用户姓名：X"里的 X。
+func (z *Zhiji) currentLockedName() string {
+	for _, s := range z.Store.SelfModel(LayerGoal) {
+		if s.Status != StatusActive {
+			continue
+		}
+		const prefix = "用户姓名："
+		if len(s.Text) > len(prefix) && s.Text[:len(prefix)] == prefix {
+			return s.Text[len(prefix):]
+		}
+	}
+	return ""
 }
 
 // BeforeDecision decide beforenoteinbaseline (   decide stagecalluse; returnbacknotein baseprovide  ). 
