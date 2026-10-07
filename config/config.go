@@ -287,14 +287,21 @@ func Load(configPath string) (Config, error) {
 	}
 
 	//   change overwrite(onlycuralready  ). 
+	// 2026-10-08 (harness distillation): per-provider explicit api_key in the config file WINS over
+	// the env override — multi-provider setups (e.g. local on-prem qwen + cloud classifier) need
+	// different keys per provider. Providers WITHOUT an explicit key still inherit VHS_API_KEY/AIOPS_KEY.
 	if v := os.Getenv("VHS_API_KEY"); v != "" {
 		for i := range cfg.Providers {
-			cfg.Providers[i].APIKey = v
+			if cfg.Providers[i].APIKey == "" {
+				cfg.Providers[i].APIKey = v
+			}
 		}
 	} else if v := os.Getenv("AIOPS_KEY"); v != "" {
 		// 2026-10-04 compat change name( before harness   use AIOPS_KEY   closeread Key). 
 		for i := range cfg.Providers {
-			cfg.Providers[i].APIKey = v
+			if cfg.Providers[i].APIKey == "" {
+				cfg.Providers[i].APIKey = v
+			}
 		}
 	}
 	if v := os.Getenv("VHS_PROVIDER"); v != "" {

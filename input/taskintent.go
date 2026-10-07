@@ -98,22 +98,34 @@ var (
 	thoughtWords   = []string{"想法", "备忘"}
 	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
 	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
-	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到"}
+	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
+		// 2026-10-08 (distillation R2): "记一条：明天上午9点开会" fell to UNKNOWN because
+		// "记一条" was missing from the note table. Added for NOTE capability baseline (U3).
+		"记一条", "记个条", "记个想法", "记条"}
 	// reminderTriggers: reminder/alarm/timed prompts. Must be matched BEFORE noteTriggers,
 	// otherwise "记个提醒：明天八点开会" trips "记个" and the whole sentence is misrouted to
 	// NOTE (appended verbatim into notes.md) — the repo has no cron/scheduler at all.
-	reminderTriggers = []string{"提醒我", "提醒", "闹钟", "几点叫我", "到点提醒", "定时提醒", "设个时间", "定时叫"}
+	reminderTriggers = []string{"提醒我", "提醒", "闹钟", "几点叫我", "到点提醒", "定时提醒", "设个时间", "定时叫",
+		// 2026-10-08 (distillation R4): English reminder forms for the A7-REMINDER-EN case.
+		"Remind me", "remind me", "Set a reminder", "set a reminder", "Remind", "remind"}
 	queryTriggers  = []string{"查一下", "查", "找一下", "找", "上次", "搜一下", "搜", "看看", "看",
+		"读一下", "读",
 		"几点", "几点钟", "什么时间", "几号", "星期几", "周几",
 		// 2026-10-04   control  seg:   formtriggersendword empty , only"   ls/   cat"class in, 
 		//    "    pos  "(noempty   in). 
-		"运行 ", "执行 ", "帮我跑 ", "截个图", "截图"}
+		"运行 ", "执行 ", "帮我跑 ", "截个图", "截图",
+		// 2026-10-08 (distillation R2): arithmetic / email drafting / translation are content
+		// generation requests; route them to QUERY instead of UNKNOWN (U5/U6/A5 baseline).
+		"算一下", "等于多少", "多少", "等于", "邮件", "写一封", "翻译", "translate", "翻译成"}
 	editTriggers    = []string{"改成", "换成", "改一下", "修改", "替换", "改"}
 	debugTriggers   = []string{"报错", "为什么失败", "崩溃", "闪退", "出错", "bug", "修一下", "修这个", "修那个", "修一修", "修"}
 	testTriggers    = []string{"跑测试", "跑一下", "测一下", "跑个测试", "测试"}
 	commitTriggers  = []string{"提交", "推上去", "推到"}
 	deployTriggers  = []string{"部署", "上线", "生成报表", "发到", "发布"}
-	askTriggers     = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何"}
+	askTriggers     = []string{"为什么", "怎么办", "你觉得", "是什么意思", "怎么弄", "如何",
+		// 2026-10-08 (distillation R2): "那个东西怎么样了" is an ambiguous referent question;
+		// route to ask so the harness asks which item instead of guessing (U4 baseline).
+		"怎么样了", "怎么样"}
 	defaultExcludes = []string{".env*", "node_modules"}
 )
 
@@ -256,9 +268,12 @@ func registerGapThenNoun(after string) bool {
 //   **  **"  ":  is"   "   split, recv pipe  ity sent  . 
 //    P1 patch :  /  /  /noneed/ again/  -- origfirst recv,    
 // "  delete""noneed  "" again  " be become     . 
+// 2026-10-08 (distillation R4): "算了/不记了/不做了/不写了/别记/取消" added so that
+// abandon-style utterances ("算了，不记了") are recognized as negation instead of UNKNOWN.
 var negationMarkers = []string{
 	"不需要", "不要再", "请勿", "切勿", "无需", "不再",
 	"不要", "不用", "先别", "别再", "免了",
+	"算了", "不记了", "不做了", "不写了", "别记", "取消",
 }
 
 // markerIsNegation   "    ,     " onunder (   P2). 
@@ -377,7 +392,10 @@ var actionWords = func() []string {
 // ---------------------------------------------------------------------------
 
 // metaPrefixes isto controlclassbefore . 
-var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下来", "推进", "开工", "先这样", "暂停", "停一下"}
+var metaPrefixes = []string{"开始", "继续", "接着", "下一步", "接下来", "推进", "开工", "先这样", "暂停", "停一下",
+	// 2026-10-08 (distillation R4): "就这样吧" is a wrap-up/chit-chat closer; treat it as
+	// a meta stop instead of letting the LLM mislabel it COMMIT (-> human-confirm stall).
+	"就这样吧", "就这样"}
 
 // metaInstruction    baseis as" refer  +   "  state. 
 //
@@ -476,7 +494,17 @@ func metaInstruction(text string) (string, bool) {
 			continue
 		}
 		rest := text[i+len(m):]
-		if rest == "" || !containsAny(rest, actionWords) {
+		if rest == "" {
+			// 2026-10-08 (distillation R4): "就这样吧" is a complete wrap-up instruction when
+			// spoken alone. Bare "开始/继续/暂停" stays a referent signal (excluded here and
+			// pinned by TestMetaRequiresActionWord).
+			switch m {
+			case "就这样吧", "就这样":
+				return m, true
+			}
+			continue
+		}
+		if !containsAny(rest, actionWords) {
 			continue
 		}
 		//     wordandsenttaillang becomesplit;   all   = useuser giveto  =  refer . 
@@ -897,8 +925,15 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// 0.     (   G1,     delete  **ofbefore**). 
 	//    ` needdelete  file` iffirst on deleteTriggers, then be become     EDIT(action=delete); 
 	//      word connect    time    ASK confirm -- SPEC-v2:49"Ask != '' ->     ". 
+	// 2026-10-08 (distillation R4): abandon-style words ("算了，不记了") carry the bare
+	// verb "记" which is not in noteTriggers ("记一条" etc.), so actionWords misses and the
+	// negation branch would be skipped -> UNKNOWN. Settled words are complete abandon
+	// expressions and must reach the negation flow on their own.
+	settledNegation := strings.Contains(text, "算了") || strings.Contains(text, "取消") ||
+		strings.Contains(text, "不记") || strings.Contains(text, "不写") ||
+		strings.Contains(text, "不做") || strings.Contains(text, "别记")
 	if neg, actionBound, ok := hasNegation(text); ok && (actionBound ||
-		containsAny(text, actionWords) || registerToolRequest(text)) {
+		containsAny(text, actionWords) || registerToolRequest(text) || settledNegation) {
 		got := c.fill(ti, contract.IntentAsk, 0.9, nil)
 		got.Conflict = contract.ConflictNegation
 		got.Ask = "我听到的是「" + neg + "」——确认不执行这个动作吗？" +
@@ -1080,10 +1115,31 @@ func (c *TaskClassifier) fill(ti contract.Intent, kind string, conf float64, par
 	//    G2:    sent i.e.then   also  clarification. 
 	// orig as:  classtriggersend  0.85,   atdefault value 0.6, atis applyCommon    
 	// "low-confidenceclarification" default  under      -- "modify under""fix"" " connect     . 
-	if ti.Ask == "" && slotGateTrips(kind, ti.CorrectedText) {
+	// 2026-10-08 (distillation R4): note-read requests ("读一下笔记") trip the slot gate
+	// because "读笔记" (3 runes) is not longer than the "读一下" trigger (3 runes) — but the
+	// note file itself IS the object; skip the clarification and let execActions read notes.md.
+	if ti.Ask == "" && slotGateTrips(kind, ti.CorrectedText) && !notesReadRequest(ti.CorrectedText) {
 		ti.Ask = askForKind(kind)
 	}
 	return ti
+}
+
+// notesReadRequest reports whether the text asks to read the session note file:
+// a note referent plus a read verb. Mirrors pipeline.isNotesReferent for the slot gate.
+func notesReadRequest(text string) bool {
+	lower := strings.ToLower(text)
+	ref := false
+	for _, k := range []string{"笔记", "备忘", "记录", "notes", "note"} {
+		if strings.Contains(lower, k) {
+			ref = true
+			break
+		}
+	}
+	if !ref {
+		return false
+	}
+	return strings.Contains(text, "读") || strings.Contains(text, "看") ||
+		strings.Contains(lower, "read")
 }
 
 // slotGateFillers is  time and    word/ fillword. 
