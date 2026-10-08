@@ -67,6 +67,7 @@ type Receipt struct {
 	Stderr     string `json:"stderr,omitempty"`
 	Err        string `json:"err,omitempty"`
 	Blocked    string `json:"blocked,omitempty"` // safesafetyblockorigbecause
+	ConfirmAsk bool   `json:"confirm_ask,omitempty"` // distillation R6: receipt is a confirmation gate (render 待确认, not FAILED)
 	DurationMs int64  `json:"duration_ms"`
 }
 
@@ -147,6 +148,7 @@ const (
 	IntentReminder     = "REMINDER"      // reminder/alarm: explicit not-implemented branch (no cron/scheduler), no longer misrouted to NOTE
 	IntentBuildTest    = "BUILD_TEST"    // distillation R5 (2026-10-08): clone/download code -> build -> test real pipeline
 	IntentContinue     = "CONTINUE"      // distillation R5: "开始干/立刻执行/继续" resumes the task slot from the previous turn
+	IntentInstall      = "INSTALL"       // distillation R6 (2026-10-08): "安装 codex / claude code 到后台" -> real npm install on the host, gated by a confirm + task slot
 )
 
 // confirm  etc (Intent.Confirm, risk   decideafterbackfillauthoritative value). 
