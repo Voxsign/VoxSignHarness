@@ -14,6 +14,7 @@
 //
 
 import SwiftUI
+import AVFAudio
 
 struct InputBarView: View {
     @EnvironmentObject var model: AppModel
@@ -70,11 +71,19 @@ struct InputBarView: View {
                 .fill(Color.black.opacity(0.08))
                 .frame(height: 0.5)
         }
-        // 【开头录不进修复】进入主界面即预热语音引擎：按下时 engine.start 首帧提前，
-        // 开头语音不再被引擎冷启动吞掉。
+        // 【闪退排查 B24】prewarm 在打开 App 的 onAppear 即触发，audioSetupQueue 后台线程
+        // 直接 engine.prepare()，无权限前置检查、无 NSException 防护（Swift 捕不到 ObjC 异常，
+        // prepare 异常=直接闪退）。疑似"打开 App 即崩"根因——先移除验证，后续用安全方式（授权后+主线程）恢复。
+        // .onAppear {
+        //     #if canImport(Speech)
+        //     SpeechRecognizer.shared.prewarm()
+        //     #endif
+        // }
         .onAppear {
             #if canImport(Speech)
-            SpeechRecognizer.shared.prewarm()
+            if AVAudioSession.sharedInstance().recordPermission == .granted {
+                SpeechRecognizer.shared.prewarm()
+            }
             #endif
         }
         .sheet(isPresented: $showAttachPanel) {

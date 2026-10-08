@@ -673,6 +673,13 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// "动作待模型工具循环落地"）。路径从"写到/写入/保存到"后提取。
 		path, content := extractWriteTarget(it.CorrectedText)
 		if path == "" {
+			// 2026-10-08 用户实测「写一封英文邮件」：EDIT 无路径 → 卡"文件路径"回问（对牛弹琴）。
+			// 无路径写作请求（邮件/信/草稿/文章）→ LLM 直接生成内容返回，不回问、不写文件。
+			if isComposeRequest(it.CorrectedText) {
+				if draft := o.queryLLMCompose(context.Background(), it.RawText); draft != "" {
+					return []contract.Receipt{{Tool: "compose", OK: true, Stdout: draft}}
+				}
+			}
 			return []contract.Receipt{{Tool: "file", OK: false,
 				Err: "未识别要写入的文件路径（说「把 XX 写到 /path/to/file」）"}}
 		}
@@ -732,6 +739,18 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 
 // extractWriteTarget 从"把 XX 写到 /path"类口语提取 (路径, 内容)。
 // 路径 = "写到/写入/保存到/保存为/创建文件"后第一个以 / 开头的词；内容 = 其余文本（去"把"）。
+// isComposeRequest 判定"无路径写作"请求（写邮件/写信/草稿/文章等）→ LLM 直接生成内容返回，
+// 不再卡"文件路径"回问（2026-10-08 用户实测「写一封英文邮件」反复被卡）。
+// 仅当 extractWriteTarget 未提取到路径时才检查；已点名路径的写文件请求不受影响。
+func isComposeRequest(text string) bool {
+	for _, k := range []string{"邮件", "写信", "草稿", "文章", "写一篇", "写一段", "email", "信给"} {
+		if strings.Contains(text, k) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractWriteTarget(text string) (string, string) {
 	marks := []string{"写到", "写入", "保存到", "保存为", "创建文件"}
 	rest := ""
@@ -3357,6 +3376,55 @@ func receiptsDigest(rs []contract.Receipt) string {
 	return strings.TrimSpace(sb.String())
 }
 
+// queryLLMCompose 无路径写作生成（2026-10-08）：「写一封英文邮件」等请求直接生成完整内容。
+// 与 queryLLMAnswer 的区别：system 指令为"直接输出内容本身"（不解释/不提问/不 JSON），
+// MaxTokens 放宽到 1600（邮件/文章正文可能超过 400）。
+func (o *Options) queryLLMCompose(ctx context.Context, original string) string {
+	if o == nil || o.Providers == nil {
+		log.Printf("[queryLLMCompose] providers 未配置")
+		return ""
+	}
+	p, err := o.Providers.Get("fast")
+	if err != nil {
+		log.Printf("[queryLLMCompose] fast provider unavailable: %v", err)
+		return ""
+	}
+	resp, err := p.Chat(ctx, provider.ChatRequest{
+		Messages: []contract.Message{
+			{Role: "system", Content: "你是 VoxSign 写作助手。根据用户要求直接输出完整内容（邮件、文章、文档、代码等），只输出内容本身，不要解释、不要提问、不要输出 JSON、不要输出任何结构化格式。"},
+			{Role: "user", Content: "用户要求：" + original},
+		},
+		MaxTokens:      1600,
+		ResponseFormat: noJSON(),
+	})
+	if err != nil {
+		log.Printf("[queryLLMCompose] fast Chat err: %v", err)
+		return ""
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		log.Printf("[queryLLMCompose] fast Chat empty content")
+		return ""
+	}
+	// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本。
+	if strings.HasPrefix(content, "{") {
+		var j map[string]any
+		if err := json.Unmarshal([]byte(content), &j); err == nil {
+			for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
+				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+					content = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+		if strings.HasPrefix(content, "{") {
+			log.Printf("[queryLLMCompose] fast returned unexpected JSON shell: %.160s", content)
+			return ""
+		}
+	}
+	return content
+}
+
 // ensureReply（Phase 1，D0 冻结契约）：任务终态前保证 Outcome.Reply 非空。
 //
 //	已执行成功路径：
@@ -3397,6 +3465,18 @@ func (o *Options) ensureReply(ctx context.Context, out *Outcome, it contract.Int
 			out.Reply = truncateStr(s, 800)
 			o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
 				LatencyMs: time.Since(start).Milliseconds(), Content: sanitizeReplyLog("reuse_query_stdout: " + truncateStr(out.Reply, 200))})
+			return
+		}
+	}
+
+	// ②b COMPOSE 复用（2026-10-08）：无路径写作（写邮件/信/文章）已由 queryLLMCompose
+	// 产出完整内容，直接作 reply——不得二次总结丢正文（用户实测「写一封英文邮件」曾被总结成
+	// "我为你准备了模板"而正文消失）。
+	if it.Intent == contract.IntentEdit && len(out.Receipts) > 0 && out.Receipts[0].Tool == "compose" {
+		if s := strings.TrimSpace(out.Receipts[0].Stdout); s != "" {
+			out.Reply = truncateStr(s, 2000)
+			o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+				LatencyMs: time.Since(start).Milliseconds(), Content: sanitizeReplyLog("reuse_compose_stdout: " + truncateStr(out.Reply, 200))})
 			return
 		}
 	}
