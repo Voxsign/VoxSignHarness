@@ -66,6 +66,17 @@ final class SpeechRecognizer: ObservableObject {
         }
     }
 
+    /// 【开头录不进修复】引擎预热：进入主界面即 prepare（渲染图编译好），
+    /// 按下时 engine.start 首帧显著提前——开头语音不再被引擎冷启动吞掉。
+    /// prepare 不需激活录音会话/不需要权限，安全且无副作用。
+    func prewarm() {
+        audioSetupQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.engine.prepare()
+            DiagLogger.shared.log("ASR", "engine prewarmed")
+        }
+    }
+
     func toggle() {
         isRecording ? stop() : start()
     }

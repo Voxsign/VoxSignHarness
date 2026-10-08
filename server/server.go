@@ -247,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/tasks", s.auth(s.handleTasksPost))
 	mux.HandleFunc("/v1/tasks/", s.auth(s.handleTasksSub))
 	mux.HandleFunc("/v1/status", s.auth(s.handleStatus))
+	mux.HandleFunc("/v1/orgs", s.auth(s.handleOrgs)) // 独立部署组织目录（iOS 自动拉取）
 	mux.HandleFunc("/v1/roles", s.auth(s.handleRoles)) // M5-3
 	// 兼容旧端点（deprecated，保留）
 	mux.HandleFunc("/v1/run", s.auth(s.handleRun))
@@ -1198,11 +1199,13 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				// 手机侧以轮询 GET /v1/tasks/{id} 的 receipt 为准，必须改 View.Result，光改 event 不生效。
 				out.View.Action = "（待澄清）"
 				out.View.Result = receipt
+				out.Reply = receipt // Phase 1：done 必带自然语言回答（此处 pipeline 出口时 View.Result 尚不是友好文案）
 				ts.Outcome = &out
 				s.markStatus(ts, stDone)
 				s.emitEvent(ts, "done", map[string]any{
 					"receipt":     contract.RenderReceipt(out.View),
 					"attribution": out.Attribution,
+					"reply":       out.Reply,
 				})
 				s.persist(ts)
 				return
@@ -1245,10 +1248,12 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				}
 			}
 			s.emitEvent(ts, "done", map[string]any{
-				"receipt":     contract.RenderReceipt(out.View),
-				"attribution": out.Attribution,
-				"reversible":  ts.Reversible,
-				"role":        ts.Role,
+				"receipt":            contract.RenderReceipt(out.View),
+				"attribution":        out.Attribution,
+				"reversible":         ts.Reversible,
+				"role":               ts.Role,
+				"reply":              out.Reply, // Phase 1：自然语言回答（D0 契约）
+				"termination_reason": out.TerminationReason,
 			})
 			s.persist(ts)
 		}
@@ -1563,6 +1568,13 @@ func (s *Server) writeTaskView(w http.ResponseWriter, ts *taskState) {
 		if ts.Reversible {
 			body["reversible"] = true
 		}
+		// Phase 1（D0 契约）：done 必带自然语言回答 reply；生成失败时带可读终止原因。
+		if ts.Outcome.Reply != "" {
+			body["reply"] = ts.Outcome.Reply
+		}
+		if ts.Outcome.TerminationReason != "" {
+			body["termination_reason"] = ts.Outcome.TerminationReason
+		}
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, body)
@@ -1668,6 +1680,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"uptime":  time.Since(s.boot).Seconds(),
 		"tasks":   len(s.tasks),
 	})
+}
+
+// handleOrgs：独立部署组织目录（iOS「独立部署」区自动拉取，与 OrgEntry 结构对齐）。
+func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
+	orgs := make([]map[string]any, 0, len(s.cfg.Orgs))
+	for _, o := range s.cfg.Orgs {
+		orgs = append(orgs, map[string]any{
+			"orgId":    o.OrgID,
+			"orgName":  o.OrgName,
+			"base":     o.Base,
+			"viaRelay": o.ViaRelay,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orgs": orgs})
 }
 
 // handleRoles（M5-3）：返回三角色定义 + 当前任务角色。

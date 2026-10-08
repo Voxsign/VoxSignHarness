@@ -35,6 +35,11 @@ const (
 	KindConfirm     = "confirm"     // 阶段⑧ 确认放行结果（level/approved）
 	KindVerify      = "verify"      // 阶段⑩ 独立校验结论
 	KindAttribution = "attribution" // 归因回写（discuss 结论）
+
+	// KindReplyGen（Phase 1 回答生成）：工具执行完成后，provider 生成自然语言回答的
+	// 调用日志（model/latency/回答正文或可读失败原因）。必须在 kinds.go Kinds 登记——
+	// 否则 Validate 报错、write 打 warning（Q3「未登记 kind 静默丢弃」前科）。
+	KindReplyGen = "reply_gen"
 )
 
 // Entry 是一条轨迹事件。Content 与结构化字段（Intent/Actions/Receipts）按 kind 二选一或并存。

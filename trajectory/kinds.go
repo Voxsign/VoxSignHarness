@@ -46,6 +46,7 @@ var Kinds = map[string]bool{
 	KindConfirm:     true,
 	KindVerify:      true,
 	KindAttribution: true,
+	KindReplyGen:    true, // Phase 1：回答生成（provider 调用日志）
 }
 
 // KnownKind 报告 kind 是否已登记。

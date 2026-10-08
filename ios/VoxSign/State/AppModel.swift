@@ -415,8 +415,11 @@ final class AppModel: ObservableObject {
                 } catch {
                     failCount += 1
                     DiagLogger.shared.log("POLL", "轮询第\(failCount)次失败: \(error.localizedDescription)")
-                    await MainActor.run {
-                        self.diagLine = "轮询失败x\(failCount): \(error.localizedDescription)"
+                    // 【重启抗断连】云端容器重启期间不刷屏：失败 10 次后静默重试（diagLine 只留前 10 次）。
+                    if failCount <= 10 {
+                        await MainActor.run {
+                            self.diagLine = "轮询失败x\(failCount): \(error.localizedDescription)"
+                        }
                     }
                 }
                 try? await Task.sleep(nanoseconds: 900_000_000)
@@ -524,17 +527,20 @@ final class AppModel: ObservableObject {
                     }
                     return // 流正常结束（终态已处理）
                 } catch {
-                    // T2：指数退避重连（0.8s→1.6s→…上限 4s），连续失败 5 次后停止。
+                    // T2：指数退避重连（0.8s→1.6s→…上限 8s），连续失败 30 次后停止。
+                    // 【重启抗断连】云端容器重启/升级耗时 1~3 分钟，原 5 次（~12s）就放弃重连
+                    // → 用户感知"前端关断/闪退"。30 次 + 上限 8s ≈ 4 分钟窗口内持续自动重连，
+                    // 云端起来后 SSE 自动接回，任务不丢。
                     // v2.2 修复（用户反馈"根本啥也没有"）：重连提示**不再进对话流**——
                     // 只在诊断日志留痕，顶部胶囊由 ConnectivityService 实时反映，避免刷屏顶掉回复。
                     reconnectFailures += 1
                     DiagLogger.shared.log("SSE", "重连中 failures=\(reconnectFailures) err=\(error.localizedDescription)")
-                    if reconnectFailures >= 5 {
-                        DiagLogger.shared.log("SSE", "重连失败5次停止，task=\(taskId)")
+                    if reconnectFailures >= 30 {
+                        DiagLogger.shared.log("SSE", "重连失败30次停止，task=\(taskId)")
                         stopPolling()
                         return
                     }
-                    let delay = min(Double(reconnectFailures) * 0.8, 4.0)
+                    let delay = min(pow(2.0, Double(reconnectFailures)) * 0.8, 8.0)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     if Task.isCancelled { return }
                 }
@@ -552,7 +558,10 @@ final class AppModel: ObservableObject {
             currentView = TaskView(taskId: taskId, status: "need_ask",
                                    question: question, options: options)
             closeExecCard()
-            decision = VSLogic.nextDecisionPoint(currentView!)
+            // 【闪退加固】currentView 刚设置但防御性安全解包（避免任何竞态下 force unwrap 崩溃）。
+            if let cv = currentView {
+                decision = VSLogic.nextDecisionPoint(cv)
+            }
             // T1：后台/锁屏时本地通知提醒（前台由 UI 呈现）。
             NotificationService.shared.routeEvent("need_ask", taskId: taskId, seq: 0,
                                                   payload: ["question": question ?? ""])
@@ -560,7 +569,10 @@ final class AppModel: ObservableObject {
         case .confirm(_, let question):
             currentView = TaskView(taskId: taskId, status: "need_confirm", question: question)
             closeExecCard()
-            decision = VSLogic.nextDecisionPoint(currentView!)
+            // 【闪退加固】同上：安全解包。
+            if let cv = currentView {
+                decision = VSLogic.nextDecisionPoint(cv)
+            }
             NotificationService.shared.routeEvent("need_confirm", taskId: taskId, seq: 0,
                                                   payload: ["question": question ?? ""])
 
@@ -813,11 +825,13 @@ final class AppModel: ObservableObject {
 
         // 1) reply 优先：服务端给的回答正文。
         if let reply = view.reply, !reply.isEmpty {
-            receipt.result = reply
+            // 【对牛弹琴修复】英文 needs-clarification 回问自动中文化（用户说中文就不该看英文套话）。
+            let localized = VSLogic.localizeReply(reply)
+            receipt.result = localized
             rows.append(.receipt(ReceiptRow(receipt: receipt, undo: dp.undo, badges: badges)))
             scrollTick += 1
             // T3 豆包式：朗读回答正文。
-            speak(reply)
+            speak(localized)
             return
         }
 

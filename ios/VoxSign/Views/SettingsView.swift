@@ -86,15 +86,27 @@ struct SettingsView: View {
                 // —— 连接状态 ——
                 Section("连接状态") {
                     HStack {
-                        Circle().fill(conn.state == .online ? Color.green : (conn.state == .reconnecting ? Color.yellow : Color.gray))
-                            .frame(width: 8, height: 8)
-                        Text(conn.state == .online ? "已连接" : (conn.state == .reconnecting ? "正在重连…" : "离线"))
-                        Spacer()
-                        // UI v3：延迟小字（豆包式 12.5pt 灰字，如「延迟 42ms」）。
-                        if conn.state == .online && conn.latencyMs > 0 {
-                            Text("延迟 \(conn.latencyMs)ms")
-                                .font(.system(size: 12))
+                        // 云道模式未登录：显示「未登录（云道）」灰点，不再误报「已连接」。
+                        // 「已连接」仅代表服务器连通（health 无认证），不代表登录态有效。
+                        let signedIn = settings.mode != .cloud || settings.googleAuth != nil
+                        if !signedIn {
+                            Circle().fill(Color.gray)
+                                .frame(width: 8, height: 8)
+                            Text("未登录（云道）")
+                                .font(.system(size: 14))
                                 .foregroundColor(.secondary)
+                            Spacer()
+                        } else {
+                            Circle().fill(conn.state == .online ? Color.green : (conn.state == .reconnecting ? Color.yellow : Color.gray))
+                                .frame(width: 8, height: 8)
+                            Text(conn.state == .online ? "已连接" : (conn.state == .reconnecting ? "正在重连…" : "离线"))
+                            Spacer()
+                            // UI v3：延迟小字（豆包式 12.5pt 灰字，如「延迟 42ms」）。
+                            if conn.state == .online && conn.latencyMs > 0 {
+                                Text("延迟 \(conn.latencyMs)ms")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                     Button("立即重探") { conn.probe() }
@@ -583,12 +595,20 @@ struct SettingsView: View {
     }
 
     /// 刷新登录态（GET /v1/me）。
+    /// 401 = 会话失效/未登录：自动引导 Google 重新登录，避免红字卡死。
     private func refreshMe() {
         googleError = ""
         Task {
             do {
                 let me = try await APIClient.shared.me()
                 settings.refreshAuth(me)
+            } catch let APIError.http(code, body) {
+                if code == 401 {
+                    googleError = "登录态已失效，正在引导重新登录…"
+                    loginGoogle()
+                } else {
+                    googleError = "HTTP \(code): \(body)"
+                }
             } catch {
                 googleError = error.localizedDescription
             }

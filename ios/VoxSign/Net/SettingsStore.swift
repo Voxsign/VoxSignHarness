@@ -179,30 +179,38 @@ final class SettingsStore: ObservableObject {
     ///   getOrgs() 内部绝不抛错，故此处永不因网络问题崩溃。
     func refreshUniFusionOrgs() async {
         let entries = await APIClient.shared.getOrgs()
-        backendOrgs = entries.map {
-            UniFusionOrg(orgId: $0.orgId, orgName: $0.orgName, suggestedBase: $0.base)
-        }
-        // 空列表时 liveIDs=空集：清理掉所有非 manual-* 的组织条目（手动兜底保留）。
-        let liveIDs = Set(entries.map { $0.orgId })
-        for e in entries {
-            if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {
-                servers[idx].orgName = e.orgName
-                servers[idx].name = e.orgName
-                servers[idx].base = e.base
-                servers[idx].viaRelay = e.viaRelay
-            } else {
-                servers.append(ServerConfig(id: UUID().uuidString,
-                                            name: e.orgName, base: e.base, token: "",
-                                            machineCode: nil, viaRelay: e.viaRelay ?? false,
-                                            orgId: e.orgId, orgName: e.orgName))
+        // 【闪退修复】全部 @Published 修改必须回到主线程（SwiftUI 禁止后台线程 publish，
+        // 否则切换机器/设置页时崩溃）。网络请求在挂起点外完成，主线程仅做状态写入。
+        await MainActor.run {
+            backendOrgs = entries.map {
+                UniFusionOrg(orgId: $0.orgId, orgName: $0.orgName, suggestedBase: $0.base)
             }
+            // 空列表时 liveIDs=空集：清理掉所有非 manual-* 的组织条目（手动兜底保留）。
+            let liveIDs = Set(entries.map { $0.orgId })
+            for e in entries {
+                if let idx = servers.firstIndex(where: { $0.orgId == e.orgId }) {
+                    servers[idx].orgName = e.orgName
+                    servers[idx].name = e.orgName
+                    servers[idx].base = e.base
+                    servers[idx].viaRelay = e.viaRelay
+                    // 组织条目 token 缺失时补云端会话凭证（本地部署与云端共享会话密钥，可验签通过）
+                    if servers[idx].token.isEmpty, let t = googleAuth?.token, !t.isEmpty {
+                        servers[idx].token = t
+                    }
+                } else {
+                    servers.append(ServerConfig(id: UUID().uuidString,
+                                                name: e.orgName, base: e.base, token: googleAuth?.token ?? "",
+                                                machineCode: nil, viaRelay: e.viaRelay ?? false,
+                                                orgId: e.orgId, orgName: e.orgName))
+                }
+            }
+            // 后端权威清理：删除后端不再返回的组织条目（保留 manual-* 手动条目）。
+            servers.removeAll { srv in
+                guard let oid = srv.orgId else { return false }
+                return !oid.hasPrefix("manual-") && !liveIDs.contains(oid)
+            }
+            persist()
         }
-        // 后端权威清理：删除后端不再返回的组织条目（保留 manual-* 手动条目）。
-        servers.removeAll { srv in
-            guard let oid = srv.orgId else { return false }
-            return !oid.hasPrefix("manual-") && !liveIDs.contains(oid)
-        }
-        persist()
     }
 
     // MARK: - 模式

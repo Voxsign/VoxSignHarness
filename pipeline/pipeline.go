@@ -179,8 +179,15 @@ type Outcome struct {
 	Ask          string               `json:"ask,omitempty"`
 	Options      []AskOption          `json:"options,omitempty"` // M4-3 结构化候选
 	ContextBlock string               `json:"context_block,omitempty"`
-	LoopMs       int64                `json:"loop_ms"`
-	NetMs        int64                `json:"net_ms"`
+	// Reply（Phase 1，D0 冻结契约）：任务完成后给用户的**自然语言回答**（纯文本字符串）。
+	// 成功终态必须非空（不许「任务 done 但无回答内容」）；生成失败时由降级文案兜底非空，
+	// 真实原因进 TerminationReason。receipts[] 保留作回退（本字段不取代它）。
+	Reply string `json:"reply,omitempty"`
+	// TerminationReason：Reply 由 LLM 生成失败/超时时的可读终止原因（真实错误，
+	// 不对外美化成「预算/网络」——归因必须来自真实错误，同 queryLLMAnswer 教训）。
+	TerminationReason string `json:"termination_reason,omitempty"`
+	LoopMs            int64  `json:"loop_ms"`
+	NetMs             int64  `json:"net_ms"`
 }
 
 // discussLogName 是 discuss-log 文件名（<log_dir>/discuss.jsonl）。
@@ -234,6 +241,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		out.View = contract.ReceiptView{
 			Action: "（空指令）", Files: "—", Result: "未执行（需回问：" + out.Ask + "）", Undo: "—",
 		}
+		o.ensureReply(context.Background(), &out, contract.Intent{}, text, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
@@ -269,6 +277,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// 不再依赖 LLM。命中即返回 done；未命中返回 false 继续正常分类。
 	if wout, ok := o.tryWeather(ctx, corrected, start); ok {
 		wout.RequestID = out.RequestID
+		o.ensureReply(ctx, wout, contract.Intent{}, corrected, false)
 		emit(trajectory.Entry{Kind: trajectory.KindFinal, Content: contract.RenderReceipt(wout.View)})
 		return *wout, nil
 	}
@@ -328,6 +337,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Action: shortAction(intent), Files: "—",
 			Result: "未执行（需回问：" + intent.Ask + "）", Undo: "—（未执行）",
 		}
+		o.ensureReply(ctx, &out, intent, corrected, false)
 		o.writeTaskMetrics(intent, out, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
@@ -361,6 +371,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Action: shortAction(intent), Files: "—",
 			Result: "BOUNDARY_VIOLATION：" + reasonText(verdict.Reason), Undo: "—（未执行）",
 		}
+		o.ensureReply(ctx, &out, intent, corrected, false)
 		o.writeTaskMetrics(intent, out, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
@@ -434,6 +445,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			Action: shortAction(intent), Files: targetFiles(intent),
 			Result: "待确认（" + decision.Level + "，未放行）", Undo: "—（未执行）",
 		}
+		o.ensureReply(ctx, &out, intent, corrected, false)
 		o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 		return out, nil
 	}
@@ -493,6 +505,8 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// ⑫ cache：四元组已在⑧ Set；拦截/漂移路径在 o.attribution 里无需额外失效。
 	// ⑬ view
 	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
+	// ⑬-bis（Phase 1）：工具执行完成后生成自然语言回答 reply（成功终态必非空）。
+	o.ensureReply(ctx, &out, intent, text, true)
 	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 
 	out.LoopMs = time.Since(start).Milliseconds()
@@ -3309,6 +3323,159 @@ func (o *Options) queryLLMAnswer(ctx context.Context, original string, searchStd
 		reason = lastErr.Error()
 	}
 	return degradedNow()
+}
+
+// bearerPat 脱敏：日志/轨迹绝不落 Bearer token 明文（验收硬指标 A4）。
+// openai.go 的错误信息设计上不含 key，此正则是第二道防线——任何意外流入日志的
+// Authorization/X-AIops-Key 头值在此被机械抹掉。
+var bearerPat = regexp.MustCompile(`(?i)(bearer|x-aiops-key)\s+[A-Za-z0-9._\-~+\/=]{8,}`)
+
+// sanitizeReplyLog 抹掉日志文本中的鉴权凭据（防轨迹/日志泄露 token）。
+func sanitizeReplyLog(s string) string {
+	return bearerPat.ReplaceAllString(s, "${1} <redacted>")
+}
+
+// receiptsDigest 把 receipts[] 压成喂给回答生成模型的上下文（截断防超长）。
+func receiptsDigest(rs []contract.Receipt) string {
+	var sb strings.Builder
+	for i, r := range rs {
+		if i >= 6 {
+			fmt.Fprintf(&sb, "…（其余 %d 条回执省略）\n", len(rs)-6)
+			break
+		}
+		fmt.Fprintf(&sb, "#%d tool=%s ok=%v\n", r.Seq, r.Tool, r.OK)
+		if r.Stdout != "" {
+			fmt.Fprintf(&sb, "stdout: %s\n", truncateStr(r.Stdout, 300))
+		}
+		if r.Stderr != "" {
+			fmt.Fprintf(&sb, "stderr: %s\n", truncateStr(r.Stderr, 200))
+		}
+		if r.Err != "" {
+			fmt.Fprintf(&sb, "err: %s\n", truncateStr(r.Err, 200))
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// ensureReply（Phase 1，D0 冻结契约）：任务终态前保证 Outcome.Reply 非空。
+//
+//	已执行成功路径：
+//	  - QUERY/Ask：receipts[0].Stdout 已是 queryLLMAnswer 产出的自然语言回答（execActions 内
+//	    覆写），直接复用——不再二次调 LLM（语音链路延迟敏感，同 queryLLMAnswer 性能立场）；
+//	  - 其余意图（NOTE/EDIT/COMMIT/…）：复用现有 fast provider 通道（aiops /api/model/chat），
+//	    输入 = 用户指令 + receipts 摘要，生成 1-3 句自然语言总结。
+//	未执行路径（回问/拦截/未放行/空指令）：View.Result 本身已是可读中文，直接作 reply，零 LLM 成本。
+//
+// 不变量：返回时 out.Reply 必非空。LLM 生成失败/超时 → 用 View.Result 降级文案兜底，
+// 真实错误写 out.TerminationReason（不许对外美化原因，同 queryLLMAnswer 归因教训）；
+// 绝不存在「任务 done 但 reply 为空」。provider 调用日志落 KindReplyGen 轨迹（已登记白名单），
+// 内容经 sanitizeReplyLog 脱敏。
+func (o *Options) ensureReply(ctx context.Context, out *Outcome, it contract.Intent, rawText string, executed bool) {
+	if out == nil {
+		return
+	}
+	if strings.TrimSpace(out.Reply) != "" {
+		return // 已由其他路径设置（如未来 Phase 2 多问题）
+	}
+	rid := out.RequestID
+	start := time.Now()
+
+	// ① 未执行/拦截路径：View.Result 即可读回答，零 LLM。
+	if !executed {
+		out.Reply = strings.TrimSpace(out.View.Result)
+		if out.Reply == "" {
+			out.Reply = "任务已结束。"
+		}
+		o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen,
+			Model: "", LatencyMs: 0, Content: sanitizeReplyLog("fallback_view: " + truncateStr(out.Reply, 200))})
+		return
+	}
+
+	// ② QUERY/Ask 复用：execActions 已把 LLM 自然语言回答写进 receipts[0].Stdout。
+	if (it.Intent == contract.IntentQuery || it.Intent == contract.IntentAsk) && len(out.Receipts) > 0 {
+		if s := strings.TrimSpace(out.Receipts[0].Stdout); s != "" {
+			out.Reply = truncateStr(s, 800)
+			o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+				LatencyMs: time.Since(start).Milliseconds(), Content: sanitizeReplyLog("reuse_query_stdout: " + truncateStr(out.Reply, 200))})
+			return
+		}
+	}
+
+	// ③ 已执行但无现成自然语言回答 → 调 fast provider 生成（复用现有通道，不新发明路由）。
+	degrade := func(reason string) {
+		// 兜底必须非空：优先 View.Result（已含「做了什么/结果如何」），再退回执 stdout。
+		fb := strings.TrimSpace(out.View.Result)
+		if fb == "" && len(out.Receipts) > 0 {
+			fb = strings.TrimSpace(out.Receipts[0].Stdout)
+		}
+		if fb == "" {
+			fb = "任务已执行完成。"
+		}
+		out.Reply = fb
+		out.TerminationReason = reason
+		log.Printf("[ensureReply] rid=%s reply 生成失败，降级兜底: %s", rid, sanitizeReplyLog(reason))
+	}
+
+	if o == nil || o.Providers == nil {
+		degrade("providers 未配置（无可用 LLM 通道）")
+		o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+			Err: sanitizeReplyLog(out.TerminationReason)})
+		return
+	}
+	if _, err := o.Providers.Get("fast"); err != nil {
+		degrade("fast provider 不可用: " + err.Error())
+		o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+			Err: sanitizeReplyLog(out.TerminationReason)})
+		return
+	}
+	digest := receiptsDigest(out.Receipts)
+	if digest == "" {
+		digest = "（无工具回执）"
+	}
+	// chatWithFallback：复用现有「fast 欠费/故障自动切 gpt-mini/gpt4o」降级链
+	// （config.go 模型调度设计），不新发明模型路由。
+	resp, err := o.chatWithFallback(ctx, []string{"fast", "gpt-mini", "gpt4o"}, provider.ChatRequest{
+		Messages: []contract.Message{
+			{Role: "system", Content: "你是 VoxSign 助手。根据用户指令和工具执行结果，用简洁中文（1-3 句）告诉用户：做了什么、结果如何。只输出回答文本本身：不要 JSON、不要分点复述工具调用、不要解释你自己。"},
+			{Role: "user", Content: "用户指令：" + strings.TrimSpace(rawText) + "\n\n工具执行结果：\n" + truncateStr(digest, 4000)},
+		},
+		MaxTokens:      400,
+		ResponseFormat: noJSON(), // 纯文本回答，关掉 provider 级 json_object
+	})
+	if err != nil {
+		degrade("reply 生成调用失败/超时: " + err.Error())
+		o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+			LatencyMs: time.Since(start).Milliseconds(), Err: sanitizeReplyLog(out.TerminationReason)})
+		return
+	}
+	c := strings.TrimSpace(resp.Content)
+	if c == "" {
+		degrade("reply 生成返回空内容（finish_reason 可能是 length）")
+		o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+			LatencyMs: time.Since(start).Milliseconds(), Err: sanitizeReplyLog(out.TerminationReason)})
+		return
+	}
+	// provider 级默认 json_object 时可能仍包一层 JSON 壳，解出文本字段（同 queryLLMAnswer）。
+	if strings.HasPrefix(c, "{") {
+		var j map[string]any
+		if err := json.Unmarshal([]byte(c), &j); err == nil {
+			for _, k := range []string{"text", "content", "response", "answer", "message"} {
+				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+					c = strings.TrimSpace(s)
+					break
+				}
+			}
+		}
+		if strings.HasPrefix(c, "{") {
+			degrade("reply 生成返回意外 JSON 壳（未解出文本字段）")
+			o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+				LatencyMs: time.Since(start).Milliseconds(), Err: sanitizeReplyLog(out.TerminationReason)})
+			return
+		}
+	}
+	out.Reply = truncateStr(c, 1000)
+	o.write(trajectory.Entry{RequestID: rid, Kind: trajectory.KindReplyGen, Model: "fast",
+		LatencyMs: time.Since(start).Milliseconds(), Content: sanitizeReplyLog("reply: " + truncateStr(out.Reply, 200))})
 }
 
 // mergeAskOptions 合并意图候选与 refer 目标候选（id 去重，上限 8）。

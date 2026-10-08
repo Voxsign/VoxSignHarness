@@ -38,10 +38,22 @@ type Config struct {
 
 	// Cloud 云端模式（VHS_MODE=cloud）：谷歌登录 + 租户配额。nil 字段默认值见 CloudCfg.Default。
 	Cloud          CloudCfg `json:"cloud,omitempty"`
+
+	// Orgs 独立部署组织目录（iOS「独立部署」区自动拉取：orgId/orgName/base）。
+	Orgs []OrgCfg `json:"orgs,omitempty"`
+
 	ConfigPath     string   `json:"-"` // 实际加载的配置文件路径
 	Warnings       []string `json:"-"` // 非致命问题（如缺 API key）
 	ForcedRoute    string   `json:"-"` // env VHS_ROUTE：强制路由名
 	ForcedProvider string   `json:"-"` // env VHS_PROVIDER：强制 provider 名
+}
+
+// OrgCfg 独立部署组织条目（/v1/orgs 返回，iOS OrgEntry 结构对齐）。
+type OrgCfg struct {
+	OrgID    string `json:"orgId"`
+	OrgName  string `json:"orgName"`
+	Base     string `json:"base"`
+	ViaRelay bool   `json:"viaRelay,omitempty"`
 }
 
 // SpacesCfg 域注册表（.space.json manifest 目录）。
@@ -282,6 +294,13 @@ func Load(configPath string) (Config, error) {
 			if err := json.Unmarshal(v, &cfg.Server); err != nil {
 				return cfg, fmt.Errorf("解析配置文件 %s server 节失败: %w", configPath, err)
 			}
+		}
+		if v, ok := raw["orgs"]; ok {
+			var os []OrgCfg
+			if err := json.Unmarshal(v, &os); err != nil {
+				return cfg, fmt.Errorf("解析配置文件 %s orgs 节失败: %w", configPath, err)
+			}
+			cfg.Orgs = os
 		}
 		cfg.ConfigPath = configPath
 	}

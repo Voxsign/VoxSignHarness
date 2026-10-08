@@ -40,6 +40,9 @@ struct InputBarView: View {
     // 视觉先于引擎——"一按下去马上反应"，波形呼吸动画立即出现，meterLevel 随后接入。
     @State private var pressActive: Bool = false
 
+    /// 【按住延迟修复 T5】震动发生器复用 + 预热：首次按下不因 haptic 引擎冷启动而延迟。
+    private let haptic = UIImpactFeedbackGenerator(style: .light)
+
     private var isTyping: Bool { !model.inputText.isEmpty }
 
     /// V6：连接在线才可输入（顶栏红点=离线 → 输入条禁用并提示切换机器）。
@@ -66,6 +69,13 @@ struct InputBarView: View {
             Rectangle()
                 .fill(Color.black.opacity(0.08))
                 .frame(height: 0.5)
+        }
+        // 【开头录不进修复】进入主界面即预热语音引擎：按下时 engine.start 首帧提前，
+        // 开头语音不再被引擎冷启动吞掉。
+        .onAppear {
+            #if canImport(Speech)
+            SpeechRecognizer.shared.prewarm()
+            #endif
         }
         .sheet(isPresented: $showAttachPanel) {
             AttachmentPanelView()
@@ -172,7 +182,13 @@ struct InputBarView: View {
 
     /// 中：超大「🎤 按住说话」深色胶囊主按钮（#1a1a1a、高 56pt、胶囊圆角=高度一半、占满剩余宽度）。
     /// 【卡死修复-手势宿主】录音中淡出但不禁用 hit-testing——拖拽起始于此、录音期间持续收事件。
+    /// 【按住延迟修复 T5】手势改由 UIKit TouchCaptureView 采集（touchesBegan=touch down 同步，
+    /// 比 SwiftUI DragGesture 首帧快；视觉/震动在手指落下同一帧出现）。
     private var voiceMainButton: some View {
+        voiceMainButtonLabel.overlay(touchCaptureButton)
+    }
+
+    private var voiceMainButtonLabel: some View {
         Text("🎤 按住说话")
             .font(.system(size: 17, weight: .semibold))
             .foregroundColor(.white)
@@ -182,7 +198,28 @@ struct InputBarView: View {
             .clipShape(Capsule())
             .contentShape(Capsule())
             .accessibilityIdentifier("vhs.mic")
-            .gesture(holdGesture)
+    }
+
+    /// 【按住延迟修复 T5】按钮区触摸容器（复用震动发生器且已 prepare）。
+    /// 注意：content 传空（Color.clear）——容器是透明触摸层，不渲染任何内容，
+    /// 否则按钮 label 会被画两次造成重影。
+    private var touchCaptureButton: some View {
+        TouchCaptureView(
+            onTouchDown: { handleTouchDown() },
+            onTouchMove: { dy in handleTouchMove(dy) },
+            onTouchUp: { handleTouchUp() },
+            onTouchCancel: { handleTouchCancel() }
+        ) { Color.clear }
+    }
+
+    /// 【按住延迟修复 T5】按住态波形区触摸容器（双宿主；内容仅展示不交互）。
+    private var touchCapturePanel: some View {
+        TouchCaptureView(
+            onTouchDown: { handleTouchDown() },
+            onTouchMove: { dy in handleTouchMove(dy) },
+            onTouchUp: { handleTouchUp() },
+            onTouchCancel: { handleTouchCancel() }
+        ) { Color.clear }
     }
 
     /// 右：圆形 ⌨ 按钮（30×30，浅灰圆底，键盘图标 16pt secondary），切换文字输入模式。
@@ -221,36 +258,43 @@ struct InputBarView: View {
     /// 【卡死修复-双宿主】整块波形区域即录音态手势宿主（.gesture(holdGesture)）：
     /// 松手/上滑/滑回落在任意处都触发 onEnded（cancelling→cancelHold 否则 stopHold），isRecording 必然复位。
     private var recordingHoldView: some View {
+    recordingHoldViewContent
+        // 【卡死修复-双宿主】手势宿主：录音中重新按压波形区域任意处也可接管手势；
+        // -80pt 阈值与可滑回逻辑由 handleTouchMove/Up 内部语义保证，此处不变。
+        // 【按住延迟修复 T5】与主按钮同用 UIKit 触摸容器（touchesBegan 同步回调）。
+        .overlay(touchCapturePanel)
+}
+
+private var recordingHoldViewContent: some View {
         VStack(spacing: 0) {
             // V6.4 去掉顶部「正在听…」提示：按住态只有波形，识别过程不需要文字（机器转一转即可）。
+            // 【留白收紧】波形 + 底部文案整组垂直居中：上下对称、顶部不再空一大块（参考豆包按住态）。
+            Spacer(minLength: 4)
 
             #if canImport(Speech)
             HoldWaveBars(meterLevel: speech.meterLevel)
                 .frame(height: 55)
-                .padding(.top, 10)
             #else
             HoldWaveBars(meterLevel: 0)
                 .frame(height: 55)
-                .padding(.top, 10)
             #endif
 
             Text(holdBarText)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(HoldWaveBars.barRed)
-                .padding(.top, 12)          // 条组下方留 ~12pt 再放底部文案
-                .padding(.bottom, 8)
+                .padding(.top, 10)          // 波形与文案间留 ~10pt
+                .padding(.bottom, 4)
+
+            Spacer(minLength: 4)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 130)
+        .frame(height: 120)
         // V6.7 更透明：极浅半透明白（0.15）几乎全透但保留层次，不发雾；红波形对比不受影响。
         // （真机若显雾可降到 0.10——本参数为微调项）。
         .background(Color.white.opacity(0.15))
         // 向下延展：背景沉到 home indicator 之下，整体贴底不留空隙
         .ignoresSafeArea(edges: .bottom)
         .animation(.easeOut(duration: 0.12), value: cancelling)
-        // 【卡死修复-双宿主】手势宿主：录音中重新按压波形区域任意处也可接管手势；
-        // -80pt 阈值与可滑回逻辑由 holdGesture.onChanged/onEnded 内部语义保证，此处不变。
-        .gesture(holdGesture)
         // noSpeechDetected 计数定时器（原样迁移）。录音中每秒对比 transcript 快照累计静默秒数；非录音清零。
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             #if canImport(Speech)
@@ -432,61 +476,76 @@ struct InputBarView: View {
         }
     }
 
-    // MARK: - 按住说话手势（按下录音 / 上滑取消可滑回 / 松手发送）——语义原样迁移
+    // MARK: - 按住说话手势（按下录音 / 上滑取消可滑回 / 松手发送）
+    // 【按住延迟修复 T5】SwiftUI DragGesture → UIKit TouchCaptureView（touchesBegan 同步回调，
+    // 手指落下同一帧出震动 + 视觉按住态，与豆包原生手感同级）。
 
     #if canImport(Speech)
-    /// 麦克风按钮手势——按下录音；dy < -80pt 进取消态（可滑回继续）；松手按态发送。
-    private var holdGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                // LAT：手指落下瞬间打点（主线程，最近于 touch down）。
-                SpeechRecognizer.markTouch()
-                // 【按住延迟修复】轻触觉反馈：手指一落下立刻震动，视觉/听觉之前先有"按到了"的
-                // 触感，不等引擎/波形，按压感知 <0.1s。
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                // V6.4 按下立刻进入按住态（视觉先行，不等语音引擎异步启动）。
-                pressActive = true
-                // 【加固1】仅在本轮尚无发起者时 start 一次；录音中或已发起过不重复 start（R2）。
-                if !speech.isRecording && !holdInitiated {
-                    holdInitiated = true
-                    cancelling = false
-                    // V6.5 异步启动语音引擎：波形先渲染，不被引擎初始化（音频会话/授权等）阻塞首帧——
-                    // 按下去→弹出波形应在 0.1 秒内完成。
-                    DispatchQueue.main.async {
-                        speech.startHold()
-                    }
-                }
-                // 上滑 -80pt → 取消态；滑回 -80pt 以上 → 恢复录音（豆包同款可逆手感）。
-                let c = v.translation.height < -80
-                if c != cancelling { cancelling = c }
+    /// 手指落下（touch down 同步回调，零延迟）：震动 + 视觉按住态 + 异步启动引擎。
+    private func handleTouchDown() {
+        // LAT：手指落下瞬间打点（主线程，touch down 同步）。
+        SpeechRecognizer.markTouch()
+        // 【按住延迟修复 T5】复用已 prepare 的震动发生器：首次按下也零延迟（原每次新建未预热，
+        // 第一次 impactOccurred 要等 haptic 引擎冷启动 → 按下"没感觉"，后续才快）。
+        haptic.impactOccurred()
+        haptic.prepare()   // 预热下一次
+        // V6.4 按下立刻进入按住态（视觉先行，不等语音引擎异步启动）。
+        pressActive = true
+        // 【加固1】仅在本轮尚无发起者时 start 一次；录音中或已发起过不重复 start（R2）。
+        if !speech.isRecording && !holdInitiated {
+            holdInitiated = true
+            cancelling = false
+            // V6.5 异步启动语音引擎：波形先渲染，不被引擎初始化（音频会话/授权等）阻塞首帧——
+            // 按下去→弹出波形应在 0.1 秒内完成。
+            DispatchQueue.main.async {
+                speech.startHold()
             }
-            .onEnded { v in
-                // V6.4 松手立即复位视觉态。
-                pressActive = false
-                // 【加固1/2】先记下本轮是否发起者，再复位标记。
-                let wasInitiator = holdInitiated
-                holdInitiated = false
-                if speech.isRecording {
-                    if cancelling || v.translation.height < -80 {
-                        speech.cancelHold()   // 上滑取消：不发送
-                    } else {
-                        speech.stopHold()     // 松手：识别完自动发送
-                    }
-                } else if wasInitiator {
-                    // 【加固2-R1 极轻点竞态兜底】isRecording 是 start() 里 DispatchQueue.main.async
-                    // 下一拍才置 true；手指先松时按旧逻辑什么都不做 → 随后置位 → 无手指却卡录音态。
-                    // 主队列 FIFO 保证此块排在置位块之后执行：若已置位则立即收尾（此时 installTap
-                    // 已同步完成，stopHold 安全）。
-                    DispatchQueue.main.async {
-                        if self.speech.isRecording { self.speech.stopHold() }
-                    }
-                }
-                cancelling = false
+        }
+    }
+
+    /// 手指移动：dy<0 上滑；-80pt 进取消态，滑回 -80pt 以上恢复（豆包同款可逆手感）。
+    private func handleTouchMove(_ dy: CGFloat) {
+        guard holdInitiated || speech.isRecording else { return }
+        let c = dy < -80
+        if c != cancelling { cancelling = c }
+    }
+
+    /// 松手：发送（取消态则取消）。
+    private func handleTouchUp() {
+        // V6.4 松手立即复位视觉态。
+        pressActive = false
+        // 【加固1/2】先记下本轮是否发起者，再复位标记。
+        let wasInitiator = holdInitiated
+        holdInitiated = false
+        if speech.isRecording {
+            if cancelling {
+                speech.cancelHold()   // 上滑取消：不发送
+            } else {
+                speech.stopHold()     // 松手：识别完自动发送
             }
+        } else if wasInitiator {
+            // 【加固2-R1 极轻点竞态兜底】isRecording 是 start() 里 DispatchQueue.main.async
+            // 下一拍才置 true；手指先松时按旧逻辑什么都不做 → 随后置位 → 无手指却卡录音态。
+            // 主队列 FIFO 保证此块排在置位块之后执行：若已置位则立即收尾（此时 installTap
+            // 已同步完成，stopHold 安全）。
+            DispatchQueue.main.async {
+                if self.speech.isRecording { self.speech.stopHold() }
+            }
+        }
+        cancelling = false
+    }
+
+    /// 系统取消（来电/手势被打断）：复位并取消录音。
+    private func handleTouchCancel() {
+        pressActive = false
+        holdInitiated = false
+        cancelling = false
+        if speech.isRecording { speech.cancelHold() }
     }
     #else
-    private var holdGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-    }
+    private func handleTouchDown() {}
+    private func handleTouchMove(_ dy: CGFloat) {}
+    private func handleTouchUp() {}
+    private func handleTouchCancel() {}
     #endif
 }

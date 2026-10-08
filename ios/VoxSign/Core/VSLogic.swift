@@ -69,15 +69,29 @@ enum VSLogic {
         return nil
     }
 
+    /// 【对牛弹琴修复】harness UNKNOWN 回问若返回英文 needs-clarification（旧版云端模板），
+    /// 自动中文化显示/朗读——用户说中文就绝不该看到英文套话。
+    /// 匹配特征：I am not sure / not sure what you meant / be explicit（+ you said [ 前缀残留）。
+    static func localizeReply(_ reply: String) -> String {
+        let lower = reply.lowercased()
+        let isEnglishClarif = lower.contains("not sure what you meant")
+            || lower.contains("i am not sure")
+            || lower.contains("be explicit")
+            || (lower.contains("you said") && lower.contains("not sure"))
+        guard isEnglishClarif else { return reply }
+        return "我不太确定你想让我做什么。请说得更具体一点，比如「查一下今天的天气」「记个想法」「跑一下测试」——我会直接去办。"
+    }
+
     // MARK: - 回执四行解析（contract.RenderReceipt 的反向解析）
     //
-    /// server 渲染恰好四行：动作/文件/结果/撤销。
+    /// server 渲染恰好四行：动作/文件/结果/撤销（兼容英文 Action/Files/Result/Undo）。
     /// 容错：行缺失 / 全半角冒号 / 多余行 / 前后空白 都不炸，按行首标签归位。
     static func parseReceipt(_ text: String?) -> Receipt {
         var out = Receipt()
         guard let text = text else { return out }
-        // 匹配行首标签：动作/文件/结果/撤销，后接全/半角冒号。
-        let pattern = #"^\s*(动作|文件|结果|撤销)\s*[:：]\s*(.*)$"#
+        // 匹配行首标签：动作/文件/结果/撤销（含英文 Action/Files/Result/Undo），后接全/半角冒号。
+        // (?i) 忽略大小写：云端/本地 harness 语言输出不稳定（中英混合），双标签都认。
+        let pattern = #"(?i)^\s*(动作|文件|结果|撤销|action|files|result|undo)\s*[:：]\s*(.*)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return out }
         for raw in text.components(separatedBy: CharacterSet.newlines) {
             let ns = NSRange(raw.startIndex..., in: raw)
@@ -85,13 +99,13 @@ enum VSLogic {
             // NSRange → Swift Range<String.Index>，再用 String 下标。
             guard let labelRange = Range(m.range(at: 1), in: raw),
                   let valueRange = Range(m.range(at: 2), in: raw) else { continue }
-            let label = String(raw[labelRange])
+            let label = String(raw[labelRange]).lowercased()
             let value = String(raw[valueRange]).trimmingCharacters(in: .whitespaces)
             switch label {
-            case "动作": out.action = value
-            case "文件": out.files = value
-            case "结果": out.result = value
-            case "撤销": out.undo = value
+            case "动作", "action": out.action = value
+            case "文件", "files": out.files = value
+            case "结果", "result": out.result = value
+            case "撤销", "undo": out.undo = value
             default: break
             }
         }
