@@ -145,6 +145,8 @@ const (
 	IntentRegisterTool = "REGISTER_TOOL" // langaudionote new    (  fillsplit  , 8 classofout  define)
 	IntentOrchestrate  = "ORCHESTRATE"   //   orchestrate(  erformrouteby): read    ->  ->occurbecomefile->
 	IntentReminder     = "REMINDER"      // reminder/alarm: explicit not-implemented branch (no cron/scheduler), no longer misrouted to NOTE
+	IntentBuildTest    = "BUILD_TEST"    // distillation R5 (2026-10-08): clone/download code -> build -> test real pipeline
+	IntentContinue     = "CONTINUE"      // distillation R5: "开始干/立刻执行/继续" resumes the task slot from the previous turn
 )
 
 // confirm  etc (Intent.Confirm, risk   decideafterbackfillauthoritative value). 
@@ -209,6 +211,7 @@ const (
 	// ConflictMultiAction:  sent  has  byon   -> ASK  first   (   G5). 
 	// produce  endis"   decision point",     useuser   , also     its   . 
 	ConflictMultiAction = "multi_action"
+	ConflictContinue    = "continue" // distillation R5: "开始干/立刻执行/继续" resumes the task slot
 )
 
 // Intent is in   produceout close izeintent(     §5.5): 
