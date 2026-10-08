@@ -3187,10 +3187,14 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	// M7 复验补强：含问句特征时，规则未判 QUERY（UNKNOWN/低置信/误判其他意图如 NOTE）
 	// 一律调 LLM 复查——规则词典对口语长问句常误判（22:04 真机："我现在测试一下…看看效果怎么样"
 	// 被规则判 NOTE 高置信，若只看低置信则 fallback 永不触发）。已是 QUERY 则直接信任规则。
-	if !hasQ {
+	// 2026-10-08 泛化（用户实测）：陈述句 UNKNOWN（「一封英文邮件」「根据沙特SFDA情况写一封英文邮件」）
+	// 无问句特征 → hasQ=false → fallback 永不触发 → 死循环回问。补：UNKNOWN 陈述句也调 LLM 复查
+	// （语义分类补词表之不足；LLM 判 UNKNOWN 则维持回问，安全不降级）。
+	isUnknown := it.Intent == contract.IntentUnknown
+	if !hasQ && !isUnknown {
 		return it
 	}
-	if it.Intent == contract.IntentQuery {
+	if it.Intent == contract.IntentQuery && !isUnknown {
 		return it
 	}
 	p, err := o.Providers.Get("fast")
@@ -3199,7 +3203,7 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	}
 	resp, err := p.Chat(ctx, provider.ChatRequest{
 		Messages: []contract.Message{
-			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=改文件，COMMIT=提交。"},
+			{Role: "system", Content: "你是 VoxSign 意图分类器。只输出 JSON：{\"intent\":\"NOTE|QUERY|EDIT|COMMIT|UNKNOWN\",\"confidence\":0.0-1.0}。意图含义：NOTE=记笔记，QUERY=问答/查询，EDIT=写文件/写邮件/写文章/写代码/改文件（任何写作或修改请求，含口语变体如\"一封英文邮件\"\"根据XX情况写一封邮件\"，都判 EDIT），COMMIT=提交，无法确定才判 UNKNOWN。"},
 			{Role: "user", Content: text},
 		},
 		MaxTokens: 64,
@@ -3379,6 +3383,7 @@ func receiptsDigest(rs []contract.Receipt) string {
 // queryLLMCompose 无路径写作生成（2026-10-08）：「写一封英文邮件」等请求直接生成完整内容。
 // 与 queryLLMAnswer 的区别：system 指令为"直接输出内容本身"（不解释/不提问/不 JSON），
 // MaxTokens 放宽到 1600（邮件/文章正文可能超过 400）。
+// 2026-10-08 实测：fast provider 偶发空响应（empty content）→ 空时重试一次防抖。
 func (o *Options) queryLLMCompose(ctx context.Context, original string) string {
 	if o == nil || o.Providers == nil {
 		log.Printf("[queryLLMCompose] providers 未配置")
@@ -3389,40 +3394,53 @@ func (o *Options) queryLLMCompose(ctx context.Context, original string) string {
 		log.Printf("[queryLLMCompose] fast provider unavailable: %v", err)
 		return ""
 	}
-	resp, err := p.Chat(ctx, provider.ChatRequest{
-		Messages: []contract.Message{
-			{Role: "system", Content: "你是 VoxSign 写作助手。根据用户要求直接输出完整内容（邮件、文章、文档、代码等），只输出内容本身，不要解释、不要提问、不要输出 JSON、不要输出任何结构化格式。"},
-			{Role: "user", Content: "用户要求：" + original},
-		},
-		MaxTokens:      1600,
-		ResponseFormat: noJSON(),
-	})
-	if err != nil {
-		log.Printf("[queryLLMCompose] fast Chat err: %v", err)
-		return ""
-	}
-	content := strings.TrimSpace(resp.Content)
-	if content == "" {
-		log.Printf("[queryLLMCompose] fast Chat empty content")
-		return ""
-	}
-	// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本。
-	if strings.HasPrefix(content, "{") {
-		var j map[string]any
-		if err := json.Unmarshal([]byte(content), &j); err == nil {
-			for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
-				if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
-					content = strings.TrimSpace(s)
-					break
+	callCompose := func() (string, bool) {
+		resp, err := p.Chat(ctx, provider.ChatRequest{
+			Messages: []contract.Message{
+				{Role: "system", Content: "你是 VoxSign 写作助手。根据用户要求直接输出完整内容（邮件、文章、文档、代码等），只输出内容本身，不要解释、不要提问、不要输出 JSON、不要输出任何结构化格式。"},
+				{Role: "user", Content: "用户要求：" + original},
+			},
+			MaxTokens:      1600,
+			ResponseFormat: noJSON(),
+		})
+		if err != nil {
+			log.Printf("[queryLLMCompose] fast Chat err: %v", err)
+			return "", false
+		}
+		content := strings.TrimSpace(resp.Content)
+		if content == "" {
+			log.Printf("[queryLLMCompose] fast Chat empty content")
+			return "", false
+		}
+		// fast 配了 json_object response_format——模型输出 JSON 壳；解出文本字段还原纯文本。
+		if strings.HasPrefix(content, "{") {
+			var j map[string]any
+			if err := json.Unmarshal([]byte(content), &j); err == nil {
+				for _, k := range []string{"text", "response", "content", "answer", "message", "error"} {
+					if s, ok := j[k].(string); ok && strings.TrimSpace(s) != "" {
+						content = strings.TrimSpace(s)
+						break
+					}
 				}
 			}
+			if strings.HasPrefix(content, "{") {
+				log.Printf("[queryLLMCompose] fast returned unexpected JSON shell: %.160s", content)
+				return "", false
+			}
 		}
-		if strings.HasPrefix(content, "{") {
-			log.Printf("[queryLLMCompose] fast returned unexpected JSON shell: %.160s", content)
-			return ""
+		return content, true
+	}
+	// 首次失败（空/错误/JSON 壳）→ 重试一次防瞬时波动。
+	for attempt := 1; attempt <= 2; attempt++ {
+		content, ok := callCompose()
+		if ok {
+			return content
+		}
+		if attempt == 1 {
+			log.Printf("[queryLLMCompose] 首次生成失败，重试一次（attempt=2）")
 		}
 	}
-	return content
+	return ""
 }
 
 // ensureReply（Phase 1，D0 冻结契约）：任务终态前保证 Outcome.Reply 非空。
