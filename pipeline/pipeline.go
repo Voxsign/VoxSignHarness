@@ -380,6 +380,43 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
 
+	// distillation R5: CONTINUE resumes the previous turn's task slot so
+	// "开始干呀/立刻执行/继续" actually does the job instead of asking again.
+	if intent.Intent == contract.IntentContinue {
+		slot := loadTaskSlot(o.logDir(), convID)
+		if slot == nil || slot.Status == "clear" {
+			intent.Intent = contract.IntentAsk
+			intent.Conflict = contract.ConflictContinue
+			intent.Confidence = 0.85
+			intent.Ask = "上一轮没有待执行的任务。直接说具体指令就行，例如「下载 https://github.com/owner/repo 然后编译测试」"
+		} else if slot.Status == "done" {
+			// job finished already — report instead of inventing a new run
+			intent.Intent = contract.IntentAsk
+			intent.Conflict = contract.ConflictContinue
+			intent.Confidence = 0.85
+			intent.Ask = "上一轮任务已完成（" + slot.Text + "）。需要我重新跑一遍，还是继续下一个任务？"
+		} else if slot.Params == nil || strings.TrimSpace(slot.Params["url"]) == "" {
+			// resumed job still missing its target repo — ask for the URL
+			intent.Intent = contract.IntentAsk
+			intent.Conflict = contract.ConflictContinue
+			intent.Confidence = 0.85
+			intent.Ask = "上一轮要下载编译测试，但还没给仓库地址。给我 URL 或仓库名（例如「下载 https://github.com/owner/repo 然后编译测试」）"
+		} else {
+			intent.Intent = contract.IntentBuildTest
+			intent.Confidence = 0.9
+			intent.Conflict = ""
+			intent.Ask = ""
+			intent.Params = slot.Params
+			if slot.Params == nil {
+				intent.Params = map[string]string{}
+			}
+			intent.Params["resumed"] = "1"
+			intent.CorrectedText = slot.Text
+			intent.Context = append(intent.Context, "[resumed task] "+slot.Text)
+		}
+		emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
+	}
+
 	// clarificationexit: classify /coreference   needclarification ->    . 
 	// M3 #37: clarificationis   " type/ needneedchange onunder "pt,   notein ground     . 
 	if intent.NeedsClarification() {
@@ -401,7 +438,11 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		}
 		// zhiji: clarification 分支也走 LLM 自然回复——不管什么intent，都不要硬说"need clarification"
 		if o.Providers != nil {
-			if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
+			if intent.Ask != "" {
+				// distillation R5: on a clarification ask, show the real question, never a
+				// generated promise of action ("我现在就动手…") that will not happen.
+				out.View.Result = intent.Ask
+			} else if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
 				out.View.Result = reply
 			} else {
 				out.View.Result = "好的，我理解了你的意思，我们接着往下推——先从最要紧的那件事开始。"
@@ -518,6 +559,35 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 
 	// ⑨ Exec(onlyalreadyed space_check + risk    )
+	// distillation R5: BUILD_TEST without a resolvable URL must ask instead of failing,
+	// unless it is a resumed job whose slot carries the URL (execBuildTest handles the slot).
+	if intent.Intent == contract.IntentBuildTest && (intent.Params == nil || strings.TrimSpace(intent.Params["url"]) == "") {
+		slot := loadTaskSlot(o.logDir(), convID)
+		hasURL := slot != nil && slot.Params != nil && strings.TrimSpace(slot.Params["url"]) != ""
+		if !hasURL && strings.TrimSpace(intent.Params["resumed"]) == "" {
+			// record the pending job so "开始干/继续" can resume it once the URL is given
+			writeTaskSlot(o.logDir(), convID, &TaskSlot{
+				Kind: TaskKindBuildTest, Params: map[string]string{"url": ""},
+				Steps: []string{"clone", "build", "test"}, Step: 0, Status: "pending", Text: intent.CorrectedText,
+			})
+			intent.Intent = contract.IntentAsk
+			intent.Conflict = contract.ConflictContinue
+			intent.Confidence = 0.85
+			intent.Ask = "要下载哪个仓库？给我 URL 或仓库名，例如「下载 https://github.com/owner/repo 然后编译测试」"
+			intent.Params = map[string]string{"action": "build_test"}
+			out.Intent = intent
+			out.Ask = intent.Ask
+			out.Options = mergeAskOptions(optionsForIntent(&intent, nil), nil)
+			out.ContextBlock = "下载编译测试需要目标仓库 URL"
+			out.View = contract.ReceiptView{
+				Action: shortAction(intent), Files: "—",
+				Result: "需要仓库地址：请提供 URL 或仓库名，我立刻下载编译测试", Undo: "- (not executed)",
+			}
+			o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
+			return out, nil
+		}
+	}
+
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
@@ -594,13 +664,27 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
 		}
 		if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
-			out.View.Result = reply
+			// distillation R5: on a clarification ask the LLM natural reply tends to
+			// promise action ("我现在就动手…") that will not happen. Keep the ask text
+			// as the result so the user sees the actual question, not a false promise.
+			if intent.Ask != "" {
+				out.View.Result = intent.Ask
+			} else {
+				out.View.Result = reply
+			}
 		}
 	}
 	// 兜底：不管什么intent，只要最终回复是"need clarification"，用LLM自然回复覆盖
 	if strings.Contains(out.View.Result, "need clarification") || strings.Contains(out.View.Result, "你是想让我做什么") {
 		if reply := o.llmNaturalReply(ctx, corrected, intent.Context); reply != "" {
-			out.View.Result = reply
+			// distillation R5: on a clarification ask the LLM natural reply tends to
+			// promise action ("我现在就动手…") that will not happen. Keep the ask text
+			// as the result so the user sees the actual question, not a false promise.
+			if intent.Ask != "" {
+				out.View.Result = intent.Ask
+			} else {
+				out.View.Result = reply
+			}
 		} else {
 			// LLM也失败了，硬兜底——永远不要说"没理解"
 			out.View.Result = "好的，我理解了你的意思，我们接着往下推——先从最要紧的那件事开始。"
@@ -683,6 +767,8 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "project" //   orchestrate=read  +writefile+git   ,    objdomain
 	case contract.IntentRegisterTool:
 		return "project" // 2026-10-04     : note   =writeclassintent, need writedomain(global read-only reject)
+	case contract.IntentBuildTest:
+		return "project" // distillation R5: clone+build+test needs a writable workspace domain
 	case contract.IntentEdit, contract.IntentDebug, contract.IntentTest,
 		contract.IntentCommit, contract.IntentDeploy:
 		// 2026-10-04 useuser  "  under  /   under code"->out-of-scope(BOUNDARY_VIOLATION): 
@@ -706,6 +792,9 @@ func planCaps(it contract.Intent) []string {
 		return []string{"test", "run", "read"}
 	case contract.IntentCommit:
 		return []string{"git", "read"}
+	case contract.IntentBuildTest:
+		// distillation R5: real pipeline clone -> build -> test (git + run + test + read)
+		return []string{"git", "run", "test", "read"}
 	case contract.IntentOrchestrate:
 		//   erform  chain: read  (file/search)-> writefile(file)-> git   (git). 
 		return []string{"file", "read", "git", "search"}
@@ -727,6 +816,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 	switch it.Intent {
 	case contract.IntentOrchestrate:
 		return o.execOrchestrate(ctx, it, logDir)
+	case contract.IntentBuildTest:
+		return o.execBuildTest(ctx, it, logDir)
 	case contract.IntentRegisterTool:
 		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
 		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
@@ -1569,10 +1660,33 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 		seen[e] = true
 		out = append(out, refer.RecentEntity{Space: "default", Entity: e, Kind: kind, Ts: now})
 	}
+	// distillation R5: the old project regex swallowed intent labels ("Remind"/"Change"/"Explain")
+	// into the cross-turn slot, polluting referent resolution. Skip known intent words.
+	intentWord := map[string]bool{
+		"NOTE": true, "QUERY": true, "EDIT": true, "TEST": true, "COMMIT": true,
+		"DEPLOY": true, "REMINDER": true, "ASK": true, "INFO": true, "TIME": true,
+		"FILE_READ": true, "FILE_WRITE": true, "FILE_LIST": true, "SHELL": true,
+		"APP_LAUNCH": true, "UNKNOWN": true, "ORCHESTRATE": true, "REGISTER_TOOL": true,
+		"BUILD_TEST": true, "CONTINUE": true, "BACKUP": true, "CANCEL": true,
+		"DELETE": true, "DEBUG": true, "REVIEW": true, "RETRY": true,
+	}
 	//    write name(  - linkconnect  0..N seg): OT-ODP / SPoG / DMZ / NGSA
 	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
 	for _, m := range re.FindAllString(text, -1) {
+		if intentWord[m] {
+			continue
+		}
 		add(m, "project")
+	}
+	// distillation R5: explicit URLs and github owner/repo patterns become first-class
+	// project entities so "从这个地方下载那个代码" can resolve to the repo mentioned earlier.
+	reURL := regexp.MustCompile(`https?://[^\s"'（）()《》<>]+`)
+	for _, m := range reURL.FindAllString(text, -1) {
+		add(strings.TrimRight(m, "。，,.;；）)〕〉"), "project")
+	}
+	reGH := regexp.MustCompile(`github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`)
+	for _, m := range reGH.FindAllString(text, -1) {
+		add("https://"+m, "project")
 	}
 	//  …  nameid  (2-30 char)
 	re2 := regexp.MustCompile(`《([^》]{2,30})》`)
@@ -1734,6 +1848,157 @@ func (o *Options) execOrchestrate(ctx context.Context, it contract.Intent, logDi
 	crecv := o.commitTargetPath(root, cleanTarget, "vhs(orchestrate): 生成《"+title+"》多步编排落地")
 	crecv.Seq = nextSeq()
 	receipts = append(receipts, crecv)
+	return receipts
+}
+
+// execBuildTest (distillation R5, 2026-10-08) executes the real work pipeline the
+// iOS repro demanded: clone/download <repo> -> build -> test. It resolves the URL
+// from (a) explicit text, (b) the task slot, (c) recent entities; works in
+// <logDir>/workspace/<repo>; probes go.mod / package.json / Makefile; runs the
+// matching build & test commands and reports receipts. The task slot is written
+// so "开始干呀/继续" resumes the same job.
+func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	var receipts []contract.Receipt
+	seq := 0
+	bump := func() int { seq++; return seq }
+
+	url := ""
+	if it.Params != nil {
+		url = strings.TrimSpace(it.Params["url"])
+	}
+	// fallback 1: task slot url
+	if url == "" {
+		if slot := loadTaskSlot(logDir, o.ConvID); slot != nil && slot.Params != nil {
+			url = strings.TrimSpace(slot.Params["url"])
+		}
+	}
+	// fallback 2: recent entities that look like a github repo
+	if url == "" && o.Refer != nil {
+		for _, e := range o.Refer.Recent {
+			if strings.Contains(e.Entity, "github.com/") || strings.Contains(e.Entity, "github.com ") {
+				url = e.Entity
+				if !strings.HasPrefix(url, "http") {
+					url = "https://" + url
+				}
+				break
+			}
+		}
+	}
+	if url == "" {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "build_test", OK: false,
+			Err: "要下载哪个仓库？给我 URL 或仓库名，例如「下载 https://github.com/owner/repo 然后编译测试」"})
+		return receipts
+	}
+
+	// normalize: owner/repo shorthand -> https URL
+	if !strings.HasPrefix(url, "http") && strings.Contains(url, "/") {
+		url = "https://" + url
+	}
+	repoName := filepath.Base(strings.TrimSuffix(url, "/"))
+	if i := strings.Index(repoName, ".git"); i >= 0 {
+		repoName = repoName[:i]
+	}
+	if repoName == "" || repoName == "." || repoName == "/" {
+		repoName = "repo"
+	}
+	wsRoot := filepath.Join(logDir, "workspace")
+	_ = os.MkdirAll(wsRoot, 0o755)
+	repoDir := filepath.Join(wsRoot, repoName)
+
+	// write the task slot so a later CONTINUE can resume this job
+	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+		Kind:   TaskKindBuildTest,
+		Params: map[string]string{"url": url},
+		Steps:  []string{"clone", "build", "test"},
+		Step:   0,
+		Status: "running",
+		Text:   it.CorrectedText,
+	})
+
+	// step 1: clone (shallow). If the dir already exists and is a git repo, pull instead.
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
+		precv := o.run("git", map[string]any{"args": []string{"-C", repoDir, "pull", "--ff-only"}, "cwd": repoDir})
+		precv.Seq = bump()
+		precv.Tool = "git"
+		precv.Stdout = "repo already present, pulled: " + precv.Stdout
+		receipts = append(receipts, precv)
+	} else {
+		_ = os.RemoveAll(repoDir)
+		crecv := o.run("git", map[string]any{"args": []string{"clone", "--depth", "1", url, repoDir}})
+		crecv.Seq = bump()
+		crecv.Tool = "git"
+		receipts = append(receipts, crecv)
+		if !crecv.OK {
+			writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+				Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+				Steps: []string{"clone", "build", "test"}, Step: 0, Status: "failed", Text: it.CorrectedText,
+			})
+			return receipts
+		}
+	}
+
+	// step 2: probe the language and build
+	buildCmd := []string{}
+	testCmd := []string{}
+	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err == nil {
+		buildCmd = []string{"go", "build", "./..."}
+		// CI 口径（.github/workflows/ci.yml）：排除 asr/doccontract 包，避免环境依赖测试误报。
+		listRecv := o.run("run", map[string]any{"command": []string{"go", "list", "./..."}, "cwd": repoDir})
+		var pkgs []string
+		for _, ln := range strings.Split(listRecv.Stdout, "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln == "" || strings.HasSuffix(ln, "/asr") || strings.HasSuffix(ln, "/doccontract") {
+				continue
+			}
+			pkgs = append(pkgs, ln)
+		}
+		if len(pkgs) == 0 {
+			testCmd = []string{"go", "test", "./..."}
+		} else {
+			testCmd = append([]string{"go", "test"}, pkgs...)
+		}
+	} else if _, err := os.Stat(filepath.Join(repoDir, "package.json")); err == nil {
+		buildCmd = []string{"npm", "install", "--no-audit", "--no-fund"}
+		testCmd = []string{"npm", "test", "--", "--runInBand"}
+	} else {
+		// generic make fallback
+		if _, err := os.Stat(filepath.Join(repoDir, "Makefile")); err == nil {
+			buildCmd = []string{"make", "build"}
+			testCmd = []string{"make", "test"}
+		} else {
+			receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "build_test", OK: true,
+				Stdout: "克隆完成（" + repoDir + "），未识别到 go.mod/package.json/Makefile，跳过编译与测试"})
+			writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+				Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+				Steps: []string{"clone", "build", "test"}, Step: 3, Status: "done", Text: it.CorrectedText,
+			})
+			return receipts
+		}
+	}
+	if len(buildCmd) > 0 {
+		brecv := o.run("run", map[string]any{"command": buildCmd, "cwd": repoDir})
+		brecv.Seq = bump()
+		brecv.Tool = "run"
+		receipts = append(receipts, brecv)
+		if !brecv.OK {
+			writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+				Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+				Steps: []string{"clone", "build", "test"}, Step: 1, Status: "failed", Text: it.CorrectedText,
+			})
+			return receipts
+		}
+	}
+	if len(testCmd) > 0 {
+		trecv := o.run("test", map[string]any{"command": testCmd, "cwd": repoDir})
+		trecv.Seq = bump()
+		trecv.Tool = "test"
+		receipts = append(receipts, trecv)
+	}
+
+	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+		Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+		Steps: []string{"clone", "build", "test"}, Step: 3, Status: "done", Text: it.CorrectedText,
+	})
 	return receipts
 }
 

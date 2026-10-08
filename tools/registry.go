@@ -29,13 +29,13 @@ func builtinContracts() []contract.ToolContract {
 	return []contract.ToolContract{
 		{
 			Name: "git", Version: "1.0", Source: "builtin",
-			Caps:          []string{"status", "diff", "log", "commit", "checkout"},
+			Caps:          []string{"status", "diff", "log", "commit", "checkout", "clone"},
 			Params:        map[string]string{"args": "[]string,optional"},
-			SideEffects:   []string{"read workspace/index", "commit irreversible (local)"},
+			SideEffects:   []string{"read workspace/index", "commit irreversible (local)", "clone downloads a repo (network)"},
 			AllowedSpaces: []string{"project", "sandbox"},
 			Risk: map[string]string{
 				"status": "none", "diff": "none", "log": "none",
-				"commit": "irreversible", "checkout": "medium",
+				"commit": "irreversible", "checkout": "medium", "clone": "medium",
 			},
 		},
 		{
