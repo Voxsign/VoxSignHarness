@@ -53,6 +53,7 @@ package input
 //   Ask   byintent restrict(referout   ), UNKNOWN ofout  allow     as. 
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -126,6 +127,24 @@ var (
 		// 2026-10-08 (distillation R2): "那个东西怎么样了" is an ambiguous referent question;
 		// route to ask so the harness asks which item instead of guessing (U4 baseline).
 		"怎么样了", "怎么样"}
+	// distillation R5 (2026-10-08): real work pipeline "download/clone code -> build -> test".
+	// The iOS repro "从这个地方下载那个代码…编译…测试" was misrouted to TEST (guessed
+	// "go test ./..." without downloading anything). BuildTest requires a download verb AND
+	// (build OR test) verb; a bare "下载" alone stays ask for the missing URL.
+	buildDownloadVerbs = []string{"下载", "克隆", "clone", "拉取", "拉代码", "取代码", "抓取", "pull down", "download"}
+	buildCompileVerbs  = []string{"编译", "构建", "build", "打包", "compile"}
+	buildTestVerbs     = []string{"测试", "跑测试", "跑一下测试", "test", "跑一下"}
+	// backup task (T1 repro): "备份程序可以执行吗/立刻执行" was misrouted to EDIT. "备份" now
+	// routes to QUERY (check backup state) when it is the only signal; pipeline may upgrade.
+	backupTriggers = []string{"备份", "backup"}
+	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering
+	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
+	// task slot from the previous turn instead of asking. Kept narrow on purpose: bare
+	// "继续/接着/下一步/开工" is a referent/meta signal, not a resume command, and
+	// "继续推进" in a plan-style sentence must not hijack the turn (TestColloquialQuestionNoReferAsk).
+	continuationTriggers = []string{"开始干", "开始吧", "立刻执行", "马上执行", "现在就做", "现在做", "开始做",
+		"接着干", "继续干", "接着来", "继续来", "往下走", "动手吧", "赶紧做", "赶紧干", "去执行", "执行吧",
+		"干活吧", "开始执行", "就开始", "现在开始", "直接干", "马上开始", "就开始吧"}
 	defaultExcludes = []string{".env*", "node_modules"}
 )
 
@@ -963,6 +982,9 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 
 	// 1.     ( first   )
 	switch {
+	case isBuildTestRequest(text):
+		// distillation R5: "下载那个代码→编译→测试" is a real pipeline, not a bare TEST.
+		return c.fill(ti, contract.IntentBuildTest, 0.88, c.buildTestParams(text))
 	case registerToolRequest(text):
 		return c.fill(ti, contract.IntentRegisterTool, 0.95, nil)
 	case containsAny(text, deleteTriggers):
@@ -976,6 +998,15 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 		return c.fill(ti, contract.IntentNote, 0.9, nil)
 	case containsAny(text, statusQuestion):
 		return c.fill(ti, contract.IntentQuery, 0.85, c.queryParams(text))
+	case containsAny(text, backupTriggers):
+		// distillation R5: "备份程序可以执行吗/立刻执行" — check backup task state.
+		return c.fill(ti, contract.IntentQuery, 0.8, map[string]string{"action": "backup"})
+	case isContinuationRequest(text):
+		// distillation R5: "那你现在开始干呀" — resume the task slot from the
+		// previous turn (pipeline decides execution vs ask). Last in the switch so
+		// concrete action intents win; continuation is the fallback signal.
+		ti.Conflict = contract.ConflictContinue
+		return c.fill(ti, contract.IntentContinue, 0.9, nil)
 	case containsAny(text, debugTriggers) && containsAny(text, debugPlanWords):
 		ti.Intent = contract.IntentAsk
 		ti.Confidence = 0.5
@@ -1484,4 +1515,74 @@ func insideBookTitle(text string, start, end int) bool {
 		return false
 	}
 	return start >= i && end <= j
+}
+
+// ---------------------------------------------------------------------------
+// distillation R5 (2026-10-08): continuation / build-test pipeline / backup helpers.
+// ---------------------------------------------------------------------------
+
+// reURL matches explicit http(s) URLs; reGitHubRepo matches a github owner/repo path.
+var (
+	reURL        = regexp.MustCompile(`https?://[^\s"'（）()《》<>]+`)
+	reGitHubRepo = regexp.MustCompile(`github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`)
+)
+
+// isContinuationRequest reports whether the user is telling the harness to
+// resume the previous turn's job ("开始干呀/立刻执行/继续"). Narrow on purpose:
+// a trigger word counts only when it sits at the start of a short sentence, so
+// "…就立刻执行啊，现在开始做" (T1) and "下载…就开始测试" (T2) do NOT hijack the
+// turn, while "那你现在开始干呀" (T3) does.
+func isContinuationRequest(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	runes := []rune(trimmed)
+	short := len(runes) <= 14
+	for _, m := range continuationTriggers {
+		i := strings.Index(trimmed, m)
+		if i < 0 {
+			continue
+		}
+		pos := len([]rune(trimmed[:i]))
+		// leading politeness "那你/那你现在/好的" is allowed before the trigger
+		if pos <= 8 && (short || pos <= 4) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBuildTestRequest reports the real-work pipeline "download/clone <code> -> build -> test".
+// A download verb plus (build or test) verb is enough; a bare download without any
+// build/test tail stays ambiguous (pipeline will ask for the URL).
+func isBuildTestRequest(text string) bool {
+	hasDL := containsAny(text, buildDownloadVerbs)
+	if !hasDL {
+		return false
+	}
+	return containsAny(text, buildCompileVerbs) || containsAny(text, buildTestVerbs)
+}
+
+// extractRepoURL pulls an explicit https URL or a github owner/repo pattern from
+// the text. Empty when the user only points ("那个代码/这个地方") — the pipeline then
+// falls back to the task slot / recent entities.
+func extractRepoURL(text string) string {
+	if m := reURL.FindString(text); m != "" {
+		return strings.TrimRight(m, "。，,.;；）)〕〉")
+	}
+	if m := reGitHubRepo.FindString(text); m != "" {
+		return "https://" + m
+	}
+	return ""
+}
+
+// buildTestParams fills the BUILD_TEST intent params: url (may be empty when the
+// user only points), action and the step chain.
+func (c *TaskClassifier) buildTestParams(text string) map[string]string {
+	params := map[string]string{
+		"action": "build_test",
+		"steps":  "clone,build,test",
+	}
+	if u := extractRepoURL(text); u != "" {
+		params["url"] = u
+	}
+	return params
 }

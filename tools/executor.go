@@ -81,10 +81,10 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	switch tool {
 	case "test", "run":
 		argv := strSlice(args, "command")
-		out, execErr, ok = e.runCmd(argv)
+		out, execErr, ok = e.runCmdIn(argv, str(args, "cwd"))
 	case "git":
 		argv := strSlice(args, "args")
-		out, execErr, ok = e.runCmd(append([]string{"git"}, argv...))
+		out, execErr, ok = e.runCmdIn(append([]string{"git"}, argv...), str(args, "cwd"))
 	case "file":
 		out, execErr, ok = e.execFile(args)
 	case "search":
@@ -124,13 +124,22 @@ func truncateOut(s string) string {
 
 // runCmd raise process    , returnback (stdout and, stderr  , OK). 
 func (e *Executor) runCmd(argv []string) (string, string, bool) {
+	return e.runCmdIn(argv, "")
+}
+
+// runCmdIn is runCmd with an explicit working directory; empty dir falls back to BaseDir.
+// distillation R5 (2026-10-08): build/test commands must run inside the cloned repo.
+func (e *Executor) runCmdIn(argv []string, dir string) (string, string, bool) {
 	if len(argv) == 0 {
 		return "", "missing command argv", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = e.BaseDir
+	cmd.Dir = dir
+	if strings.TrimSpace(dir) == "" {
+		cmd.Dir = e.BaseDir
+	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
