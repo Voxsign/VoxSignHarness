@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +44,23 @@ func str(args map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// intVal reads an integer parameter (used for timeout_s on long-running jobs).
+func intVal(args map[string]any, key string) int {
+	if v, ok := args[key]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		case string:
+			if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+				return i
+			}
+		}
+	}
+	return 0
 }
 
 // strSlice from args get []string(compat []any and   string). 
@@ -81,7 +99,9 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	switch tool {
 	case "test", "run":
 		argv := strSlice(args, "command")
-		out, execErr, ok = e.runCmdIn(argv, str(args, "cwd"))
+		// distillation R6: long-running jobs (npm install -g) pass timeout_s to override
+		// the default 30s exec cap.
+		out, execErr, ok = e.runCmdIn(argv, str(args, "cwd"), intVal(args, "timeout_s"))
 	case "git":
 		argv := strSlice(args, "args")
 		out, execErr, ok = e.runCmdIn(append([]string{"git"}, argv...), str(args, "cwd"))
@@ -129,11 +149,15 @@ func (e *Executor) runCmd(argv []string) (string, string, bool) {
 
 // runCmdIn is runCmd with an explicit working directory; empty dir falls back to BaseDir.
 // distillation R5 (2026-10-08): build/test commands must run inside the cloned repo.
-func (e *Executor) runCmdIn(argv []string, dir string) (string, string, bool) {
+func (e *Executor) runCmdIn(argv []string, dir string, timeoutSec ...int) (string, string, bool) {
 	if len(argv) == 0 {
 		return "", "missing command argv", false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout())
+	timeout := e.timeout()
+	if len(timeoutSec) > 0 && timeoutSec[0] > 0 {
+		timeout = time.Duration(timeoutSec[0]) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
