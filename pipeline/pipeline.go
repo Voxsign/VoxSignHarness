@@ -395,6 +395,22 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			intent.Conflict = contract.ConflictContinue
 			intent.Confidence = 0.85
 			intent.Ask = "上一轮任务已完成（" + slot.Text + "）。需要我重新跑一遍，还是继续下一个任务？"
+		} else if slot.Kind == TaskKindInstall {
+			// distillation R6: a pending install awaits confirmation; "怎么还没执行/立刻执行"
+			// resumes it, and the pipeline runs the real npm install now.
+			intent.Intent = contract.IntentInstall
+			intent.Confidence = 0.9
+			intent.Conflict = ""
+			intent.Ask = ""
+			intent.Params = map[string]string{}
+			if slot.Params != nil {
+				for k, v := range slot.Params {
+					intent.Params[k] = v
+				}
+			}
+			intent.Params["resumed"] = "1"
+			intent.CorrectedText = slot.Text
+			intent.Context = append(intent.Context, "[resumed install] "+slot.Text)
 		} else if slot.Params == nil || strings.TrimSpace(slot.Params["url"]) == "" {
 			// resumed job still missing its target repo — ask for the URL
 			intent.Intent = contract.IntentAsk
@@ -673,6 +689,24 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 				out.View.Result = reply
 			}
 		}
+		// distillation R6: 若存在安装任务槽而本轮是纯对话/查询（没有新动作词），在回复末尾
+		// 提示安装状态（待确认→催确认；已完成→告知结果），避免用户以为 harness 拒绝干活。
+		if slot := loadTaskSlot(o.logDir(), convID); slot != nil && slot.Kind == TaskKindInstall {
+			pkgs := ""
+			if slot.Params != nil {
+				pkgs = strings.Join(strings.Fields(slot.Params["packages"]), "、")
+			}
+			suffix := ""
+			switch slot.Status {
+			case "pending_confirm":
+				suffix = "\n\n⚠️ 上一轮待确认安装 " + pkgs + "——回复「装吧」或「确认」我就立刻执行。"
+			case "done":
+				suffix = "\n\n✅ 上一轮已完成安装 " + pkgs + "。还要装别的，或继续其它任务，直接说。"
+			}
+			if suffix != "" && !strings.Contains(out.View.Result, suffix) {
+				out.View.Result += suffix
+			}
+		}
 	}
 	// 兜底：不管什么intent，只要最终回复是"need clarification"，用LLM自然回复覆盖
 	if strings.Contains(out.View.Result, "need clarification") || strings.Contains(out.View.Result, "你是想让我做什么") {
@@ -769,6 +803,10 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "project" // 2026-10-04     : note   =writeclassintent, need writedomain(global read-only reject)
 	case contract.IntentBuildTest:
 		return "project" // distillation R5: clone+build+test needs a writable workspace domain
+	case contract.IntentInstall:
+		// distillation R6: software install executes on the host; project domain is the
+		// writable+executable space (global is read-only and would BOUNDARY_VIOLATION).
+		return "project"
 	case contract.IntentEdit, contract.IntentDebug, contract.IntentTest,
 		contract.IntentCommit, contract.IntentDeploy:
 		// 2026-10-04 useuser  "  under  /   under code"->out-of-scope(BOUNDARY_VIOLATION): 
@@ -795,6 +833,9 @@ func planCaps(it contract.Intent) []string {
 	case contract.IntentBuildTest:
 		// distillation R5: real pipeline clone -> build -> test (git + run + test + read)
 		return []string{"git", "run", "test", "read"}
+	case contract.IntentInstall:
+		// distillation R6: npm install -g <pkgs> on the host (run + read to verify)
+		return []string{"run", "read"}
 	case contract.IntentOrchestrate:
 		//   erform  chain: read  (file/search)-> writefile(file)-> git   (git). 
 		return []string{"file", "read", "git", "search"}
@@ -818,6 +859,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		return o.execOrchestrate(ctx, it, logDir)
 	case contract.IntentBuildTest:
 		return o.execBuildTest(ctx, it, logDir)
+	case contract.IntentInstall:
+		return o.execInstall(ctx, it, logDir)
 	case contract.IntentRegisterTool:
 		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
 		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
@@ -1998,6 +2041,90 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
 		Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
 		Steps: []string{"clone", "build", "test"}, Step: 3, Status: "done", Text: it.CorrectedText,
+	})
+	return receipts
+}
+
+// execInstall (distillation R6, 2026-10-08) really installs developer CLIs on the
+// host — "安装 codex / claude code 到后台" (iOS repro: "code code x and cloud code").
+// Software names are mapped to npm packages; the action is gated: a fresh INSTALL
+// writes a pending task slot and asks for confirmation, and a later CONTINUE
+// ("怎么还没执行呢/立刻执行") resumes and runs `npm install -g` for real.
+func (o *Options) execInstall(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	var receipts []contract.Receipt
+	seq := 0
+	bump := func() int { seq++; return seq }
+
+	pkgs := []string{}
+	if it.Params != nil {
+		for _, p := range strings.Fields(it.Params["packages"]) {
+			pkgs = append(pkgs, p)
+		}
+	}
+	if len(pkgs) == 0 {
+		if slot := loadTaskSlot(logDir, o.ConvID); slot != nil && slot.Params != nil {
+			for _, p := range strings.Fields(slot.Params["packages"]) {
+				pkgs = append(pkgs, p)
+			}
+		}
+	}
+	if len(pkgs) == 0 {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "install", OK: false,
+			Err: "要安装哪个软件？例如「安装 codex」或「安装 claude code 到后台」"})
+		return receipts
+	}
+
+	// Confirmation gate on a fresh INSTALL: persist a pending slot and ask instead of
+	// silently changing the host. "确认/装吧/立刻执行" resumes through CONTINUE.
+	if it.Params == nil || it.Params["resumed"] != "1" {
+		writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+			Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
+			Steps: []string{"confirm", "install"}, Step: 0, Status: "pending_confirm", Text: it.CorrectedText,
+		})
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "install", OK: false,
+			ConfirmAsk: true,
+			Err:        "准备安装 " + strings.Join(pkgs, "、") + "（npm 全局安装，写入系统）。确认后我立刻执行——回复「确认」或「装吧」"})
+		return receipts
+	}
+
+	// Resumed install: verify node/npm first.
+	nodeRecv := o.run("run", map[string]any{"command": []string{"node", "--version"}})
+	npmRecv := o.run("run", map[string]any{"command": []string{"npm", "--version"}})
+	if !nodeRecv.OK || !npmRecv.OK {
+		writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+			Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
+			Steps: []string{"confirm", "install"}, Step: 1, Status: "failed", Text: it.CorrectedText,
+		})
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "install", OK: false,
+			Err: "后台没有可用的 node/npm，无法执行 npm 安装（node: " + nodeRecv.Stderr + " npm: " + npmRecv.Stderr + "）"})
+		return receipts
+	}
+
+	// Dry-run mode for local end-to-end tests: prints the exact command, no host change.
+	if os.Getenv("VHS_EXEC_DRY_RUN") != "" {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "install", OK: true,
+			Stdout: "[dry-run] 将执行: npm install -g " + strings.Join(pkgs, " ")})
+		writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+			Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
+			Steps: []string{"confirm", "install"}, Step: 2, Status: "done", Text: it.CorrectedText,
+		})
+		return receipts
+	}
+
+	instRecv := o.run("run", map[string]any{
+		"command":   append([]string{"npm", "install", "-g"}, pkgs...),
+		"timeout_s": 300,
+	})
+	instRecv.Seq = bump()
+	instRecv.Tool = "install"
+	receipts = append(receipts, instRecv)
+	status := "failed"
+	if instRecv.OK {
+		status = "done"
+	}
+	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+		Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
+		Steps: []string{"confirm", "install"}, Step: 2, Status: status, Text: it.CorrectedText,
 	})
 	return receipts
 }
@@ -3376,6 +3503,17 @@ func hasFailure(rs []contract.Receipt) bool {
 	return false
 }
 
+// hasConfirmAsk reports whether any receipt is a confirmation gate (distillation R6:
+// render as 待确认 with the real question instead of FAILED).
+func hasConfirmAsk(rs []contract.Receipt) bool {
+	for _, r := range rs {
+		if r.ConfirmAsk {
+			return true
+		}
+	}
+	return false
+}
+
 func firstErr(rs []contract.Receipt) string {
 	for _, r := range rs {
 		if !r.OK {
@@ -3406,7 +3544,13 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		if vr.Status == verify.StatusFail {
 			reason = "verify 未通过：" + vr.Detail
 		}
-		view.Result = "FAILED：" + truncateStr(reason, 60)
+		if hasConfirmAsk(rs) {
+			// distillation R6: a confirmation gate (e.g. software install) renders as
+			// 待确认 with the real question, never as FAILED.
+			view.Result = "待确认：" + truncateStr(reason, 200)
+		} else {
+			view.Result = "FAILED：" + truncateStr(reason, 60)
+		}
 	default:
 		view.Result = "OK（" + confirmWord(d.Level) + "）"
 		// M7:    stdout has  in (QUERY   LLM answer/    etc  base)time, 

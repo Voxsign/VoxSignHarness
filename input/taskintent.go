@@ -137,14 +137,19 @@ var (
 	// backup task (T1 repro): "备份程序可以执行吗/立刻执行" was misrouted to EDIT. "备份" now
 	// routes to QUERY (check backup state) when it is the only signal; pipeline may upgrade.
 	backupTriggers = []string{"备份", "backup"}
-	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering
-	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
+	// distillation R6 (2026-10-08): "安装 codex / claude code 到后台" (iOS repro "code code x
+	// and cloud code") was falling through to the English UNKNOWN template. "安装/装一下/装到"
+	// now marks IntentInstall; the pipeline gates with a confirm and really runs npm install -g.
+	installTriggers = []string{"安装", "装一下", "装上", "装个", "装到", "装好", "install", "setup"}
+	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
 	// task slot from the previous turn instead of asking. Kept narrow on purpose: bare
 	// "继续/接着/下一步/开工" is a referent/meta signal, not a resume command, and
 	// "继续推进" in a plan-style sentence must not hijack the turn (TestColloquialQuestionNoReferAsk).
 	continuationTriggers = []string{"开始干", "开始吧", "立刻执行", "马上执行", "现在就做", "现在做", "开始做",
 		"接着干", "继续干", "接着来", "继续来", "往下走", "动手吧", "赶紧做", "赶紧干", "去执行", "执行吧",
-		"干活吧", "开始执行", "就开始", "现在开始", "直接干", "马上开始", "就开始吧"}
+		"干活吧", "开始执行", "就开始", "现在开始", "直接干", "马上开始", "就开始吧",
+		// distillation R6: 确认词恢复上一轮待确认安装（"装吧/可以装/确认" 短句即触发）
+		"装吧", "可以装", "确认", "确认安装", "就装吧"}
 	defaultExcludes = []string{".env*", "node_modules"}
 )
 
@@ -985,6 +990,9 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case isBuildTestRequest(text):
 		// distillation R5: "下载那个代码→编译→测试" is a real pipeline, not a bare TEST.
 		return c.fill(ti, contract.IntentBuildTest, 0.88, c.buildTestParams(text))
+	case containsAny(text, installTriggers):
+		// distillation R6: "安装 codex / claude code 到后台" — pipeline gates + really installs.
+		return c.fill(ti, contract.IntentInstall, 0.85, c.installParams(text))
 	case registerToolRequest(text):
 		return c.fill(ti, contract.IntentRegisterTool, 0.95, nil)
 	case containsAny(text, deleteTriggers):
@@ -1542,10 +1550,27 @@ func isContinuationRequest(text string) bool {
 			continue
 		}
 		pos := len([]rune(trimmed[:i]))
+		// distillation R6: 强延续信号（立刻执行/马上执行/赶紧做…）即使句子较长、触发词靠后
+		// 也视为延续（iOS repro "怎么还没执行呢？那你现在立刻执行好吗" 16 字被旧收窄拦下，
+		// 落成 EDIT 误判）。弱延续词（接着/继续/往下走）保持收窄防计划句劫持。
+		if strongContinuation(m) {
+			return true
+		}
 		// leading politeness "那你/那你现在/好的" is allowed before the trigger
 		if pos <= 8 && (short || pos <= 4) {
 			return true
 		}
+	}
+	return false
+}
+
+// strongContinuation marks imperative resume verbs whose intent is unambiguous even
+// in a longer sentence ("怎么还没执行呢？那你现在立刻执行好吗").
+func strongContinuation(m string) bool {
+	switch m {
+	case "立刻执行", "马上执行", "现在就做", "现在做", "开始执行", "赶紧做", "赶紧干",
+		"动手吧", "去执行", "执行吧", "直接干", "马上开始", "现在开始":
+		return true
 	}
 	return false
 }
@@ -1585,4 +1610,43 @@ func (c *TaskClassifier) buildTestParams(text string) map[string]string {
 		params["url"] = u
 	}
 	return params
+}
+
+// installParams fills the INSTALL intent params: packages maps ASR-ish variants to
+// canonical npm package names (deduped, order preserved). Unknown software names are
+// kept verbatim so the pipeline can still ask or install them.
+func (c *TaskClassifier) installParams(text string) map[string]string {
+	// key: substring as the user (or ASR) says it; value: npm package name.
+	variants := []struct{ key, pkg string }{
+		{"code code x", "@openai/codex"}, // ASR of "codex"
+		{"code x", "@openai/codex"},
+		{"codex", "@openai/codex"},
+		{"codx", "@openai/codex"},
+		{"cloud code", "@anthropic-ai/claude-code"}, // ASR of "claude code"
+		{"clock code", "@anthropic-ai/claude-code"},
+		{"claude code", "@anthropic-ai/claude-code"},
+		{"claude-code", "@anthropic-ai/claude-code"},
+		{"claude", "@anthropic-ai/claude-code"},
+	}
+	var pkgs []string
+	seen := map[string]bool{}
+	for _, v := range variants {
+		if strings.Contains(text, v.key) && !seen[v.pkg] {
+			pkgs = append(pkgs, v.pkg)
+			seen[v.pkg] = true
+		}
+	}
+	if len(pkgs) == 0 {
+		// generic fallback: "安装 <X>" -> keep X verbatim (pipeline will ask to confirm).
+		if i := strings.Index(text, "安装"); i >= 0 {
+			rest := strings.TrimSpace(text[i+len("安装"):])
+			rest = strings.Trim(rest, "。，！？,.!?，。")
+			rest = strings.TrimSpace(strings.TrimSuffix(rest, "后台"))
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, "一下"))
+			if rest != "" && !strings.ContainsAny(rest, " 那怎么现在好吗呀") {
+				pkgs = append(pkgs, rest)
+			}
+		}
+	}
+	return map[string]string{"packages": strings.Join(pkgs, " ")}
 }
