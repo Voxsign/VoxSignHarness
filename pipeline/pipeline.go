@@ -4253,8 +4253,12 @@ func classifyAttribution(it contract.Intent, receipts []contract.Receipt, v veri
 	switch {
 	case len(corr) > 0:
 		return contract.AttrInput, "ASR 经词典纠错 " + strconvItoa(len(corr)) + " 处后完成", "把高频误识别固化进词典"
-	case hasFailure(receipts):
+	case hasFailure(receipts) && !hasConfirmAsk(receipts):
 		return contract.AttrExec, "执行回执失败：" + firstErr(receipts), "检查环境/路径/权限后重试"
+	case hasConfirmAsk(receipts):
+		// R12.1: a confirmation gate (install / email-draft) is not a failure — label
+		// the attribution honestly so mobile metrics never read "失败" on a waiting step.
+		return contract.AttrExec, "待确认：" + firstErr(receipts), "回复「确认」继续"
 	case v.Status == verify.StatusFail:
 		return contract.AttrExec, "独立校验未通过：" + v.Detail, "verify 不读自报，按真实 fs 修正"
 	case v.Status == verify.StatusUnverifiable && it.Intent == contract.IntentNote:
