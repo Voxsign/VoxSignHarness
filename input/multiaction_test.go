@@ -9,12 +9,16 @@
 package input
 
 import (
+	"strings"
 	"testing"
 
 	"voicesign-harness/contract"
 )
 
 // TestMultiActionAsksForOrder G5  line:  sent     -> clarificationfirst   ,      . 
+// R12 (2026-10-09): multi-task sentences with real action verbs now become SEQUENCE
+// (queued execution, no silent drop). Sentences the chain parser cannot split into
+// actionable steps must still ask back (ConflictMultiAction) — never drop actions.
 func TestMultiActionAsksForOrder(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -25,6 +29,12 @@ func TestMultiActionAsksForOrder(t *testing.T) {
 		"记一下明天开会然后查一下上次的报价",
 	} {
 		got := c.ClassifyTask(text)
+		if got.Intent == contract.IntentSequence {
+			if len(strings.Split(got.Params["steps"], "\n")) < 2 {
+				t.Errorf("G5: %q SEQUENCE 必须带 ≥2 步骤，实际 steps=%q", text, got.Params["steps"])
+			}
+			continue
+		}
 		if got.Ask == "" {
 			t.Errorf("G5: %q 未回问（intent=%s）—— 其余动作会被静默丢弃", text, got.Intent)
 		}
@@ -106,7 +116,9 @@ func TestMultiActionDoesNotShadowOrchestrate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestMultiActionSameIntentStillAsks    P0-2: **same  intentoutnow  **alsois   . 
-// "first  A again  B"ifby" sameintentnum" heavy  become 1 ->   Ask ->          . 
+// R12 (2026-10-09): ordered multi-task sentences now become SEQUENCE — every step is
+// queued on the durable goal and auto-advances, so no second action is dropped and no
+// ask-back is needed. The old ConflictMultiAction ask is superseded by real execution.
 func TestMultiActionSameIntentStillAsks(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	for _, text := range []string{
@@ -115,12 +127,13 @@ func TestMultiActionSameIntentStillAsks(t *testing.T) {
 		"先提交 A 再提交 B",
 	} {
 		got := c.ClassifyTask(text)
-		if got.Conflict != contract.ConflictMultiAction {
-			t.Errorf("P0-2: %q 未判多动作（intent=%s conflict=%q）—— 第二个动作会被静默丢弃",
+		if got.Intent != contract.IntentSequence {
+			t.Errorf("P0-2: %q 应判 SEQUENCE（排队执行），实际 intent=%s conflict=%q",
 				text, got.Intent, got.Conflict)
 		}
-		if got.Ask == "" {
-			t.Errorf("P0-2: %q 必须回问，实际 Ask 为空", text)
+		steps := got.Params["steps"]
+		if len(strings.Split(steps, "\n")) < 2 {
+			t.Errorf("P0-2: %q SEQUENCE 必须带 ≥2 步骤，实际 steps=%q", text, steps)
 		}
 	}
 }
