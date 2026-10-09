@@ -149,6 +149,7 @@ const (
 	IntentBuildTest    = "BUILD_TEST"    // distillation R5 (2026-10-08): clone/download code -> build -> test real pipeline
 	IntentContinue     = "CONTINUE"      // distillation R5: "开始干/立刻执行/继续" resumes the task slot from the previous turn
 	IntentInstall      = "INSTALL"       // distillation R6 (2026-10-08): "安装 codex / claude code 到后台" -> real npm install on the host, gated by a confirm + task slot
+	IntentEmail        = "EMAIL"         // distillation R7 (2026-10-09): "处理邮件/看看新邮件/回那封邮件" -> fetch AIOps inbox -> Strata analysis -> structured receipt
 )
 
 // confirm  etc (Intent.Confirm, risk   decideafterbackfillauthoritative value). 

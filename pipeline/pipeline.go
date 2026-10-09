@@ -411,6 +411,22 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			intent.Params["resumed"] = "1"
 			intent.CorrectedText = slot.Text
 			intent.Context = append(intent.Context, "[resumed install] "+slot.Text)
+		} else if slot.Kind == TaskKindEmail {
+			// distillation R7: a pending email draft awaits confirmation; "确认/好的" resumes it
+			// and the pipeline writes the draft deliverable under harness-output/.
+			intent.Intent = contract.IntentEmail
+			intent.Confidence = 0.9
+			intent.Conflict = ""
+			intent.Ask = ""
+			intent.Params = map[string]string{}
+			if slot.Params != nil {
+				for k, v := range slot.Params {
+					intent.Params[k] = v
+				}
+			}
+			intent.Params["resumed"] = "1"
+			intent.CorrectedText = slot.Text
+			intent.Context = append(intent.Context, "[resumed email] "+slot.Text)
 		} else if slot.Params == nil || strings.TrimSpace(slot.Params["url"]) == "" {
 			// resumed job still missing its target repo — ask for the URL
 			intent.Intent = contract.IntentAsk
@@ -707,6 +723,19 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 				out.View.Result += suffix
 			}
 		}
+		// distillation R7: 邮件槽提示——上一轮待确认的邮件回复草稿，回复「确认」即生成草稿文件。
+		if slot := loadTaskSlot(o.logDir(), convID); slot != nil && slot.Kind == TaskKindEmail {
+			suffix := ""
+			switch slot.Status {
+			case "pending_confirm":
+				suffix = "\n\n⚠️ 上一轮已拟好邮件草稿（" + slot.Params["action"] + "）——回复「确认」我就生成草稿文件。"
+			case "done":
+				suffix = "\n\n✅ 上一轮邮件草稿已生成（harness-output/email-*.md）。还要处理其它邮件，直接说。"
+			}
+			if suffix != "" && !strings.Contains(out.View.Result, suffix) {
+				out.View.Result += suffix
+			}
+		}
 	}
 	// 兜底：不管什么intent，只要最终回复是"need clarification"，用LLM自然回复覆盖
 	if strings.Contains(out.View.Result, "need clarification") || strings.Contains(out.View.Result, "你是想让我做什么") {
@@ -861,6 +890,8 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		return o.execBuildTest(ctx, it, logDir)
 	case contract.IntentInstall:
 		return o.execInstall(ctx, it, logDir)
+	case contract.IntentEmail:
+		return o.execEmail(ctx, it, logDir)
 	case contract.IntentRegisterTool:
 		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
 		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
@@ -2127,6 +2158,308 @@ func (o *Options) execInstall(ctx context.Context, it contract.Intent, logDir st
 		Steps: []string{"confirm", "install"}, Step: 2, Status: status, Text: it.CorrectedText,
 	})
 	return receipts
+}
+
+// ---------------------------------------------------------------------------
+// execEmail (distillation R7, 2026-10-09) — "收到邮件之后的处理"
+//
+// DeepSeek Harness distillation: the task is executed as a real chain instead of a
+// canned reply — fetch the AIOps inbox (X-AIops-Key from env), run Strata
+// (192.168.8.201 local Qwen, NOT aiops.voxsign.ai) analysis with a section-assembled
+// prompt (identity → task → rules → email snapshot → output format), and produce a
+// structured Chinese receipt. summary/list/archive run for real; reply/forward are
+// confirm-gated and write a draft deliverable under harness-output/.
+func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	var receipts []contract.Receipt
+	seq := 0
+	bump := func() int { seq++; return seq }
+
+	action := "summary"
+	scope := "unread"
+	target := ""
+	if it.Params != nil {
+		if it.Params["action"] != "" {
+			action = it.Params["action"]
+		}
+		if it.Params["scope"] != "" {
+			scope = it.Params["scope"]
+		}
+		target = it.Params["target"]
+	}
+	// Resumed reply/forward after the confirmation gate: write the draft deliverable.
+	if it.Params != nil && it.Params["resumed"] == "1" && (action == "reply" || action == "forward") {
+		draft := it.Params["draft"]
+		if draft == "" {
+			draft = "(未取到拟稿内容，请重新说一遍要回复的内容)"
+		}
+		file := filepath.Join(logDir, "..", "harness-output")
+		if err := os.MkdirAll(file, 0o755); err == nil {
+			fp := filepath.Join(file, "email-"+action+"-"+time.Now().Format("20060102-150405")+".md")
+			if err := os.WriteFile(fp, []byte(draft), 0o644); err == nil {
+				writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+					Kind: TaskKindEmail, Params: it.Params, Steps: []string{"confirm", "draft"},
+					Step: 2, Status: "done", Text: it.CorrectedText,
+				})
+				receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
+					Stdout: "已生成" + action + "草稿：" + fp + "\n\n" + draft})
+				return receipts
+			}
+		}
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
+			Err: "草稿写入失败（harness-output 不可写）"})
+		return receipts
+	}
+
+	// 1) Fetch the AIOps inbox for real (read-only GET).
+	emails, err := o.emailFetch(ctx, 20)
+	if err != nil {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
+			Err: "取邮件失败：" + err.Error()})
+		return receipts
+	}
+	if len(emails) == 0 {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
+			Stdout: "收件箱暂时没有可处理的邮件。"})
+		return receipts
+	}
+
+	// 2) Filter by scope: unread (first N) or all. Sender-target matching for reply/forward.
+	var sel []emailItem
+	for i, e := range emails {
+		if scope == "unread" && i >= 12 {
+			break
+		}
+		if target != "" {
+			tl := strings.ToLower(target)
+			if strings.Contains(strings.ToLower(e.from), tl) || strings.Contains(strings.ToLower(e.subject), tl) {
+				sel = append(sel, e)
+			}
+		} else {
+			sel = append(sel, e)
+		}
+	}
+	if len(sel) == 0 {
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
+			Err: "没有找到匹配" + target + "的邮件（已取 " + strconv.Itoa(len(emails)) + " 封，检查一下发件人或主题描述）"})
+		return receipts
+	}
+
+	// 3) reply/forward: confirmation gate — draft the reply, ask before any external action.
+	if action == "reply" || action == "forward" {
+		draftPrompt := emailPrompt(action, scope, target, sel)
+		draft := o.emailReason(ctx, draftPrompt)
+		if draft == "" {
+			draft = "（拟稿失败：模型未返回内容，请重试或换一种说法）"
+		}
+		writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+			Kind: TaskKindEmail, Params: map[string]string{
+				"action": action, "scope": scope, "target": target, "draft": draft,
+			},
+			Steps: []string{"confirm", "draft"}, Step: 0, Status: "pending_confirm", Text: it.CorrectedText,
+		})
+		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
+			ConfirmAsk: true,
+			Err: "已拟好" + action + "草稿：\n\n" + truncateStr(draft, 900) +
+				"\n\n确认后我生成草稿文件（发送通道下一轮对接服务器 mailSend）——回复「确认」"})
+		return receipts
+	}
+
+	// 4) summary/list/archive: real analysis via the local Strata Qwen (192.168.8.201).
+	prompt := emailPrompt(action, scope, target, sel)
+	content := o.emailReason(ctx, prompt)
+	if content == "" {
+		// Deterministic fallback: never leave the user with a blank receipt.
+		content = "（分析模型未返回内容，列出原始清单）\n"
+		for i, e := range sel {
+			content += fmt.Sprintf("%d. %s｜%s｜%s\n", i+1, e.from, e.subject, e.ts)
+		}
+	}
+	receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
+		Stdout: content})
+	return receipts
+}
+
+// emailItem is a normalized inbox row (mirror of the server-side NormalizedEmail).
+type emailItem struct {
+	from    string
+	subject string
+	ts      string
+	body    string
+}
+
+// emailFetch GETs the AIOps inbox. Key comes from AIOPS_KEY env (container already
+// injects AIOPS_KEY + VHS_AIOPS_URL); base defaults to the VHS_AIOPS_URL host.
+func (o *Options) emailFetch(ctx context.Context, limit int) ([]emailItem, error) {
+	key := os.Getenv("AIOPS_KEY")
+	if key == "" {
+		return nil, fmt.Errorf("AIOPS_KEY 未配置（服务器容器已注入，本机请设置 AIOPS_KEY）")
+	}
+	base := os.Getenv("AIOPS_BASE")
+	if base == "" {
+		if u := os.Getenv("VHS_AIOPS_URL"); u != "" {
+			if parsed, err := url.Parse(u); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+				base = parsed.Scheme + "://" + parsed.Host
+			}
+		}
+	}
+	if base == "" {
+		base = "https://aiops.voxsign.ai"
+	}
+	u := fmt.Sprintf("%s/api/email/list?tenant_id=sfdapartner&limit=%d&include_body=1", base, limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-AIops-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var payload struct {
+		OK    bool `json:"ok"`
+		Count int  `json:"count"`
+		Items []struct {
+			From         string `json:"from"`
+			Subject      string `json:"subject"`
+			Date         string `json:"date"`
+			TS           int64  `json:"ts"`
+			BodyPreview  string `json:"bodyPreview"`
+			Body         string `json:"body"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	var out []emailItem
+	for _, it := range payload.Items {
+		ts := it.Date
+		if ts == "" && it.TS > 0 {
+			ts = time.Unix(it.TS, 0).Format("2006-01-02 15:04")
+		}
+		body := it.Body
+		if body == "" {
+			body = it.BodyPreview
+		}
+		out = append(out, emailItem{
+			from:    it.From,
+			subject: it.Subject,
+			ts:      ts,
+			body:    truncateStr(body, 400),
+		})
+	}
+	return out, nil
+}
+
+// emailReason calls the LOCAL Strata Qwen (192.168.8.201:8080) — NOT the aiops
+// gateway — to analyze the inbox snapshot (user requirement: 192.168.8.201 Qwen).
+// OpenAI-compatible /v1/chat/completions; llama.cpp servers reject non-curl UAs,
+// so the request is sent with User-Agent: curl/8.7.1.
+func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
+	strata := os.Getenv("VHS_EMAIL_STRATA")
+	if strata == "" {
+		strata = "http://192.168.8.201:8080"
+	}
+	reqBody, _ := json.Marshal(map[string]any{
+		"model":       "qwen3.8-flash-next-ista-iq3_xxs",
+		"messages":    []contract.Message{
+			{Role: "system", Content: emailSystemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		"max_tokens":  1200,
+		"temperature": 0.2,
+		// llama.cpp/Qwen3: disable chain-of-thought so the content budget is not
+		// consumed by reasoning_content (observed finish=length otherwise).
+		"chat_template_kwargs": map[string]any{"enable_thinking": false},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strata+"/v1/chat/completions", bytes.NewReader(reqBody))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "curl/8.7.1")
+	// Strata (llama.cpp) gates with an API key; the server env carries it as
+	// STRATA_API_KEY (18 chars). Missing key -> the server replies 401.
+	if k := os.Getenv("STRATA_API_KEY"); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[execEmail] Strata call failed: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		log.Printf("[execEmail] Strata HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return ""
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		log.Printf("[execEmail] Strata decode err: %v", err)
+		return ""
+	}
+	if len(out.Choices) == 0 {
+		log.Printf("[execEmail] Strata empty choices")
+		return ""
+	}
+	c := strings.TrimSpace(out.Choices[0].Message.Content)
+	if c == "" {
+		log.Printf("[execEmail] Strata empty content; finish=%s", out.Choices[0].FinishReason)
+	}
+	return c
+}
+
+// emailSystemPrompt is the section-assembled mail-handling policy distilled from
+// DeepSeek Harness's goal/policy pattern: identity → task → rules → completion
+// standard → output format. Never fabricate body text; a missing body is reported,
+// not invented.
+const emailSystemPrompt = `你是 VoxSign 邮箱处理助手。你的任务：把用户收到的邮件处理成可直接阅读的中文结果。
+
+规则：
+- 只依据邮件快照中的信息，正文缺失时标注「正文未取到」，绝不编造内容；
+- 每封邮件给出发件人、主题、时间、要点（如有正文）、是否需要用户行动；
+- 分类标注：紧急待办 / 可稍后处理 / 资讯参考 / 疑似垃圾；
+- 总结保持简洁（每封 1-3 行），总量不超过 600 字；
+- 完成标准：输出可直接给用户看的中文结果清单；若存在需要用户决定的事项（如是否回复、是否付款），单独列出；
+- 遇到同一阻塞条件才说「无法处理」，困难不等于无法处理。`
+
+// emailPrompt assembles the task + snapshot for the model (DeepSeek-style section
+// composition: the fixed system section stays constant, the user section carries
+// the current task and the live inbox snapshot).
+func emailPrompt(action, scope, target string, sel []emailItem) string {
+	var sb strings.Builder
+	switch action {
+	case "list":
+		sb.WriteString("任务：列出邮件清单（范围：" + scope + "）。")
+	case "reply":
+		sb.WriteString("任务：针对目标邮件起草一封中文回复（目标线索：" + target + "）。")
+	case "forward":
+		sb.WriteString("任务：起草一封转发说明（目标线索：" + target + "）。")
+	case "archive":
+		sb.WriteString("任务：判断哪些邮件可以归档（已处理/资讯类），列出归档建议。")
+	default:
+		sb.WriteString("任务：总结以下邮件（范围：" + scope + "）。")
+	}
+	sb.WriteString("\n\n邮件快照：\n")
+	for i, e := range sel {
+		sb.WriteString(fmt.Sprintf("[%d] 发件人=%s｜主题=%s｜时间=%s\n正文=%s\n",
+			i+1, e.from, e.subject, e.ts, e.body))
+	}
+	sb.WriteString("\n输出：直接输出中文结果，不要 JSON、不要复述指令。")
+	return sb.String()
 }
 
 // execImplement(2026-10-04 connectline): kind=implement   nowclass task--
