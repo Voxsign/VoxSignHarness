@@ -462,6 +462,11 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 				intent.Conflict = ""
 				intent.Ask = ""
 				intent.Params = map[string]string{"resumed": "1"}
+				// R13-P2 fix: carry the repo URL from the persisted goal objective into
+				// Params so execBuildTest resolves it (it only reads Params/slot/entities).
+				if u := goalURLRe.FindString(goal.Objective); u != "" {
+					intent.Params["url"] = u
+				}
 				intent.Context = append(intent.Context, "[goal resume] "+goal.Objective)
 			} else if xgoal := recentResumableGoal(o.logDir()); xgoal != nil && xgoal.IntentKind != "" {
 				// R13 (2026-10-09): cross-session long-task resume — no pending task in
@@ -473,6 +478,9 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 				intent.Conflict = ""
 				intent.Ask = ""
 				intent.Params = map[string]string{"resumed": "1"}
+				if u := goalURLRe.FindString(xgoal.Objective); u != "" {
+					intent.Params["url"] = u
+				}
 				intent.Context = append(intent.Context, "[goal resume across sessions] "+xgoal.Objective)
 			} else {
 				intent.Intent = contract.IntentAsk
@@ -1343,6 +1351,11 @@ func (o *Options) matchVoiceContract(it *contract.Intent) string {
 
 // weatherCityRe from"  under     day  " getlypt  : get"… day "before namewordseg. 
 var weatherCityRe = regexp.MustCompile(`([^，,。！？!？ ]{1,20}?)的?天气`)
+
+// goalURLRe (R13-P2): extracts a repo URL from a persisted goal objective so a
+// resumed BUILD_TEST job carries its URL into Params (execBuildTest resolves
+// URL only from Params / task slot / recent entities).
+var goalURLRe = regexp.MustCompile(`https?://[^\s"'（）()《》<>]+`)
 
 // tryWeather day   :  lang "day "time connect  wttr.in(no key,  line use),  dependency LLM. 
 //  inreturnback done Outcome and true;  thenreturnback false continuecontinuepos intentclassify. 
