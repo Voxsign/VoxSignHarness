@@ -969,6 +969,8 @@ func defaultSpaceFor(it contract.Intent) string {
 		return "project" // 2026-10-04     : note   =writeclassintent, need writedomain(global read-only reject)
 	case contract.IntentBuildTest:
 		return "project" // distillation R5: clone+build+test needs a writable workspace domain
+	case contract.IntentSelfImprove:
+		return "project" // R15/v0.6.0: the ReAct loop researches and edits its own backend repo
 	case contract.IntentInstall:
 		// distillation R6: software install executes on the host; project domain is the
 		// writable+executable space (global is read-only and would BOUNDARY_VIOLATION).
@@ -999,6 +1001,11 @@ func planCaps(it contract.Intent) []string {
 	case contract.IntentBuildTest:
 		// distillation R5: real pipeline clone -> build -> test (git + run + test + read)
 		return []string{"git", "run", "test", "read"}
+	case contract.IntentSelfImprove:
+		// R15/v0.6.0: autonomous ReAct loop over its own backend — run shell (ls/cat/go),
+		// read/search to research, file to edit source, git to inspect. Build/test gate is
+		// enforced explicitly at the end of the loop.
+		return []string{"run", "file", "read", "search", "git"}
 	case contract.IntentInstall:
 		// distillation R6: npm install -g <pkgs> on the host (run + read to verify)
 		return []string{"run", "read"}
@@ -1025,6 +1032,9 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		return o.execOrchestrate(ctx, it, logDir)
 	case contract.IntentBuildTest:
 		return o.execBuildTest(ctx, it, logDir)
+	case contract.IntentSelfImprove:
+		// R15/v0.6.0: real autonomous tool loop — research -> edit own backend -> build/test.
+		return o.execSelfImprove(ctx, it, logDir)
 	case contract.IntentInstall:
 		return o.execInstall(ctx, it, logDir)
 	case contract.IntentEmail:
@@ -1919,6 +1929,7 @@ func extractRecentEntities(text string) []refer.RecentEntity {
 		"APP_LAUNCH": true, "UNKNOWN": true, "ORCHESTRATE": true, "REGISTER_TOOL": true,
 		"BUILD_TEST": true, "CONTINUE": true, "BACKUP": true, "CANCEL": true,
 		"DELETE": true, "DEBUG": true, "REVIEW": true, "RETRY": true,
+		"SELF_IMPROVE": true,
 	}
 	//    write name(  - linkconnect  0..N seg): OT-ODP / SPoG / DMZ / NGSA
 	re := regexp.MustCompile(`[A-Z][A-Za-z0-9]{1,}(?:-[A-Za-z0-9]+)*`)
@@ -4481,6 +4492,29 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		Action: shortAction(it),
 		Files:  targetFiles(it),
 		Undo:   undoText(it, rs),
+	}
+	// R15/v0.6.0 SELF_IMPROVE: the verdict is the TERMINAL selfimprove receipt (the
+	// build/test gate result). Intermediate exploratory `run` failures are normal ReAct
+	// trial-and-error (the model tries a command, sees the error, routes around it) and
+	// must not flip an otherwise successful, gate-passing self-improvement to FAILED.
+	if it.Intent == contract.IntentSelfImprove {
+		var final *contract.Receipt
+		for i := range rs {
+			if rs[i].Tool == "selfimprove" {
+				final = &rs[i]
+			}
+		}
+		view.Action = "自主长任务：研究→蒸馏→自改后端→编译测试"
+		if final != nil {
+			if final.OK {
+				view.Result = truncateStr(strings.TrimSpace(final.Stdout), 600)
+				view.Undo = "改动已写入仓库（原文件已 .bak 备份）；尚未 git 提交，可随时回滚"
+			} else {
+				view.Result = "自改未完成（诚实回退）：" + truncateStr(strings.TrimSpace(final.Err), 400)
+				view.Undo = "—（未通过门，改动有 .bak 备份）"
+			}
+		}
+		return view
 	}
 	switch {
 	case !confirmed:
