@@ -106,6 +106,7 @@ import (
 	"voicesign-harness/input"
 	"voicesign-harness/memory"
 	"voicesign-harness/provider"
+	"voicesign-harness/prompts"
 	"voicesign-harness/refer"
 	"voicesign-harness/risk"
 	"voicesign-harness/search"
@@ -259,6 +260,11 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 
 	// ① input_raw tracewritedone -> start event(#45). 
 	emit(trajectory.Entry{Kind: trajectory.KindInputRaw, Content: text})
+	// R8: 上下文管理——本轮用户输入进入会话历史（压缩检查点由 llmNaturalReply 侧触发）
+	appendHistory(o.logDir(), o.ConvID, "user", text)
+	// R8: 每轮检查是否需要压缩（幂等：已有 checkpoint 则跳过）——槽恢复/真实执行
+	// 等不走 llmNaturalReply 的路径也要获得压缩能力。
+	o.maybeCompact(ctx, o.ConvID)
 	start := time.Now()
 	var waitMs time.Duration
 
@@ -379,6 +385,28 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		}
 	}
 	emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
+
+	// distillation R8 (DeepSeek goal-resume): slot-aware continuation promotion.
+	// A pending task slot is an open goal: when the user says a continue-family
+	// word (继续/接着/推进/往下/下一步/然后呢), promote the turn to CONTINUE so the
+	// harness resumes the real job instead of misreading it as an edit or asking
+	// again. Without a pending slot the promotion stays inert — plan-style
+	// sentences such as "继续推进这个计划" are not hijacked.
+	if intent.Intent != contract.IntentContinue {
+		if slot := loadTaskSlot(o.logDir(), convID); slot != nil && slot.Status != "clear" && slot.Status != "done" {
+			probe := strings.ToLower(intent.CorrectedText + " " + cleaned)
+			for _, w := range []string{"继续", "接着", "推进", "往下", "下一步", "然后呢", "continue", "keep going"} {
+				if strings.Contains(probe, w) {
+					intent.Intent = contract.IntentContinue
+					intent.Confidence = 0.9
+					intent.Conflict = ""
+					intent.Ask = ""
+					intent.Context = append(intent.Context, "[slot-aware continue] "+slot.Text)
+					break
+				}
+			}
+		}
+	}
 
 	// distillation R5: CONTINUE resumes the previous turn's task slot so
 	// "开始干呀/立刻执行/继续" actually does the job instead of asking again.
@@ -2422,6 +2450,240 @@ func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
 	return c
 }
 
+// strataChat is the single local-Qwen gateway for R8: every LLM call that must
+// obey "192.168.8.201 千问（不是 aiops.voxsign.ai）" routes through here.
+// OpenAI-compatible /v1/chat/completions; llama.cpp gates with STRATA_API_KEY
+// and rejects non-curl User-Agents.
+func (o *Options) strataChat(ctx context.Context, system, user string, maxTokens int) string {
+	// No local-Qwen credential configured (CI, sandbox): fail fast instead of
+	// hanging on an unreachable LAN endpoint — callers fall back or degrade.
+	if os.Getenv("STRATA_API_KEY") == "" {
+		log.Printf("[strataChat] no STRATA_API_KEY, skipping local qwen")
+		return ""
+	}
+	strata := os.Getenv("VHS_EMAIL_STRATA")
+	if strata == "" {
+		strata = "http://192.168.8.201:8080"
+	}
+	reqBody, _ := json.Marshal(map[string]any{
+		"model":    "qwen3.8-flash-next-ista-iq3_xxs",
+		"messages": []contract.Message{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		"max_tokens": maxTokens,
+		"temperature": 0.2,
+		// llama.cpp/Qwen3: disable CoT so reasoning_content cannot eat the budget.
+		"chat_template_kwargs": map[string]any{"enable_thinking": false},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strata+"/v1/chat/completions", bytes.NewReader(reqBody))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "curl/8.7.1")
+	if k := os.Getenv("STRATA_API_KEY"); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[strataChat] failed: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		log.Printf("[strataChat] HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return ""
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ""
+	}
+	if len(out.Choices) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(out.Choices[0].Message.Content)
+}
+
+// aiopsChatFallback is the emergency fallback for llmNaturalReply: when the
+// local Strata qwen is unavailable (no key, LAN unreachable), route the same
+// assembled prompt through the aiops.voxsign.ai model gateway so the phone
+// conversation never dead-ends. Primary routing is always local Strata.
+func (o *Options) aiopsChatFallback(ctx context.Context, sys, userMsg string) string {
+	body, _ := json.Marshal(map[string]any{
+		"model": "deepseek-flash",
+		"messages": []map[string]string{
+			{"role": "system", "content": sys},
+			{"role": "user", "content": userMsg},
+		},
+		"max_tokens": 300,
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://aiops.voxsign.ai/api/model/chat", bytes.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AIops-Key", os.Getenv("AIOPS_KEY"))
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil || resp2.StatusCode != 200 {
+		log.Printf("[llmNaturalReply] aiops fallback failed: status=%v err=%v", resp2.StatusCode, err)
+		return ""
+	}
+	defer resp2.Body.Close()
+	var chatResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&chatResp)
+	if len(chatResp.Choices) == 0 || strings.TrimSpace(chatResp.Choices[0].Message.Content) == "" {
+		return ""
+	}
+	return strings.TrimSpace(chatResp.Choices[0].Message.Content)
+}
+
+// ckptText returns the loaded checkpoint body (empty string drops the section
+// at render); the checkpoint file already carries the PREAMBLE wording.
+func ckptText(ckpt string) string { return strings.TrimSpace(ckpt) }
+
+// ---------------------------------------------------------------------------
+// R8: 上下文管理（DeepSeek compaction/snapshot 蒸馏）
+// - history: 每轮用户输入+harness 回复写入 context_slots/history-<convID>.jsonl（环形 ≤24 条）
+// - checkpoint: 超过阈值时用 Strata 生成 8 段摘要（checkpoint-<convID>.md），下一轮注入
+// - runtimeContextSnapshot: "当前运行时上下文，本快照取代早期快照"（supersedes 措辞）
+
+func historyPath(logDir, convID string) string {
+	convID = strings.TrimSpace(convID)
+	if convID == "" {
+		convID = "default"
+	}
+	return filepath.Join(logDir, "context_slots", "history-"+convID+".jsonl")
+}
+
+func checkpointPath(logDir, convID string) string {
+	convID = strings.TrimSpace(convID)
+	if convID == "" {
+		convID = "default"
+	}
+	return filepath.Join(logDir, "context_slots", "checkpoint-"+convID+".md")
+}
+
+// appendHistory records one turn (role: user|assistant) and trims to the ring cap.
+func appendHistory(logDir, convID, role, text string) {
+	p := historyPath(logDir, convID)
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	line, _ := json.Marshal(map[string]string{"role": role, "text": truncateStr(text, 600), "ts": time.Now().Format("15:04")})
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(line, '\n'))
+	_ = f.Close()
+	// ring trim: keep the newest 24 lines
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) > 24 {
+		_ = os.WriteFile(p, []byte(strings.Join(lines[len(lines)-24:], "\n")+"\n"), 0o644)
+	}
+}
+
+// loadHistory returns the most recent n turns as "用户: …/助手: …" lines.
+func loadHistory(logDir, convID string, n int) []string {
+	raw, err := os.ReadFile(historyPath(logDir, convID))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	var out []string
+	for _, ln := range lines {
+		var rec map[string]string
+		if json.Unmarshal([]byte(ln), &rec) == nil {
+			role, text := rec["role"], rec["text"]
+			if role == "assistant" {
+				out = append(out, "助手: "+text)
+			} else {
+				out = append(out, "用户: "+text)
+			}
+		}
+	}
+	return out
+}
+
+// maybeCompact generates the 8-section checkpoint once history exceeds the
+// threshold (16 turns), keeping only the newest 4 turns afterwards.
+func (o *Options) maybeCompact(ctx context.Context, convID string) {
+	raw, err := os.ReadFile(historyPath(o.logDir(), convID))
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) <= 16 {
+		return
+	}
+	if ckpt := loadCheckpoint(o.logDir(), convID); ckpt != "" {
+		// Already compacted before: keep the existing checkpoint; the history
+		// ring cap already bounds growth. No re-compaction this turn.
+		return
+	}
+	hist := loadHistory(o.logDir(), convID, 16)
+	sys := "你是对话压缩引擎。把下方对话浓缩成结构化检查点，让另一个模型无损失地继续任务。" +
+		"输出以下 Markdown 结构，每段保留，没有就写 (无)：\n" +
+		"## 主要请求与意图\n## 关键概念\n## 涉及文件/数据\n## 错误与修复\n## 未完成工作\n" +
+		"## 当前进度\n## 下一步\n## 关键上下文（决策理由/约束/用户偏好/开放问题/继续所需数据）\n" +
+		"规则：保留精确路径、命令、错误串、数值、标识符；忠实记录用户纠正；不提压缩本身；只输出检查点正文。"
+	user := "对话历史：\n" + strings.Join(hist, "\n")
+	ckpt := o.strataChat(ctx, sys, user, 1200)
+	if ckpt == "" {
+		return
+	}
+	body := "【自动生成的检查点——已建立的背景，不要复述，直接从后续消息继续任务。】\n\n" + ckpt
+	_ = os.WriteFile(checkpointPath(o.logDir(), convID), []byte(body), 0o644)
+	// keep only the newest 4 turns
+	keep := strings.Join(lines[len(lines)-4:], "\n") + "\n"
+	_ = os.WriteFile(historyPath(o.logDir(), convID), []byte(keep), 0o644)
+}
+
+func loadCheckpoint(logDir, convID string) string {
+	b, err := os.ReadFile(checkpointPath(logDir, convID))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// runtimeContextSnapshot renders "当前运行时上下文。本快照取代早期上下文快照。" —
+// DeepSeek renderContextSnapshot wording distilled; carries task slot, recent
+// history, remembered user info and the current time.
+func (o *Options) runtimeContextSnapshot(convID string) string {
+	var sb strings.Builder
+	sb.WriteString("当前运行时上下文。本快照取代早期上下文快照。")
+	if slot := loadTaskSlot(o.logDir(), convID); slot != nil {
+		sb.WriteString("\n- 最近任务槽：" + slot.Kind + "（" + slot.Status + "）：" + truncateStr(slot.Text, 120))
+	}
+	if hist := loadHistory(o.logDir(), convID, 6); len(hist) > 0 {
+		sb.WriteString("\n- 最近对话：\n  " + strings.Join(hist, "\n  "))
+	}
+	if mem := o.loadASRMemory(); mem != "" {
+		sb.WriteString("\n- 记住的用户信息：" + truncateStr(mem, 800))
+	}
+	sb.WriteString("\n- 当前时间：" + time.Now().Format("2006-01-02 15:04"))
+	return sb.String()
+}
+
 // emailSystemPrompt is the section-assembled mail-handling policy distilled from
 // DeepSeek Harness's goal/policy pattern: identity → task → rules → completion
 // standard → output format. Never fabricate body text; a missing body is reported,
@@ -4095,47 +4357,38 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 	if o.Providers == nil {
 		return ""
 	}
-	sys := "你是 VoxSign 语音助手，正在和用户打电话式对话。你能看到：记住的用户身份、已知实体、最近对话历史。\n" +
-		"用户可能在问问题、下任务、或者给你信息——不管哪种，你都要自然地接住，永远不要说'没理解'或'再说一遍'。\n" +
-		"问问题就认真回答；下任务就说'好的我来处理'；给信息就说'好的我记住了'。\n" +
-		"'这个''那个'从最近对话里推测指什么；代指模糊时给最佳猜测+确认。\n" +
-		"特别注意：\n" +
-		"- 不管用户说多长、几件事，都接住——说'好的，我理解了，先从最要紧的开始'\n" +
-		"- 如果一句话里有多个任务，就说'好的，我先做A，再做B，再做C'\n" +
-		"- 如果用户说'继续推进''接着干''继续'，就是接着上次的任务继续做\n" +
-		"- 如果没有具体目标，就根据最近对话推测目标\n" +
-		"口语化，一句话。绝对不要说'没理解''再说一遍''你是想让我做什么'。"
-	userMsg := "用户说：" + text + "\n\n记住的用户信息：\n" + strings.Join(baselineCtx, "\n")
-	// 直连网关，绕过 provider 层 temperature/response_format 兼容问题
-	body, _ := json.Marshal(map[string]any{
-		"model": "deepseek-flash",
-		"messages": []map[string]string{
-			{"role": "system", "content": sys},
-			{"role": "user", "content": userMsg},
-		},
-		"max_tokens": 200,
-	})
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://aiops.voxsign.ai/api/model/chat", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-AIops-Key", os.Getenv("AIOPS_KEY"))
-	resp2, err := http.DefaultClient.Do(req)
-	if err != nil || resp2.StatusCode != 200 {
-		log.Printf("[llmNaturalReply] direct http failed: status=%v err=%v", resp2.StatusCode, err)
+	// R8 (2026-10-09, DeepSeek 提示词/上下文管理蒸馏): 系统提示词按 section 装配
+	// （身份→人设→历史检查点→运行时上下文快照→规则），模型路由统一走
+	// 192.168.8.201 本地千问（strataChat），不再走 aiops.voxsign.ai 网关。
+	ckpt := loadCheckpoint(o.logDir(), o.ConvID)
+	o.maybeCompact(ctx, o.ConvID)
+	if c := loadCheckpoint(o.logDir(), o.ConvID); c != "" && c != ckpt {
+		ckpt = c
+	}
+	sys := prompts.New().
+		Add("identity", -1000, "你是 VoxSign 语音助手，正在和用户打电话式对话。").
+		Add("persona", 0, "你能看到：记住的用户身份、已知实体、最近对话历史。用户可能在问问题、下任务、或者给你信息——不管哪种都要自然地接住。").
+		Add("checkpoint", 400, ckptText(ckpt)).
+		AddDynamic("runtime-context", 900, func() string { return o.runtimeContextSnapshot(o.ConvID) }).
+		Add("rules", 1000, "问问题就认真回答；下任务就说'好的我来处理'；给信息就说'好的我记住了'。"+
+			"'这个''那个'从最近对话里推测指什么；代指模糊时给最佳猜测+确认。特别注意："+
+			"不管用户说多长、几件事，都接住——说'好的，我理解了，先从最要紧的开始'；"+
+			"一句话里有多个任务就说'好的，我先做A，再做B，再做C'；"+
+			"用户说'继续推进''接着干''继续'就是接着上次的任务继续做；"+
+			"没有具体目标就根据最近对话推测目标。口语化，一句话。绝对不要说'没理解''再说一遍''你是想让我做什么'。")
+	userMsg := "用户说：" + text
+	if len(baselineCtx) > 0 {
+		userMsg += "\n\n记住的用户信息：\n" + strings.Join(baselineCtx, "\n")
+	}
+	// 模型路由统一：本地 Strata 千问（192.168.8.201）为主；本地不可用
+	// （无 key / LAN 不可达 / 调用失败）时回退 aiops 网关，保证电话对话不空转。
+	out := o.strataChat(ctx, sys.Render(), userMsg, 300)
+	if out == "" {
+		out = o.aiopsChatFallback(ctx, sys.Render(), userMsg)
+	}
+	if out == "" {
 		return ""
 	}
-	defer resp2.Body.Close()
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	json.NewDecoder(resp2.Body).Decode(&chatResp)
-	if len(chatResp.Choices) == 0 || strings.TrimSpace(chatResp.Choices[0].Message.Content) == "" {
-		return ""
-	}
-	out := strings.TrimSpace(chatResp.Choices[0].Message.Content)
 	// 解析LEARN_ENTITY行——LLM从用户话里学到的新实体
 	if idx := strings.Index(out, "LEARN_ENTITY:"); idx >= 0 {
 		line := out[idx+len("LEARN_ENTITY:"):]
@@ -4534,6 +4787,10 @@ func strconvItoa(n int) string {
 // ---------- trace/discuss    (nil-safe) ----------
 
 func (o *Options) write(e trajectory.Entry) {
+	// R8: 上下文管理——最终回执进入会话历史（与用户输入配对，供运行时快照/压缩使用）。
+	if e.Kind == trajectory.KindFinal && strings.TrimSpace(e.Content) != "" {
+		appendHistory(o.logDir(), o.ConvID, "assistant", e.Content)
+	}
 	if o.Trace == nil {
 		return
 	}
