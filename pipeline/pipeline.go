@@ -463,6 +463,17 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 				intent.Ask = ""
 				intent.Params = map[string]string{"resumed": "1"}
 				intent.Context = append(intent.Context, "[goal resume] "+goal.Objective)
+			} else if xgoal := recentResumableGoal(o.logDir()); xgoal != nil && xgoal.IntentKind != "" {
+				// R13 (2026-10-09): cross-session long-task resume — no pending task in
+				// this conversation, but another conversation (or a restart) left an
+				// Active/Paused goal. "继续上次的任务" resumes it transparently.
+				intent.Intent = xgoal.IntentKind
+				intent.CorrectedText = xgoal.Objective
+				intent.Confidence = 0.85
+				intent.Conflict = ""
+				intent.Ask = ""
+				intent.Params = map[string]string{"resumed": "1"}
+				intent.Context = append(intent.Context, "[goal resume across sessions] "+xgoal.Objective)
 			} else {
 				intent.Intent = contract.IntentAsk
 				intent.Conflict = contract.ConflictContinue

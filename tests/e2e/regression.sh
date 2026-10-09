@@ -48,4 +48,7 @@ if [ -s "$TRACE" ] && [ "$(wc -l < "$TRACE")" -ge 1 ]; then
 else FAIL=$((FAIL+1)); echo "FAIL trace-audit-trail (trace file absent/empty)"; fi
 
 echo "===== regression: PASS=$PASS FAIL=$FAIL ====="
+# self-growth: harvest execution issues from the audit trail into GROWING-ISSUES.md
+# (never blocks the gate — it feeds the NEXT distillation round)
+bash "$(dirname "$0")/../../tools/selfgrow.sh" >/dev/null 2>&1 || true
 [ "$FAIL" -eq 0 ]
