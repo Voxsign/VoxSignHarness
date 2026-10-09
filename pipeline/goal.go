@@ -70,6 +70,42 @@ func goalPath(logDir, convID string) string {
 	return filepath.Join(logDir, "context_slots", "goal-"+convID+".json")
 }
 
+// recentResumableGoal (R13, 2026-10-09): long-task persistence across sessions —
+// scans every goal-<convID>.json under context_slots and returns the most recently
+// updated goal that is still Active or Paused. Lets "继续上次的任务" resume a task
+// that was started in another conversation (or after a restart) instead of asking
+// "当前没有待执行的任务". Returns nil when nothing is resumable.
+func recentResumableGoal(logDir string) *Goal {
+	dir := filepath.Join(logDir, "context_slots")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var best *Goal
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "goal-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(dir, name))
+		if rerr != nil {
+			continue
+		}
+		var g Goal
+		if json.Unmarshal(b, &g) != nil {
+			continue
+		}
+		if g.Status != GoalActive && g.Status != GoalPaused {
+			continue
+		}
+		if best == nil || g.UpdatedAt > best.UpdatedAt {
+			cp := g
+			best = &cp
+		}
+	}
+	return best
+}
+
 func loadGoal(logDir, convID string) *Goal {
 	b, err := os.ReadFile(goalPath(logDir, convID))
 	if err != nil {
