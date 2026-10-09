@@ -97,7 +97,13 @@ var (
 	deleteTriggers = []string{"删掉", "删除", "去掉", "移除", "清空"}
 	feasibleAsk    = []string{"能不能", "可不可以", "是否可以", "行不行"}
 	thoughtWords   = []string{"想法", "备忘"}
-	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗"}
+	statusQuestion = []string{"好了吗", "弄好了吗", "搞定了吗", "改好了吗", "改没改", "改了没", "改了吗", "弄了吗",
+		// R10 (2026-10-09): iOS-style progress asks must stay rule-routed (QUERY/status),
+		// not fall to the LLM four-way classifier which misreads them as EDIT.
+		"做完了吗", "完成了吗", "弄完了吗", "处理完了吗", "搞完了吗",
+		// R10 (2026-10-09): email follow-up asks ("那封回复了没/回了没") route to
+		// QUERY so the natural reply (with checkpoint history) can carry the referent.
+		"回复了没", "回了没", "处理了没", "看了没", "发了没"}
 	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
 	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
 		// 2026-10-08 (distillation R2): "记一条：明天上午9点开会" fell to UNKNOWN because
@@ -152,6 +158,10 @@ var (
 	continuationTriggers = []string{"开始干", "开始吧", "立刻执行", "马上执行", "现在就做", "现在做", "开始做",
 		"接着干", "继续干", "接着来", "继续来", "往下走", "动手吧", "赶紧做", "赶紧干", "去执行", "执行吧",
 		"干活吧", "开始执行", "就开始", "现在开始", "直接干", "马上开始", "就开始吧",
+		// R10 (2026-10-09): bare iOS continuation words must be rule-routed to CONTINUE.
+		// Without them they fall to the LLM four-way classifier and get misread as EDIT
+		// ("继续" -> "FAILED：未识别到目标文件"). "继续" alone is the #1 iOS resume word.
+		"继续", "接着", "接着弄", "接着做", "还没好", "还没好吗", "没弄完", "没搞定",
 		// distillation R6: 确认词恢复上一轮待确认安装（"装吧/可以装/确认" 短句即触发）
 		"装吧", "可以装", "确认", "确认安装", "就装吧"}
 	defaultExcludes = []string{".env*", "node_modules"}

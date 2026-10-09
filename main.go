@@ -150,14 +150,35 @@ func buildOptions(cfg *config.Config, confirmFn func(taskID, question string) (b
 
 // cliConfirm reads a y/n confirmation answer from stdin.
 func cliConfirm(taskID, question string) (bool, error) {
-	fmt.Printf("\n[%s] %s [y/n]: ", taskID, question)
-	r := bufio.NewReader(os.Stdin)
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return false, err
+	// R10 (2026-10-09): a non-interactive stdin (pipes, background jobs,
+	// automation, /dev/null) must fail fast instead of blocking forever on
+	// ReadString. Auto-deny keeps every automated probe alive; interactive
+	// terminals still get the real y/n prompt.
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+		return false, nil
 	}
-	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes", nil
+	fmt.Printf("\n[%s] %s [y/n]: ", taskID, question)
+	type lineResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan lineResult, 1)
+	go func() {
+		r := bufio.NewReader(os.Stdin)
+		line, err := r.ReadString('\n')
+		ch <- lineResult{line, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return false, r.err
+		}
+		r.line = strings.ToLower(strings.TrimSpace(r.line))
+		return r.line == "y" || r.line == "yes", nil
+	case <-time.After(15 * time.Second):
+		// Never block the pipeline forever: auto-deny after the prompt times out.
+		return false, nil
+	}
 }
 
 func cmdRun(args []string) {
