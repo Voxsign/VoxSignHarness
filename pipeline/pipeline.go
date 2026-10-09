@@ -214,7 +214,7 @@ func (o *Options) EnableSerialGate() {
 }
 
 // Run   finish  13 stageorchestration loop. ctx cancel instopwaithumanconfirm, butalready  trace rollback. 
-func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
+func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) {
 	// ⭐     (Lead 2026-10-03     : o==nil / empty Options ⇒ **panic**,  isreturnbackerror). 
 	// origthen: **" "and"  "  diffis --   has     toorigbecause**(andif  after  goroutine, recover also  to). 
 	if o == nil {
@@ -230,6 +230,14 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	// R13 (2026-10-09): Observability — every executed turn appends one structured
+	// trace record (ETCLOVG O layer; AutoHarness JSONL distillation). Runs inside
+	// the lock; appendTrace touches no shared state.
+	defer func() {
+		if out.RequestID != "" {
+			appendTrace(o.logDir(), o.ConvID, newTraceRec(out, o))
+		}
+	}()
 	if o.guard == nil {
 		o.guard = risk.NewGuard()
 	}
@@ -240,7 +248,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		rid = newRequestID()
 	}
 	o.RequestID = rid // write-back: basetask Options   inaftercontinue  (selfheal/llmSummarize day )  readtorule  rid
-	out := Outcome{RequestID: rid}
+	out = Outcome{RequestID: rid}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "Empty command, did not catch that, please repeat"
 		out.View = contract.ReceiptView{
@@ -991,6 +999,7 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 	case contract.IntentCancel:
 		// R11 (2026-10-09): explicit cancellation stops the current slot+goal with an
 		// honest receipt. No confirm loop, no invented task — "取消/算了/别发了" means stop.
+		slotBefore := loadTaskSlot(logDir, o.ConvID)
 		canceled := o.cancelCurrent(ctx, it, logDir)
 		recvs := []contract.Receipt{canceled}
 		// R12 (2026-10-09): interruption form "先别管 X，先做 Y" — after cancelling X,
@@ -999,6 +1008,14 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 			log.Printf("[cancel-then] executing follow-on %q", then)
 			sub := o.classifyOne(then, logDir)
 			recvs = append(recvs, o.execActions(ctx, sub)...)
+		} else if slotBefore != nil && slotBefore.Status == "pending_confirm" {
+			// R13 (2026-10-09): a pure rejection ("算了不装了/不用了/别回了") records a
+			// session-level deny-once so the same confirmation gate is not re-asked in
+			// this session (H4 recurrence policy; no nagging loops).
+			if key := denyKeyFromSlot(slotBefore); key != "" {
+				recordDeny(logDir, o.ConvID, key)
+				log.Printf("[deny-once] recorded %s (pending_confirm slot canceled)", key)
+			}
 		}
 		return recvs
 	case contract.IntentSequence:
@@ -2222,6 +2239,20 @@ func (o *Options) execInstall(ctx context.Context, it contract.Intent, logDir st
 	// Confirmation gate on a fresh INSTALL: persist a pending slot and ask instead of
 	// silently changing the host. "确认/装吧/立刻执行" resumes through CONTINUE.
 	if it.Params == nil || it.Params["resumed"] != "1" {
+		// R13 (2026-10-09): deny-once — if the user rejected this exact install in
+		// this session, do not re-ask; a revive phrase clears the deny and re-enters
+		// the gate (change of mind is never blocked).
+		key := denyKeyForIntent(it)
+		if key != "" && isDenied(logDir, o.ConvID, key) {
+			reviving := isRevive(it.CorrectedText) || isRevive(it.RawText)
+			if !reviving {
+				// R13: an honored deny-once is a successful policy action, not an
+				// execution failure — render as an honest notice, never "FAILED".
+				return []contract.Receipt{contract.Receipt{Seq: bump(), Tool: "install", OK: true,
+					Stdout: "上次已取消安装 " + strings.Join(pkgs, "、") + "。要重新做，说「还是要装 " + strings.Join(pkgs, "、") + "」"}}
+			}
+			clearDeny(logDir, o.ConvID, key)
+		}
 		writeTaskSlot(logDir, o.ConvID, &TaskSlot{
 			Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
 			Steps: []string{"confirm", "install"}, Step: 0, Status: "pending_confirm", Text: it.CorrectedText,
@@ -2363,6 +2394,17 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 
 	// 3) reply/forward: confirmation gate — draft the reply, ask before any external action.
 	if action == "reply" || action == "forward" {
+		// R13 (2026-10-09): deny-once — a rejected reply/forward target is not re-asked
+		// in this session; "还是要回 …" revives it and re-enters the gate.
+		key := denyKeyForIntent(it)
+		if key != "" && isDenied(logDir, o.ConvID, key) {
+			reviving := isRevive(it.CorrectedText) || isRevive(it.RawText)
+			if !reviving {
+				return []contract.Receipt{contract.Receipt{Seq: bump(), Tool: "email", OK: true,
+					Stdout: "上次已取消该" + action + "。要重新做，说「还是要" + action + "」"}}
+			}
+			clearDeny(logDir, o.ConvID, key)
+		}
 		draftPrompt := emailPrompt(action, scope, target, sel)
 		draft := o.emailReason(ctx, draftPrompt)
 		if draft == "" {
