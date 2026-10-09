@@ -37,7 +37,8 @@ type Entity struct {
 	Aliases    []string   `json:"aliases"`             // 所有代指（["冀总","老冀","Amber"]）
 	Desc       string     `json:"desc,omitempty"`      // 描述（"consultant 客户"）
 	Confidence float64    `json:"confidence"`
-	Status     string     `json:"status"` // active/superseded
+	Status     string     `json:"status"`           // active/superseded
+	Source     string     `json:"source,omitempty"` // R9-D8 知己多源: voice-local|external-hub|longwall
 }
 
 type EntityStore struct {

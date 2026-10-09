@@ -262,10 +262,16 @@ func (h *HarnessHooks) ActiveEntities() string {
 	return out
 }
 
-// LearnEntity 记录一个新实体（用户说"X是Y"时调用）。
-func (h *HarnessHooks) LearnEntity(canonical, desc string, aliases []string) {
+// LearnEntity 记录一个新实体（用户说"X是Y"时调用）。R9-D8 知己多源：
+// sources 记录认知来源（voice-local=本地对话提取 / external-hub=外部模型中心 /
+// longwall=长城长期记忆库），缺省 voice-local。
+func (h *HarnessHooks) LearnEntity(canonical, desc string, aliases []string, sources ...string) {
 	if h == nil || h.z == nil || h.z.Entities == nil {
 		return
+	}
+	src := "voice-local"
+	if len(sources) > 0 && sources[0] != "" {
+		src = sources[0]
 	}
 	h.z.Entities.Upsert(Entity{
 		Type:       EntityPerson,
@@ -273,6 +279,7 @@ func (h *HarnessHooks) LearnEntity(canonical, desc string, aliases []string) {
 		Aliases:    aliases,
 		Desc:       desc,
 		Confidence: 0.9,
+		Source:     src,
 	})
 }
 

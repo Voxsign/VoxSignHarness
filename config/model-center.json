@@ -1,10 +1,11 @@
 {
-  "contract_version": "1",
+  "contract_version": "2",
   "gateway": {
     "base_url": "https://aiops.voxsign.ai",
     "chat_path": "/api/model/chat",
     "api_key_env": "AIOPS_KEY"
   },
+  "_layering_principle": "R9-D7: 本地有本地模型中心、外部有外部模型中心——本地模型调本地的（对话感知/checkpoint/自然回复，127.0.0.1 千问），外部模型调外部的（意图/规划/总结/学习，aiops 网关）。local 通道显式声明本地模型中心。",
   "channels": {
     "default": {
       "enabled": true,
@@ -46,6 +47,16 @@
       "tier": "quality",
       "timeout_ms": 180000,
       "max_concurrency": 2,
+      "write_back": false
+    },
+    "local": {
+      "enabled": true,
+      "provider": "local-strata",
+      "model_id": "qwen3.8-flash-next-ista-iq3_xxs",
+      "base_url": "http://127.0.0.1:8080",
+      "api_key_env": "STRATA_API_KEY",
+      "timeout_ms": 60000,
+      "max_concurrency": 1,
       "write_back": false
     }
   },

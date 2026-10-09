@@ -26,11 +26,14 @@ const (
 	ChannelResearch Channel = "research"
 	ChannelDiagnose Channel = "diagnose"
 	ChannelLearn    Channel = "learn"
+	// ChannelLocal (R9-D7): the local model hub — 127.0.0.1 Strata qwen.
+	// Local tasks call the local hub, external tasks call the aiops gateway.
+	ChannelLocal Channel = "local"
 )
 
 // Channels returnbacksafety     name. 
 func AllChannels() []Channel {
-	return []Channel{ChannelDefault, ChannelPlan, ChannelResearch, ChannelDiagnose, ChannelLearn}
+	return []Channel{ChannelDefault, ChannelPlan, ChannelResearch, ChannelDiagnose, ChannelLearn, ChannelLocal}
 }
 
 // ChannelConfig is       . 
