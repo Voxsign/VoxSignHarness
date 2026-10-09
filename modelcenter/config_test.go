@@ -24,6 +24,7 @@ func goodConfig() Config {
 			"research": {Enabled: true, Provider: "aiops", Tier: "quality", TimeoutMS: 5000, MaxConcurrency: 2, WriteBack: false},
 			"diagnose": {Enabled: false, Provider: "aiops", ModelID: "TBD", TimeoutMS: 5000, MaxConcurrency: 2, WriteBack: false},
 			"learn":    {Enabled: false, Provider: "aiops", ModelID: "TBD", TimeoutMS: 5000, MaxConcurrency: 1, WriteBack: true},
+			"local":    {Enabled: true, Provider: "local-strata", ModelID: "qwen-local", TimeoutMS: 5000, MaxConcurrency: 1, WriteBack: false},
 		},
 	}
 }

@@ -39,6 +39,7 @@ func substRegistry(t *testing.T, actualModel string) *Registry {
 			"research": {Enabled: true, Tier: "quality", MaxConcurrency: 1},
 			"diagnose": {Enabled: false, ModelID: "TBD", MaxConcurrency: 1},
 			"learn":    {Enabled: false, ModelID: "TBD", MaxConcurrency: 1, WriteBack: true},
+			"local":    {Enabled: false, ModelID: "TBD", MaxConcurrency: 1},
 		},
 	}
 	reg, err := NewRegistry(cfg)

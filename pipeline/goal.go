@@ -15,7 +15,7 @@ package pipeline
 //   - blocked:   same failure streak >= 3 with a reason and options (DeepSeek:
 //                difficulty != blocker, consecutive-blocked rule).
 //   - completed: only when evidence shows the whole objective is achieved
-//                (PeterZou: premature "done" is the #1 agent failure mode).
+//                (premature "done" is the #1 agent failure mode).
 
 import (
 	"encoding/json"
