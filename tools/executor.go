@@ -64,8 +64,7 @@ func intVal(args map[string]any, key string) int {
 }
 
 // strSlice from args get []string(compat []any and   string). 
-func strSlice(args map[string]any, key string) []string {
-	switch v := args[key].(type) {
+func strSlice(args map[string]any, key string) []string {	switch v := args[key].(type) {
 	case []string:
 		return v
 	case []any:
@@ -85,6 +84,33 @@ func strSlice(args map[string]any, key string) []string {
 	return nil
 }
 
+// strMap reads a map[string]string from args (env overrides for runCmdEnv).
+func strMap(args map[string]any, key string) map[string]string {
+	switch v := args[key].(type) {
+	case map[string]string:
+		return v
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, item := range v {
+			if s, ok := item.(string); ok {
+				out[k] = s
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func envHas(env []string, key string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Exec         . tool as  name; args as   num; c asto   . 
 func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContract) (contract.Receipt, error) {
 	recv := contract.Receipt{Tool: tool}
@@ -100,8 +126,9 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	case "test", "run":
 		argv := strSlice(args, "command")
 		// distillation R6: long-running jobs (npm install -g) pass timeout_s to override
-		// the default 30s exec cap.
-		out, execErr, ok = e.runCmdIn(argv, str(args, "cwd"), intVal(args, "timeout_s"))
+		// the default 30s exec cap. R14: env map supports unsetting LLM keys for the
+		// build-test step so the target repo's tests run in a CI-like environment.
+		out, execErr, ok = e.runCmdEnv(argv, str(args, "cwd"), strMap(args, "env"), intVal(args, "timeout_s"))
 	case "git":
 		argv := strSlice(args, "args")
 		out, execErr, ok = e.runCmdIn(append([]string{"git"}, argv...), str(args, "cwd"))
@@ -150,6 +177,16 @@ func (e *Executor) runCmd(argv []string) (string, string, bool) {
 // runCmdIn is runCmd with an explicit working directory; empty dir falls back to BaseDir.
 // distillation R5 (2026-10-08): build/test commands must run inside the cloned repo.
 func (e *Executor) runCmdIn(argv []string, dir string, timeoutSec ...int) (string, string, bool) {
+	return e.runCmdEnv(argv, dir, nil, timeoutSec...)
+}
+
+// runCmdEnv is runCmdIn with an env override map: keys mapping to "" are REMOVED
+// from the child environment, other keys replace/insert values.
+// distillation R14 (2026-10-09): the build-test step must run the target repo's
+// tests in a clean environment — the repo's own server tests invoke the real LLM
+// when STRATA_API_KEY is present, blow past their 5s poll window and fail, while
+// CI (no key) is green. Unsetting the LLM key makes harness runs match CI.
+func (e *Executor) runCmdEnv(argv []string, dir string, env map[string]string, timeoutSec ...int) (string, string, bool) {
 	if len(argv) == 0 {
 		return "", "missing command argv", false
 	}
@@ -163,6 +200,28 @@ func (e *Executor) runCmdIn(argv []string, dir string, timeoutSec ...int) (strin
 	cmd.Dir = dir
 	if strings.TrimSpace(dir) == "" {
 		cmd.Dir = e.BaseDir
+	}
+	if len(env) > 0 {
+		filtered := make([]string, 0, len(os.Environ()))
+		for _, kv := range os.Environ() {
+			k := strings.SplitN(kv, "=", 2)[0]
+			if val, drop := env[k]; drop {
+				if val == "" {
+					continue // unset
+				}
+				kv = k + "=" + val
+			}
+			filtered = append(filtered, kv)
+		}
+		for k, v := range env {
+			if v == "" {
+				continue
+			}
+			if !envHas(filtered, k) {
+				filtered = append(filtered, k+"="+v)
+			}
+		}
+		cmd.Env = filtered
 	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
