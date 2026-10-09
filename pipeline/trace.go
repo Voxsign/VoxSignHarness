@@ -29,6 +29,7 @@ type traceRec struct {
 	Attribution string         `json:"attribution,omitempty"`
 	LoopMs      int64          `json:"loop_ms,omitempty"`
 	NetMs       int64          `json:"net_ms,omitempty"`
+	Tokens      int64          `json:"tokens,omitempty"` // R13: LLM tokens this turn (cost field; $ rate via model-hub billing, P1)
 }
 
 type traceReceipt struct {
@@ -73,6 +74,7 @@ func newTraceRec(out Outcome, o *Options) traceRec {
 		Attribution: out.Attribution.Class + "/" + out.Attribution.Detail,
 		LoopMs:      out.LoopMs,
 		NetMs:       out.NetMs,
+		Tokens:      out.TurnTokens,
 	}
 	for _, r := range out.Receipts {
 		rec.Receipts = append(rec.Receipts, traceReceipt{
