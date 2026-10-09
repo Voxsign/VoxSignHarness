@@ -1010,6 +1010,13 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	if kind, params, ok := detectOrchestrate(text); ok {
 		return c.fill(ti, kind, 0.92, params)
 	}
+	// R15/v0.6.0: an open-ended self-improvement/research long task ("研究 Claude Code
+	// 怎么执行任务，然后改进你自己的后端；步骤 1)…2)…") is ONE autonomous job with a
+	// real tool loop — it must be detected before the multi-task splitter, or SEQUENCE
+	// shreds it by punctuation into fragments that never execute.
+	if params, ok := detectSelfImprove(text); ok {
+		return c.fill(ti, contract.IntentSelfImprove, 0.9, params)
+	}
 	if steps, ok := parseMultiTask(text); ok && len(steps) >= 2 {
 		got := c.fill(ti, contract.IntentSequence, 0.9, nil)
 		got.Params = map[string]string{"steps": strings.Join(steps, "\n")}
@@ -1801,6 +1808,44 @@ func interruptionThen(text string) (string, bool) {
 		return "", false
 	}
 	return after, true
+}
+
+// detectSelfImprove (R15/v0.6.0) recognizes an open-ended autonomous long task whose
+// object is the harness itself: "研究/学习/蒸馏 Claude Code、Codex 怎么执行任务，然后
+// 改进你自己的后端/代码/pipeline". Such a job must run the real ReAct tool loop
+// (SELF_IMPROVE), not be shredded into a SEQUENCE. Returns params (objective=full text).
+func detectSelfImprove(text string) (map[string]string, bool) {
+	lower := strings.ToLower(text)
+	// strong, explicit self-modification phrases — sufficient on their own
+	selfImproveStrong := []string{
+		"改进你自己", "改你自己", "优化你自己", "升级你自己", "改造你自己",
+		"改进你的后端", "改你的后端", "改进你的代码", "改你的代码", "修改你的代码",
+		"改进你的pipeline", "改你的pipeline", "改进你的 pipeline",
+		"自我改进", "自我进化", "自我完善", "自我升级", "自己改自己", "你自己改",
+		"自己修自己", "改进自己的后端", "改自己的后端", "改进自己的代码",
+		"improve yourself", "modify your own", "improve your own", "edit your own",
+		"your own backend", "your own code", "your own pipeline", "self-improv",
+		"self imporov", "distill into yourself",
+	}
+	researchWords := []string{
+		"研究", "学习", "调研", "蒸馏", "分析", "看看", "看下", "参考", "借鉴",
+		"research", "study", "learn from", "distill", "analyse", "analyze",
+	}
+	selfRefWords := []string{
+		"你自己", "你的后端", "你的代码", "你的pipeline", "你的 pipeline", "自己的后端",
+		"yourself", "your own", "the harness", "this harness",
+	}
+	strong := containsAny(text, selfImproveStrong) || strings.Contains(lower, "self-improv")
+	researchAndSelf := containsAny(text, researchWords) && containsAny(text, selfRefWords)
+	if !strong && !researchAndSelf {
+		return nil, false
+	}
+	// "蒸馏" is the program's core distillation verb; require it to co-occur with a
+	// change/learn signal so a bare mention in chat does not trigger the loop.
+	return map[string]string{
+		"action":    "self_improve",
+		"objective": strings.TrimSpace(text),
+	}, true
 }
 
 // isBuildTestRequest reports the real-work pipeline "download/clone <code> -> build -> test".

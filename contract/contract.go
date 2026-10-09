@@ -152,6 +152,7 @@ const (
 	IntentEmail        = "EMAIL"         // distillation R7 (2026-10-09): "处理邮件/看看新邮件/回那封邮件" -> fetch AIOps inbox -> Strata analysis -> structured receipt
 	IntentCancel       = "CANCEL"        // R11 (2026-10-09): "取消/算了/别发了/不用了" -> stop the current slot+goal with an honest receipt (was: ask-confirm loop)
 	IntentSequence     = "SEQUENCE"      // R12 (2026-10-09): "先 X 再 Y / 同时 X 和 Y / X 顺便 Y" -> ordered multi-task chain; queue runs automatically after each step
+	IntentSelfImprove  = "SELF_IMPROVE"  // R15/v0.6.0 (2026-10-09): open-ended long task "研究/学习/蒸馏 X，然后改进你自己的后端" -> real ReAct tool loop that researches and edits its own backend, then builds/tests
 )
 
 // confirm  etc (Intent.Confirm, risk   decideafterbackfillauthoritative value). 
