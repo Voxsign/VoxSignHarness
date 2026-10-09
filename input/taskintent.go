@@ -160,7 +160,10 @@ var (
 	// distillation R7 (2026-10-09): "收到邮件之后的处理" — "处理邮件/看看新邮件/回那封邮件/
 	// 邮件总结" now marks IntentEmail; the pipeline fetches the AIOps inbox, runs Strata
 	// analysis and produces a structured receipt (reply/forward are confirm-gated).
-	emailTriggers = []string{"邮件", "收件", "收信", "inbox", "email", "mail", "新邮件", "回信", "处理一下邮件"}
+	emailTriggers = []string{"邮件", "收件", "收信", "inbox", "email", "mail", "新邮件", "回信", "处理一下邮件",
+		// R12 (2026-10-09): bare "写回复/回一下/写封回复" (a queued step inside a SEQUENCE
+		// chain) must route to EMAIL(reply), not to the UNKNOWN template.
+		"回复", "写封回复", "回一下"}
 	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
 	// task slot from the previous turn instead of asking. Kept narrow on purpose: bare
 	// "继续/接着/下一步/开工" is a referent/meta signal, not a resume command, and
@@ -985,7 +988,27 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// the negation branch would otherwise trap the user in "确认不做请说「取消」" even though
 	// they already said cancel. A bare cancel is an honest stop, not a confirm loop.
 	if containsAny(text, cancelTriggers) && !containsAny(text, []string{"还是", "要不要", "是否可以", "能不能"}) {
+		// R12 (2026-10-09): interruption form "先别管 X，先做 Y" = cancel X, then do Y.
+		// The cancel is real, but the turn carries a "then" action to execute right after.
+		if then, ok := interruptionThen(text); ok && then != "" {
+			got := c.fill(ti, contract.IntentCancel, 0.92, nil)
+			got.Params = map[string]string{"then": then}
+			return got
+		}
 		return c.fill(ti, contract.IntentCancel, 0.92, nil)
+	}
+	// R12 (2026-10-09): multi-task sentence "先 X 再 Y / 同时 X 和 Y / X 顺便 Y" — a real
+	// ordered chain. Must sit before the single-intent switch so "先装 codex 再处理邮件"
+	// does not collapse into EMAIL(0.87) and silently drop the first step.
+	// A document-orchestrate sentence ("整理成《…》并保存提交") is one job, not a chain —
+	// detect it first so SEQUENCE never steals it.
+	if kind, params, ok := detectOrchestrate(text); ok {
+		return c.fill(ti, kind, 0.92, params)
+	}
+	if steps, ok := parseMultiTask(text); ok && len(steps) >= 2 {
+		got := c.fill(ti, contract.IntentSequence, 0.9, nil)
+		got.Params = map[string]string{"steps": strings.Join(steps, "\n")}
+		return got
 	}
 	settledNegation := strings.Contains(text, "算了") || strings.Contains(text, "取消") ||
 		strings.Contains(text, "不记") || strings.Contains(text, "不写") ||
@@ -1027,6 +1050,10 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, installTriggers):
 		// distillation R6: "安装 codex / claude code 到后台" — pipeline gates + really installs.
 		return c.fill(ti, contract.IntentInstall, 0.85, c.installParams(text))
+	case containsAny(text, statusQuestion):
+		// R12: status asks ("回复了没/做完了吗/Are you done?") must win over the email
+		// verb — "那封回复了没" is a follow-up ask (QUERY), not a new email action.
+		return c.fill(ti, contract.IntentQuery, 0.85, c.queryParams(text))
 	case containsAny(text, emailTriggers):
 		// distillation R7: "处理邮件/看看新邮件/回那封邮件" — fetch AIOps inbox -> Strata analysis.
 		return c.fill(ti, contract.IntentEmail, 0.87, c.emailParams(text))
@@ -1041,8 +1068,6 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, thoughtWords) && !c.spaceShadowsThought(text):
 		ti.Conflict = contract.ConflictNoteVsDeploy
 		return c.fill(ti, contract.IntentNote, 0.9, nil)
-	case containsAny(text, statusQuestion):
-		return c.fill(ti, contract.IntentQuery, 0.85, c.queryParams(text))
 	case containsAny(text, backupTriggers):
 		// distillation R5: "备份程序可以执行吗/立刻执行" — check backup task state.
 		return c.fill(ti, contract.IntentQuery, 0.8, map[string]string{"action": "backup"})
@@ -1613,6 +1638,166 @@ func strongContinuation(m string) bool {
 	return false
 }
 
+// R12 (2026-10-09): multi-task sentence parsing.
+// Ordered chain:  先 A 再 B / 先 A 然后 B / 先 A 接着 B / 同时 A 和 B / A 顺便 B / A 还有 B
+// Each segment must carry a concrete action verb; bare talk ("先这样再那样") is ignored.
+func parseMultiTask(text string) ([]string, bool) {
+	// split on clause connectors that join two imperative actions.
+	segs := splitOnConnectors(text)
+	segs = cleanSegs(segs)
+	if len(segs) < 2 {
+		return nil, false
+	}
+	// every segment must look actionable, else this is a plan sentence, not a task chain.
+	actionable := 0
+	for _, s := range segs {
+		if segmentIsAction(s) {
+			actionable++
+		}
+	}
+	if actionable < 2 {
+		return nil, false
+	}
+	return segs, true
+}
+
+// splitOnConnectors cuts "先…再…然后…" into its ordered action chunks.
+func splitOnConnectors(text string) []string {
+	// connectors in priority order; "先" opens the chain, "再/然后/接着/随后/之后/同时/顺便/还有/以及" continue it.
+	type conn struct{ token string }
+	conns := []string{"先", "再", "然后", "接着", "随后", "之后", "同时", "顺便", "还有", "以及", "并", "和"}
+	segs := []string{}
+	cur := ""
+	rest := text
+	found := false
+	for rest != "" {
+		best := -1
+		bestTok := ""
+		for _, c := range conns {
+			if i := strings.Index(rest, c); i >= 0 && (best == -1 || i < best) {
+				best = i
+				bestTok = c
+			}
+		}
+		if best < 0 {
+			cur += rest
+			break
+		}
+		// a "先" that is part of an unrelated word (先生/先例…) — stop scanning, keep the rest verbatim
+		if bestTok == "先" && isOpenParticle(rest, best) {
+			cur += rest
+			break
+		}
+		if best == 0 {
+			// leading connector: "先A" — the chunk starts after it
+			rest = rest[len(bestTok):]
+			found = true
+			continue
+		}
+		segs = append(segs, cur+rest[:best])
+		cur = ""
+		rest = rest[best+len(bestTok):]
+		found = true
+	}
+	if found && cur != "" {
+		segs = append(segs, cur)
+	}
+	if !found {
+		return []string{text}
+	}
+	return segs
+}
+
+// isOpenParticle guards against "先" appearing inside an unrelated word (e.g. 先生/先例).
+func isOpenParticle(rest string, i int) bool {
+	after := ""
+	if i+len("先") < len(rest) {
+		after = rest[i+len("先"):]
+	}
+	// "先" must be followed by an actionable clause, not by a noun particle.
+	return strings.HasPrefix(after, "生") || strings.HasPrefix(after, "例") ||
+		strings.HasPrefix(after, "锋") || strings.HasPrefix(after, "天")
+}
+
+func cleanSegs(segs []string) []string {
+	out := []string{}
+	for _, s := range segs {
+		s = strings.TrimSpace(strings.Trim(s, "，。！？,.!?；; "))
+		if s == "" {
+			continue
+		}
+		// strip leading politeness/colloquial fillers inside segments
+		for _, p := range []string{"那你", "你现在", "好的", "好，", "帮我", "请帮我"} {
+			if strings.HasPrefix(s, p) {
+				s = strings.TrimSpace(strings.TrimPrefix(s, p))
+				break
+			}
+		}
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// segmentIsAction: a chunk counts as actionable when it carries a task verb or a concrete
+// command word (install/email/build/test/read/translate/backup/download…).
+func segmentIsAction(s string) bool {
+	// bare "装 …" (e.g. "装 codex") is an install clause even though installTriggers keeps
+	// only full forms ("安装/装一下") to avoid false hits like 装修.
+	if strings.HasPrefix(s, "装") && len([]rune(s)) <= 12 {
+		return true
+	}
+	if containsAny(s, installTriggers) || containsAny(s, emailTriggers) ||
+		containsAny(s, buildDownloadVerbs) || containsAny(s, buildCompileVerbs) ||
+		containsAny(s, buildTestVerbs) || containsAny(s, debugTriggers) ||
+		containsAny(s, backupTriggers) || containsAny(s, commitTriggers) ||
+		containsAny(s, []string{"看", "查", "读", "翻译", "translate", "回复", "转发", "总结", "列一下", "写", "记", "改", "部署", "deploy"}) {
+		return true
+	}
+	return false
+}
+
+// interruptionThen (R12): "先别管 X，先做 Y" / "别管那个删除操作，先看看 SFDA 邮件" —
+// return the Y clause so the pipeline can cancel X then run Y. Only fires when a
+// cancel trigger and a following "先/现在/马上 + action" both exist.
+func interruptionThen(text string) (string, bool) {
+	// work on runes so a 3-byte CJK separator never truncates the follow-on clause
+	runes := []rune(text)
+	idxs := []int{}
+	for i, r := range runes {
+		if r == '，' || r == ',' || r == '。' || r == '；' || r == ';' {
+			idxs = append(idxs, i)
+		}
+	}
+	if len(idxs) == 0 {
+		return "", false
+	}
+	// the clause after the last separator should look like a real action instruction
+	after := string(runes[idxs[len(idxs)-1]+1:])
+	after = strings.TrimSpace(strings.Trim(after, "，。！？,.!?；; "))
+	if after == "" || len([]rune(after)) < 2 {
+		return "", false
+	}
+	// must carry a leading "先/现在/马上/立刻" or a bare action verb to be a follow-on task
+	lead := []string{"先", "现在", "马上", "立刻", "赶紧", "帮我", "请"}
+	hasLead := false
+	for _, l := range lead {
+		if strings.HasPrefix(after, l) {
+			hasLead = true
+			after = strings.TrimSpace(strings.TrimPrefix(after, l))
+			break
+		}
+	}
+	if !hasLead && !segmentIsAction(after) {
+		return "", false
+	}
+	if !segmentIsAction(after) {
+		return "", false
+	}
+	return after, true
+}
+
 // isBuildTestRequest reports the real-work pipeline "download/clone <code> -> build -> test".
 // A download verb plus (build or test) verb is enough; a bare download without any
 // build/test tail stays ambiguous (pipeline will ask for the URL).
@@ -1722,7 +1907,10 @@ func (c *TaskClassifier) emailParams(text string) map[string]string {
 			}
 			before = strings.ReplaceAll(before, "发", "")
 			before = strings.TrimSpace(strings.Trim(before, "把给帮一下，。！？,.!? "))
-			if before != "" && len(before) <= 30 {
+			// R12: a bare verb fragment ("写回复" → before="写") is not a sender
+			// target — drop single-character leftovers so the reply falls back
+			// to the full inbox instead of matching a phantom "写" sender.
+			if before != "" && len(before) <= 30 && len([]rune(before)) >= 2 {
 				seg = before
 			}
 		}
@@ -1731,7 +1919,7 @@ func (c *TaskClassifier) emailParams(text string) map[string]string {
 			for _, kw := range []string{"那封", "那个"} {
 				if i := strings.Index(text, kw); i >= 0 {
 					pre := strings.TrimSpace(strings.Trim(text[:i], "。，！？,.!? "))
-					if pre != "" && len(pre) <= 40 {
+					if pre != "" && len(pre) <= 40 && len([]rune(pre)) >= 2 {
 						seg = pre
 						break
 					}

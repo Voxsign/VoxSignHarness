@@ -392,7 +392,10 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// harness resumes the real job instead of misreading it as an edit or asking
 	// again. Without a pending slot the promotion stays inert — plan-style
 	// sentences such as "继续推进这个计划" are not hijacked.
-	if intent.Intent != contract.IntentContinue {
+	// R12: a SEQUENCE intent already carries the full ordered instruction — never let
+	// the continuation promotion hijack it just because a step connector ("接着/然后")
+	// also appears in the continuation word list.
+	if intent.Intent != contract.IntentContinue && intent.Intent != contract.IntentSequence {
 		slot := loadTaskSlot(o.logDir(), convID)
 		goal := loadGoal(o.logDir(), convID)
 		// R9-D1: an open durable goal also entitles continuation promotion —
@@ -989,7 +992,20 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		// R11 (2026-10-09): explicit cancellation stops the current slot+goal with an
 		// honest receipt. No confirm loop, no invented task — "取消/算了/别发了" means stop.
 		canceled := o.cancelCurrent(ctx, it, logDir)
-		return []contract.Receipt{canceled}
+		recvs := []contract.Receipt{canceled}
+		// R12 (2026-10-09): interruption form "先别管 X，先做 Y" — after cancelling X,
+		// execute the follow-on Y clause in the same turn.
+		if then := strings.TrimSpace(it.Params["then"]); then != "" {
+			log.Printf("[cancel-then] executing follow-on %q", then)
+			sub := o.classifyOne(then, logDir)
+			recvs = append(recvs, o.execActions(ctx, sub)...)
+		}
+		return recvs
+	case contract.IntentSequence:
+		// R12 (2026-10-09): ordered multi-task chain "先 X 再 Y / 同时 X 和 Y / X 顺便 Y".
+		// Step 1 runs now; the rest are queued on the goal and auto-advance as each
+		// step completes (long-task persistence — no step is silently dropped).
+		return o.execSequence(ctx, it, logDir)
 	case contract.IntentRegisterTool:
 		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
 		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
@@ -2171,7 +2187,7 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 		Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
 		Steps: []string{"clone", "build", "test"}, Step: 3, Status: "done", Text: it.CorrectedText,
 	})
-	return receipts
+	return o.advanceGoalQueue(ctx, logDir, receipts)
 }
 
 // execInstall (distillation R6, 2026-10-08) really installs developer CLIs on the
@@ -2237,7 +2253,7 @@ func (o *Options) execInstall(ctx context.Context, it contract.Intent, logDir st
 			Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
 			Steps: []string{"confirm", "install"}, Step: 2, Status: "done", Text: it.CorrectedText,
 		})
-		return receipts
+		return o.advanceGoalQueue(ctx, logDir, receipts)
 	}
 
 	instRecv := o.run("run", map[string]any{
@@ -2255,6 +2271,9 @@ func (o *Options) execInstall(ctx context.Context, it contract.Intent, logDir st
 		Kind: TaskKindInstall, Params: map[string]string{"packages": strings.Join(pkgs, " ")},
 		Steps: []string{"confirm", "install"}, Step: 2, Status: status, Text: it.CorrectedText,
 	})
+	if status == "done" {
+		return o.advanceGoalQueue(ctx, logDir, receipts)
+	}
 	return receipts
 }
 
@@ -2300,7 +2319,7 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 				})
 				receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
 					Stdout: "已生成" + action + "草稿：" + fp + "\n\n" + draft})
-				return receipts
+				return o.advanceGoalQueue(ctx, logDir, receipts)
 			}
 		}
 		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
@@ -2374,9 +2393,8 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 	}
 	receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
 		Stdout: content})
-	return receipts
+	return o.advanceGoalQueue(ctx, logDir, receipts)
 }
-
 // cancelCurrent stops the current task slot and durable goal with an honest
 // receipt (R11: 取消/算了/别发了 = real stop, no confirm loop, no invented task).
 func (o *Options) cancelCurrent(ctx context.Context, it contract.Intent, logDir string) contract.Receipt {
@@ -2398,6 +2416,67 @@ func (o *Options) cancelCurrent(ctx context.Context, it contract.Intent, logDir 
 	}
 	return contract.Receipt{Seq: 1, Tool: "cancel", OK: true,
 		Stdout: "好，已取消「" + truncateStr(stopped, 80) + "」。当前任务已停止，需要做什么直接说就行。"}
+}
+
+// classifyOne classifies a sub-task text with the same classifier the main turn uses.
+func (o *Options) classifyOne(text string, logDir string) contract.Intent {
+	classifier := input.NewTaskClassifier(confOf(o.Cfg), spaceHints(o.Spaces))
+	intent := classifier.ClassifyTask(strings.TrimSpace(text))
+	intent.RawText = text
+	return intent
+}
+
+// execSequence (R12, 2026-10-09): run step 1 of an ordered multi-task chain now and
+// queue the rest on the durable goal; each completed step auto-advances to the next.
+func (o *Options) execSequence(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
+	steps := []string{}
+	for _, s := range strings.Split(it.Params["steps"], "\n") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			steps = append(steps, s)
+		}
+	}
+	if len(steps) == 0 {
+		return []contract.Receipt{{Seq: 1, Tool: "sequence", OK: false,
+			Err: "没解析出具体步骤，请把要做的每件事说清楚（例如「先装 codex 再处理邮件」）"}}
+	}
+	first := steps[0]
+	rest := steps[1:]
+	convID := o.ConvID
+	g := loadGoal(logDir, convID)
+	if g == nil || g.Status != GoalActive {
+		// a fresh chain starts a new durable goal even if the previous one was
+		// canceled/completed — otherwise the queue would silently be dropped.
+		g = &Goal{Objective: first, IntentKind: contract.IntentSequence, Status: GoalActive, Round: 0}
+	}
+	g.Queue = append(rest, g.Queue...)
+	saveGoal(logDir, convID, g)
+	log.Printf("[execSequence] steps=%d first=%q rest=%v queueSaved=%v", len(steps), first, rest, g.Queue)
+	recvs := o.execActions(ctx, o.classifyOne(first, logDir))
+	queueNote := ""
+	if len(rest) > 0 {
+		queueNote = "已排队的后续步骤：" + strings.Join(rest, " → ") + "。做完当前这步我会自动继续。"
+	}
+	recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
+		Stdout: "按顺序执行：" + strings.Join(steps, " → ") + "。先做①「" + first + "」。 " + queueNote})
+	return recvs
+}
+
+// advanceGoalQueue (R12): pop the next queued step after a step completes and run it.
+// Called from the completion points of real-work pipelines (install/email/build-test).
+func (o *Options) advanceGoalQueue(ctx context.Context, logDir string, recvs []contract.Receipt) []contract.Receipt {
+	convID := o.ConvID
+	g := loadGoal(logDir, convID)
+	if g == nil || len(g.Queue) == 0 {
+		return recvs
+	}
+	next := g.Queue[0]
+	g.Queue = g.Queue[1:]
+	saveGoal(logDir, convID, g)
+	recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
+		Stdout: "①已完成，自动继续②「" + next + "」。"})
+	recvs = append(recvs, o.execActions(ctx, o.classifyOne(next, logDir))...)
+	return recvs
 }
 
 // emailItem is a normalized inbox row (mirror of the server-side NormalizedEmail).
@@ -4238,7 +4317,15 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		if hasConfirmAsk(rs) {
 			// distillation R6: a confirmation gate (e.g. software install) renders as
 			// 待确认 with the real question, never as FAILED.
-			view.Result = "待确认：" + truncateStr(reason, 200)
+			// R12: keep earlier OK steps visible ("先看邮件，再写回复" shows the email
+			// summary above the reply draft confirm, not just the question).
+			var parts []string
+			for _, r := range rs {
+				if s := strings.TrimSpace(r.Stdout); s != "" && !strings.HasPrefix(s, "{") {
+					parts = append(parts, s)
+				}
+			}
+			view.Result = "待确认：" + truncateStr(strings.Join(parts, "\n"), 600)
 		} else {
 			view.Result = "FAILED：" + truncateStr(reason, 60)
 		}
@@ -4247,10 +4334,16 @@ func renderView(it contract.Intent, v space.Verdict, d risk.Decision, rs []contr
 		// M7:    stdout has  in (QUERY   LLM answer/    etc  base)time, 
 		// four-line receipt "close " showanswer base( disconnect 400;  before 120  pipe  close   after ), 
 		//  againonly show"OK(    )"empty . 
-		if len(rs) > 0 {
-			if s := strings.TrimSpace(rs[0].Stdout); s != "" && !strings.HasPrefix(s, "{") {
-				view.Result = truncateStr(s, 400)
+		// R12: multi-step chains (SEQUENCE / cancel-then) produce several OK receipts —
+		// surface every step's stdout so the mobile user sees the whole chain, not just rs[0].
+		var outs []string
+		for _, r := range rs {
+			if s := strings.TrimSpace(r.Stdout); s != "" && !strings.HasPrefix(s, "{") {
+				outs = append(outs, s)
 			}
+		}
+		if len(outs) > 0 {
+			view.Result = truncateStr(strings.Join(outs, "\n"), 600)
 		}
 	}
 	// ORCHESTRATE   chain: back need show    chain(read N     -> writefile -> git commit hash), 

@@ -57,6 +57,7 @@ type Goal struct {
 	Options       []string `json:"options,omitempty"` // alternatives when blocked
 	FailStreak    int      `json:"fail_streak"`
 	FirstRetryOK  bool     `json:"first_retry_ok"` // R9-D4: first-retry-success indicator
+	Queue         []string `json:"queue,omitempty"` // R12: pending multi-task steps to run automatically after the current one
 	CreatedAt     string   `json:"created_at"`
 	UpdatedAt     string   `json:"updated_at"`
 }
