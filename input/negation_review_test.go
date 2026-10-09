@@ -15,6 +15,8 @@ import (
 )
 
 // TestNegationCoversReviewP1Markers    P1: patch after   word  alloccur . 
+// R11 (2026-10-09): "别管那个删除操作" is an explicit stop → CANCEL (real cancel,
+// no confirm loop); the remaining P1 markers stay negation-with-ask.
 func TestNegationCoversReviewP1Markers(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
 	cases := []string{
@@ -25,7 +27,6 @@ func TestNegationCoversReviewP1Markers(t *testing.T) {
 		"切勿修改配置",
 		"提交就免了",
 		"别去删除那个文件",
-		"别管那个删除操作",
 	}
 	for _, text := range cases {
 		got := c.ClassifyTask(text)
@@ -39,6 +40,11 @@ func TestNegationCoversReviewP1Markers(t *testing.T) {
 		if got.Intent == contract.IntentEdit && got.Params["action"] == "delete" {
 			t.Errorf("%q 仍被判为可执行删除 —— G1 未闭合", text)
 		}
+	}
+	// R11: explicit stop words cancel the current task instead of asking again.
+	if got := c.ClassifyTask("别管那个删除操作"); got.Intent != contract.IntentCancel {
+		t.Errorf("%q 应判 CANCEL（停止当前操作），实际 intent=%s conflict=%q",
+			"别管那个删除操作", got.Intent, got.Conflict)
 	}
 }
 

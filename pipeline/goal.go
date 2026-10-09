@@ -34,6 +34,7 @@ const (
 	GoalPaused    = "paused"
 	GoalBlocked   = "blocked"
 	GoalCompleted = "completed"
+	GoalCanceled  = "canceled" // R11 (2026-10-09): user said 取消/算了/别发了 — honest stop
 )
 
 // MaxGoalBlockStreak is how many consecutive failing turns before the goal is

@@ -985,6 +985,11 @@ func (o *Options) execActions(ctx context.Context, it contract.Intent) []contrac
 		return o.execInstall(ctx, it, logDir)
 	case contract.IntentEmail:
 		return o.execEmail(ctx, it, logDir)
+	case contract.IntentCancel:
+		// R11 (2026-10-09): explicit cancellation stops the current slot+goal with an
+		// honest receipt. No confirm loop, no invented task — "取消/算了/别发了" means stop.
+		canceled := o.cancelCurrent(ctx, it, logDir)
+		return []contract.Receipt{canceled}
 	case contract.IntentRegisterTool:
 		// 2026-10-04 useuser needrequire"after   has      ,     changenew": 
 		// REGISTER_TOOL intent pos lynote ( beforeonlygive caps,    ). 
@@ -2370,6 +2375,29 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 	receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
 		Stdout: content})
 	return receipts
+}
+
+// cancelCurrent stops the current task slot and durable goal with an honest
+// receipt (R11: 取消/算了/别发了 = real stop, no confirm loop, no invented task).
+func (o *Options) cancelCurrent(ctx context.Context, it contract.Intent, logDir string) contract.Receipt {
+	convID := o.ConvID
+	slot := loadTaskSlot(logDir, convID)
+	stopped := ""
+	if slot != nil && slot.Status != "done" && slot.Status != "clear" {
+		stopped = slot.Text
+	}
+	clearTaskSlot(logDir, convID)
+	if g := loadGoal(logDir, convID); g != nil && (g.Status == GoalActive || g.Status == GoalPaused) {
+		g.Status = GoalCanceled
+		g.LastProgress = "用户主动取消：" + it.CorrectedText
+		saveGoal(logDir, convID, g)
+	}
+	if stopped == "" {
+		return contract.Receipt{Seq: 1, Tool: "cancel", OK: true,
+			Stdout: "好，已停止。当前没有正在进行的任务，需要做什么直接说就行。"}
+	}
+	return contract.Receipt{Seq: 1, Tool: "cancel", OK: true,
+		Stdout: "好，已取消「" + truncateStr(stopped, 80) + "」。当前任务已停止，需要做什么直接说就行。"}
 }
 
 // emailItem is a normalized inbox row (mirror of the server-side NormalizedEmail).
