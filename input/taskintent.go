@@ -156,14 +156,19 @@ var (
 	// distillation R6 (2026-10-08): "安装 codex / claude code 到后台" (iOS repro "code code x
 	// and cloud code") was falling through to the English UNKNOWN template. "安装/装一下/装到"
 	// now marks IntentInstall; the pipeline gates with a confirm and really runs npm install -g.
-	installTriggers = []string{"安装", "装一下", "装上", "装个", "装到", "装好", "install", "setup"}
+	installTriggers = []string{"安装", "装一下", "装上", "装个", "装到", "装好", "install", "setup",
+		// R13 (2026-10-09): deny-once revive phrases — "还是要装 X / 还是装 X" after a
+		// rejection must route back to INSTALL, not to the UNKNOWN template.
+		"还是要装", "还是装"}
 	// distillation R7 (2026-10-09): "收到邮件之后的处理" — "处理邮件/看看新邮件/回那封邮件/
 	// 邮件总结" now marks IntentEmail; the pipeline fetches the AIOps inbox, runs Strata
 	// analysis and produces a structured receipt (reply/forward are confirm-gated).
 	emailTriggers = []string{"邮件", "收件", "收信", "inbox", "email", "mail", "新邮件", "回信", "处理一下邮件",
 		// R12 (2026-10-09): bare "写回复/回一下/写封回复" (a queued step inside a SEQUENCE
 		// chain) must route to EMAIL(reply), not to the UNKNOWN template.
-		"回复", "写封回复", "回一下"}
+		"回复", "写封回复", "回一下",
+		// R13 (2026-10-09): deny-once revive — "还是要回/还是回那封邮件" after a rejection.
+		"还是要回", "还是回"}
 	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
 	// task slot from the previous turn instead of asking. Kept narrow on purpose: bare
 	// "继续/接着/下一步/开工" is a referent/meta signal, not a resume command, and
