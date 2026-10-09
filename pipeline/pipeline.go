@@ -393,7 +393,20 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 	// again. Without a pending slot the promotion stays inert — plan-style
 	// sentences such as "继续推进这个计划" are not hijacked.
 	if intent.Intent != contract.IntentContinue {
-		if slot := loadTaskSlot(o.logDir(), convID); slot != nil && slot.Status != "clear" && slot.Status != "done" {
+		slot := loadTaskSlot(o.logDir(), convID)
+		goal := loadGoal(o.logDir(), convID)
+		// R9-D1: an open durable goal also entitles continuation promotion —
+		// persistent execution means "继续/接着干" resumes the objective even
+		// when the per-turn slot has moved on.
+		hasOpen := (slot != nil && slot.Status != "clear" && slot.Status != "done") ||
+			(goal != nil && goal.Status == GoalActive)
+		if hasOpen {
+			openText := ""
+			if slot != nil {
+				openText = slot.Text
+			} else if goal != nil {
+				openText = goal.Objective
+			}
 			probe := strings.ToLower(intent.CorrectedText + " " + cleaned)
 			for _, w := range []string{"继续", "接着", "推进", "往下", "下一步", "然后呢", "continue", "keep going"} {
 				if strings.Contains(probe, w) {
@@ -401,7 +414,7 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 					intent.Confidence = 0.9
 					intent.Conflict = ""
 					intent.Ask = ""
-					intent.Context = append(intent.Context, "[slot-aware continue] "+slot.Text)
+					intent.Context = append(intent.Context, "[slot-aware continue] "+openText)
 					break
 				}
 			}
@@ -410,13 +423,27 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 
 	// distillation R5: CONTINUE resumes the previous turn's task slot so
 	// "开始干呀/立刻执行/继续" actually does the job instead of asking again.
+	// R9-D2: with no slot but an active durable goal, CONTINUE resumes the
+	// objective itself (persistent execution — never claim "no task" while a
+	// goal is open).
 	if intent.Intent == contract.IntentContinue {
 		slot := loadTaskSlot(o.logDir(), convID)
+		goal := loadGoal(o.logDir(), convID)
 		if slot == nil || slot.Status == "clear" {
-			intent.Intent = contract.IntentAsk
-			intent.Conflict = contract.ConflictContinue
-			intent.Confidence = 0.85
-			intent.Ask = "上一轮没有待执行的任务。直接说具体指令就行，例如「下载 https://github.com/owner/repo 然后编译测试」"
+			if goal != nil && goal.Status == GoalActive && goal.IntentKind != "" {
+				intent.Intent = goal.IntentKind
+				intent.CorrectedText = goal.Objective
+				intent.Confidence = 0.9
+				intent.Conflict = ""
+				intent.Ask = ""
+				intent.Params = map[string]string{"resumed": "1"}
+				intent.Context = append(intent.Context, "[goal resume] "+goal.Objective)
+			} else {
+				intent.Intent = contract.IntentAsk
+				intent.Conflict = contract.ConflictContinue
+				intent.Confidence = 0.85
+				intent.Ask = "上一轮没有待执行的任务。直接说具体指令就行，例如「下载 https://github.com/owner/repo 然后编译测试」"
+			}
 		} else if slot.Status == "done" {
 			// job finished already — report instead of inventing a new run
 			intent.Intent = contract.IntentAsk
@@ -648,9 +675,45 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 		}
 	}
 
+	// R9-D1: a real-execution intent establishes (or keeps) the durable goal so
+	// a later "继续/接着干" turn resumes the whole objective.
+	if isExecutableIntent(intent) {
+		o.maybeCreateGoal(intent)
+	}
+
 	receipts := o.execActions(ctx, intent)
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
+	// R9-D4: sync goal progress after one executed turn — success bumps round,
+	// failure streaks toward blocked (consecutive-3 rule, DeepSeek).
+	if g := loadGoal(o.logDir(), convID); g != nil && g.Status == GoalActive {
+		slotStatus := ""
+		if slot := loadTaskSlot(o.logDir(), convID); slot != nil {
+			slotStatus = slot.Status
+		}
+		reason := "执行未产出有效结果"
+		if hasFailure(receipts) && len(receipts) > 0 {
+			r := receipts[0]
+			if r.Err != "" {
+				reason = r.Err
+			} else if r.Stderr != "" {
+				reason = truncateStr(r.Stderr, 120)
+			} else if r.Blocked != "" {
+				reason = r.Blocked
+			}
+		}
+		progress := ""
+		for _, r := range receipts {
+			if r.OK && strings.TrimSpace(r.Stdout) != "" {
+				progress = truncateStr(r.Stdout, 200)
+				break
+			}
+		}
+		if progress == "" && len(receipts) > 0 {
+			progress = truncateStr(receipts[0].Stdout, 200)
+		}
+		o.syncGoalFromTurn(slotStatus, progress, hasFailure(receipts), reason)
+	}
 	// F2: on a successful turn, append the conversation's core entities to the session slot
 	// (waking the writeRecentEntities dead code) so the next turn can resolve anaphora like
 	// "刚才那个/橙子那个" back to this turn's artifact. Only written when no receipt failed.
@@ -2674,6 +2737,9 @@ func (o *Options) runtimeContextSnapshot(convID string) string {
 	if slot := loadTaskSlot(o.logDir(), convID); slot != nil {
 		sb.WriteString("\n- 最近任务槽：" + slot.Kind + "（" + slot.Status + "）：" + truncateStr(slot.Text, 120))
 	}
+	if g := loadGoal(o.logDir(), convID); g != nil && g.Status == GoalActive {
+		sb.WriteString("\n- 目标：" + truncateStr(g.Objective, 120) + "（轮次 " + strconv.Itoa(g.Round+1) + "，进展：" + truncateStr(g.LastProgress, 100) + "）")
+	}
 	if hist := loadHistory(o.logDir(), convID, 6); len(hist) > 0 {
 		sb.WriteString("\n- 最近对话：\n  " + strings.Join(hist, "\n  "))
 	}
@@ -4369,6 +4435,16 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 		Add("identity", -1000, "你是 VoxSign 语音助手，正在和用户打电话式对话。").
 		Add("persona", 0, "你能看到：记住的用户身份、已知实体、最近对话历史。用户可能在问问题、下任务、或者给你信息——不管哪种都要自然地接住。").
 		Add("checkpoint", 400, ckptText(ckpt)).
+		// R9-D2: goal-round continuation — persistent execution ("执着"): while an
+		// active goal exists, every conversational turn is told to keep making
+		// concrete progress and verify before claiming completion.
+		AddDynamic("goal-round", 600, func() string {
+			g := loadGoal(o.logDir(), o.ConvID)
+			if s := goalStale(g); s != "" {
+				return s
+			}
+			return goalRoundText(g)
+		}).
 		AddDynamic("runtime-context", 900, func() string { return o.runtimeContextSnapshot(o.ConvID) }).
 		Add("rules", 1000, "问问题就认真回答；下任务就说'好的我来处理'；给信息就说'好的我记住了'。"+
 			"'这个''那个'从最近对话里推测指什么；代指模糊时给最佳猜测+确认。特别注意："+
@@ -4406,8 +4482,8 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 			}
 		}
 		if canonical != "" && o.Zhiji != nil {
-			o.Zhiji.LearnEntity(canonical, desc, nil)
-			log.Printf("[llmNaturalReply] learned entity: %s = %s", canonical, desc)
+			o.Zhiji.LearnEntity(canonical, desc, nil, "voice-local")
+			log.Printf("[llmNaturalReply] learned entity: %s = %s (source=voice-local)", canonical, desc)
 		}
 		out = strings.TrimSpace(out[:idx])
 	}
