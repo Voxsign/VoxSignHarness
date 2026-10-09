@@ -90,6 +90,13 @@ var (
 		// 2026-10-04     R11:  langnote "add     day    "--
 		// "add   /newadd  /    "+"  " lang  in("   "    in). 
 		"增加一个", "新增一个", "添加一个"}
+	// R11 (2026-10-09): explicit cancellation. Must be matched BEFORE the negation
+	// branch — "取消/算了/别发了" previously fell into the ask-confirm loop
+	// ("确认不做请说「取消」" — the user already said cancel!). Real cancellation
+	// stops the current slot+goal in the pipeline with an honest receipt.
+	cancelTriggers = []string{"取消", "算了", "算了不装了", "别发了", "别弄了", "别装了", "别做了",
+		"不弄了", "不装了", "不做了", "不用了", "停一下", "先停一下", "别干了", "cancel", "stop",
+		"别删了", "别提交了", "别改了", "别管它", "别管了", "别管", "别弄", "别干"}
 	// writeTriggers writefilerefer (2026-10-04     R6/R7  out): 
 	// "pipe XX writeto /path"  beforebe  TEST( "  "char)or UNKNOWN(notriggersendword). 
 	//   table  before, firstat TEST   . 
@@ -103,7 +110,10 @@ var (
 		"做完了吗", "完成了吗", "弄完了吗", "处理完了吗", "搞完了吗",
 		// R10 (2026-10-09): email follow-up asks ("那封回复了没/回了没") route to
 		// QUERY so the natural reply (with checkpoint history) can carry the referent.
-		"回复了没", "回了没", "处理了没", "看了没", "发了没"}
+		"回复了没", "回了没", "处理了没", "看了没", "发了没",
+		// R11 (2026-10-09): English status asks — rule-routed to QUERY so the natural
+		// reply carries the checkpoint context instead of the UNKNOWN ask template.
+		"done", "finished", "status", "how's it going", "how is it going"}
 	debugPlanWords = []string{"思路", "怎么做", "方案", "打算"}
 	noteTriggers   = []string{"记一下", "记下来", "记下", "记个", "记住", "记录一下", "记录", "存档", "存个", "存到",
 		// 2026-10-08 (distillation R2): "记一条：明天上午9点开会" fell to UNKNOWN because
@@ -162,6 +172,10 @@ var (
 		// Without them they fall to the LLM four-way classifier and get misread as EDIT
 		// ("继续" -> "FAILED：未识别到目标文件"). "继续" alone is the #1 iOS resume word.
 		"继续", "接着", "接着弄", "接着做", "还没好", "还没好吗", "没弄完", "没搞定",
+		// R11 (2026-10-09): English continuation words — containsAny matches
+		// case-insensitively, so "Continue"/"Keep going" route to CONTINUE instead of
+		// the UNKNOWN ask template.
+		"continue", "keep going", "go ahead", "proceed", "carry on",
 		// distillation R6: 确认词恢复上一轮待确认安装（"装吧/可以装/确认" 短句即触发）
 		"装吧", "可以装", "确认", "确认安装", "就装吧"}
 	defaultExcludes = []string{".env*", "node_modules"}
@@ -967,6 +981,12 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	// verb "记" which is not in noteTriggers ("记一条" etc.), so actionWords misses and the
 	// negation branch would be skipped -> UNKNOWN. Settled words are complete abandon
 	// expressions and must reach the negation flow on their own.
+	// R11 (2026-10-09): explicit cancellation ("取消/算了/别发了/不用了") must come FIRST —
+	// the negation branch would otherwise trap the user in "确认不做请说「取消」" even though
+	// they already said cancel. A bare cancel is an honest stop, not a confirm loop.
+	if containsAny(text, cancelTriggers) && !containsAny(text, []string{"还是", "要不要", "是否可以", "能不能"}) {
+		return c.fill(ti, contract.IntentCancel, 0.92, nil)
+	}
 	settledNegation := strings.Contains(text, "算了") || strings.Contains(text, "取消") ||
 		strings.Contains(text, "不记") || strings.Contains(text, "不写") ||
 		strings.Contains(text, "不做") || strings.Contains(text, "别记")
@@ -1559,14 +1579,15 @@ var (
 // turn, while "那你现在开始干呀" (T3) does.
 func isContinuationRequest(text string) bool {
 	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed) // R11: English triggers ("Continue") match case-insensitively
 	runes := []rune(trimmed)
 	short := len(runes) <= 14
 	for _, m := range continuationTriggers {
-		i := strings.Index(trimmed, m)
+		i := strings.Index(lower, strings.ToLower(m))
 		if i < 0 {
 			continue
 		}
-		pos := len([]rune(trimmed[:i]))
+		pos := len([]rune(lower[:i]))
 		// distillation R6: 强延续信号（立刻执行/马上执行/赶紧做…）即使句子较长、触发词靠后
 		// 也视为延续（iOS repro "怎么还没执行呢？那你现在立刻执行好吗" 16 字被旧收窄拦下，
 		// 落成 EDIT 误判）。弱延续词（接着/继续/往下走）保持收窄防计划句劫持。

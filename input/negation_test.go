@@ -60,12 +60,15 @@ func TestFeasibilityQuestionIsNotNegation(t *testing.T) {
 }
 
 // TestSingleBieNeedsFollowingVerb  "diff"   after  word,    in" diff/diff ". 
+// R11 (2026-10-09): explicit cancellation ("别发了/别删了/别提交了") now routes to
+// CANCEL (real stop, no ask-confirm loop); negation-with-action keeps ConflictNegation
+// only for non-cancel negative commands ("别记这个了" style handled by settledNegation).
 func TestSingleBieNeedsFollowingVerb(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
-	positives := []string{"别删了", "别发了", "别提交了", "别改了"}
-	for _, text := range positives {
-		if got := c.ClassifyTask(text); got.Conflict != contract.ConflictNegation {
-			t.Errorf("%q 应判否定，实际 conflict=%q intent=%s", text, got.Conflict, got.Intent)
+	cancelWords := []string{"别删了", "别发了", "别提交了", "别改了"}
+	for _, text := range cancelWords {
+		if got := c.ClassifyTask(text); got.Intent != contract.IntentCancel {
+			t.Errorf("%q 应判 CANCEL，实际 intent=%s conflict=%q", text, got.Intent, got.Conflict)
 		}
 	}
 	negatives := []string{"特别关注一下那个报错", "改别的文件", "告别旧版本"}
