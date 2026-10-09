@@ -790,7 +790,9 @@ func Run(ctx context.Context, o *Options, text string) (Outcome, error) {
 			// distillation R5: on a clarification ask the LLM natural reply tends to
 			// promise action ("我现在就动手…") that will not happen. Keep the ask text
 			// as the result so the user sees the actual question, not a false promise.
-			if intent.Ask != "" {
+			// R10: for bare UNKNOWN the ask template ("请再说一遍") must NOT override a
+			// context-carrying natural reply — anaphora like "那封回复了没" depends on it.
+			if intent.Ask != "" && intent.Intent != contract.IntentUnknown {
 				out.View.Result = intent.Ask
 			} else {
 				out.View.Result = reply
@@ -4548,6 +4550,13 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 	if isBareReferent(text) || hasFileOpVerb(text) {
 		return it
 	}
+	// R10 (2026-10-09): continuation words ("继续/接着/推进/还没好") never go to the
+	// four-way LLM classifier — it has no CONTINUE class and misreads them as EDIT
+	// ("继续" -> "FAILED：未识别到目标文件"). Keep them rule-handled: the pipeline's
+	// CONTINUE branch then resumes the open slot/goal or asks honestly when empty.
+	if pipelineContinuationWord(text) {
+		return it
+	}
 	p, err := o.Providers.Get("fast")
 	if err != nil {
 		return it
@@ -5190,6 +5199,19 @@ func extractCapabilityName(text string) string {
 		return t
 	}
 	return ""
+}
+
+// pipelineContinuationWord reports whether the text is a bare continuation/progress
+// prompt that the four-way LLM classifier must never see (R10; mirror of the input
+// package's continuation table kept local to avoid an import cycle).
+func pipelineContinuationWord(text string) bool {
+	lower := strings.ToLower(text)
+	for _, w := range []string{"继续", "接着", "推进", "还没好", "没弄完", "没搞定", "往下", "下一步", "然后呢", "continue", "keep going"} {
+		if strings.Contains(lower, strings.ToLower(w)) {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeTask 判断用户这句话是不是在让做事（不是问问题/自我介绍/闲聊）。
