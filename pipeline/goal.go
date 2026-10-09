@@ -215,7 +215,8 @@ func isExecutableIntent(it contract.Intent) bool {
 	case contract.IntentBuildTest, contract.IntentInstall, contract.IntentEmail,
 		contract.IntentEdit, contract.IntentDebug, contract.IntentTest,
 		contract.IntentCommit, contract.IntentDeploy, contract.IntentShell,
-		contract.IntentFileWrite, contract.IntentRegisterTool, contract.IntentOrchestrate:
+		contract.IntentFileWrite, contract.IntentRegisterTool, contract.IntentOrchestrate,
+		contract.IntentSelfImprove:
 		return true
 	}
 	return false
