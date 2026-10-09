@@ -142,6 +142,15 @@ type Options struct {
 	// selfhealSvc error   (  );    . Providers==nil time as nil( open  ed,  chain change). 
 	selfhealSvc *selfheal.Service
 
+	// R13 (2026-10-09): per-turn LLM token counter (O layer cost field). All LLM
+	// paths (strataChat / chatWithFallback / llmSummarize) accumulate here; Run
+	// copies it into Outcome.TurnTokens -> trace JSONL. Lock-guarded by Run's mu.
+	turnTokens int64
+
+	// R13 (2026-10-09): declarative governance constitution (G layer). Lazy-loaded
+	// once per Run from <logDir>/constitution.json with embedded defaults.
+	constitution *constitution
+
 	// ConvID   tgt (same logDir under   run   ;    "default"). 
 	ConvID string
 	// RequestID out refer   require ID(P0-4b). emptythen Run in occurbecome(= nowstatus as, toaftercompat); 
@@ -193,6 +202,7 @@ type Outcome struct {
 	ContextBlock string               `json:"context_block,omitempty"`
 	LoopMs       int64                `json:"loop_ms"`
 	NetMs        int64                `json:"net_ms"`
+	TurnTokens   int64                `json:"turn_tokens,omitempty"` // R13: LLM tokens consumed this turn (O cost field)
 }
 
 // discussLogName is discuss-log filename(<log_dir>/discuss.jsonl). 
@@ -235,11 +245,15 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	// the lock; appendTrace touches no shared state.
 	defer func() {
 		if out.RequestID != "" {
+			out.TurnTokens = o.turnTokens
 			appendTrace(o.logDir(), o.ConvID, newTraceRec(out, o))
 		}
 	}()
 	if o.guard == nil {
 		o.guard = risk.NewGuard()
+	}
+	if o.constitution == nil {
+		o.constitution = loadConstitution(o.logDir())
 	}
 
 	// P0-4b: out refer  request_id(in /byReq   ) first; emptythen occurbecome(= nowstatus as). 
@@ -2340,22 +2354,16 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 		if draft == "" {
 			draft = "(未取到拟稿内容，请重新说一遍要回复的内容)"
 		}
-		file := filepath.Join(logDir, "..", "harness-output")
-		if err := os.MkdirAll(file, 0o755); err == nil {
-			fp := filepath.Join(file, "email-"+action+"-"+time.Now().Format("20060102-150405")+".md")
-			if err := os.WriteFile(fp, []byte(draft), 0o644); err == nil {
-				writeTaskSlot(logDir, o.ConvID, &TaskSlot{
-					Kind: TaskKindEmail, Params: it.Params, Steps: []string{"confirm", "draft"},
-					Step: 2, Status: "done", Text: it.CorrectedText,
-				})
-				receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: true,
-					Stdout: "已生成" + action + "草稿：" + fp + "\n\n" + draft})
-				return o.advanceGoalQueue(ctx, logDir, receipts)
+		recv, ok := o.writeEmailDraft(logDir, action, draft, it)
+		if ok {
+			// R13 (2026-10-09): the confirmation was granted — remember allow-once so
+			// confirm:once tools (email reply/forward) skip the gate this session.
+			if key := denyKeyForIntent(it); key != "" {
+				recordAllow(logDir, o.ConvID, key)
 			}
+			return o.advanceGoalQueue(ctx, logDir, []contract.Receipt{recv})
 		}
-		receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "email", OK: false,
-			Err: "草稿写入失败（harness-output 不可写）"})
-		return receipts
+		return []contract.Receipt{recv}
 	}
 
 	// 1) Fetch the AIOps inbox for real (read-only GET).
@@ -2404,6 +2412,20 @@ func (o *Options) execEmail(ctx context.Context, it contract.Intent, logDir stri
 					Stdout: "上次已取消该" + action + "。要重新做，说「还是要" + action + "」"}}
 			}
 			clearDeny(logDir, o.ConvID, key)
+		}
+		// R13 (2026-10-09): declarative constitution — confirm:once tools skip the
+		// gate when this session already allowed the same target (allow-once, H4).
+		if o.constitution != nil && o.constitution.confirmMode("email:"+action) == "once" &&
+			key != "" && isAllowed(logDir, o.ConvID, key) {
+			draft := o.emailReason(ctx, emailPrompt(action, scope, target, sel))
+			if draft == "" {
+				draft = "（拟稿失败：模型未返回内容，请重试或换一种说法）"
+			}
+			recv, ok := o.writeEmailDraft(logDir, action, draft, it)
+			if !ok {
+				return []contract.Receipt{recv}
+			}
+			return o.advanceGoalQueue(ctx, logDir, []contract.Receipt{recv})
 		}
 		draftPrompt := emailPrompt(action, scope, target, sel)
 		draft := o.emailReason(ctx, draftPrompt)
@@ -2529,6 +2551,28 @@ type emailItem struct {
 	body    string
 }
 
+// writeEmailDraft (R13) persists the drafted reply/forward under
+// harness-output/ and marks the email slot done. Used by both the resumed path
+// (after confirmation) and the constitution allow-once path (gate skipped).
+func (o *Options) writeEmailDraft(logDir, action, draft string, it contract.Intent) (contract.Receipt, bool) {
+	file := filepath.Join(logDir, "..", "harness-output")
+	if err := os.MkdirAll(file, 0o755); err != nil {
+		return contract.Receipt{Seq: 1, Tool: "email", OK: false,
+			Err: "草稿写入失败（harness-output 不可写）"}, false
+	}
+	fp := filepath.Join(file, "email-"+action+"-"+time.Now().Format("20060102-150405")+".md")
+	if err := os.WriteFile(fp, []byte(draft), 0o644); err != nil {
+		return contract.Receipt{Seq: 1, Tool: "email", OK: false,
+			Err: "草稿写入失败（harness-output 不可写）"}, false
+	}
+	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+		Kind: TaskKindEmail, Params: it.Params, Steps: []string{"confirm", "draft"},
+		Step: 2, Status: "done", Text: it.CorrectedText,
+	})
+	return contract.Receipt{Seq: 1, Tool: "email", OK: true,
+		Stdout: "已生成" + action + "草稿：" + fp + "\n\n" + draft}, true
+}
+
 // emailFetch GETs the AIOps inbox. Key comes from AIOPS_KEY env (container already
 // injects AIOPS_KEY + VHS_AIOPS_URL); base defaults to the VHS_AIOPS_URL host.
 func (o *Options) emailFetch(ctx context.Context, limit int) ([]emailItem, error) {
@@ -2648,6 +2692,10 @@ func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		log.Printf("[execEmail] Strata decode err: %v", err)
@@ -2657,6 +2705,8 @@ func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
 		log.Printf("[execEmail] Strata empty choices")
 		return ""
 	}
+	// R13 (2026-10-09): O cost field — accumulate local-qwen tokens this turn.
+	o.turnTokens += out.Usage.PromptTokens + out.Usage.CompletionTokens
 	c := strings.TrimSpace(out.Choices[0].Message.Content)
 	if c == "" {
 		log.Printf("[execEmail] Strata empty content; finish=%s", out.Choices[0].FinishReason)
@@ -2715,6 +2765,10 @@ func (o *Options) strataChat(ctx context.Context, system, user string, maxTokens
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return ""
@@ -2722,6 +2776,8 @@ func (o *Options) strataChat(ctx context.Context, system, user string, maxTokens
 	if len(out.Choices) == 0 {
 		return ""
 	}
+	// R13 (2026-10-09): O cost field — llama.cpp returns usage.prompt/completion.
+	o.turnTokens += out.Usage.PromptTokens + out.Usage.CompletionTokens
 	return strings.TrimSpace(out.Choices[0].Message.Content)
 }
 
@@ -3060,6 +3116,8 @@ func (o *Options) llmSummarize(ctx context.Context, title, merged string) string
 		log.Printf("[llmSummarize] rid=%s fast Chat err: %v", rid, err)
 		return ""
 	}
+	// R13 (2026-10-09): O cost field — accumulate LLM tokens consumed this turn.
+	o.turnTokens += int64(resp.Usage.TotalTokens)
 	if strings.TrimSpace(resp.Content) == "" {
 		log.Printf("[llmSummarize] rid=%s fast Chat empty content (finish_reason may be length; reasoning budget exhausted)", rid)
 		return ""
@@ -3168,6 +3226,8 @@ func (o *Options) chatWithFallback(ctx context.Context, pref []string, req provi
 			log.Printf("[llm-trace] %s attempt=FAIL retryable=true err=%v", name, err)
 			continue
 		}
+		// R13 (2026-10-09): O cost field — accumulate LLM tokens consumed this turn.
+		o.turnTokens += int64(resp.Usage.TotalTokens)
 		return resp, nil
 	}
 	if lastErr == nil {
