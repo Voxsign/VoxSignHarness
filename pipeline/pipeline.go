@@ -1209,6 +1209,13 @@ func (o *Options) run(tool string, args map[string]any) contract.Receipt {
 		recv.OK = false
 		recv.Err = err.Error()
 	}
+	// R14 (2026-10-09): error detail loss — Executor puts the real stderr into
+	// recv.Stderr but leaves Err empty on a failed command, so receipts/trace/ledger
+	// showed "test:" with no message and the user got a bare "FAILED". Merge stderr
+	// into Err when the tool failed and Err is still empty.
+	if !recv.OK && recv.Err == "" && recv.Stderr != "" {
+		recv.Err = strings.TrimSpace(recv.Stderr)
+	}
 	return recv
 }
 
@@ -2187,6 +2194,7 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 		buildCmd = []string{"go", "build", "./..."}
 		// CI 口径（.github/workflows/ci.yml）：排除 asr/doccontract 包，避免环境依赖测试误报。
 		listRecv := o.run("run", map[string]any{"command": []string{"go", "list", "./..."}, "cwd": repoDir})
+		log.Printf("[execBuildTest] go list ok=%v pkgs_out=%d stderr=%q", listRecv.OK, len(strings.Split(listRecv.Stdout, "\n")), strings.TrimSpace(listRecv.Stderr))
 		var pkgs []string
 		for _, ln := range strings.Split(listRecv.Stdout, "\n") {
 			ln = strings.TrimSpace(ln)
@@ -2196,6 +2204,17 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 			pkgs = append(pkgs, ln)
 		}
 		if len(pkgs) == 0 {
+			// R14: a failed/empty `go list` must fail loudly with its stderr, never
+			// degrade to a full `go test ./...` that re-includes excluded packages.
+			if !listRecv.OK {
+				receipts = append(receipts, contract.Receipt{Seq: bump(), Tool: "test", OK: false,
+					Err: "go list failed: " + strings.TrimSpace(listRecv.Stderr)})
+				writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+					Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+					Steps: []string{"clone", "build", "test"}, Step: 2, Status: "failed", Text: it.CorrectedText,
+				})
+				return receipts
+			}
 			testCmd = []string{"go", "test", "./..."}
 		} else {
 			testCmd = append([]string{"go", "test"}, pkgs...)
@@ -2219,7 +2238,9 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 		}
 	}
 	if len(buildCmd) > 0 {
-		brecv := o.run("run", map[string]any{"command": buildCmd, "cwd": repoDir})
+		// R14: fresh clones compile from scratch — a 33-package go repo easily exceeds
+		// the default 30s exec cap. Build/test get a 180s budget.
+		brecv := o.run("run", map[string]any{"command": buildCmd, "cwd": repoDir, "timeout_s": 180})
 		brecv.Seq = bump()
 		brecv.Tool = "run"
 		receipts = append(receipts, brecv)
@@ -2232,10 +2253,35 @@ func (o *Options) execBuildTest(ctx context.Context, it contract.Intent, logDir 
 		}
 	}
 	if len(testCmd) > 0 {
-		trecv := o.run("test", map[string]any{"command": testCmd, "cwd": repoDir})
+		// R14: run the target repo's tests with LLM keys unset — its server tests
+		// call the real model when STRATA_API_KEY is present, exceed their 5s poll
+		// window and fail, while CI (no key) is green. Clean env matches CI.
+		trecv := o.run("test", map[string]any{"command": testCmd, "cwd": repoDir, "timeout_s": 180,
+			"env": map[string]string{"STRATA_API_KEY": "", "DEEPSEEK_API_KEY": "", "OPENAI_API_KEY": "", "VHS_TOKEN": ""}})
+		if !trecv.OK {
+			// R14: truncateOut keeps the HEAD of a long output, which discards the
+			// trailing FAIL details of a big `go test` run. On failure, surface the
+			// TAIL (diagnostics live at the end) instead of the head.
+			head := strings.TrimSpace(trecv.Stdout)
+			tail := head
+			if len(head) > 2000 {
+				tail = "…" + head[len(head)-2000:]
+			}
+			trecv.Err = tail
+		}
+		log.Printf("[execBuildTest] test recv ok=%v stdout_len=%d err_tail=%q", trecv.OK, len(trecv.Stdout), strings.TrimSpace(trecv.Err[:min(200, len(trecv.Err))]))
 		trecv.Seq = bump()
 		trecv.Tool = "test"
 		receipts = append(receipts, trecv)
+		if !trecv.OK {
+			// R14: test failure must persist as a failed slot and stop, exactly like
+			// build — previously the job was marked "done" while the receipt said FAILED.
+			writeTaskSlot(logDir, o.ConvID, &TaskSlot{
+				Kind: TaskKindBuildTest, Params: map[string]string{"url": url},
+				Steps: []string{"clone", "build", "test"}, Step: 2, Status: "failed", Text: it.CorrectedText,
+			})
+			return receipts
+		}
 	}
 
 	writeTaskSlot(logDir, o.ConvID, &TaskSlot{
