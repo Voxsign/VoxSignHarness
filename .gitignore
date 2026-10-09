@@ -34,3 +34,6 @@ coverage.out
 
 # ===== local build artifacts (reproducible, not committed) =====
 /bin/
+
+# self-growth ledger (runtime-generated, stays local)
+GROWING-ISSUES.md
