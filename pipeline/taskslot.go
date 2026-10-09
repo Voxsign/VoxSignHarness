@@ -22,6 +22,7 @@ const (
 	TaskKindBuildTest = "build_test" // clone -> build -> test
 	TaskKindBackup    = "backup"     // run the backup task (informational/resume)
 	TaskKindInstall   = "install"    // distillation R6: npm install -g <pkgs> (confirm-gated)
+	TaskKindEmail     = "email"      // distillation R7: fetch AIOps inbox -> Strata analysis -> receipt (confirm-gated for reply/forward)
 )
 
 type TaskSlot struct {

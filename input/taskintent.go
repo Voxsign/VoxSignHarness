@@ -141,6 +141,10 @@ var (
 	// and cloud code") was falling through to the English UNKNOWN template. "安装/装一下/装到"
 	// now marks IntentInstall; the pipeline gates with a confirm and really runs npm install -g.
 	installTriggers = []string{"安装", "装一下", "装上", "装个", "装到", "装好", "install", "setup"}
+	// distillation R7 (2026-10-09): "收到邮件之后的处理" — "处理邮件/看看新邮件/回那封邮件/
+	// 邮件总结" now marks IntentEmail; the pipeline fetches the AIOps inbox, runs Strata
+	// analysis and produces a structured receipt (reply/forward are confirm-gated).
+	emailTriggers = []string{"邮件", "收件", "收信", "inbox", "email", "mail", "新邮件", "回信", "处理一下邮件"}
 	// continuation triggers (T3 repro): "那你现在开始干呀" became ASK with the harness answering	// "I cannot download/build/test". These now mark IntentContinue; the pipeline resumes the
 	// task slot from the previous turn instead of asking. Kept narrow on purpose: bare
 	// "继续/接着/下一步/开工" is a referent/meta signal, not a resume command, and
@@ -993,6 +997,9 @@ func (c *TaskClassifier) ClassifyTask(text string) contract.Intent {
 	case containsAny(text, installTriggers):
 		// distillation R6: "安装 codex / claude code 到后台" — pipeline gates + really installs.
 		return c.fill(ti, contract.IntentInstall, 0.85, c.installParams(text))
+	case containsAny(text, emailTriggers):
+		// distillation R7: "处理邮件/看看新邮件/回那封邮件" — fetch AIOps inbox -> Strata analysis.
+		return c.fill(ti, contract.IntentEmail, 0.87, c.emailParams(text))
 	case registerToolRequest(text):
 		return c.fill(ti, contract.IntentRegisterTool, 0.95, nil)
 	case containsAny(text, deleteTriggers):
@@ -1649,4 +1656,60 @@ func (c *TaskClassifier) installParams(text string) map[string]string {
 		}
 	}
 	return map[string]string{"packages": strings.Join(pkgs, " ")}
+}
+
+// emailParams fills the EMAIL intent params: action (summary/list/reply/forward/archive),
+// scope (all/unread/by sender, default "unread") and target (sender/subject hint for
+// reply/forward). Distillation R7 (2026-10-09).
+func (c *TaskClassifier) emailParams(text string) map[string]string {
+	p := map[string]string{"action": "summary", "scope": "unread"}
+	switch {
+	case containsAny(text, []string{"回", "回复", "reply", "复信", "回信"}):
+		p["action"] = "reply"
+	case containsAny(text, []string{"转发", "forward"}):
+		p["action"] = "forward"
+	case containsAny(text, []string{"归档", "archive", "处理完", "清掉"}):
+		p["action"] = "archive"
+	case containsAny(text, []string{"看看", "查看", "有哪些", "列一下", "都有什么", "list", "查收"}):
+		p["action"] = "list"
+	case containsAny(text, []string{"总结", "汇总", "摘要", "summary", "处理一下", "怎么办", "分析"}):
+		p["action"] = "summary"
+	}
+	if containsAny(text, []string{"全部", "所有", "all"}) {
+		p["scope"] = "all"
+	}
+	// 目标：回复/转发时找发件人线索（ASR 常见表述：那封/那个人的/某某发的）
+	if p["action"] == "reply" || p["action"] == "forward" {
+		seg := ""
+		// 主路径：目标在「回/回复」之前——剥掉「的邮件/邮件/发」后缀与「把/给/帮/一下」前缀。
+		if i := strings.Index(text, "回"); i >= 0 {
+			before := text[:i]
+			for _, suf := range []string{"的邮件", "邮件"} {
+				if j := strings.Index(before, suf); j >= 0 {
+					before = before[:j]
+				}
+			}
+			before = strings.ReplaceAll(before, "发", "")
+			before = strings.TrimSpace(strings.Trim(before, "把给帮一下，。！？,.!? "))
+			if before != "" && len(before) <= 30 {
+				seg = before
+			}
+		}
+		// 兜底：那封/那个 表述
+		if seg == "" {
+			for _, kw := range []string{"那封", "那个"} {
+				if i := strings.Index(text, kw); i >= 0 {
+					pre := strings.TrimSpace(strings.Trim(text[:i], "。，！？,.!? "))
+					if pre != "" && len(pre) <= 40 {
+						seg = pre
+						break
+					}
+				}
+			}
+		}
+		if seg != "" {
+			p["target"] = seg
+		}
+	}
+	return p
 }
