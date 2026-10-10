@@ -33,7 +33,7 @@ import (
 	"voicesign-harness/zhiji"
 )
 
-const version = "0.6.0"
+const version = "0.6.1"
 
 func main() {
 	if len(os.Args) < 2 {
