@@ -1,6 +1,6 @@
 #!/bin/bash
 # R13 (2026-10-09): automated regression suite (V layer) — replays the distilled
-# end-to-end scenarios against the local Qwen (192.168.8.201) and asserts the
+# end-to-end scenarios against the private local Qwen and asserts the
 # harness behavior, not just output presence. Run before every release:
 #   bash tests/e2e/regression.sh
 # Requires: bin/vhs built (go build -o bin/vhs .), STRATA_API_KEY, AIOPS_KEY set.
@@ -11,8 +11,13 @@ set -u
 cd "$(dirname "$0")/../.." || exit 1
 VHS=./bin/vhs
 [ -x "$VHS" ] || { echo "build first: go build -o bin/vhs ."; exit 1; }
-export STRATA_API_KEY=${STRATA_API_KEY:-sk-local-flashnext}
-export AIOPS_KEY=${AIOPS_KEY:-aiops-mac-sophia-8cdec6c75e5a1528f2efed609fbbb05f}
+# Credentials and the local endpoint are deployment-private: supply them via the
+# environment, they are never hardcoded in the repository.
+: "${STRATA_API_KEY:?set STRATA_API_KEY to the local Qwen key}"
+: "${AIOPS_KEY:?set AIOPS_KEY to the aiops gateway key}"
+export STRATA_API_KEY AIOPS_KEY
+: "${VHS_EMAIL_STRATA:?set VHS_EMAIL_STRATA to the private local Qwen base URL}"
+export VHS_EMAIL_STRATA
 
 PASS=0; FAIL=0
 run() { # run <label> <expected-grep> <cmd...>

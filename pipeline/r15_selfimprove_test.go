@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +139,109 @@ func TestCosmeticOnly(t *testing.T) {
 	_ = os.WriteFile(abs, []byte("package pipeline\n\n// doc\nfunc F() {}\n\nvar Added = true\n"), 0o644)
 	if cosmeticOnly(dir, []string{rel}, snap) {
 		t.Errorf("adding a declaration must NOT be cosmetic")
+	}
+}
+
+// R15/v0.6.x (D7 model tiering): research/planning stays on the local Qwen; a
+// code-change objective escalates to the strong model once code is touched or
+// enough read-only research has accumulated; escalation is sticky.
+func TestPickSelfImproveTier(t *testing.T) {
+	cases := []struct {
+		name          string
+		requiresEdit  bool
+		alreadyStrong bool
+		researchTurns int
+		touchedGo     int
+		want          selfImproveTier
+	}{
+		{"research-only stays local", false, false, 9, 0, tierLocal},
+		{"code task opening research local", true, false, 0, 0, tierLocal},
+		{"code task mid research local", true, false, 2, 0, tierLocal},
+		{"code task past research threshold strong", true, false, selfImproveStrongAfterResearch, 0, tierStrong},
+		{"code task after first edit strong", true, false, 1, 1, tierStrong},
+		{"hysteresis stays strong", true, true, 0, 0, tierStrong},
+		{"hysteresis strong regardless of flag", false, true, 0, 0, tierStrong},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pickSelfImproveTier(c.requiresEdit, c.alreadyStrong, c.researchTurns, c.touchedGo)
+			if got != c.want {
+				t.Fatalf("pickSelfImproveTier(%v,%v,%d,%d) = %s, want %s",
+					c.requiresEdit, c.alreadyStrong, c.researchTurns, c.touchedGo, got, c.want)
+			}
+		})
+	}
+}
+
+// R15/v0.6.x: once the research turn budget is used on a code-change task with
+// no Go edit yet, force the model into planning/editing instead of letting it
+// keep issuing read-only actions.
+func TestForceBuildNudge(t *testing.T) {
+	cases := []struct {
+		name                      string
+		edit                      bool
+		touched, research, nudges int
+		want                      bool
+	}{
+		{"research-only never", false, 0, 9, 0, false},
+		{"before research threshold", true, 0, 2, 0, false},
+		{"at threshold zero edit", true, 0, selfImproveStrongAfterResearch, 0, true},
+		{"after code touched", true, 1, 3, 0, false},
+		{"nudge cap reached", true, 0, 5, 3, false},
+		{"nudge still under cap", true, 0, 4, 2, true},
+	}
+	for _, c := range cases {
+		if got := forceBuildNudge(c.edit, c.touched, c.research, c.nudges); got != c.want {
+			t.Fatalf("%s: forceBuildNudge = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// R15/v0.6.x: tool actions run through /bin/sh so `cd` and chaining behave like
+// the Codex/Claude Bash tool; already-shell commands pass through and quotes are
+// escaped safely.
+func TestShellWrap(t *testing.T) {
+	if got := shellWrap([]string{"cd", "/tmp/vhs-self"}); !(len(got) == 3 && got[0] == "sh" && got[1] == "-c" && got[2] == "'cd' '/tmp/vhs-self'") {
+		t.Fatalf("cd wrap = %v", got)
+	}
+	if got := shellWrap([]string{"sh", "-c", "a && b | c"}); !(len(got) == 3 && got[2] == "a && b | c") {
+		t.Fatalf("sh -c should pass through, got %v", got)
+	}
+	if got := shellWrap([]string{"go", "test", "./pipeline/"}); got[2] != "'go' 'test' './pipeline/'" {
+		t.Fatalf("go test wrap = %v", got)
+	}
+	if got := shellWrap([]string{"grep", "it's"}); got[2] != `'grep' 'it'\''s'` {
+		t.Fatalf("single-quote escaping = %v", got)
+	}
+	// The wrapped `cd` must actually succeed under a real shell (R18 root cause:
+	// a bare ["cd", dir] exec failed with "executable not found", which the strong
+	// model misread as "the repo directory does not exist").
+	dir := t.TempDir()
+	w := shellWrap([]string{"sh", "-c", "cd " + dir + " && pwd"})
+	if out, err := exec.Command(w[0], w[1], w[2]).CombinedOutput(); err != nil || !strings.Contains(string(out), dir) {
+		t.Fatalf("wrapped cd failed: %v\n%s", err, out)
+	}
+}
+
+func TestDangerousBackgroundRejected(t *testing.T) {
+	for _, argv := range [][]string{
+		{"sh", "-c", "sleep 30 & wait"},
+		{"sh", "-c", "sleep 30 &1"},
+		{"sh", "-c", "nohup ./worker"},
+		{"sh", "-c", "setsid ./worker"},
+		{"&"},
+	} {
+		if dangerousCommand(argv) == "" {
+			t.Fatalf("background execution must be rejected: %v", argv)
+		}
+	}
+	// Legitimate chaining and fd redirection must still pass.
+	for _, argv := range [][]string{
+		{"sh", "-c", "go build ./... && go test ./..."},
+		{"sh", "-c", "go test ./... 2>&1"},
+	} {
+		if bad := dangerousCommand(argv); bad != "" {
+			t.Fatalf("legit command wrongly rejected (%s): %v", bad, argv)
+		}
 	}
 }

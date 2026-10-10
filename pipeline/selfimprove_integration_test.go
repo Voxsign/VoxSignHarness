@@ -145,11 +145,25 @@ func TestReactPlanMalformedAndMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, steps := range [][]reactPlanStep{
-		{{"A", "pending"}, {"B", "pending"}}, {{"A", "completed"}}, {{"A", "completed"}, {"B", "pending"}, {" b ", "pending"}}, {{"A", "completed"}, {"B\t", "pending"}},
+		{{"A", "pending"}, {"B", "pending"}}, {{"A", "completed"}, {"B", "pending"}, {" b ", "pending"}},
 	} {
 		if err := thread.updatePlan(steps); err == nil {
 			t.Errorf("accepted %+v", steps)
 		}
+	}
+	// A whitespace-only variant of an existing title is trimmed (m7) and treated as
+	// a valid update of that same step, not a duplicate.
+	if err := thread.updatePlan([]reactPlanStep{{"A", "completed"}, {"B\t", "pending"}}); err != nil {
+		t.Fatalf("whitespace variant of an existing step should update it: %v", err)
+	}
+	// R21: omitting an existing step in a full rewrite no longer rejects the
+	// update; the omitted step is retained with its prior status (no deletion).
+	if err := thread.updatePlan([]reactPlanStep{{"A", "completed"}}); err != nil {
+		t.Fatalf("omitting B should merge-retain it, got: %v", err)
+	}
+	if len(thread.plan) != 2 || thread.plan[0].Status != "completed" ||
+		thread.plan[1].Step != "B" || thread.plan[1].Status != "pending" {
+		t.Fatalf("omitted step was not retained as-is: %+v", thread.plan)
 	}
 	if err := (&reactThread{}).updatePlan([]reactPlanStep{{"A", "pending"}, {"B", "pending"}}); err != nil {
 		t.Fatal(err)
@@ -261,16 +275,22 @@ func TestSelfImproveRepairOutcomes(t *testing.T) {
 			case "parse-repair":
 				actions = []string{"bad", repair}
 			}
-			o, calls := selfImproveTestOptions(t, actions)
+			o, _ := selfImproveTestOptions(t, actions)
 			seq := 0
 			var receipts []contract.Receipt
-			result := o.selfImproveBuildTestGate(context.Background(), dir, t.TempDir(), []string{"x.go"}, true, map[string]string{abs: "package testrepo\nvar X = 0\n"}, thread, &receipts, &seq)
-			if result.passed != (scenario == "parse-repair") {
+			result := o.selfImproveBuildTestGate(context.Background(), dir, t.TempDir(), []string{"x.go"}, true, map[string]string{abs: "package testrepo\nvar X = 0\n"}, thread, &receipts, &seq, true)
+			// B1: a real repair passes only when the plan is complete or at its
+			// final in_progress step. A step left pending (never started) is not
+			// auto-closed, even with a code change, so pending-plan stays an honest
+			// failure; parse-repair (plan already completed) passes; failed and
+			// abandoned repairs stay failures.
+			wantPass := scenario == "parse-repair"
+			if result.passed != wantPass {
 				t.Fatalf("unexpected result %+v", result)
 			}
 			if scenario == "pending-plan" {
-				if *calls != 2 || !strings.Contains(result.detail, "plan:") || !strings.Contains(result.detail, "go test") {
-					t.Fatalf("plan blocked repair: %+v calls=%d", result, *calls)
+				if !strings.Contains(result.detail, "plan:") {
+					t.Fatalf("pending-plan must be honestly blocked by the plan gate: %+v", result)
 				}
 			}
 		})

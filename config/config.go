@@ -1,6 +1,6 @@
-// Package config    harness  node  (global / providers / routes / input / memory): 
-// in defaultvalue -> JSON   file(VHS_CONFIG ordefaultpath)->   change overwrite(   first ). 
-// this packageonlydependencytgtapprove , issafety module   base ;        . 
+// Package config    harness  node  (global / providers / routes / input / memory):
+// in defaultvalue -> JSON   file(VHS_CONFIG ordefaultpath)->   change overwrite(   first ).
+// this packageonlydependencytgtapprove , issafety module   base ;        .
 package config
 
 import (
@@ -14,15 +14,15 @@ import (
 )
 
 const (
-	// MockKind isin  line mock provider   kind(no key     , opensend/ showuse). 
+	// MockKind isin  line mock provider   kind(no key     , opensend/ showuse).
 	MockKind = "mock"
-	// OpenAIKind is OpenAI compatendpoint  kind. 
+	// OpenAIKind is OpenAI compatendpoint  kind.
 	OpenAIKind = "openai"
-	// LocalProvider isroutebyto"basely  ,  call LLM"    provider name(e.g. TIME). 
+	// LocalProvider isroutebyto"basely  ,  call LLM"    provider name(e.g. TIME).
 	LocalProvider = "local"
 )
 
-// Config is node   rootclose . 
+// Config is node   rootclose .
 type Config struct {
 	Global    Global     `json:"global"`
 	Providers []Provider `json:"providers"`
@@ -30,13 +30,13 @@ type Config struct {
 	Input     InputCfg   `json:"input"`
 	Memory    MemoryCfg  `json:"memory"`
 
-	// M2 newaddnode(SPACE domainnote table /      /    cache / mobile API serveservice). 
+	// M2 newaddnode(SPACE domainnote table /      /    cache / mobile API serveservice).
 	Spaces    SpacesCfg    `json:"spaces,omitempty"`
 	Contracts ContractsCfg `json:"contracts,omitempty"`
 	Cache     CacheCfg     `json:"cache,omitempty"`
 	Server    ServerCfg    `json:"server,omitempty"`
 
-	// Cloud  end form(VHS_MODE=cloud):      +  user  . nil charsegdefaultvaluesee CloudCfg.Default. 
+	// Cloud  end form(VHS_MODE=cloud):      +  user  . nil charsegdefaultvaluesee CloudCfg.Default.
 	Cloud          CloudCfg `json:"cloud,omitempty"`
 	ConfigPath     string   `json:"-"` //        filepath
 	Warnings       []string `json:"-"` //      (e.g.  API key)
@@ -44,51 +44,52 @@ type Config struct {
 	ForcedProvider string   `json:"-"` // env VHS_PROVIDER:  restrict provider name
 }
 
-// SpacesCfg domainnote table(.space.json manifest obj ). 
+// SpacesCfg domainnote table(.space.json manifest obj ).
 type SpacesCfg struct {
 	Dir string `json:"dir,omitempty"` // default <log_dir>/spaces
 }
 
-// ContractsCfg     obj (.contract.json; REGISTER_TOOL note   place). 
+// ContractsCfg     obj (.contract.json; REGISTER_TOOL note   place).
 type ContractsCfg struct {
 	Dir string `json:"dir,omitempty"` // default <log_dir>/contracts
 }
 
-// CacheCfg    cache. 
+// CacheCfg    cache.
 type CacheCfg struct {
 	Dir        string `json:"dir,omitempty"`         // default <log_dir>/cache
 	TTLSeconds int    `json:"ttl_seconds,omitempty"` // default 86400(1 day)
 }
 
-// ServerCfg mobile HTTP API face(in  + token auth). 
+// ServerCfg mobile HTTP API face(in  + token auth).
 type ServerCfg struct {
 	Token string `json:"token,omitempty"` // empty = only 127.0.0.1 base     token;  base       token(start   )
 	Bind  string `json:"bind,omitempty"`  // empty = get Global.Addr(default 127.0.0.1:8765)
-	// UseScheduler env VHS_USE_SCHEDULER(  , default false): true=C2 processincall  connectmanagetask  ; 
-	// false=   path charnode change(C0 EnableSerialGate  occur  bot). 
+	// UseScheduler env VHS_USE_SCHEDULER(  , default false): true=C2 processincall  connectmanagetask  ;
+	// false=   path charnode change(C0 EnableSerialGate  occur  bot).
 	UseScheduler bool `json:"use_scheduler,omitempty"`
 	// MaxConcurrent env VHS_MAX_CONCURRENT(default 1): call  andsendonlimit(sem   ). >1 time
-	//   Runner andsend(C1+ objtgtstate),  againbe C0 EnableSerialGate   ; =1 timecall   serial  . 
+	//   Runner andsend(C1+ objtgtstate),  againbe C0 EnableSerialGate   ; =1 timecall   serial  .
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 }
 
-// CloudCfg  end form num(VHS_MODE=cloud timestartuse). 
-//   see docs/ end    andsend   -20261004.md:    useri.e. user,     ,    JWT. 
+// CloudCfg  end form num(VHS_MODE=cloud timestartuse).
+//
+//	see docs/ end    andsend   -20261004.md:    useri.e. user,     ,    JWT.
 type CloudCfg struct {
 	GoogleClientID     string `json:"google_client_id,omitempty"`     // env VHS_GOOGLE_CLIENT_ID(Web application, code   use)
 	GoogleClientSecret string `json:"google_client_secret,omitempty"` // env VHS_GOOGLE_CLIENT_SECRET
-	// env VHS_GOOGLE_CLIENT_IDS:  idsplit  accept  client ID listtable(   aud use). 
-	// iOS classtype client  send  id_token aud is iOS client ID,   listinonly  ed  . 
-	// asemptytime back GoogleClientID(  ). 
+	// env VHS_GOOGLE_CLIENT_IDS:  idsplit  accept  client ID listtable(   aud use).
+	// iOS classtype client  send  id_token aud is iOS client ID,   listinonly  ed  .
+	// asemptytime back GoogleClientID(  ).
 	GoogleClientIDs string `json:"google_client_ids,omitempty"`
-	RedirectURI     string `json:"redirect_uri,omitempty"`         // env VHS_GOOGLE_REDIRECT_URI, default https://voicesign.ai/auth/callback
-	JWTSecret       string `json:"jwt_secret,omitempty"`           // env VHS_JWT_SECRET;   first start   occurbecomeandkeep ize <log_dir>/cloud/jwt-secret
-	FreeDailyTasks  int    `json:"free_daily_tasks,omitempty"`     //     daytask  , default 30
-	TrialDays       int    `json:"trial_days,omitempty"`           // new userbody   daynum, default 15(periodtimeby Prime  )
-	TokenTTLHours   int    `json:"token_ttl_hours,omitempty"`      //    JWT has period, default 10
+	RedirectURI     string `json:"redirect_uri,omitempty"`     // env VHS_GOOGLE_REDIRECT_URI, default https://voicesign.ai/auth/callback
+	JWTSecret       string `json:"jwt_secret,omitempty"`       // env VHS_JWT_SECRET;   first start   occurbecomeandkeep ize <log_dir>/cloud/jwt-secret
+	FreeDailyTasks  int    `json:"free_daily_tasks,omitempty"` //     daytask  , default 30
+	TrialDays       int    `json:"trial_days,omitempty"`       // new userbody   daynum, default 15(periodtimeby Prime  )
+	TokenTTLHours   int    `json:"token_ttl_hours,omitempty"`  //    JWT has period, default 10
 }
 
-// Global global num. 
+// Global global num.
 type Global struct {
 	LogDir             string `json:"log_dir"`               // traceetcday obj , default ~/.voicesign/harness
 	Addr               string `json:"addr"`                  // basely HTTP listenly , default 127.0.0.1:8765
@@ -98,27 +99,27 @@ type Global struct {
 	MaxActionTimeoutMs int    `json:"max_action_timeout_ms"` //    time onlimit, default 120000
 	AllowHighRisk      bool   `json:"allow_high_risk"`       //       (default false)
 	MaxOutputChars     int    `json:"max_output_chars"`      // back  out disconnect, default 4000
-	// FastResponseMs fast    value: fast etc"fast type"callusewall-clock ed  asslow  , 
-	//   connect  butis  model name error disconnect ( split  slow/    / num cur). 
-	// default 10000ms; <=0   izeas 10000. 
+	// FastResponseMs fast    value: fast etc"fast type"callusewall-clock ed  asslow  ,
+	//   connect  butis  model name error disconnect ( split  slow/    / num cur).
+	// default 10000ms; <=0   izeas 10000.
 	FastResponseMs int `json:"fast_response_ms"`
-	// CloudMode  end formopenclose: env VHS_MODE=cloud(    + user  ); empty/its value=basely form. 
+	// CloudMode  end formopenclose: env VHS_MODE=cloud(    + user  ); empty/its value=basely form.
 	CloudMode bool `json:"cloud_mode,omitempty"`
 }
 
-// Provider    typeendpoint(OpenAI compator mock). same  close voice    provider( same model) nowby scenario  type. 
+// Provider    typeendpoint(OpenAI compator mock). same  close voice    provider( same model) nowby scenario  type.
 type Provider struct {
 	Name           string         `json:"name"`
 	Kind           string         `json:"kind"`                      // openai | mock
-	Endpoint       string         `json:"endpoint"`                  // openai   
-	Model          string         `json:"model"`                     // openai   
+	Endpoint       string         `json:"endpoint"`                  // openai
+	Model          string         `json:"model"`                     // openai
 	APIKey         string         `json:"api_key,omitempty"`         //  use VHS_API_KEY overwrite
 	ResponseFormat *bool          `json:"response_format,omitempty"` // nil = default true( require json_object  form)
 	TimeoutMs      int            `json:"timeout_ms,omitempty"`      // 0 = use Global.LLMTimeoutMs
 	Params         map[string]any `json:"params,omitempty"`          // byendpoint  (e.g. reasoning_effort)
 }
 
-// Route   routeby: by intent + close word  in, first infirst , Default  bot. 
+// Route   routeby: by intent + close word  in, first infirst , Default  bot.
 type Route struct {
 	Name     string   `json:"name"`
 	Intent   []string `json:"intent,omitempty"`    //  in contract.Intent.Intent classdiff
@@ -128,7 +129,7 @@ type Route struct {
 	Default  bool     `json:"default,omitempty"`   //  botrouteby
 }
 
-// InputCfg  in    num. 
+// InputCfg  in    num.
 type InputCfg struct {
 	IntentConf     float64  `json:"intent_conf,omitempty"`     // intent    value, default 0.6
 	LowConfAction  string   `json:"low_conf_action,omitempty"` // ask | model, default ask(model   orchestrate aftercontinue   )
@@ -136,17 +137,19 @@ type InputCfg struct {
 	Fillers        []string `json:"fillers,omitempty"`         // overwritedefault fillwordtable
 }
 
-// MemoryCfg     num. 
+// MemoryCfg     num.
 type MemoryCfg struct {
 	Dir        string `json:"dir,omitempty"`         // default ~/.voicesign/harness/memory
 	FactsLimit int    `json:"facts_limit,omitempty"` //   notein numonlimit, default 20
 }
 
-// Default returnbackin default  (    §6  showexample providers/routes). 
-// note :  occurobj (Memory/Spaces/Contracts/Cache   Dir) place empty, 
+// Default returnbackin default  (    §6  showexample providers/routes).
+// note :  occurobj (Memory/Spaces/Contracts/Cache   Dir) place empty,
 // by Load->validate()   end Global.LogDir   after    --
-//  then VHS_LOG_DIR overwrite LogDir time occurobj  stop   default ~/.voicesign/harness/*, 
-// env      pipenote table/cache/  readwrite useuser  obj (M3 config bug fix ). 
+//
+//	then VHS_LOG_DIR overwrite LogDir time occurobj  stop   default ~/.voicesign/harness/*,
+//
+// env      pipenote table/cache/  readwrite useuser  obj (M3 config bug fix ).
 func Default() Config {
 	home, _ := os.UserHomeDir()
 	logDir := filepath.Join(home, ".voicesign", "harness")
@@ -166,16 +169,22 @@ func Default() Config {
 		Providers: []Provider{
 
 			// 2026-10-03  call  : use_max_completion_tokens  astop charseg   aiops  close 502(0.9s)
-			// --alreadyfrom Params   ; MaxTokens onlimitalso   typeusefull token   close 60s 504, harness   onlimit. 
+			// --alreadyfrom Params   ; MaxTokens onlimitalso   typeusefull token   close 60s 504, harness   onlimit.
 			{Name: "center", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "fast", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
 			{Name: "strong", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-v4-pro", ResponseFormat: &trueVal},
+			// D7 model tiering: explicit top-tier coding model that reliably follows
+			// the ReAct JSON protocol. When the deepseek-* balance is exhausted the
+			// gateway degrades requests to a Claude Code "don't ask" sandbox persona
+			// that refuses to run tools; an explicitly-selected claude model
+			// (model_choice_source=explicit) answers as a normal model and complies.
+			{Name: "sonnet", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "claude-sonnet-5-5", ResponseFormat: &trueVal},
 			{Name: "deepseek", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "deepseek-flash", ResponseFormat: &trueVal},
-				//  typecall (docs/ typecall -  .md): gpt-mini = lineon   bot(gpt-4o-mini    10s  use); 
-				// deepseek  listif 402    -> ChatWithFallback   i.e. down ->     gpt-mini,  again  . 
-				{Name: "gpt-mini", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
-				// 2026-10-03   chain: gpt4o(gpt-4o) call   6s/3461 char occurbecomebecome ,      at gpt-4o-mini. 
-				{Name: "gpt4o", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o", ResponseFormat: &trueVal},
+			//  typecall (docs/ typecall -  .md): gpt-mini = lineon   bot(gpt-4o-mini    10s  use);
+			// deepseek  listif 402    -> ChatWithFallback   i.e. down ->     gpt-mini,  again  .
+			{Name: "gpt-mini", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o-mini", ResponseFormat: &trueVal},
+			// 2026-10-03   chain: gpt4o(gpt-4o) call   6s/3461 char occurbecomebecome ,      at gpt-4o-mini.
+			{Name: "gpt4o", Kind: OpenAIKind, Endpoint: "https://aiops.voxsign.ai/api/model/chat", Model: "gpt-4o", ResponseFormat: &trueVal},
 
 			{Name: "openai", Kind: OpenAIKind, Endpoint: "https://api.openai.com/v1", Model: "gpt-5.4-mini", ResponseFormat: &trueVal},
 			{Name: "gemini", Kind: OpenAIKind, Endpoint: "https://generativelanguage.googleapis.com/v1beta/openai", Model: "gemini-3.8-flash", ResponseFormat: &trueVal},
@@ -203,8 +212,9 @@ func Default() Config {
 	}
 }
 
-// Load resolve   : defaultvalue ->   file(VHS_CONFIG, or ~/.voicesign/harness.json, ./voicesign-harness.json)->   change . 
-//  formrefer  configPath butfile store  ->   ;   formrefer anddefaultpathall store  ->  defaultvalue. 
+// Load resolve   : defaultvalue ->   file(VHS_CONFIG, or ~/.voicesign/harness.json, ./voicesign-harness.json)->   change .
+//
+//	formrefer  configPath butfile store  ->   ;   formrefer anddefaultpathall store  ->  defaultvalue.
 func Load(configPath string) (Config, error) {
 	cfg := Default()
 	if configPath == "" {
@@ -227,9 +237,9 @@ func Load(configPath string) (Config, error) {
 		if err != nil {
 			return cfg, fmt.Errorf("failed to read config file %s: %w", configPath, err)
 		}
-		// firstresolve to raw map againbynodeoverwrite:   node(providers/routes)   body  , 
-		//    encoding/json to empty  "thenly usealreadyhas  ,  charsegoverwrite"  defaultvalue  
-		// (e.g.default provider center   endpoint  infilevoice   provider). 
+		// firstresolve to raw map againbynodeoverwrite:   node(providers/routes)   body  ,
+		//    encoding/json to empty  "thenly usealreadyhas  ,  charsegoverwrite"  defaultvalue
+		// (e.g.default provider center   endpoint  infilevoice   provider).
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(data, &raw); err != nil {
 			return cfg, fmt.Errorf("failed to parse config file %s: %w", configPath, err)
@@ -286,7 +296,7 @@ func Load(configPath string) (Config, error) {
 		cfg.ConfigPath = configPath
 	}
 
-	//   change overwrite(onlycuralready  ). 
+	//   change overwrite(onlycuralready  ).
 	// 2026-10-08 (harness distillation): per-provider explicit api_key in the config file WINS over
 	// the env override — multi-provider setups (e.g. local on-prem qwen + cloud classifier) need
 	// different keys per provider. Providers WITHOUT an explicit key still inherit VHS_API_KEY/AIOPS_KEY.
@@ -297,7 +307,7 @@ func Load(configPath string) (Config, error) {
 			}
 		}
 	} else if v := os.Getenv("AIOPS_KEY"); v != "" {
-		// 2026-10-04 compat change name( before harness   use AIOPS_KEY   closeread Key). 
+		// 2026-10-04 compat change name( before harness   use AIOPS_KEY   closeread Key).
 		for i := range cfg.Providers {
 			if cfg.Providers[i].APIKey == "" {
 				cfg.Providers[i].APIKey = v
@@ -319,7 +329,7 @@ func Load(configPath string) (Config, error) {
 	envString(&cfg.Server.Token, "VHS_TOKEN")
 	envBool(&cfg.Server.UseScheduler, "VHS_USE_SCHEDULER")
 	envInt(&cfg.Server.MaxConcurrent, "VHS_MAX_CONCURRENT")
-	//  end form: VHS_MODE=cloud startuse    / user/  . 
+	//  end form: VHS_MODE=cloud startuse    / user/  .
 	if os.Getenv("VHS_MODE") == "cloud" {
 		cfg.Global.CloudMode = true
 	}
@@ -332,7 +342,7 @@ func Load(configPath string) (Config, error) {
 	envInt(&cfg.Cloud.TrialDays, "VHS_TRIAL_DAYS")
 	envInt(&cfg.Cloud.TokenTTLHours, "VHS_TOKEN_TTL_HOURS")
 
-	// verifyand  ize. 
+	// verifyand  ize.
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}
@@ -404,7 +414,7 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.Server.Bind) == "" {
 		c.Server.Bind = c.Global.Addr
 	}
-	//  base       token(in    boundary, SPEC v2    32  decide: listen   + token). 
+	//  base       token(in    boundary, SPEC v2    32  decide: listen   + token).
 	if c.Server.Token == "" && !isLocalhost(c.Server.Bind) {
 		c.Warnings = append(c.Warnings,
 			fmt.Sprintf("server binds %s but no token (VHS_TOKEN) set: reachable internally without auth; set a token", c.Server.Bind))
@@ -465,7 +475,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// ProviderByName byname   provider. 
+// ProviderByName byname   provider.
 func (c *Config) ProviderByName(name string) (Provider, bool) {
 	for _, p := range c.Providers {
 		if p.Name == name {
@@ -475,20 +485,22 @@ func (c *Config) ProviderByName(name string) (Provider, bool) {
 	return Provider{}, false
 }
 
-// IsMockProvider    provider is asin  mock. 
+// IsMockProvider    provider is asin  mock.
 func (c *Config) IsMockProvider(name string) bool {
 	p, ok := c.ProviderByName(name)
 	return ok && p.Kind == MockKind
 }
 
-// DiagProvider returnback name=="diag"  "     type"provider(error    ②  ). 
-//    (ok=false)->  disconnect  open  ed,  chain as change. diag.Endpoint      overwrite
-// as typein  use disconnectendpoint;   i.e. typein  OpenAI compat  . 
+// DiagProvider returnback name=="diag"  "     type"provider(error    ②  ).
+//
+//	(ok=false)->  disconnect  open  ed,  chain as change. diag.Endpoint      overwrite
+//
+// as typein  use disconnectendpoint;   i.e. typein  OpenAI compat  .
 func (c *Config) DiagProvider() (Provider, bool) {
 	return c.ProviderByName("diag")
 }
 
-// EffectiveMaxTurns returnbackroutebyoccur   max_turns(0 = local   ). 
+// EffectiveMaxTurns returnbackroutebyoccur   max_turns(0 = local   ).
 func (c *Config) EffectiveMaxTurns(r Route) int {
 	if r.Provider == LocalProvider {
 		return 0
@@ -499,12 +511,12 @@ func (c *Config) EffectiveMaxTurns(r Route) int {
 	return c.Global.MaxTurnsDefault
 }
 
-// EffectiveResponseFormat returnback provider occur   json_object openclose(nil = true). 
+// EffectiveResponseFormat returnback provider occur   json_object openclose(nil = true).
 func (c *Config) EffectiveResponseFormat(p Provider) bool {
 	return p.ResponseFormat == nil || *p.ResponseFormat
 }
 
-// EffectiveTimeoutMs returnback provider occur  calluse time. 
+// EffectiveTimeoutMs returnback provider occur  calluse time.
 func (c *Config) EffectiveTimeoutMs(p Provider) int {
 	if p.TimeoutMs > 0 {
 		return p.TimeoutMs
@@ -512,7 +524,7 @@ func (c *Config) EffectiveTimeoutMs(p Provider) int {
 	return c.Global.LLMTimeoutMs
 }
 
-// DictionaryPath returnbackoccur    word path. 
+// DictionaryPath returnbackoccur    word path.
 func (c *Config) DictionaryPath() string {
 	if strings.TrimSpace(c.Input.DictionaryPath) != "" {
 		return c.Input.DictionaryPath
@@ -520,27 +532,27 @@ func (c *Config) DictionaryPath() string {
 	return filepath.Join(c.Memory.Dir, "dictionary.json")
 }
 
-// SpacesDir returnbackoccur  domainnote tableobj (.space.json). 
+// SpacesDir returnbackoccur  domainnote tableobj (.space.json).
 func (c *Config) SpacesDir() string {
 	return c.Spaces.Dir
 }
 
-// ContractsDir returnbackoccur      obj (.contract.json). 
+// ContractsDir returnbackoccur      obj (.contract.json).
 func (c *Config) ContractsDir() string {
 	return c.Contracts.Dir
 }
 
-// CacheDir returnbackoccur     cacheobj . 
+// CacheDir returnbackoccur     cacheobj .
 func (c *Config) CacheDir() string {
 	return c.Cache.Dir
 }
 
-// ServerBind returnbackoccur  mobile API listenly . 
+// ServerBind returnbackoccur  mobile API listenly .
 func (c *Config) ServerBind() string {
 	return c.Server.Bind
 }
 
-// isLocalhost    host is asback ly (127.0.0.1 / ::1 / localhost / empty host). 
+// isLocalhost    host is asback ly (127.0.0.1 / ::1 / localhost / empty host).
 func isLocalhost(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

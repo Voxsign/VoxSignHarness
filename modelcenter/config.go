@@ -1,12 +1,13 @@
-// Package modelcenter --  typein   calluse     andcalluse(ASR-MODEL-02). 
+// Package modelcenter --  typein   calluse     andcalluse(ASR-MODEL-02).
 //
-//   name**  **: default / diagnose / learn(L1); bot  type**from  read**,  change. 
-// base onlystartuse default( type `deepseek-flash`, ASR-EXT-006 §2   fixpos); 
-// diagnose / learn    owner refer  type -> `enabled:false`(fail-closed, C3). 
+//	name**  **: default / diagnose / learn(L1); bot  type**from  read**,  change.
 //
-// safesafety  (ASR-EXT-006 §4): 
-//   - key **onlyfrom  change  / .env read**,     code,   writeday /commit/    ; 
-//   -   is JSON(   use YAML). 
+// base onlystartuse default( type `deepseek-flash`, ASR-EXT-006 §2   fixpos);
+// diagnose / learn    owner refer  type -> `enabled:false`(fail-closed, C3).
+//
+// safesafety  (ASR-EXT-006 §4):
+//   - key **onlyfrom  change  / .env read**,     code,   writeday /commit/    ;
+//   - is JSON(   use YAML).
 package modelcenter
 
 import (
@@ -17,7 +18,7 @@ import (
 	"strings"
 )
 
-// Channel is       name(L1). 
+// Channel is       name(L1).
 type Channel string
 
 const (
@@ -26,17 +27,18 @@ const (
 	ChannelResearch Channel = "research"
 	ChannelDiagnose Channel = "diagnose"
 	ChannelLearn    Channel = "learn"
-	// ChannelLocal (R9-D7): the local model hub — 192.168.8.201 Strata qwen.
+	// ChannelLocal (R9-D7): the local, private model hub (on-LAN Strata Qwen; its
+	// endpoint is supplied via deployment-private config, never hardcoded here).
 	// Local tasks call the local hub, external tasks call the aiops gateway.
 	ChannelLocal Channel = "local"
 )
 
-// Channels returnbacksafety     name. 
+// Channels returnbacksafety     name.
 func AllChannels() []Channel {
 	return []Channel{ChannelDefault, ChannelPlan, ChannelResearch, ChannelDiagnose, ChannelLearn, ChannelLocal}
 }
 
-// ChannelConfig is       . 
+// ChannelConfig is       .
 type ChannelConfig struct {
 	Enabled        bool   `json:"enabled"`
 	Provider       string `json:"provider"`
@@ -44,27 +46,27 @@ type ChannelConfig struct {
 	TimeoutMS      int    `json:"timeout_ms"`
 	MaxConcurrency int    `json:"max_concurrency"`
 	WriteBack      bool   `json:"write_back"` // L2: onlyhas learn  as true(C2)
-	// Tier is**  **(fast/quality): and"useway(  )"splitopen,   pipe     same list. 
+	// Tier is**  **(fast/quality): and"useway(  )"splitopen,   pipe     same list.
 	Tier string `json:"tier"`
 }
 
-// GatewayConfig is  in (AIOps)  . ChatPath use**  path**,   (A5). 
+// GatewayConfig is  in (AIOps)  . ChatPath use**  path**,   (A5).
 type GatewayConfig struct {
 	BaseURL   string `json:"base_url"`
 	ChatPath  string `json:"chat_path"`
 	APIKeyEnv string `json:"api_key_env"` // onlystore**change name**,  store key
 }
 
-// Config is typein   . 
+// Config is typein   .
 type Config struct {
 	ContractVersion string        `json:"contract_version"`
 	Gateway         GatewayConfig `json:"gateway"`
-	// Tiers is   ->  type id( "      " ⇒ onlymodify  ). 
+	// Tiers is   ->  type id( "      " ⇒ onlymodify  ).
 	Tiers    map[string]string        `json:"tiers"`
 	Channels map[string]ChannelConfig `json:"channels"`
 }
 
-// Load read JSON   andverify(C1–C5). YAML   reject(C4). 
+// Load read JSON   andverify(C1–C5). YAML   reject(C4).
 func Load(path string) (Config, error) {
 	if !strings.EqualFold(filepath.Ext(path), ".json") {
 		return Config{}, fmt.Errorf("C4 violation: config must be .json (YAML explicitly disallowed): %s", path)
@@ -84,15 +86,15 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// Validate    ASR-MODEL-02   C1–C5(fail-closed:    i.e.rejectstart ). 
-// TierQuality is   name( data: default   **  **referto ). 
+// Validate    ASR-MODEL-02   C1–C5(fail-closed:    i.e.rejectstart ).
+// TierQuality is   name( data: default   **  **referto ).
 const TierQuality = "quality"
 
-// TierFast isfast  name. 
+// TierFast isfast  name.
 const TierFast = "fast"
 
-// ResolveModel returnback      use  type id:    form model_id  first,  thenget tier. 
-// **fail-closed**:  use store   tier ⇒   ( allow  getdefault). 
+// ResolveModel returnback      use  type id:    form model_id  first,  thenget tier.
+// **fail-closed**:  use store   tier ⇒   ( allow  getdefault).
 func (c Config) ResolveModel(ch Channel) (string, error) {
 	cc, ok := c.Channels[string(ch)]
 	if !ok {
@@ -112,7 +114,7 @@ func (c Config) ResolveModel(ch Channel) (string, error) {
 }
 
 func (c Config) Validate() error {
-	// C1:   name  is  ,       allreject. 
+	// C1:   name  is  ,       allreject.
 	for name, cc := range c.Channels {
 		if cc.Tier != "" {
 			if _, ok := c.Tiers[cc.Tier]; !ok {
@@ -120,7 +122,7 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	// ⑤ **split    ize**: default     referto quality  . 
+	// ⑤ **split    ize**: default     referto quality  .
 	if cc, ok := c.Channels[string(ChannelDefault)]; ok && cc.Tier == TierQuality {
 		return fmt.Errorf("C6 violation: default channel must not point to %s tier (even regular calls would use the most expensive -> tiering broken)", TierQuality)
 	}
@@ -132,7 +134,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("C1 violation: missing channel %q", ch)
 		}
 	}
-	// C2: onlyhas learn  bywriteback. 
+	// C2: onlyhas learn  bywriteback.
 	if c.Channels[string(ChannelDefault)].WriteBack {
 		return fmt.Errorf("C2 violation: default.write_back must be false")
 	}
@@ -142,22 +144,22 @@ func (c Config) Validate() error {
 	if !c.Channels[string(ChannelLearn)].WriteBack {
 		return fmt.Errorf("C2 violation: learn.write_back must be true")
 	}
-	// C3: enabled ⇒ model_id  emptyand  TBD(no model_id  calluse  attribution). 
+	// C3: enabled ⇒ model_id  emptyand  TBD(no model_id  calluse  attribution).
 	for _, ch := range AllChannels() {
 		cc := c.Channels[string(ch)]
 		if !cc.Enabled {
 			continue
 		}
-		//  type by model_id refer , **or**by tier resolve (  +useway  ). 
+		//  type by model_id refer , **or**by tier resolve (  +useway  ).
 		if (strings.TrimSpace(cc.ModelID) == "" || strings.EqualFold(cc.ModelID, "TBD")) && cc.Tier == "" {
 			return fmt.Errorf("C3 violation: channel %q enabled but has neither model_id nor tier (must not enable without a model)", ch)
 		}
 	}
-	// C5: learn  writeer. 
+	// C5: learn  writeer.
 	if c.Channels[string(ChannelLearn)].MaxConcurrency != 1 {
 		return fmt.Errorf("C5 violation: learn.max_concurrency must be 1 (single writer)")
 	}
-	// in    calluse. 
+	// in    calluse.
 	if strings.TrimSpace(c.Gateway.BaseURL) == "" || strings.TrimSpace(c.Gateway.ChatPath) == "" {
 		return fmt.Errorf("incomplete gateway config: gateway.base_url / gateway.chat_path are required")
 	}
@@ -167,8 +169,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// LoadDotEnv read `.env`(KEY=VALUE  )and**only fill   **   change . 
-// returnbackfillfill num; **  returnback,   or     value**. 
+// LoadDotEnv read `.env`(KEY=VALUE  )and**only fill   **   change .
+// returnbackfillfill num; **  returnback,   or     value**.
 func LoadDotEnv(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

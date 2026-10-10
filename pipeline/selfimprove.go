@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/scanner"
+	"go/token"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +35,89 @@ const (
 	selfImproveMaxFix    = 2  // extra repair turns after a failed build/test gate
 	selfImproveObsCap    = 1800
 	selfImproveBuildSecs = 180
+	// D7 model tiering: after this many read-only research/plan turns on a
+	// code-change objective without landing code, escalate the ReAct loop from
+	// the local Qwen to the external strong model so the feature actually gets
+	// written (small models otherwise loop on exploration or cosmetic edits).
+	selfImproveStrongAfterResearch = 3
+	// Token budgets per tier. The local flash Qwen has an 8192 total context, so
+	// read-only decision turns (one minimal action JSON, no "thought") get a small
+	// completion budget; the external strong model, which actually writes feature
+	// code, gets a large one. fit_max_tokens is also set server-side for local.
+	selfImproveLocalMaxTokens  = 1500
+	selfImproveStrongMaxTokens = 8000
 )
+
+// Model tiers for the self-improvement loop. Research, planning and read-only
+// exploration run on the cheap, private on-LAN Qwen; functional code edits and
+// verification-gate repair run on the external strong model.
+type selfImproveTier string
+
+const (
+	tierLocal  selfImproveTier = "local"  // on-LAN Qwen (private endpoint via VHS_EMAIL_STRATA), never via the aiops gateway
+	tierStrong selfImproveTier = "strong" // external strong model via the aiops gateway
+)
+
+// pickSelfImproveTier is a pure, unit-testable tier decision. Research-only
+// objectives stay local throughout; a code-change objective stays local for the
+// opening research turns, then escalates to strong once code has been touched or
+// enough research has accumulated. Once strong it stays strong (hysteresis).
+func pickSelfImproveTier(requiresEdit, alreadyStrong bool, researchTurns, touchedGo int) selfImproveTier {
+	if alreadyStrong {
+		return tierStrong
+	}
+	if requiresEdit && (touchedGo > 0 || researchTurns >= selfImproveStrongAfterResearch) {
+		return tierStrong
+	}
+	return tierLocal
+}
+
+// forceBuildNudge reports whether read-only exploration must be stopped and the
+// model forced into the planning/editing phase: the research turn budget has been
+// used on a code-change task but no Go file has been touched yet. Both small and
+// strong models otherwise keep issuing read-only run/read actions instead of
+// landing the improvement. The nudge is shown at most a few times.
+func forceBuildNudge(requiresEdit bool, touchedGo, researchTurns, nudges int) bool {
+	return requiresEdit && touchedGo == 0 &&
+		researchTurns >= selfImproveStrongAfterResearch && nudges < 3
+}
+
+// selfImproveChat routes one ReAct turn to the selected model tier, with
+// cross-tier fallback so a missing credential or an unreachable endpoint never
+// hard-fails the self-improvement channel:
+//   - local:  direct on-LAN Qwen first, then the registry "fast" provider (keeps
+//     CI/sandbox runs without STRATA_API_KEY working against a test server);
+//   - strong: registry "strong" then "fast", finally the local Qwen.
+func (o *Options) selfImproveChat(ctx context.Context, tier selfImproveTier, msgs []contract.Message) (string, error) {
+	if tier == tierStrong {
+		req := provider.ChatRequest{Messages: msgs, MaxTokens: selfImproveStrongMaxTokens, ResponseFormat: noJSON()}
+		// Prefer the explicit compliant coding model; fall back to the deepseek
+		// strong/fast providers, then finally the local on-LAN Qwen.
+		resp, err := o.chatWithFallback(ctx, []string{"sonnet", "strong", "fast"}, req)
+		if err == nil {
+			return resp.Content, nil
+		}
+		// External tier unreachable: last resort is the local Qwen (small budget).
+		if c, e := o.strataChatMessages(ctx, msgs, selfImproveLocalMaxTokens); e == nil {
+			log.Printf("[selfimprove] strong tier unavailable (%v); used local qwen", err)
+			return c, nil
+		}
+		return "", fmt.Errorf("self-improve strong tier unavailable (strong/fast/local all failed): %w", err)
+	}
+	// Local first, with a small completion budget that fits the 8192 context.
+	c, err := o.strataChatMessages(ctx, msgs, selfImproveLocalMaxTokens)
+	if err == nil {
+		return c, nil
+	}
+	resp, ferr := o.chatWithFallback(ctx, []string{"fast"}, provider.ChatRequest{
+		Messages: msgs, MaxTokens: selfImproveStrongMaxTokens, ResponseFormat: noJSON(),
+	})
+	if ferr != nil {
+		return "", fmt.Errorf("self-improve local tier unavailable (strata: %v; fast: %v)", err, ferr)
+	}
+	log.Printf("[selfimprove] local qwen unavailable (%v); used registry fast", err)
+	return resp.Content, nil
+}
 
 // selfImproveRepo resolves the working copy the loop is allowed to edit.
 func selfImproveRepo() string {
@@ -53,13 +138,16 @@ func wantsCodeChange(objective string) bool {
 	for _, kw := range []string{
 		"改进", "修改", "改你", "改自", "优化你", "升级你", "重构", "实现", "修复",
 		"改代码", "改后端", "改 pipeline", "改pipeline", "落地",
-		"improve", "modify", "implement", "refactor", "fix ", "edit your", "change your",
+		"improve", "modify", "implement", "refactor", "fix", "edit", "change", "add", "create", "build", "optimize", "update", "新增", "添加", "编写",
 	} {
 		if strings.Contains(strings.ToLower(objective), strings.ToLower(kw)) {
 			return true
 		}
 	}
-	return false
+	// Unknown wording is not permission to claim success without code. Only
+	// an explicit research-only objective may use the no-edit completion path.
+	n := strings.ToLower(strings.TrimSpace(objective))
+	return n != "research" && n != "research only" && n != "research-only" && n != "仅研究" && n != "只研究"
 }
 
 // reactAction is one model-chosen tool call.
@@ -171,7 +259,7 @@ func selfImproveSystemPrompt(repo, objective string) string {
 		"你的源码仓库（唯一允许修改的目录，也是所有命令的工作目录）：" + repo + "\n" +
 
 		"每一轮你只能输出一个最小 JSON 动作（不要 Markdown、不要解释、不要多个动作、不要 thought 字段）：\n" +
-		"- 运行命令研究（command 为字符串数组，工作目录锁定仓库；读仓库外资料用绝对路径或 sh -c，例如 [\"sh\",\"-c\",\"ls -la $HOME/.codex\"]）：\n" +
+		"- 运行命令研究（command 为字符串数组，统一在 /bin/sh 中、且工作目录已经是仓库根 " + repo + " 执行；仓库确实存在，严禁用 cd 去确认或切换目录——cd 是 shell 内建，裸 [\"cd\",...] 会报 executable not found 并误导你以为仓库不存在；读仓库外资料用绝对路径，复合命令（&&、管道、重定向）一律用 [\"sh\",\"-c\",\"...\"]，例如 [\"sh\",\"-c\",\"ls -la $HOME/.codex\"]）：\n" +
 		"  {\"tool\":\"run\",\"command\":[\"sh\",\"-c\",\"grep -rn SELF_IMPROVE --include=*.go . | head -30\"]}\n" +
 		"- 读文件：{\"tool\":\"read\",\"path\":\"pipeline/pipeline.go\"}\n" +
 		"- 精准修改（首选，old 必须与文件内容逐字一致，先用 read 取得原文）：\n" +
@@ -181,14 +269,15 @@ func selfImproveSystemPrompt(repo, objective string) string {
 		"- 任务完成：{\"done\":true,\"summary\":\"你研究了什么、蒸馏出哪些改进点、实际改了什么、为什么\",\"changed\":[\"相对路径\"]}\n\n" +
 		"纪律（必须遵守）：\n" +
 		"1. 先研究后动手：用少量精准的 run/read 查看研究对象（如 $HOME/.codex、$HOME/.claude、claude/codex 二进制 --help）和你自己的 Go 源码，再改。\n" +
-		"2. 只改后端 Go（.go）及必要的 .md/.mod/.sum/.yaml/.sh/.json；严禁修改前端/iOS 文件（.swift/.html/.jsx/.tsx/.vue/.storyboard 等）。\n" +
+		"2. 只改后端 Go（.go）及必要的 .md/.mod/.sum/.yaml/.sh/.json；改进应落在核心 pipeline/ 包（编排/执行/自改后端），不要改 asr/、doccontract/ 等外围包；严禁修改前端/iOS 文件（.swift/.html/.jsx/.tsx/.vue/.storyboard 等）。\n" +
 		"3. 修改已有文件一律用 replace 做最小改动：old/new 各不超过 40 行，old 必须先用 read 取得、在文件中唯一且逐字匹配；write 仅用于新建文件且不超过 80 行。绝不在单个动作里输出整个大型文件（会被截断导致失败）。\n" +
 		"4. 不要运行 git commit/push；改完系统会自动执行 go build 与 go test 验证。\n" +
 		"5. 禁止危险命令（rm -rf /、sudo、关机、curl/wget 外发、git push/reset --hard 等），违者该步被拒绝；被拒后换等价安全命令，不要放弃。\n" +
 		"6. 每一步都要朝目标推进；研究命令必须精准限量（grep 后接 head、看片段用 sed -n 'a,bp'，不要 cat 整个文件或 ls 整个目录，侦察信息已提供）。宣称 done 前必须已完成研究、产出至少一个具体后端改进，并确认编译/测试由系统验证。\n" +
 		"7. 诚实：若确实无法完成，输出 done 并在 summary 如实说明卡在哪、还缺什么，绝不假装成功。\n" +
 		"8. 严禁输出 thought/reasoning/分析等任何长文本字段（简短结构化 plan.steps 除外），也不要在 JSON 外加解释；你的全部推理只保留在最后 done.summary。JSON 越短越好，长推理会撑爆输出导致动作被截断。\n" +
-		"9. 改动必须改变后端的运行时行为或逻辑（新增能力、修复缺陷、改进执行流程），严禁只改注释、排版、文档字符串、空行或重命名来充数。若你无法在保证编译测试通过的前提下安全落地一个真正的功能改进，就输出 done 并在 summary 诚实说明卡点，绝不用表面改动假装完成。"
+		"9. 改动必须改变后端的运行时行为或逻辑（新增能力、修复缺陷、改进执行流程），严禁只改注释、排版、文档字符串、空行或重命名来充数。若你无法在保证编译测试通过的前提下安全落地一个真正的功能改进，就输出 done 并在 summary 诚实说明卡点，绝不用表面改动假装完成。\n" +
+		"10. 研究要快、落地要坚决：用 3-5 个精准研究命令看清研究对象与你自己的源码后，立即用 plan 把研究步骤标 completed、转入 replace/write 真正改码，禁止反复只读探索或反复验证仓库是否存在。写代码只能通过 write/replace 动作提交，绝不把代码或大段解释贴在普通回复里（那样动作 JSON 会解析失败）；一次只发一个动作，内容太长就拆成多个 replace。"
 }
 
 // selfImproveRecon auto-runs read-only reconnaissance before the loop so the small
@@ -220,6 +309,12 @@ func (o *Options) selfImproveRecon(repo string) string {
 // execSelfImprove runs the autonomous ReAct loop and then the build/test gate.
 func (o *Options) execSelfImprove(ctx context.Context, it contract.Intent, logDir string) []contract.Receipt {
 	repo := selfImproveRepo()
+	// Canonicalize once (on macOS /tmp is a symlink to /private/tmp). Otherwise
+	// withinRepo returns /private/... abs paths while repo stays /tmp/..., which
+	// corrupts relPath changed entries and makes snapshot lookups miss (M1).
+	if resolved, err := resolveEditPath(repo); err == nil {
+		repo = resolved
+	}
 	var recv []contract.Receipt
 	seq := 0
 	add := func(tool string, ok bool, out, errStr string) {
@@ -252,26 +347,33 @@ func (o *Options) execSelfImprove(ctx context.Context, it contract.Intent, logDi
 	add("selfimprove.recon", true, "已自动收集仓库地图与研究对象清单（上下文工程：开局即给全局视图）", "")
 
 	touchedGo := map[string]bool{}
-	codeSnap := map[string]string{} // abs path -> original Go source (lazy, before first edit)
+	codeSnap, snapErr := snapshotRepoGo(repo)
+	if snapErr != nil {
+		add("selfimprove", false, "", "cannot snapshot Go source: "+snapErr.Error())
+		return recv
+	}
 	badTurns := 0
 	earlyDoneRejects := 0
 	planDoneRejects := 0
 	requiresEdit := wantsCodeChange(objective)
+	researchTurns := 0    // successful read-only run/read actions (drives tier escalation)
+	strongOn := false     // hysteresis: once escalated to strong, stay there
+	forceBuildNudges := 0 // count of "stop researching, now plan/edit" nudges
+	doneSignaled := false // model declared done with edits; gate is the completion authority
 	finalSummary := ""
 	completed := false
 
 	for step := 1; step <= selfImproveMaxSteps; step++ {
-		resp, err := o.chatWithFallback(ctx, []string{"fast"}, provider.ChatRequest{
-			Messages:       thread.messages(),
-			MaxTokens:      8000,
-			ResponseFormat: noJSON(),
-		})
+		tier := pickSelfImproveTier(requiresEdit, strongOn, researchTurns, len(touchedGo))
+		if tier == tierStrong && !strongOn {
+			add("selfimprove.tier", true, "模型分层(D7)：研究/规划已在本地千问完成，进入功能改码阶段，升级到外部强模型 strong（不可用时回退本地）", "")
+		}
+		strongOn = strongOn || tier == tierStrong
+		raw, err := o.selfImproveChat(ctx, tier, thread.messages())
 		if err != nil {
 			add("selfimprove.llm", false, "", "模型调用失败: "+err.Error())
 			break
 		}
-		o.turnTokens += int64(resp.Usage.TotalTokens)
-		raw := resp.Content
 
 		act, perr := parseReactAction(raw)
 		if perr != nil {
@@ -291,13 +393,34 @@ func (o *Options) execSelfImprove(ctx context.Context, it contract.Intent, logDi
 
 		if act.Done {
 			if err := thread.planCompletionError(); err != nil {
-				add("selfimprove.done_guard", false, "", err.Error())
-				planDoneRejects++
-				if planDoneRejects >= 2 {
+				if len(touchedGo) > 0 && canAutoClosePlan(thread.plan) {
+					// Real edits exist and the plan is at its final in_progress step:
+					// defer to the objective gate, which verifies and closes only that
+					// final step. An empty plan or a never-started (pending) step is not
+					// bypassed (B1).
+					doneSignaled = true
+					finalSummary = strings.TrimSpace(act.Summary)
+					add("selfimprove.done_guard", true,
+						"已改码且 plan 处于最后一步，转入客观验证门裁决（通过则收尾该步）", "")
 					break
 				}
+				add("selfimprove.done_guard", false, "", err.Error())
+				planDoneRejects++
+				maxPlanDoneRejects := 2
+				if len(touchedGo) > 0 {
+					maxPlanDoneRejects = 4
+				}
+				if planDoneRejects >= maxPlanDoneRejects {
+					break
+				}
+				var stepHint string
+				if len(touchedGo) > 0 {
+					stepHint = "你的代码改动已经落地。不要发 done，也不要重复改码。现在只发一个 plan 动作：把仍停在 in_progress 的实现步骤（见上一条 step 编号）状态改为 completed（每次提交完整有序 steps；漏报的旧步骤系统会自动保留）。plan 更新后直接发 done。"
+				} else {
+					stepHint = "不要发 done。现在只发一个 plan 动作：把仍停在 in_progress 的步骤（研究步骤）状态改为 completed、把实现步骤标 in_progress（每次提交完整有序 steps；漏报的旧步骤系统会自动保留）。更新 plan 后立刻用 replace/write 改码，全部完成后才发 done。"
+				}
 				thread.push(contract.Message{Role: "assistant", Content: raw},
-					contract.Message{Role: "user", Content: "OBSERVATION: " + err.Error()},
+					contract.Message{Role: "user", Content: "OBSERVATION: " + err.Error() + "\n" + stepHint},
 					fmt.Sprintf("#%d done rejected: unfinished plan", step))
 				continue
 			}
@@ -326,16 +449,36 @@ func (o *Options) execSelfImprove(ctx context.Context, it contract.Intent, logDi
 		for _, f := range touched {
 			touchedGo[f] = true
 		}
+		if len(touched) > 0 {
+			strongOn = true // functional edits have begun: stay on the strong model (hysteresis)
+		}
+		if ok {
+			switch strings.TrimSpace(act.Tool) {
+			case "run", "read":
+				researchTurns++ // successful read-only exploration
+			}
+		}
 		toolName := "selfimprove." + strings.TrimSpace(act.Tool)
 		if toolName == "selfimprove." {
 			toolName = "selfimprove.step"
 		}
 		add(toolName, ok, obs.Obs, obs.Err)
+		nextHint := "\n继续下一步（只输出一个 JSON 动作；若已全部完成输出 done）。"
+		if (act.Tool == "run" || act.Tool == "read") &&
+			forceBuildNudge(requiresEdit, len(touchedGo), researchTurns, forceBuildNudges) {
+			forceBuildNudges++ // only a further read-only action spends a nudge (m8)
+			nextHint = "\n【强制：研究阶段结束】已完成 " + fmt.Sprintf("%d", researchTurns) +
+				" 个研究动作但零改码。禁止再发 run/read。下一步只能二选一：" +
+				"①发一个 plan 动作，把研究步骤标 completed、实现步骤标 in_progress；" +
+				"②直接发 replace（首选，old 与文件逐字一致）或 write，在 .go 文件里落地你已确定的那个改进。" +
+				"（第 " + fmt.Sprintf("%d", forceBuildNudges) + " 次强制提醒）"
+			add("selfimprove.force_build", true,
+				fmt.Sprintf("研究阈值已到（%d 轮）且零改码，强制转入 plan/改码", researchTurns), "")
+		}
 		thread.push(
 			contract.Message{Role: "assistant", Content: raw},
 			contract.Message{Role: "user", Content: "OBSERVATION:\n" + obs.Obs +
-				" ；ok=" + fmt.Sprintf("%v", ok) +
-				"\n继续下一步（只输出一个 JSON 动作；若已全部完成输出 done）。"},
+				" ；ok=" + fmt.Sprintf("%v", ok) + nextHint},
 			stepSummary(step, act, ok))
 	}
 
@@ -344,9 +487,9 @@ func (o *Options) execSelfImprove(ctx context.Context, it contract.Intent, logDi
 	for f := range touchedGo {
 		changed = append(changed, f)
 	}
-	gate := o.selfImproveBuildTestGate(ctx, repo, logDir, changed, requiresEdit, codeSnap, thread, &recv, &seq)
+	gate := o.selfImproveBuildTestGate(ctx, repo, logDir, changed, requiresEdit, codeSnap, thread, &recv, &seq, completed || doneSignaled)
 
-	if !completed {
+	if !completed && !doneSignaled {
 		gate.passed = false
 		gate.detail += "; 主循环未宣布完成（异常退出或预算耗尽）"
 	}
@@ -461,14 +604,43 @@ func (o *Options) executeReactAction(repo, logDir string, a reactAction, snap ma
 		if len(a.Command) == 0 {
 			return reactObs{Err: "run 缺少 command 数组"}, false, nil
 		}
+		beforeRun, err := snapshotRepoGo(repo)
+		if err != nil {
+			return reactObs{Err: err.Error()}, false, nil
+		}
+		for p, source := range beforeRun {
+			if _, exists := snap[p]; snap != nil && !exists {
+				snap[p] = source
+			}
+		}
+		// Scan the ORIGINAL argv (quoting would weaken substring matching), then
+		// execute through /bin/sh with cwd locked to the repo.
 		if bad := dangerousCommand(a.Command); bad != "" {
 			return reactObs{Err: bad}, false, nil
 		}
 		r := o.run("run", map[string]any{
-			"command":   a.Command,
+			"command":   shellWrap(a.Command),
 			"cwd":       repo,
 			"timeout_s": 120,
 		})
+		afterRun, err := snapshotRepoGo(repo)
+		if err != nil {
+			return reactObs{Err: err.Error()}, false, nil
+		}
+		for p, source := range afterRun {
+			old, exists := beforeRun[p]
+			if !exists || old != source {
+				if snap != nil && !exists {
+					snap[p] = ""
+				}
+				touched = appendIfMissing(touched, relPath(repo, p))
+			}
+		}
+		for p := range beforeRun {
+			if _, exists := afterRun[p]; !exists {
+				touched = appendIfMissing(touched, relPath(repo, p))
+			}
+		}
 		out := strings.TrimSpace(r.Stdout)
 		if r.Stderr != "" {
 			out = out + "\n[stderr] " + strings.TrimSpace(r.Stderr)
@@ -476,7 +648,7 @@ func (o *Options) executeReactAction(repo, logDir string, a reactAction, snap ma
 		if !r.OK && r.Err != "" {
 			out = out + "\n[error] " + r.Err
 		}
-		return reactObs{Obs: out, Err: gateErr(r.OK, r.Err)}, r.OK, nil
+		return reactObs{Obs: out, Err: gateErr(r.OK, r.Err)}, r.OK, touched
 	case "read":
 		p, ok := withinRepo(repo, a.Path)
 		if !ok {
@@ -554,7 +726,7 @@ type gateResult struct {
 // logic changed), go build, go test (CI shape) — feeding failures back for repair.
 func (o *Options) selfImproveBuildTestGate(
 	ctx context.Context, repo, logDir string, changed []string, requiresEdit bool,
-	snap map[string]string, thread *reactThread, recv *[]contract.Receipt, seq *int,
+	snap map[string]string, thread *reactThread, recv *[]contract.Receipt, seq *int, modelDone bool,
 ) gateResult {
 	add := func(tool string, ok bool, out, errStr string) {
 		*seq++
@@ -565,12 +737,69 @@ func (o *Options) selfImproveBuildTestGate(
 		*recv = append(*recv, r)
 	}
 
-	finish := func(verified bool, detail string) gateResult {
+	// finish applies the plan bookkeeping gate. autoClose is set only when real
+	// changed Go files passed the objective anti-cosmetic/build/test evaluation:
+	// then verified execution is authoritative and a forgotten final plan status is
+	// closed automatically. For research-only tasks (autoClose=false) the model must
+	// still complete the plan itself.
+	finish := func(verified, autoClose bool, detail string) gateResult {
+		if !modelDone {
+			detail += "; model never declared done"
+			if err := thread.planCompletionError(); err != nil {
+				add("selfimprove.plan_gate", false, "", err.Error())
+				detail += "; plan: " + err.Error()
+			}
+			return gateResult{detail: detail}
+		}
+		if verified && autoClose && canAutoClosePlan(thread.plan) {
+			// Only the final in_progress step is closed; unstarted pending steps and
+			// empty plans never reach here (B1).
+			thread.markFinalStepComplete()
+			add("selfimprove.plan_gate", true,
+				"客观验证已通过；引擎自动将最后一个 in_progress 步骤标记 completed（模型未手工收尾）", "")
+			return gateResult{passed: true, detail: detail}
+		}
 		if err := thread.planCompletionError(); err != nil {
 			add("selfimprove.plan_gate", false, "", err.Error())
 			return gateResult{detail: detail + "; plan: " + err.Error()}
 		}
 		return gateResult{passed: verified, detail: detail}
+	}
+
+	// Re-scan the whole repo immediately before verification and merge every
+	// difference versus the baseline into changed. A background process spawned by a
+	// `run` (or any edit landing after the per-action snapshot) could otherwise
+	// mutate Go files without them appearing in changed, letting a tampered test run
+	// at gate time while escaping the "existing tests must not change" check
+	// (final-review blocker #4).
+	if fresh, ferr := snapshotRepoGo(repo); ferr == nil {
+		seen := map[string]bool{}
+		for _, c := range changed {
+			seen[c] = true
+		}
+		merged := append([]string{}, changed...)
+		addRel := func(rel string) {
+			if rel != "" && rel != "." && !seen[rel] {
+				seen[rel] = true
+				merged = append(merged, rel)
+			}
+		}
+		for abs, after := range fresh {
+			before, existed := snap[abs]
+			if !existed || before != after {
+				addRel(relPath(repo, abs))
+			}
+		}
+		for abs := range snap { // deletions: present at baseline, gone now
+			if _, ok := fresh[abs]; !ok {
+				addRel(relPath(repo, abs))
+			}
+		}
+		changed = merged
+		add("selfimprove.rescan", true, fmt.Sprintf("gate 前全量重扫，纳入 %d 个变更文件（含 shell/后台改码）", len(changed)), "")
+	} else {
+		add("selfimprove.rescan", false, "", "gate 前全量重扫失败: "+ferr.Error())
+		return gateResult{passed: false, detail: "无法在验证前重新快照仓库: " + ferr.Error()}
 	}
 
 	if len(changed) == 0 {
@@ -579,14 +808,55 @@ func (o *Options) selfImproveBuildTestGate(
 		if requiresEdit {
 			return gateResult{passed: false, detail: "模型结束但未改动任何 Go 后端代码，自改目标未达成（过早放弃/研究未落地）"}
 		}
-		return finish(true, "无 Go 改动；未执行 build/test")
+		return finish(true, false, "无 Go 改动；未执行 build/test")
 	}
 
 	evaluate := func() (bool, string) {
-		cosmeticDetail := ""
-		if cosmeticOnly(repo, changed, snap) {
-			cosmeticDetail = "表面改动：你修改的 .go 文件在剥离注释、空白、文档字符串后与原文完全相同，没有改变任何 Go 逻辑。" +
-				"请落地一个真正改变运行时行为的后端改进，例如：在 pipeline/selfimprove.go 的 reactAction 新增一个工具字段、在 executeReactAction 接上对应处理分支并实现其逻辑，或新增一条校验/处理规则；严禁只改注释或文案。"
+		if err := validateChangedForGate(repo, changed, snap); err != nil {
+			return false, err.Error()
+		}
+		// One and the SAME non-test source file must both (a) participate in this
+		// build and (b) carry a real logic change after comments and dead-code blank
+		// assignments are stripped. Splitting the two across different files must not
+		// pass (final-review blocker #1).
+		qualifying := false
+		notBuilt := ""
+		for _, f := range changed {
+			if strings.HasSuffix(filepath.ToSlash(f), "_test.go") {
+				continue
+			}
+			abs := filepath.Join(repo, f)
+			before, haveSnap := snap[abs]
+			after, err := os.ReadFile(abs)
+			if err != nil || !haveSnap {
+				continue
+			}
+			if goCodeSignature(stripBlankAssigns(before)) == goCodeSignature(stripBlankAssigns(string(after))) {
+				continue // cosmetic or dead-code only: not a real logic change
+			}
+			listed := o.run("run", map[string]any{
+				"command": []string{"sh", "-c", "go list -f " + shellQuote(`{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}`) + " ./... | grep -Fx -- " + shellQuote(abs)},
+				"cwd":     repo, "timeout_s": selfImproveBuildSecs, "env": cleanGateEnv(),
+			})
+			inBuild := false
+			if listed.OK {
+				for _, name := range strings.Fields(listed.Stdout) {
+					if name == abs {
+						inBuild = true
+					}
+				}
+			}
+			if inBuild {
+				qualifying = true
+				break
+			}
+			notBuilt = f
+		}
+		if !qualifying {
+			if notBuilt != "" {
+				return false, "改动的 Go 文件未参与 go build（可能在忽略目录或 inactive build tag 后）: " + notBuilt
+			}
+			return false, "表面改动：没有任何被编译的非测试 .go 文件在剥离注释、空白与 dead-code 后仍发生真实逻辑变化。请落地一个真正改变运行时行为的后端改进（例如在 pipeline/ 新增一个处理分支并实现其逻辑，或新增一条生效的校验/处理规则）；严禁只改注释、文案或加入无行为的代码。"
 		}
 		br := o.run("run", map[string]any{
 			"command":   []string{"go", "build", "./..."},
@@ -603,11 +873,8 @@ func (o *Options) selfImproveBuildTestGate(
 			"timeout_s": selfImproveBuildSecs,
 			"env":       cleanGateEnv(),
 		})
-		if cosmeticDetail != "" || !br.OK || !tr.OK {
+		if !br.OK || !tr.OK {
 			failures := []string{}
-			if cosmeticDetail != "" {
-				failures = append(failures, cosmeticDetail)
-			}
 			if !br.OK {
 				failures = append(failures, "go build 失败:\n"+tail(br.Stdout+"\n"+br.Stderr+"\n"+br.Err, 2000))
 			}
@@ -624,13 +891,14 @@ func (o *Options) selfImproveBuildTestGate(
 
 	passed, detail := evaluate()
 	if passed {
-		return finish(true, "anti-cosmetic、go build、go test 通过")
+		return finish(true, modelDone, "anti-cosmetic、go build、go test 通过")
 	}
 	if strings.HasPrefix(detail, "表面改动") {
 		add("selfimprove.cosmetic", false, "", detail)
 	} else {
 		add("selfimprove.gate", false, "", "首轮验证未过："+detail)
 	}
+	add("selfimprove.tier", true, "模型分层(D7)：验证门未过，修复轮升级到外部强模型 strong 做代码修复（不可用时回退本地）", "")
 
 	// Repair turns build on the (windowed) main transcript plus a short local tail.
 	var gateLocal []contract.Message
@@ -638,24 +906,19 @@ func (o *Options) selfImproveBuildTestGate(
 	for fix := 1; fix <= selfImproveMaxFix; fix++ {
 		gateLocal = append(gateLocal, contract.Message{Role: "user", Content: "OBSERVATION: 你的改动未通过自动验证：\n" + detail +
 			"\n请先 read 相关文件，再用 replace 做小步修复（只输出一个 JSON 动作；不要输出整个文件、不要只改注释）。"})
-		resp, err := o.chatWithFallback(ctx, []string{"fast"}, provider.ChatRequest{
-			Messages:       mergeReactMessages(append(thread.messages(), gateLocal...)),
-			MaxTokens:      8000,
-			ResponseFormat: noJSON(),
-		})
+		fixRaw, err := o.selfImproveChat(ctx, tierStrong, mergeReactMessages(append(thread.messages(), gateLocal...)))
 		if err != nil {
-			return finish(false, detail+"; 修复轮模型调用失败: "+err.Error())
+			return finish(false, false, detail+"; 修复轮模型调用失败: "+err.Error())
 		}
-		o.turnTokens += int64(resp.Usage.TotalTokens)
-		gateLocal = append(gateLocal, contract.Message{Role: "assistant", Content: resp.Content})
-		act, perr := parseReactAction(resp.Content)
+		gateLocal = append(gateLocal, contract.Message{Role: "assistant", Content: fixRaw})
+		act, perr := parseReactAction(fixRaw)
 		if perr != nil {
 			detail = "修复轮动作无法解析: " + perr.Error()
 			continue
 		}
 		if act.Done {
 			// model gave up — honest result
-			return finish(false, detail+"; 模型放弃修复: "+act.Summary)
+			return finish(false, false, detail+"; 模型放弃修复: "+act.Summary)
 		}
 		obs, ok, touched := o.executeThreadAction(repo, logDir, act, snap, thread)
 		for _, f := range touched {
@@ -666,17 +929,17 @@ func (o *Options) selfImproveBuildTestGate(
 		if strings.TrimSpace(act.Tool) == "plan" {
 			planTurns++
 			if planTurns >= 8 {
-				return finish(false, "修复计划动作超过上限；"+detail)
+				return finish(false, false, "修复计划动作超过上限；"+detail)
 			}
 			fix--
 			continue
 		}
 		passed, detail = evaluate()
 		if passed {
-			return finish(true, "anti-cosmetic、go build、go test 通过")
+			return finish(true, modelDone, "anti-cosmetic、go build、go test 通过")
 		}
 	}
-	return finish(false, detail)
+	return finish(false, false, detail)
 }
 
 func appendIfMissing(xs []string, s string) []string {
@@ -743,35 +1006,198 @@ func indexLineComment(line string) int {
 // lines removed, each surviving line trimmed. Two versions with identical signatures
 // differ only cosmetically.
 func goCodeSignature(src string) string {
-	s := stripBlockComments(src)
-	var keep []string
-	for _, ln := range strings.Split(s, "\n") {
-		if i := indexLineComment(ln); i >= 0 {
-			ln = ln[:i]
+	var scan scanner.Scanner
+	scan.Init(token.NewFileSet().AddFile("", -1, len(src)), []byte(src), nil, 0)
+	var signature strings.Builder
+	for {
+		_, tok, literal := scan.Scan()
+		if tok == token.EOF {
+			break
 		}
-		ln = strings.TrimSpace(ln)
-		if ln != "" {
-			keep = append(keep, ln)
+		// Explicit and automatically inserted semicolons have the same meaning.
+		if tok == token.SEMICOLON {
+			literal = ";"
 		}
+		fmt.Fprintf(&signature, "%d:%q;", tok, literal)
 	}
-	return strings.Join(keep, "\n")
+	return signature.String()
+}
+
+type scanItem struct {
+	off, line int
+	tok       token.Token
+	lit       string
+}
+
+// stripBlankAssigns removes single-line blank-identifier assignments —
+// `var _ = ...`, `const _ = ...`, `_ = ...` and `_ := ...` — whose RHS is a pure expression with no
+// call. They have no intended observable behavior and are a way to smuggle a
+// token-only change past the signature. Statements whose RHS contains a call
+// (potentially side-effecting, e.g. `_ = f.Close()`) are preserved, and only the
+// blank statement itself is ever removed, never a later statement on the same
+// line. go/scanner does not insert semicolons, so an explicit ';' at bracket
+// depth 0 or a line break terminates the simple statement.
+func stripBlankAssigns(src string) string {
+	file := token.NewFileSet().AddFile("", -1, len(src))
+	var s scanner.Scanner
+	s.Init(file, []byte(src), nil, 0)
+	var items []scanItem
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		items = append(items, scanItem{off: int(pos) - 1, line: file.Line(pos), tok: tok, lit: lit})
+	}
+	type span struct{ start, end int }
+	var cuts []span
+	isBlank := func(i int) bool {
+		return items[i].tok == token.IDENT && items[i].lit == "_"
+	}
+	for i := 0; i < len(items); i++ {
+		opIdx := -1
+		if (items[i].tok == token.VAR || items[i].tok == token.CONST) && i+2 < len(items) && isBlank(i+1) && items[i+2].tok == token.ASSIGN {
+			opIdx = i + 2
+		} else if isBlank(i) && i+1 < len(items) &&
+			(items[i+1].tok == token.ASSIGN || items[i+1].tok == token.DEFINE) {
+			opIdx = i + 1
+		}
+		if opIdx < 0 {
+			continue
+		}
+		startLine := items[i].line
+		// RHS runs from opIdx+1 to an explicit semicolon at bracket depth 0 on the
+		// same line, otherwise to the end of the line. This keeps any later statement
+		// on the same line (e.g. after `{ _ = ...; return err }`) intact.
+		rhsEnd := opIdx + 1
+		depth := 0
+		for rhsEnd < len(items) && items[rhsEnd].line == startLine {
+			tk := items[rhsEnd].tok
+			if tk == token.SEMICOLON && depth == 0 {
+				break
+			}
+			switch tk {
+			case token.LPAREN, token.LBRACK, token.LBRACE:
+				depth++
+			case token.RPAREN, token.RBRACK, token.RBRACE:
+				depth--
+			}
+			rhsEnd++
+		}
+		// A call in the RHS may be side-effecting — `_ = f.Close()`, `_ = a[0]()`,
+		// `_ = (f)()`, `_ = func(){...}()`. A call's opening paren follows an IDENT,
+		// ')', ']' or '}'; such a statement is kept, so a legitimate effect next to
+		// other edits is never mistaken for cosmetic (final-review blocker #3).
+		hasCall := false
+		for j := opIdx + 1; j < rhsEnd; j++ {
+			if items[j].tok == token.LPAREN && j-1 > opIdx {
+				switch items[j-1].tok {
+				case token.IDENT, token.RPAREN, token.RBRACK, token.RBRACE:
+					hasCall = true
+				}
+				if hasCall {
+					break
+				}
+			}
+		}
+		if hasCall {
+			i = rhsEnd
+			continue
+		}
+		endOff := len(src)
+		if rhsEnd < len(items) {
+			if items[rhsEnd].tok == token.SEMICOLON && items[rhsEnd].line == startLine {
+				endOff = items[rhsEnd].off + len(items[rhsEnd].lit) // include the ';'
+			} else {
+				endOff = items[rhsEnd].off // next line begins here; keep the newline
+			}
+		}
+		cuts = append(cuts, span{items[i].off, endOff})
+		i = rhsEnd
+	}
+	if len(cuts) == 0 {
+		return src
+	}
+	var b strings.Builder
+	last := 0
+	for _, c := range cuts { // items are in source order, so cuts are ascending
+		if c.start < last {
+			continue
+		}
+		b.WriteString(src[last:c.start])
+		last = c.end
+	}
+	b.WriteString(src[last:])
+	return b.String()
 }
 
 // cosmeticOnly reports whether every touched Go file is logically unchanged versus
 // its pre-edit snapshot (comments/whitespace/doc text only).
 func cosmeticOnly(repo string, changed []string, snap map[string]string) bool {
+	realCoreChange := false
 	for _, rel := range changed {
 		abs := filepath.Join(repo, rel)
-		before := snap[abs]
-		afterBytes, err := os.ReadFile(abs)
-		if err != nil {
-			continue
+		before, haveSnap := snap[abs]
+		after, err := os.ReadFile(abs)
+		if !haveSnap || err != nil {
+			return true
 		}
-		if goCodeSignature(before) != goCodeSignature(string(afterBytes)) {
-			return false
+		// Blank-identifier assignments (`var _ = 1`, `_ = f()`) have no intended
+		// observable behavior; strip them before comparing so token-only dead-code
+		// edits cannot masquerade as a logic change (Codex remaining P1).
+		if !strings.HasSuffix(rel, "_test.go") &&
+			goCodeSignature(stripBlankAssigns(before)) != goCodeSignature(stripBlankAssigns(string(after))) {
+			realCoreChange = true
 		}
 	}
-	return true
+	return !realCoreChange
+}
+
+// validateChangedForGate enforces what counts as a valid self-improvement:
+// at least one non-test .go change, no changes in the out-of-scope
+// asr/doccontract packages, and no test weakening (deleting a `func Test...` or
+// introducing a `.Skip(`). This stops the gate going green via a weakened test
+// suite or edits confined to excluded packages (M2).
+func validateChangedForGate(repo string, changed []string, snap map[string]string) error {
+	core := false
+	for _, f := range changed {
+		n := filepath.ToSlash(f)
+		for _, p := range strings.Split(n, "/") {
+			if p == "asr" || p == "doccontract" {
+				return fmt.Errorf("changes to asr/doccontract are out of scope: %s", f)
+			}
+		}
+		if !strings.HasSuffix(n, "_test.go") && strings.HasSuffix(n, ".go") {
+			core = true // any non-test Go change outside excluded packages counts
+		}
+	}
+	if !core {
+		return fmt.Errorf("at least one non-test .go change is required (test-only edits do not count)")
+	}
+	for _, f := range changed {
+		if !strings.HasSuffix(filepath.ToSlash(f), "_test.go") {
+			continue
+		}
+		abs := filepath.Join(repo, f)
+		after, err := os.ReadFile(abs)
+		if err != nil {
+			return fmt.Errorf("cannot verify test file %s: %w", f, err)
+		}
+		before, exists := snap[abs]
+		if !exists {
+			return fmt.Errorf("missing test baseline: %s", f)
+		}
+		if before != "" && before != string(after) {
+			return fmt.Errorf("existing test source must not be changed during self-improvement: %s", f)
+		}
+		if strings.Count(before, "func Test") > strings.Count(string(after), "func Test") {
+			return fmt.Errorf("removing a test function is not allowed: %s", f)
+		}
+		if strings.Contains(string(after), ".Skip(") && !strings.Contains(before, ".Skip(") {
+			return fmt.Errorf("adding a skip to a test is not allowed: %s", f)
+		}
+	}
+	return nil
 }
 
 // tail keeps the last n chars (compiler/test diagnostics are at the tail; see R14).
@@ -804,4 +1230,27 @@ func mergeReactMessages(messages []contract.Message) []contract.Message {
 		}
 	}
 	return out
+}
+
+// snapshotRepoGo also covers shell edits, which do not use write/replace.
+func snapshotRepoGo(repo string) (map[string]string, error) {
+	out := map[string]string{}
+	err := filepath.WalkDir(repo, func(p string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if entry.IsDir() || !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		out[p] = string(b)
+		return nil
+	})
+	return out, err
 }
