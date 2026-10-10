@@ -127,8 +127,81 @@ func dangerousCommand(argv []string) string {
 		if t == "nc" {
 			return "command rejected by safety policy: nc (netcat)"
 		}
+		// Background/detached execution could mutate the repo after the action's
+		// snapshot and escape change tracking (final-review blocker #4).
+		if t == "&" || t == "nohup" || t == "setsid" || t == "disown" {
+			return "command rejected by safety policy: background/detached execution (&, nohup, setsid, disown) is not allowed"
+		}
+		if hasBackgroundAmp(tok) {
+			return "command rejected by safety policy: background operator '&' is not allowed"
+		}
+	}
+	if regexp.MustCompile(`(^|[\s;|&()(])(nohup|setsid|disown)([\s]|$)`).MatchString(joined) {
+		return "command rejected by safety policy: nohup/setsid/disown are not allowed"
 	}
 	return ""
+}
+
+// hasBackgroundAmp reports whether s launches a background job with a bare `&`.
+// It deliberately ignores `&&`, fd redirects (`2>&1`, `>&2`) and `&>` so normal
+// chaining and redirection still work.
+func hasBackgroundAmp(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '&' {
+			continue
+		}
+		prev, next := byte(' '), byte(' ')
+		if i > 0 {
+			prev = s[i-1]
+		}
+		if i+1 < len(s) {
+			next = s[i+1]
+		}
+		if next == '&' || prev == '&' {
+			continue // &&
+		}
+		if next == '>' || next == '=' {
+			continue // &>, &=
+		}
+		// A digit right after '&' is a dup-fd target only when preceded by a
+		// redirect operator, e.g. `2>&1`; `cmd &1` is a background job and is caught.
+		if (next >= '0' && next <= '9') && (prev == '>' || prev == '<') {
+			continue
+		}
+		if prev == '>' || prev == '<' || prev == '=' || (prev >= '0' && prev <= '9') {
+			continue // 2>&1, >&, =&
+		}
+		return true
+	}
+	return false
+}
+
+// shellQuote renders s as a single-quoted shell literal, encoding any inner
+// single quotes correctly.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellWrap runs an action argv through /bin/sh so shell builtins (cd),
+// chaining (&&, ||, ;), pipes and redirects behave exactly as a coding agent
+// expects — mirroring the Bash tool provided by Codex and Claude Code. The
+// caller locks the working directory to the repo, so `cd` never fails with a
+// confusing "executable not found". A command already expressed as
+// ["sh","-c",script] is passed through unchanged. Always run dangerousCommand
+// on the ORIGINAL argv (before quoting), otherwise the added quotes weaken the
+// substring matching.
+func shellWrap(argv []string) []string {
+	if len(argv) >= 3 && argv[0] == "sh" && argv[1] == "-c" {
+		return argv
+	}
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = shellQuote(a)
+	}
+	return []string{"sh", "-c", strings.Join(parts, " ")}
 }
 
 // cleanGateEnv clears LLM keys so the repo's tests match CI (R14: a present
