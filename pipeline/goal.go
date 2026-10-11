@@ -60,6 +60,65 @@ type Goal struct {
 	Queue         []string `json:"queue,omitempty"` // R12: pending multi-task steps to run automatically after the current one
 	CreatedAt     string   `json:"created_at"`
 	UpdatedAt     string   `json:"updated_at"`
+
+	// Crash-safety for the queued-step window (P0 round 3, 2026-10-11). The drain
+	// is write-ahead: StepLease for the head step is durably persisted BEFORE its
+	// side effect runs, and cleared only when the step is dequeued (completion
+	// persisted in the same write). A lease still present on load means the prior
+	// process died while that step was in flight — after the side effect but
+	// before the dequeue landed (or while it ran). Recovery reconciles the lease
+	// instead of blindly replaying an irreversible action.
+	StepSeq   int        `json:"step_seq,omitempty"`
+	StepLease *StepLease `json:"step_lease,omitempty"`
+	// LeaseDecision is the operator's explicit resolution of an externally
+	// uncertain lease: "" pending, "redo" (re-run the head step), "accept"
+	// (treat the crashed step as done and continue). Consumed once on recovery.
+	LeaseDecision string `json:"lease_decision,omitempty"`
+}
+
+// StepLease is the durable in-flight marker for one queued step (write-ahead log
+// row). Seq is the monotonic step identity within the goal; Text is the queued
+// instruction; Intent is its classified kind (drives the recovery class).
+type StepLease struct {
+	Seq       int    `json:"seq"`
+	Text      string `json:"text"`
+	Intent    string `json:"intent"`
+	StartedAt string `json:"started_at"`
+}
+
+// Recovery classes for a write-ahead step lease left behind by a crashed process.
+const (
+	recoveryLocalNote  = "local_note"          // local side effect, reconcilable from disk -> exactly-once
+	recoveryIdempotent = "idempotent_rerun"    // read-only / conversational, safe to run again
+	recoveryExternal   = "external_uncertain"  // irreversible external action: hold for operator decision
+)
+
+// leaseRecoveryClass decides how a crashed in-flight step is reconciled on the
+// next process. Unknown intents fail safe into external_uncertain and are never
+// auto-replayed (a duplicate email/deploy is far worse than asking once).
+func leaseRecoveryClass(intent string) string {
+	switch intent {
+	case contract.IntentNote, contract.IntentReminder:
+		return recoveryLocalNote
+	case contract.IntentTest, contract.IntentBuildTest, contract.IntentDebug,
+		contract.IntentQuery, contract.IntentAsk, contract.IntentUnknown,
+		contract.IntentInfo, contract.IntentFileRead, contract.IntentFileList,
+		contract.IntentTime, contract.IntentAppLaunch:
+		return recoveryIdempotent
+	default:
+		return recoveryExternal
+	}
+}
+
+// noteSideEffectLanded checks the durable notes file for a crashed NOTE/REMINDER
+// step's text, proving the local side effect already hit disk before the crash so
+// recovery can dequeue it without re-appending.
+func noteSideEffectLanded(logDir, text string) bool {
+	b, err := os.ReadFile(filepath.Join(logDir, "notes.md"))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(b), strings.TrimSpace(text))
 }
 
 func goalPath(logDir, convID string) string {

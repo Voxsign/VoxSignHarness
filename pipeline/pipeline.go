@@ -160,6 +160,12 @@ type Options struct {
 	//    §7.4/§11     : pipeline  close stage(intentclassify)backcall stage/detail,
 	// server  connect  SSE(kind:"internal"), CLI also   . nil timeandnowstatus charnode  .
 	ProgressObserver func(stage, detail string)
+	// CrashAfterQueuedStep is a TEST-ONLY fault-injection seam, nil in production.
+	// When it returns true the process hard-exits (no defers run, completion is
+	// not persisted) immediately AFTER a queued step's side effect executed,
+	// reproducing the "crash after side effect, before durable dequeue" window so
+	// cross-process recovery can be exercised deterministically.
+	CrashAfterQueuedStep func(text string, it contract.Intent, recvs []contract.Receipt) bool
 	// ASRDataDir ASR numdataobj (rev / name /word   ,    globaloccur ).
 	ASRDataDir string
 	// RoundEvidence on   data   (  2+    , back  LLM fix ).
@@ -729,13 +735,26 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		}
 	}
 
-	// R9-D1: a real-execution intent establishes (or keeps) the durable goal so
-	// a later "继续/接着干" turn resumes the whole objective.
-	if isExecutableIntent(intent) {
-		o.maybeCreateGoal(intent)
+	// P0 round-3 voice bridge — runs BEFORE goal creation so a held crash lease is
+	// resolved by this turn and never overwritten by a fresh goal. If a prior
+	// process crashed on an irreversible queued step, this utterance is interpreted
+	// as redo/accept/cancel (or re-surfaces the gate when unrelated), and the
+	// reconciler drives the queue; no new work is launched until it is resolved.
+	var receipts []contract.Receipt
+	leaseHandled := false
+	if heldRecvs, held := o.resolveCrashedLeaseTurn(ctx, o.logDir(), convID, intent, corrected); held {
+		receipts = heldRecvs
+		leaseHandled = true
 	}
 
-	receipts := o.execActions(ctx, intent)
+	if !leaseHandled {
+		// R9-D1: a real-execution intent establishes (or keeps) the durable goal so
+		// a later "继续/接着干" turn resumes the whole objective.
+		if isExecutableIntent(intent) {
+			o.maybeCreateGoal(intent)
+		}
+		receipts = o.execActions(ctx, intent)
+	}
 	out.Receipts = receipts
 	emit(trajectory.Entry{Kind: trajectory.KindReceipts, Receipts: receipts})
 	// R9-D4: sync goal progress after one executed turn — success bumps round,
@@ -777,7 +796,9 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 
 	// ⑨-bis error   (  ): has  back  ->  disconnect + read-onlysafesafetyheavy (limit 2  ).
 	//  disconnect    /      disconnect; heavy become  newback  and  out.Receipts,  disconnectclose provideattribution.
-	if hasFailure(receipts) {
+	// A crash-lease resolution turn already reconciled/drained the queue itself; do
+	// not layer top-level auto-repair on top of its receipts.
+	if hasFailure(receipts) && !leaseHandled {
 		if repaired := o.repairFailed(ctx, intent, receipts); len(repaired) > 0 {
 			receipts = append(receipts, repaired...)
 			out.Receipts = receipts
@@ -827,7 +848,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
 	// zhiji: 对对话类意图（UNKNOWN/QUERY/ASK），用 LLM + self-model baseline 生成自然回复，
 	// 不再只返回硬编码的"need clarification"。这样用户问"我叫什么"能真答出来。
-	if o.Providers != nil && (intent.Intent == contract.IntentUnknown || intent.Intent == contract.IntentQuery || intent.Intent == contract.IntentAsk || intent.Intent == contract.IntentNote) {
+	if o.Providers != nil && !leaseHandled && (intent.Intent == contract.IntentUnknown || intent.Intent == contract.IntentQuery || intent.Intent == contract.IntentAsk || intent.Intent == contract.IntentNote) {
 		// 真执行：UNKNOWN时，如果明显是任务，路由到Orchestrate真的去做
 		if intent.Intent == contract.IntentUnknown && looksLikeTask(corrected) && !looksLikeQuestion(corrected) {
 			intent.Intent = contract.IntentOrchestrate
@@ -916,7 +937,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		// actually advance an objective (executable intents / SEQUENCE): a pure
 		// QUERY/NOTE spoken while a long-lived goal waits on an external event must
 		// never close that goal.
-		advancing := isExecutableIntent(intent) || intent.Intent == contract.IntentSequence
+		advancing := leaseHandled || isExecutableIntent(intent) || intent.Intent == contract.IntentSequence
 		if advancing && out.BizState == BizDone && (gg.Status == GoalActive || gg.Status == GoalPaused) && len(gg.Queue) == 0 {
 			gg.Status = GoalCompleted
 			gg.NextStep = ""
@@ -2668,12 +2689,83 @@ func (o *Options) execSequence(ctx context.Context, it contract.Intent, logDir s
 // (BusinessState then reports in_progress, never done).
 const MaxQueuedSteps = 8
 
-// advanceGoalQueue (R12): after a step completes, pop and run the next queued
-// step, draining the whole remaining chain within the same turn (up to
-// MaxQueuedSteps). A step is consumed from the queue ONLY after it succeeds; if
-// a step opens a confirmation gate or fails, it is kept at the queue head and
-// draining stops so the objective reports need_confirm/failed/in_progress
-// honestly instead of a false done.
+// CrashExitCode is the process exit code used by the TEST-ONLY
+// CrashAfterQueuedStep fault-injection seam to simulate a hard crash.
+const CrashExitCode = 42
+
+// reconcileCrashedStep resolves a write-ahead lease left by a prior process that
+// died while a queued step was in flight (after its side effect, before the
+// dequeue landed). It mutates g and returns held=true with a need_confirm
+// receipt when an irreversible external step's outcome is unknown and the
+// operator has not yet chosen redo/accept — in that case the caller must not
+// drain or replay. Otherwise it either dequeues a proven-local step (exactly
+// once) or clears the lease so the drain loop can safely re-run it.
+func (o *Options) reconcileCrashedStep(logDir string, g *Goal) (held bool, ask contract.Receipt) {
+	if g == nil || g.StepLease == nil || len(g.Queue) == 0 {
+		return false, contract.Receipt{}
+	}
+	lease := g.StepLease
+	head := strings.TrimSpace(g.Queue[0])
+	clearLease := func() {
+		g.StepLease = nil
+		g.StepSeq = 0
+	}
+	switch leaseRecoveryClass(lease.Intent) {
+	case recoveryLocalNote:
+		if noteSideEffectLanded(logDir, lease.Text) {
+			// Local side effect already hit disk: dequeue WITHOUT re-running (exactly-once).
+			g.Queue = g.Queue[1:]
+			g.Steps = append(g.Steps, head)
+			clearLease()
+			saveGoal(logDir, o.ConvID, g)
+			return false, contract.Receipt{}
+		}
+		// Not landed: drop the stale lease but keep the step queued for the loop to run.
+		clearLease()
+		saveGoal(logDir, o.ConvID, g)
+		return false, contract.Receipt{}
+	case recoveryIdempotent:
+		// Read-only / conversational step: safe to execute again from the head.
+		clearLease()
+		saveGoal(logDir, o.ConvID, g)
+		return false, contract.Receipt{}
+	default: // recoveryExternal — irreversible, outcome unknown
+		switch g.LeaseDecision {
+		case "redo":
+			// Operator authorized one re-run: drop the lease, keep the head for the loop.
+			g.LeaseDecision = ""
+			clearLease()
+			saveGoal(logDir, o.ConvID, g)
+			return false, contract.Receipt{}
+		case "accept":
+			// Operator confirmed the action landed out-of-band: dequeue, never replay,
+			// and let the drain continue with the remaining steps.
+			g.LeaseDecision = ""
+			g.Queue = g.Queue[1:]
+			g.Steps = append(g.Steps, head)
+			clearLease()
+			saveGoal(logDir, o.ConvID, g)
+			return false, contract.Receipt{}
+		default:
+			// No decision: preserve the lease and the head; hold instead of replaying.
+			ask = contract.Receipt{Seq: 0, Tool: "pipeline", OK: false, ConfirmAsk: true,
+				Err: "进程在执行外部动作「" + truncateStr(lease.Text, 40) +
+					"」时中断，结果无法确认。为避免重复发送/执行，该步已暂停。" +
+					"回复「重新执行/重发」可重跑一次；回复「已发送/已完成/跳过，继续」则确认完成并继续后续步骤；回复「取消」终止该目标。"}
+			return true, ask
+		}
+	}
+}
+
+// advanceGoalQueue (R12 + P0 round-3 crash safety): after a step completes, pop
+// and run the next queued step, draining the remaining chain within the same
+// turn (up to MaxQueuedSteps). The drain is write-ahead: a lease for the head
+// step is durably persisted BEFORE its side effect runs and cleared together
+// with the dequeue in a single save on success, so a crash in the
+// side-effect→dequeue window is reconciled on restart instead of replaying an
+// irreversible action. A step that opens a confirmation gate or fails is kept at
+// the queue head and draining stops so the objective reports
+// need_confirm/failed/in_progress honestly instead of a false done.
 func (o *Options) advanceGoalQueue(ctx context.Context, logDir string, recvs []contract.Receipt) []contract.Receipt {
 	convID := o.ConvID
 	g := loadGoal(logDir, convID)
@@ -2687,21 +2779,117 @@ func (o *Options) advanceGoalQueue(ctx context.Context, logDir string, recvs []c
 		log.Printf("[advanceGoalQueue] goal status=%s, skip draining %d queued steps", g.Status, len(g.Queue))
 		return recvs
 	}
+	// Reconcile a step whose lease survived a prior hard crash before draining.
+	if g.StepLease != nil {
+		held, ask := o.reconcileCrashedStep(logDir, g)
+		if held {
+			recvs = append(recvs, ask)
+			return recvs
+		}
+		if len(g.Queue) == 0 {
+			return recvs
+		}
+	}
 	for run := 0; run < MaxQueuedSteps && len(g.Queue) > 0; run++ {
 		next := strings.TrimSpace(g.Queue[0])
-		stepRecvs := o.execActions(ctx, o.classifyOne(next, logDir))
+		stepIt := o.classifyOne(next, logDir)
+
+		// Write-ahead lease: persist the in-flight step BEFORE any side effect.
+		g.StepSeq++
+		g.StepLease = &StepLease{
+			Seq:       g.StepSeq,
+			Text:      next,
+			Intent:    stepIt.Intent,
+			StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		saveGoal(logDir, convID, g)
+
+		stepRecvs := o.execActions(ctx, stepIt)
+		if o.CrashAfterQueuedStep != nil && o.CrashAfterQueuedStep(next, stepIt, stepRecvs) {
+			os.Exit(CrashExitCode) // TEST-ONLY: hard crash after side effect, before dequeue
+		}
 		recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
 			Stdout: "上一步完成，自动继续「" + truncateStr(next, 40) + "」。"})
 		recvs = append(recvs, stepRecvs...)
 		if hasConfirmAsk(stepRecvs) || hasFailure(stepRecvs) {
-			// Keep the unfinished step at the queue head and stop; do not consume it.
+			// Explicit gate/failure (process alive): drop the in-flight lease and keep
+			// the unfinished step at the queue head; do not consume it.
+			g.StepLease = nil
+			g.StepSeq = 0
 			saveGoal(logDir, convID, g)
 			return recvs
 		}
-		g.Queue = g.Queue[1:] // success: consume this step and continue draining
+		// Success: clear the lease and dequeue in the SAME durable write.
+		g.StepLease = nil
+		g.StepSeq = 0
+		g.Queue = g.Queue[1:]
+		g.Steps = append(g.Steps, next)
 		saveGoal(logDir, convID, g)
 	}
 	return recvs
+}
+
+// Operator wording for resolving a held, externally-uncertain crashed step.
+var (
+	leaseCancelWords = []string{"取消", "算了", "别发", "不要发", "终止", "cancel", "abort"}
+	// accept is checked BEFORE redo: "已发送，继续吧" contains 继续 but means accept.
+	leaseAcceptWords = []string{"已发送", "已经发", "已寄出", "发过了", "已发", "已完成", "完成了",
+		"成功了", "搞定", "跳过", "不用再", "收到了", "confirmed", "sent", "already done", "skip"}
+	leaseRedoWords = []string{"重新执行", "重发", "再来", "重做", "重试", "再试", "立刻", "马上",
+		"继续", "执行", "retry", "resend", "redo", "again", "continue"}
+)
+
+func containsAnyFold(text string, words []string) bool {
+	for _, w := range words {
+		if w != "" && strings.Contains(text, strings.ToLower(w)) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveCrashedLeaseTurn (P0 round-3 voice bridge): when a prior process crashed
+// on an irreversible queued step, its external lease is held for an explicit
+// operator decision. It runs ONCE per user turn at the top-level execution entry
+// (never inside execActions, which the drain loop re-enters for each step): it
+// maps the utterance to redo/accept/cancel, persists the decision, and drives the
+// reconciler. handled=false means no external lease is pending, so normal
+// execution proceeds. An unrelated utterance while a lease is held re-surfaces
+// the confirm gate instead of launching new work — the uncertain external action
+// must be resolved before anything else fires.
+func (o *Options) resolveCrashedLeaseTurn(ctx context.Context, logDir, convID string, it contract.Intent, rawText string) (recvs []contract.Receipt, handled bool) {
+	g := loadGoal(logDir, convID)
+	if g == nil || g.StepLease == nil || len(g.Queue) == 0 {
+		return nil, false
+	}
+	if leaseRecoveryClass(g.StepLease.Intent) != recoveryExternal {
+		return nil, false
+	}
+	text := strings.ToLower(strings.TrimSpace(rawText + " " + it.CorrectedText))
+
+	if it.Intent == contract.IntentCancel || containsAnyFold(text, leaseCancelWords) {
+		g.Status = GoalCanceled
+		g.StepLease = nil
+		g.StepSeq = 0
+		g.LeaseDecision = ""
+		g.LastProgress = "用户在崩溃确认门取消：" + it.CorrectedText
+		saveGoal(logDir, convID, g)
+		clearTaskSlot(logDir, convID)
+		return []contract.Receipt{{Seq: 1, Tool: "cancel", OK: true,
+			Stdout: "好，已取消该目标，中断的外部动作不会重复执行。"}}, true
+	}
+	if containsAnyFold(text, leaseAcceptWords) {
+		g.LeaseDecision = "accept"
+		saveGoal(logDir, convID, g)
+		return o.advanceGoalQueue(ctx, logDir, nil), true
+	}
+	if containsAnyFold(text, leaseRedoWords) {
+		g.LeaseDecision = "redo"
+		saveGoal(logDir, convID, g)
+		return o.advanceGoalQueue(ctx, logDir, nil), true
+	}
+	// No recognizable decision: keep the lease and re-surface the hold gate.
+	return o.advanceGoalQueue(ctx, logDir, nil), true
 }
 
 // emailItem is a normalized inbox row (mirror of the server-side NormalizedEmail).
