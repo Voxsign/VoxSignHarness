@@ -44,7 +44,7 @@ func testOpts(t *testing.T, logDir string) *pipeline.Options {
 	reg, _ := tools.LoadContracts(cfg.Contracts.Dir)
 	tr, _ := trajectory.Open(cfg.Global.LogDir)
 	st, _ := cache.Open(filepath.Join(cfg.Cache.Dir, "quad.json"), time.Hour)
-	return &pipeline.Options{
+	opts := &pipeline.Options{
 		Cfg:       &cfg,
 		Dict:      dict,
 		Spaces:    spaces,
@@ -56,6 +56,28 @@ func testOpts(t *testing.T, logDir string) *pipeline.Options {
 		ConfirmFn: func(string, string) (bool, error) { return true, nil },
 		Trace:     tr,
 	}
+	// Isolation guard: every side effect (NOTE files, goals, slots) must stay inside
+	// the per-test temp dir; no server test may touch the developer's real global
+	// notebook. Snapshot only its metadata and assert it is unchanged on cleanup.
+	if cfg.Global.LogDir != logDir {
+		t.Fatalf("test isolation broken: Cfg.Global.LogDir=%q want temp %q", cfg.Global.LogDir, logDir)
+	}
+	if home, herr := os.UserHomeDir(); herr == nil {
+		globalNotes := filepath.Join(home, ".voicesign", "harness", "notes.md")
+		if fi, serr := os.Stat(globalNotes); serr == nil {
+			beforeSize, beforeMtime := fi.Size(), fi.ModTime()
+			t.Cleanup(func() {
+				fi2, err := os.Stat(globalNotes)
+				if err != nil {
+					t.Fatalf("real global notes.md became unreadable during test: %v", err)
+				}
+				if fi2.Size() != beforeSize || !fi2.ModTime().Equal(beforeMtime) {
+					t.Fatalf("server test leaked a NOTE into the real global notebook %s", globalNotes)
+				}
+			})
+		}
+	}
+	return opts
 }
 
 func TestServerHealthAndAuth(t *testing.T) {

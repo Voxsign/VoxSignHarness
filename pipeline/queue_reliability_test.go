@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"voicesign-harness/config"
 	"voicesign-harness/tools"
@@ -15,6 +16,10 @@ import (
 // queue drains use: NOTE appends via the built-in "file" tool; EMAIL fetch fails
 // fast without AIOPS_KEY (before any HTTP); a fresh INSTALL always opens a
 // confirmation gate. No network, host mutation or real mail is involved.
+//
+// Isolation is asserted, not assumed: every side-effect path must resolve inside
+// the per-test t.TempDir() (Options.logDir() and Executor.BaseDir), never the
+// developer's real global home notebook (~/.voicesign/harness/notes.md).
 func queueTestOptions(t *testing.T, convID, logDir string) *Options {
 	t.Helper()
 	cfg := config.Default()
@@ -32,12 +37,30 @@ func queueTestOptions(t *testing.T, convID, logDir string) *Options {
 	if err != nil {
 		t.Fatalf("load contracts: %v", err)
 	}
-	return &Options{
+	o := &Options{
 		Cfg:    &cfg,
 		ConvID: convID,
 		Tools:  reg,
 		Exec:   &tools.Executor{BaseDir: logDir},
 	}
+	// Hard isolation assertions: the pipeline resolves every side-effect path from
+	// Options.logDir(); it must be exactly this test's temp dir, and the executor's
+	// relative-path base must match. Otherwise NOTE would silently write the real
+	// global notebook (the round-2 red-test leak this now prevents).
+	if got := o.logDir(); got != logDir {
+		t.Fatalf("test isolation broken: Options.logDir()=%q want temp %q", got, logDir)
+	}
+	if o.Exec == nil || o.Exec.BaseDir != logDir {
+		t.Fatalf("test isolation broken: Executor.BaseDir must be temp %q", logDir)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		global := filepath.Join(home, ".voicesign", "harness")
+		if strings.HasPrefix(filepath.Clean(logDir)+string(os.PathSeparator), filepath.Clean(global)+string(os.PathSeparator)) ||
+			filepath.Clean(logDir) == filepath.Clean(global) {
+			t.Fatalf("test isolation broken: temp logDir %q is inside the real global home %q", logDir, global)
+		}
+	}
+	return o
 }
 
 func noteLines(t *testing.T, logDir string) int {
@@ -58,6 +81,34 @@ func noteLines(t *testing.T, logDir string) int {
 	return n
 }
 
+// globalNotesStat snapshots ONLY the metadata (never the content) of the real
+// home notebook, so a test can prove afterward that it did not touch it.
+func globalNotesStat(t *testing.T) (bool, int64, time.Time) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, 0, time.Time{}
+	}
+	fi, err := os.Stat(filepath.Join(home, ".voicesign", "harness", "notes.md"))
+	if err != nil {
+		return false, 0, time.Time{}
+	}
+	return true, fi.Size(), fi.ModTime()
+}
+
+// assertGlobalNotesUnchanged fails the test if the real home notebook changed
+// (size or mtime) while the test ran — a direct guard against any NOTE leaking
+// out of t.TempDir(). It never reads, deletes or modifies the user's notebook.
+func assertGlobalNotesUnchanged(t *testing.T, before bool, beforeSize int64, beforeMtime time.Time) {
+	t.Helper()
+	ex, sz, mt := globalNotesStat(t)
+	if ex != before || sz != beforeSize || !mt.Equal(beforeMtime) {
+		t.Fatalf("test leaked a NOTE into the real global notebook ~/.voicesign/harness/notes.md "+
+			"(before exists=%v size=%d mtime=%v; after exists=%v size=%d mtime=%v)",
+			before, beforeSize, beforeMtime.Format(time.RFC3339), ex, sz, mt.Format(time.RFC3339))
+	}
+}
+
 // TestQueueFailureParksStepAndRestartDoesNotReplay: the first step succeeds and is
 // durably consumed; the second (email fetch) fails and stays parked at the queue
 // head. A simulated restart/re-drain must retry the parked failure but must never
@@ -65,7 +116,9 @@ func noteLines(t *testing.T, logDir string) int {
 func TestQueueFailureParksStepAndRestartDoesNotReplay(t *testing.T) {
 	convID := "default"
 	logDir := t.TempDir()
+	gEx, gSize, gMtime := globalNotesStat(t)
 	o := queueTestOptions(t, convID, logDir)
+	defer assertGlobalNotesUnchanged(t, gEx, gSize, gMtime)
 
 	successStep := "记一下 队列甲"
 	failStep := "读取收件箱最新邮件"
@@ -81,7 +134,7 @@ func TestQueueFailureParksStepAndRestartDoesNotReplay(t *testing.T) {
 		t.Fatalf("expected a failure receipt from the email step; got %+v", recvs)
 	}
 	if n := noteLines(t, logDir); n != 1 {
-		t.Fatalf("the successful NOTE side effect must run exactly once, got %d note lines", n)
+		t.Fatalf("the successful NOTE side effect must run exactly once IN TEMP, got %d note lines", n)
 	}
 
 	// Simulate a restart / next-turn resume: re-drain from the persisted goal.
@@ -103,7 +156,9 @@ func TestQueueFailureParksStepAndRestartDoesNotReplay(t *testing.T) {
 func TestQueueStopsAtConfirmationGate(t *testing.T) {
 	convID := "default"
 	logDir := t.TempDir()
+	gEx, gSize, gMtime := globalNotesStat(t)
 	o := queueTestOptions(t, convID, logDir)
+	defer assertGlobalNotesUnchanged(t, gEx, gSize, gMtime)
 
 	gateStep := "帮我安装 codex 到后台"
 	behind := "记一下 门后步骤"
@@ -129,8 +184,10 @@ func TestQueueStopsAtConfirmationGate(t *testing.T) {
 func TestQueueNeverDrainsForNonActiveGoal(t *testing.T) {
 	for _, status := range []string{GoalCanceled, GoalPaused, GoalBlocked, GoalCompleted} {
 		logDir := t.TempDir()
+		gEx, gSize, gMtime := globalNotesStat(t)
 		convID := "default"
 		o := queueTestOptions(t, convID, logDir)
+
 		saveGoal(logDir, convID, &Goal{Objective: "不应继续", Status: status, Queue: []string{"记一下 不该执行"}})
 
 		recvs := o.advanceGoalQueue(context.Background(), logDir, nil)
@@ -144,5 +201,6 @@ func TestQueueNeverDrainsForNonActiveGoal(t *testing.T) {
 		if len(g.Queue) != 1 {
 			t.Fatalf("%s goal queue must be preserved; queue=%v", status, g.Queue)
 		}
+		assertGlobalNotesUnchanged(t, gEx, gSize, gMtime)
 	}
 }
