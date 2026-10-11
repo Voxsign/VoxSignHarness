@@ -120,6 +120,94 @@ func TestBusinessStateNeverFalseDone(t *testing.T) {
 			g:    nil,
 			want: BizDone,
 		},
+
+		// --- Round 2: an advancing (executable/sequence) turn must not be "done"
+		// without real success evidence. Empty receipts, a pure orchestration note,
+		// unverifiable-with-no-action, or an active/paused goal with an empty queue
+		// and no evidence all mean the objective is unproven -> in_progress.
+		{
+			name: "R2 executable empty receipts unverifiable active empty queue -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentEmail},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive},
+			want: BizInProgress,
+		},
+		{
+			name: "R2 executable only sequence orchestration note -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentInstall},
+			rs:   []contract.Receipt{{Tool: "sequence", OK: true, Stdout: "orchestrating"}},
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive},
+			want: BizInProgress,
+		},
+		{
+			name: "R2 executable only pipeline pending note -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentDebug},
+			rs:   []contract.Receipt{{Tool: "pipeline", OK: true, Stdout: "action pending model tool loop"}},
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive},
+			want: BizInProgress,
+		},
+		{
+			name: "R2 blocked-string receipt is not success evidence -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentEmail},
+			rs:   []contract.Receipt{{Tool: "email", OK: true, Blocked: "safety_guard"}},
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive},
+			want: BizInProgress,
+		},
+		{
+			name: "R2 paused empty queue no evidence -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentInstall},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalPaused},
+			want: BizInProgress,
+		},
+		{
+			name: "R2 executable no goal and no evidence -> in_progress",
+			it:   contract.Intent{Intent: contract.IntentEmail},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    nil,
+			want: BizInProgress,
+		},
+		// Evidence present -> honest done.
+		{
+			name: "R2 executable real action ok even unverifiable -> done",
+			it:   contract.Intent{Intent: contract.IntentEmail},
+			rs:   []contract.Receipt{{Tool: "email", OK: true, Stdout: "sent"}},
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive},
+			want: BizDone,
+		},
+		{
+			name: "R2 executable verify pass without receipt -> done",
+			it:   contract.Intent{Intent: contract.IntentBuildTest},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusPass},
+			g:    &Goal{Status: GoalActive},
+			want: BizDone,
+		},
+		// Conversational turns are not gated by the evidence rule or by an unrelated
+		// long-lived goal: answering the turn IS the completion for QUERY/NOTE.
+		{
+			name: "R2 conversational query no goal empty receipts -> done",
+			it:   contract.Intent{Intent: contract.IntentQuery},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    nil,
+			want: BizDone,
+		},
+		{
+			name: "R2 conversational turn not gated by an unrelated active goal -> done",
+			it:   contract.Intent{Intent: contract.IntentQuery},
+			rs:   nil,
+			vr:   verify.Result{Status: verify.StatusUnverifiable},
+			g:    &Goal{Status: GoalActive, Objective: "long-lived other objective"},
+			want: BizDone,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -1525,13 +1525,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, ts *taskSt
 	for _, ev := range ts.events {
 		if ev.Seq > after {
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, mustJSON(ev.flattened()))
-			if ev.Type == "done" || ev.Type == "failed" || ev.Type == "canceled" {
+			if ev.Type == "done" || ev.Type == "failed" || ev.Type == "canceled" || ev.Type == "in_progress" {
 				lastTerminal = true
 			}
 		}
 	}
-	// alreadyendstatethen connectclose 
-	if lastTerminal || ts.Status == stDone || ts.Status == stCanceled || ts.Status == stInterrupted {
+	// alreadyendstatethen connectclose
+	if lastTerminal || ts.Status == stDone || ts.Status == stCanceled || ts.Status == stInterrupted ||
+		ts.Status == stFailed || ts.Status == stInProgress {
 		s.mu.Unlock()
 		flusher.Flush()
 		return
@@ -1560,7 +1561,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request, ts *taskSt
 		case ev := <-ch:
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, mustJSON(ev.flattened()))
 			flusher.Flush()
-			if ev.Type == "done" || ev.Type == "failed" || ev.Type == "canceled" {
+			if ev.Type == "done" || ev.Type == "failed" || ev.Type == "canceled" || ev.Type == "in_progress" {
 				return
 			}
 		}

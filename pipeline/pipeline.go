@@ -2680,6 +2680,13 @@ func (o *Options) advanceGoalQueue(ctx context.Context, logDir string, recvs []c
 	if g == nil || len(g.Queue) == 0 {
 		return recvs
 	}
+	// Only an ACTIVE goal drains queued work. A paused/blocked/canceled/completed
+	// goal must never fire queued side effects (e.g. a cancel that leaves residual
+	// queue entries); leave the queue intact so no action leaks past the state.
+	if g.Status != GoalActive {
+		log.Printf("[advanceGoalQueue] goal status=%s, skip draining %d queued steps", g.Status, len(g.Queue))
+		return recvs
+	}
 	for run := 0; run < MaxQueuedSteps && len(g.Queue) > 0; run++ {
 		next := strings.TrimSpace(g.Queue[0])
 		stepRecvs := o.execActions(ctx, o.classifyOne(next, logDir))
