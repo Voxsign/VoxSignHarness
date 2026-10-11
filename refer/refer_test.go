@@ -44,7 +44,7 @@ func TestResolve_AnaphoraToRecentFile(t *testing.T) {
 func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
-		{Space: "voxbuybot", Entity: "src/Checkout.js", Kind: "file", Ts: "2026-10-02T09:00:00"},
+		{Space: "shopdemo", Entity: "src/Checkout.js", Kind: "file", Ts: "2026-10-02T09:00:00"},
 		{Space: "vault-notes", Entity: "idea-12.md", Kind: "file", Ts: "2026-10-02T11:00:00"},
 	}
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "改一下它"}
@@ -61,7 +61,7 @@ func TestResolve_CrossDomainAmbiguous(t *testing.T) {
 func TestResolve_PrefersCurrentSpace(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
-		{Space: "voxbuybot", Entity: "other.js", Kind: "file", Ts: "2026-10-02T12:00:00"},
+		{Space: "shopdemo", Entity: "other.js", Kind: "file", Ts: "2026-10-02T12:00:00"},
 		{Space: "voicesign-harness", Entity: "space.go", Kind: "file", Ts: "2026-10-02T08:00:00"},
 	}
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "改一下它"}
@@ -105,7 +105,7 @@ func TestResolve_ModelLayer(t *testing.T) {
 		return "报价模板.docx", 0.9
 	}
 	it := &contract.Intent{Intent: contract.IntentEdit, CorrectedText: "把上次那个改一下"}
-	got, _ := r.Resolve(it, "voxbuybot")
+	got, _ := r.Resolve(it, "shopdemo")
 	if got.Target == nil || got.Target.Entity != "报价模板.docx" {
 		t.Fatalf("语言层应消解: %+v", got.Target)
 	}
@@ -156,13 +156,13 @@ func TestSolidify(t *testing.T) {
 func TestResolveOptionsStructured(t *testing.T) {
 	r := New(nil)
 	r.Recent = []RecentEntity{
-		{Space: "voxbuybot", Entity: "src/Checkout.js", Kind: "file", Ts: "2026-10-02T09:00:00"},
+		{Space: "shopdemo", Entity: "src/Checkout.js", Kind: "file", Ts: "2026-10-02T09:00:00"},
 		{Space: "vault-notes", Entity: "idea-12.md", Kind: "file", Ts: "2026-10-02T11:00:00"},
 		{Space: "voicesign-harness", Entity: "space/space.go", Kind: "file", Ts: "2026-10-02T10:00:00"},
 	}
 	it := &contract.Intent{Intent: contract.IntentQuery, CorrectedText: "帮我看看那个文件"}
 	// curbefore spaceID          domain  ->  domain   -> clarification + close ize  
-	got, opts, err := r.ResolveOptions(it, "medsupply")
+	got, opts, err := r.ResolveOptions(it, "meddemo")
 	if err != nil {
 		t.Fatalf("ResolveOptions: %v", err)
 	}

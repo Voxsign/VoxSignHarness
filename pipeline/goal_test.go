@@ -64,9 +64,9 @@ func TestGoalCompletedOnlyOnEvidence(t *testing.T) {
 }
 
 func TestGoalRoundPrompt(t *testing.T) {
-	g := &Goal{Objective: "把 Sofia 的邮件回掉", Status: GoalActive, Round: 2}
+	g := &Goal{Objective: "把 Alice 的邮件回掉", Status: GoalActive, Round: 2}
 	text := goalRoundText(g)
-	for _, want := range []string{"<goal_round>", "把 Sofia 的邮件回掉", "轮次：3", "验证结果", "宣称完成之前", "保持目标激活"} {
+	for _, want := range []string{"<goal_round>", "把 Alice 的邮件回掉", "轮次：3", "验证结果", "宣称完成之前", "保持目标激活"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("goal round prompt missing %q: %s", want, text)
 		}

@@ -1,10 +1,10 @@
 // entity.go -- 命名实体记忆层。
 //
 // 不只是"用户自己叫什么"，而是所有用户提到的人/项目/公司/地点：
-//   "冀总" → Amber，consultant 客户
-//   "Peter" → 商业伙伴
+//   "纪总" → Alice，客户联系人
+//   "Bob" → 外部合作方
 //   "<ALIAS>" → 用户 <USER> 自己
-//   "那个沙特项目" → 具体哪个项目
+//   "那个海外项目" → 具体哪个项目
 //
 // 架构：
 //   1. EntityStore 持久化所有实体（canonical name + aliases + description）
@@ -33,9 +33,9 @@ const (
 type Entity struct {
 	ID         string     `json:"id"`
 	Type       EntityType `json:"type"`
-	Canonical  string     `json:"canonical"`           // 标准名（"Amber"）
-	Aliases    []string   `json:"aliases"`             // 所有代指（["冀总","老冀","Amber"]）
-	Desc       string     `json:"desc,omitempty"`      // 描述（"consultant 客户"）
+	Canonical  string     `json:"canonical"`           // 标准名（如 "Alice"）
+	Aliases    []string   `json:"aliases"`             // 所有代指（如 ["纪总","老纪","Alice"]）
+	Desc       string     `json:"desc,omitempty"`      // 描述（如 "客户联系人"）
 	Confidence float64    `json:"confidence"`
 	Status     string     `json:"status"`           // active/superseded
 	Source     string     `json:"source,omitempty"` // R9-D8 知己多源: voice-local|external-hub|longwall
@@ -70,7 +70,7 @@ func (s *EntityStore) save() error {
 }
 
 // Resolve 把一个代指 resolve 到实体。先查 canonical，再查 aliases。
-// 支持同音字："季总"和"冀总"近音 → 同一个人。
+// 支持同音字："纪总"和"季总"近音 → 同一个人。
 func (s *EntityStore) Resolve(mention string) *Entity {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -87,7 +87,7 @@ func (s *EntityStore) Resolve(mention string) *Entity {
 				return e
 			}
 		}
-		// 同音字代指："季总"≈"冀总"
+		// 同音字代指："纪总"≈"季总"
 		if isHomophone([]rune(mention)[0], []rune(e.Canonical)[0]) && len([]rune(mention)) == len([]rune(e.Canonical)) {
 			return e
 		}

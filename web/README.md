@@ -98,7 +98,7 @@ python3 -m http.server 8080
 #    桌面： http://127.0.0.1:8080/
 #    手机：  http://<Mac内网IP>:8080/ （与 Mac 同 Wi-Fi）
 
-# 3) 右上角 ⚙ 填 Harness server 地址（如 http://192.168.x.x:8765）与 Bearer token
+# 3) 右上角 ⚙ 填 Harness server 地址（如 http://&lt;host&gt;:8765）与 Bearer token
 #    点"测试连接"应返回 OK · v0.2.0
 ```
 

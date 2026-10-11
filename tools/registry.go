@@ -119,6 +119,25 @@ func LoadContracts(dir string) (*Registry, error) {
 	return r, nil
 }
 
+// BindContract registers a tool contract into the in-memory registry at
+// assembly time. It is the A0 customer-adapter path: business tools shipped in
+// adapter code are validated and made available, but are NOT persisted to disk
+// and NOT re-sourced as "voice". Contrast Register, which is the voice-driven
+// REGISTER_TOOL flow that requires human approval and writes a contract file.
+func (r *Registry) BindContract(c contract.ToolContract) error {
+	if err := ValidateContract(c); err != nil {
+		return fmt.Errorf("bind contract validation failed: %w", err)
+	}
+	if _, exists := r.Contracts[c.Name]; exists {
+		return fmt.Errorf("contract %q already registered (refusing to rebind)", c.Name)
+	}
+	if strings.TrimSpace(c.Source) == "" {
+		c.Source = "customer"
+	}
+	r.Contracts[c.Name] = c
+	return nil
+}
+
 // Get bynameget  . 
 func (r *Registry) Get(name string) (contract.ToolContract, bool) {
 	c, ok := r.Contracts[name]

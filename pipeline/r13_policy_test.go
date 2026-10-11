@@ -51,11 +51,11 @@ func TestLoadConstitutionOverrideMerge(t *testing.T) {
 func TestAllowOnceLifecycle(t *testing.T) {
 	logDir := t.TempDir()
 	conv := "a1"
-	if isAllowed(logDir, conv, "email:reply:Sofia") {
+	if isAllowed(logDir, conv, "email:reply:Alice") {
 		t.Fatal("fresh session must not be allowed")
 	}
-	recordAllow(logDir, conv, "email:reply:Sofia")
-	if !isAllowed(logDir, conv, "email:reply:Sofia") {
+	recordAllow(logDir, conv, "email:reply:Alice")
+	if !isAllowed(logDir, conv, "email:reply:Alice") {
 		t.Fatal("allow must be visible after record")
 	}
 	if isAllowed(logDir, conv, "email:reply:Abdullah") {

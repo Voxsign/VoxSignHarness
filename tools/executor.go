@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"voicesign-harness/contract"
@@ -24,6 +25,13 @@ import (
 type Executor struct {
 	BaseDir string
 	Timeout time.Duration
+
+	// A0 adapter seam: real business actions (email/CRM/SharePoint/...) supplied
+	// by a thin per-customer adapter. Looked up before the built-in switch; the
+	// pipeline has already passed space/risk/confirm gates before Exec runs, so
+	// handlers inherit the same safety envelope as built-in tools.
+	hmu      sync.RWMutex
+	handlers map[string]ToolHandler
 }
 
 // defaultExecTimeout is refer  timetime   onlimit. 
@@ -122,6 +130,21 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	var out string
 	var execErr string
 
+	// A0: customer adapter tools take precedence over the built-in switch. They
+	// return through the same Receipt/verify/trace path as built-in tools.
+	if h, found := e.lookupHandler(tool); found {
+		res, herr := runToolHandler(h, args, e.timeout())
+		recv.DurationMs = time.Since(start).Milliseconds()
+		if herr != nil {
+			recv.OK = false
+			recv.Err = truncateOut(herr.Error())
+			return recv, nil
+		}
+		recv.OK = true
+		recv.Stdout = truncateOut(res)
+		return recv, nil
+	}
+
 	switch tool {
 	case "test", "run":
 		argv := strSlice(args, "command")
@@ -158,6 +181,85 @@ func (e *Executor) Exec(tool string, args map[string]any, c contract.ToolContrac
 	}
 	recv.DurationMs = time.Since(start).Milliseconds()
 	return recv, nil
+}
+
+// ToolHandler is the A0 adapter seam: a real business action supplied by a thin
+// per-customer adapter. It receives the validated action args and returns a
+// human/tool-readable result. It is a leaf action — orchestration, gating,
+// confirmation and verification all stay in the kernel; the adapter only does
+// the customer-specific work (e.g. create a CRM case, fetch a Graph attachment).
+type ToolHandler func(args map[string]any) (string, error)
+
+// builtinToolNames are executed by the kernel's own switch and carry its safety
+// handling. A customer adapter must not shadow any of them.
+var builtinToolNames = map[string]bool{
+	"test": true, "run": true, "git": true, "file": true, "search": true,
+	"verify": true, "remote-desktop": true, "weather": true,
+}
+
+// RegisterHandler attaches a customer tool handler. It fails closed on an empty
+// name, a nil handler, a duplicate registration, or an attempt to shadow a
+// built-in tool. Handlers are registered once at assembly time (before any Run)
+// and only read at execution time.
+func (e *Executor) RegisterHandler(name string, h ToolHandler) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("RegisterHandler: empty tool name")
+	}
+	if h == nil {
+		return fmt.Errorf("RegisterHandler(%q): nil handler", name)
+	}
+	if builtinToolNames[name] {
+		return fmt.Errorf("RegisterHandler(%q): must not shadow a built-in tool", name)
+	}
+	e.hmu.Lock()
+	defer e.hmu.Unlock()
+	if e.handlers == nil {
+		e.handlers = map[string]ToolHandler{}
+	}
+	if _, exists := e.handlers[name]; exists {
+		return fmt.Errorf("RegisterHandler(%q): handler already registered", name)
+	}
+	e.handlers[name] = h
+	return nil
+}
+
+func (e *Executor) lookupHandler(name string) (ToolHandler, bool) {
+	e.hmu.RLock()
+	defer e.hmu.RUnlock()
+	h, ok := e.handlers[name]
+	return h, ok
+}
+
+// HandlerCount reports the number of registered customer handlers (boot log/tests).
+func (e *Executor) HandlerCount() int {
+	e.hmu.RLock()
+	defer e.hmu.RUnlock()
+	return len(e.handlers)
+}
+
+// runToolHandler bounds a customer handler by the executor timeout: the caller
+// never waits past d. A handler performing network I/O should still enforce its
+// own request deadline, because the goroutine itself is not forcibly killed.
+func runToolHandler(h ToolHandler, args map[string]any, d time.Duration) (string, error) {
+	if d <= 0 {
+		d = defaultExecTimeout
+	}
+	type handlerResult struct {
+		out string
+		err error
+	}
+	ch := make(chan handlerResult, 1)
+	go func() {
+		out, err := h(args)
+		ch <- handlerResult{out, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.out, r.err
+	case <-time.After(d):
+		return "", fmt.Errorf("customer tool timed out after %s", d)
+	}
 }
 
 const maxOut = 4000

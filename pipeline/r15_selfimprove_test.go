@@ -96,7 +96,7 @@ func TestDangerousCommand(t *testing.T) {
 		{"sh", "-c", `grep -rn "func (o *Options)" --include=*.go pipeline/`},
 		{"go", "build", "./..."},
 		{"go", "test", "./pipeline/"},
-		{"cat", "/Users/sofia/.codex/installation_id"},
+		{"cat", "/home/demo/.codex/installation_id"},
 	}
 	for _, argv := range allow {
 		if dangerousCommand(argv) != "" {

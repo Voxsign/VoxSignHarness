@@ -52,7 +52,7 @@
     "local": {
       "enabled": true,
       "provider": "local-strata",
-      "model_id": "qwen3.8-flash-next-ista-iq3_xxs",
+      "model_id": "local-default",
       "base_url": "http://127.0.0.1:8080",
       "_base_url_note": "loopback placeholder only; the private on-LAN address is injected at deploy time via a private model-center file pointed to by VHS_MODEL_CENTER (or VHS_EMAIL_STRATA for the pipeline) and is never committed",
       "api_key_env": "STRATA_API_KEY",

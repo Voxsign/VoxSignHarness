@@ -84,7 +84,7 @@ func TestDenyKeyDerivation(t *testing.T) {
 		want string
 	}{
 		{"install", contract.Intent{Intent: contract.IntentInstall, Params: map[string]string{"packages": "codex"}}, "install:codex"},
-		{"reply-targeted", contract.Intent{Intent: contract.IntentEmail, Params: map[string]string{"action": "reply", "target": "Sofia"}}, "email:reply:Sofia"},
+		{"reply-targeted", contract.Intent{Intent: contract.IntentEmail, Params: map[string]string{"action": "reply", "target": "Alice"}}, "email:reply:Alice"},
 		{"reply-bare", contract.Intent{Intent: contract.IntentEmail, Params: map[string]string{"action": "reply"}}, "email:reply:"},
 		{"summary-no-key", contract.Intent{Intent: contract.IntentEmail, Params: map[string]string{"action": "summary"}}, ""},
 	}
