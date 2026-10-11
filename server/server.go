@@ -53,7 +53,9 @@ const (
 	stCanceled    = "canceled"
 	stRevoked     = "revoked"     //    v1 §6.2:  backalreadydonetask(alreadytgt ,   use    has rollback)
 	stPending     = "pending"     //   :    openstart(  call  use)
-	stInterrupted = "interrupted" // M4-1 ③: heavystart    donetask,    continue 
+	stInterrupted = "interrupted" // M4-1 ③: heavystart    donetask,    continue
+	stFailed      = "failed"      // P0 (2026-10-11): external action/tool or verify failed this turn
+	stInProgress  = "in_progress" // P0: turn ended but the objective still has queued/remaining work
 )
 
 //     (M5-3): pipeline 13 stage -> Planner / Executor / Verifier. 
@@ -77,7 +79,7 @@ func roleForStatus(status string) string {
 		return RolePlanner
 	case stDone:
 		return RoleVerifier
-	case stRunning:
+	case stRunning, stFailed, stInProgress:
 		return RoleExecutor
 	default:
 		return RolePlanner
@@ -1240,6 +1242,51 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 			})
 			s.persist(ts)
 		default:
+			// P0 (2026-10-11): derive the terminal HTTP status from the OBJECTIVE-level
+			// business state computed by the pipeline, NOT from "the turn returned
+			// without a question". A failed external action must be failed; a
+			// confirmation-gated receipt must be need_confirm; an undrained chain must
+			// be in_progress; only an evidence-backed BizDone is reported done.
+			switch out.BizState {
+			case pipeline.BizNeedConfirm:
+				s.markStatus(ts, stNeedConfirm)
+				ts.Question = out.BizReason
+				s.emitEvent(ts, "need_confirm", map[string]any{
+					"question":    out.BizReason,
+					"receipt":     contract.RenderReceipt(out.View),
+					"attribution": out.Attribution,
+				})
+				s.persist(ts)
+				return
+			case pipeline.BizFailed, pipeline.BizBlocked:
+				s.markStatus(ts, stFailed)
+				ts.Err = out.BizReason
+				s.emitEvent(ts, "failed", map[string]any{
+					"error":       out.BizReason,
+					"receipt":     contract.RenderReceipt(out.View),
+					"attribution": out.Attribution,
+					"blocked":     out.BizState == pipeline.BizBlocked,
+				})
+				s.persist(ts)
+				return
+			case pipeline.BizInProgress:
+				s.markStatus(ts, stInProgress)
+				ts.Reversible = isReversibleIntent(out.Intent.Intent)
+				s.emitEvent(ts, "in_progress", map[string]any{
+					"receipt":     contract.RenderReceipt(out.View),
+					"goal_status": out.GoalStatus,
+					"queue_left":  out.GoalQueueLeft,
+					"reason":      out.BizReason,
+				})
+				s.persist(ts)
+				return
+			case pipeline.BizCanceled:
+				s.markStatus(ts, stCanceled)
+				s.emitEvent(ts, "canceled", map[string]any{"receipt": contract.RenderReceipt(out.View)})
+				s.persist(ts)
+				return
+			}
+			// BizDone (or a legacy empty state): genuine objective completion.
 			s.markStatus(ts, stDone)
 			ts.Reversible = isReversibleIntent(out.Intent.Intent)
 			ts.BackupPath = pickBackupPath(out.Receipts, out.View.Undo)

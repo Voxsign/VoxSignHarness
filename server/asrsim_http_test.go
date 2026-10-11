@@ -90,7 +90,7 @@ func poll(t *testing.T, ts *httptest.Server, id string) phoneView {
 			t.Fatalf("解析任务视图失败: %v", err)
 		}
 		switch view.Status {
-		case stDone, stCanceled, stNeedAsk, stNeedConfirm, stInterrupted:
+		case stDone, stCanceled, stNeedAsk, stNeedConfirm, stInterrupted, stFailed, stInProgress:
 			return view
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -137,6 +137,16 @@ func TestASRSimPhoneFuzzyNeverBlankOrStuck(t *testing.T) {
 		case stDone, stCanceled:
 			if strings.TrimSpace(view.Receipt) == "" {
 				t.Errorf("%q: 终态 %s 但 receipt 为空 —— 手机渲染空白回执卡", text, view.Status)
+			}
+		case stFailed:
+			// P0: an honest failure is a valid phone end-state, but it must render a
+			// real error/receipt — never a blank failure card or a silent fake success.
+			if strings.TrimSpace(view.Error) == "" && strings.TrimSpace(view.Receipt) == "" {
+				t.Errorf("%q: 终态 failed 但 error/receipt 都空 —— 手机渲染空白失败卡", text)
+			}
+		case stInProgress:
+			if strings.TrimSpace(view.Receipt) == "" && strings.TrimSpace(view.Error) == "" {
+				t.Errorf("%q: 终态 in_progress 但 receipt/error 都空 —— 手机渲染空白进行卡", text)
 			}
 		case stNeedAsk, stNeedConfirm:
 			if strings.TrimSpace(view.Question) == "" {
@@ -234,7 +244,10 @@ func TestASRSimPhoneAnswerEndpointAccepts(t *testing.T) {
 // to  M7"back      id    done norev "  class   numdatasidekeep . 
 func TestASRSimPhoneConcurrentTasksDoNotCross(t *testing.T) {
 	ts := simPhone(t)
-	texts := []string{"记一下第一条", "记一下第二条", "查一下第三条"}
+	// All-local NOTE tasks keep this concurrency test deterministic and offline
+	// (a QUERY here needs an LLM key and now honestly reports failed without one);
+	// id/receipt isolation is what this case verifies, not LLM availability.
+	texts := []string{"记一下第一条", "记一下第二条", "记一下第三条"}
 	ids := make([]string, 0, len(texts))
 	for _, text := range texts {
 		ids = append(ids, submit(t, ts, text))

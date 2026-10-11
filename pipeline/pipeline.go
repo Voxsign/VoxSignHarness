@@ -203,6 +203,14 @@ type Outcome struct {
 	LoopMs       int64                `json:"loop_ms"`
 	NetMs        int64                `json:"net_ms"`
 	TurnTokens   int64                `json:"turn_tokens,omitempty"` // R13: LLM tokens consumed this turn (O cost field)
+	// P0 (2026-10-11): objective-level business state, distinct from the per-turn
+	// HTTP lifecycle. The server derives task status from BizState so a failed
+	// external action, a pending confirmation, or an undrained multi-step queue
+	// can never be reported as business "done".
+	BizState      string `json:"biz_state,omitempty"` // done|need_confirm|failed|blocked|in_progress|canceled
+	BizReason     string `json:"biz_reason,omitempty"`
+	GoalStatus    string `json:"goal_status,omitempty"`
+	GoalQueueLeft int    `json:"goal_queue_left,omitempty"`
 }
 
 // discussLogName is discuss-log filename(<log_dir>/discuss.jsonl).
@@ -892,6 +900,33 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 			out.View.Result = "好的，我理解了你的意思，我们接着往下推——先从最要紧的那件事开始。"
 		}
 	}
+	// P0 (2026-10-11): freeze the OBJECTIVE-level business state only after every
+	// receipt / verify / intent mutation has settled. The server derives HTTP task
+	// status from out.BizState instead of "the turn returned without a question",
+	// so a failed external action, a pending confirmation gate, or an undrained
+	// multi-step queue can never be reported as business done.
+	out.Receipts = receipts
+	gg := loadGoal(o.logDir(), convID)
+	out.BizState, out.BizReason = BusinessState(intent, receipts, out.Verify, gg)
+	if gg != nil {
+		// Converge the durable goal when the objective is genuinely finished this
+		// turn. This covers chains made of lightweight steps (e.g. SEQUENCE of
+		// NOTEs), which never set the task slot to done and so syncGoalFromTurn
+		// left the goal parked at active forever. It is restricted to turns that
+		// actually advance an objective (executable intents / SEQUENCE): a pure
+		// QUERY/NOTE spoken while a long-lived goal waits on an external event must
+		// never close that goal.
+		advancing := isExecutableIntent(intent) || intent.Intent == contract.IntentSequence
+		if advancing && out.BizState == BizDone && (gg.Status == GoalActive || gg.Status == GoalPaused) && len(gg.Queue) == 0 {
+			gg.Status = GoalCompleted
+			gg.NextStep = ""
+			gg.FailStreak = 0
+			saveGoal(o.logDir(), convID, gg)
+		}
+		out.GoalStatus = gg.Status
+		out.GoalQueueLeft = len(gg.Queue)
+	}
+
 	o.write(trajectory.Entry{RequestID: out.RequestID, Kind: trajectory.KindFinal, Content: contract.RenderReceipt(out.View)})
 
 	out.LoopMs = time.Since(start).Milliseconds()
@@ -2612,27 +2647,53 @@ func (o *Options) execSequence(ctx context.Context, it contract.Intent, logDir s
 	recvs := o.execActions(ctx, o.classifyOne(first, logDir))
 	queueNote := ""
 	if len(rest) > 0 {
-		queueNote = "已排队的后续步骤：" + strings.Join(rest, " → ") + "。做完当前这步我会自动继续。"
+		queueNote = "已排队的后续步骤：" + strings.Join(rest, " → ") + "。"
 	}
 	recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
 		Stdout: "按顺序执行：" + strings.Join(steps, " → ") + "。先做①「" + first + "」。 " + queueNote})
+	// P0 (2026-10-11): actually drain the queued steps WITHIN this turn when the
+	// first step succeeded. Previously the code only printed "做完会自动继续" but
+	// never called advanceGoalQueue, so every later step stayed parked forever and
+	// the turn was still reported done. On a gate/failure the queue is left intact
+	// and BusinessState reports need_confirm/failed/in_progress instead of done.
+	if !hasConfirmAsk(recvs) && !hasFailure(recvs) {
+		recvs = o.advanceGoalQueue(ctx, logDir, recvs)
+	}
 	return recvs
 }
 
-// advanceGoalQueue (R12): pop the next queued step after a step completes and run it.
-// Called from the completion points of real-work pipelines (install/email/build-test).
+// MaxQueuedSteps bounds how many queued sub-steps a single turn drains, so a
+// long chain cannot turn one request into an unbounded execution burst. Steps
+// left past the cap remain durably queued and continue on the next turn
+// (BusinessState then reports in_progress, never done).
+const MaxQueuedSteps = 8
+
+// advanceGoalQueue (R12): after a step completes, pop and run the next queued
+// step, draining the whole remaining chain within the same turn (up to
+// MaxQueuedSteps). A step is consumed from the queue ONLY after it succeeds; if
+// a step opens a confirmation gate or fails, it is kept at the queue head and
+// draining stops so the objective reports need_confirm/failed/in_progress
+// honestly instead of a false done.
 func (o *Options) advanceGoalQueue(ctx context.Context, logDir string, recvs []contract.Receipt) []contract.Receipt {
 	convID := o.ConvID
 	g := loadGoal(logDir, convID)
 	if g == nil || len(g.Queue) == 0 {
 		return recvs
 	}
-	next := g.Queue[0]
-	g.Queue = g.Queue[1:]
-	saveGoal(logDir, convID, g)
-	recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
-		Stdout: "①已完成，自动继续②「" + next + "」。"})
-	recvs = append(recvs, o.execActions(ctx, o.classifyOne(next, logDir))...)
+	for run := 0; run < MaxQueuedSteps && len(g.Queue) > 0; run++ {
+		next := strings.TrimSpace(g.Queue[0])
+		stepRecvs := o.execActions(ctx, o.classifyOne(next, logDir))
+		recvs = append(recvs, contract.Receipt{Seq: 0, Tool: "sequence", OK: true,
+			Stdout: "上一步完成，自动继续「" + truncateStr(next, 40) + "」。"})
+		recvs = append(recvs, stepRecvs...)
+		if hasConfirmAsk(stepRecvs) || hasFailure(stepRecvs) {
+			// Keep the unfinished step at the queue head and stop; do not consume it.
+			saveGoal(logDir, convID, g)
+			return recvs
+		}
+		g.Queue = g.Queue[1:] // success: consume this step and continue draining
+		saveGoal(logDir, convID, g)
+	}
 	return recvs
 }
 

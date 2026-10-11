@@ -245,6 +245,7 @@ func TestTasksLifecycleConfirm(t *testing.T) {
 	cfg.Global.LogDir = dir
 	srv := New(&cfg, testOpts(t, dir))
 	// note  proj  objdomain  COMMIT ed space_check
+	initGitRepo(t, dir)
 	_ = srv.tmpl.Spaces.Add(&space.Manifest{
 		Name: "proj", Type: space.TypeProject, Scope: []string{dir},
 		Tools: []string{"git", "read"}, Perms: space.Perms{Read: true, Write: true},
