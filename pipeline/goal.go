@@ -120,28 +120,38 @@ const (
 
 // leaseRecoveryClass decides how a crashed in-flight step is reconciled on the
 // next process. Fail-safe by default: only intents whose contract is PROVABLY
-// read-only (no file writes, no process launch, no external state change) may be
-// re-run automatically, and only the locally-reconcilable NOTE/REMINDER steps
-// get exactly-once treatment from their stable token.
+// read-only (no file writes, no process launch, no remote control, no external
+// state change) may be re-run automatically, and only the locally-reconcilable
+// NOTE/REMINDER steps get exactly-once treatment from their stable token.
 //
 // IntentUnknown is NOT auto-replayed (its effect is unknown by definition), and
 // neither are Test/BuildTest/Debug/AppLaunch: "test"/"debug"/"launch" can build
 // artifacts, mutate the workspace, or start a process, so the intent label alone
-// cannot prove idempotence. They — together with email/shell/install/edit/
-// deploy/etc. — fall through to external_uncertain and are held for an explicit
-// redo (two-turn risk gate) or human accept. A duplicate action is far worse
-// than asking once.
+// cannot prove idempotence.
+//
+// QUERY/ASK are ALSO held: although usually conversational, the executor routes
+// some QUERY/ASK utterances to the remote-desktop / environment-control tool
+// (see matchVoiceContract in execActions), which can operate a remote machine.
+// A crash lease records only the intent, not whether that specific invocation
+// was a pure answer or a remote action, so read-only-ness cannot be proven for
+// the crashed attempt and it must hang pending a decision. A future refinement
+// may record the actually-dispatched tool's read-only-ness on the lease and
+// re-run only those; until then, default to holding.
+//
+// These, together with email/shell/install/edit/deploy/etc., fall through to
+// external_uncertain and are held for an explicit redo (two-turn risk gate) or
+// human accept. A duplicate action is far worse than asking once.
 func leaseRecoveryClass(intent string) string {
 	switch intent {
 	case contract.IntentNote, contract.IntentReminder:
 		return recoveryLocalNote
-	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo,
+	case contract.IntentInfo,
 		contract.IntentFileRead, contract.IntentFileList, contract.IntentTime:
-		// Read-only / conversational: no state change, safe to run again.
+		// Provably read-only / no state change and no remote-control routing.
 		return recoveryIdempotent
 	default:
-		// Includes IntentUnknown, Test, BuildTest, Debug, AppLaunch and every
-		// state-changing intent: hold, never auto-replay.
+		// Includes IntentUnknown, Query, Ask, Test, BuildTest, Debug, AppLaunch
+		// and every state-changing intent: hold, never auto-replay.
 		return recoveryExternal
 	}
 }
@@ -427,31 +437,27 @@ func saveGoalChecked(logDir, convID string, g *Goal) error {
 		return rerr
 	}
 	committed = true
-	// Remove any orphaned temp files left by a previous crashed write (naming
-	// convention ".goal-*.tmp" is private to this function). Best-effort.
-	removeGoalTempFiles(dir)
-	// Best-effort: fsync the directory entry so the rename itself is durable.
+	// NOTE: we deliberately do NOT scan the directory to remove other
+	// ".goal-*.tmp" files here. Concurrent saves for OTHER conversations create
+	// their own live temp files in this same directory; a global sweep could
+	// delete a temp file that another writer is about to rename (or that is mid
+	// write). Each call only ever removes its OWN temp file (the deferred
+	// cleanup above); orphaned temps from a genuinely crashed writer are ignored
+	// by every loader and must be reclaimed only by a process that can prove
+	// exclusive ownership/lifecycle (e.g. a single-instance startup lock), never
+	// during normal concurrent operation.
+	//
+	// Advisory only: fsync the directory so rename metadata is more likely to
+	// survive power loss. This error is intentionally not fatal (the rename
+	// already succeeded) and is ignored, so it is NOT a power-loss durability
+	// guarantee. The atomicity promised here covers process crash / SIGKILL /
+	// disk-full-mid-write at the VFS-rename level; physical power loss and
+	// failing media are not guaranteed.
 	if d, oerr := os.Open(dir); oerr == nil {
 		_ = d.Sync()
 		_ = d.Close()
 	}
 	return nil
-}
-
-// removeGoalTempFiles best-effort deletes orphaned atomic-write temp files for
-// goals in dir. It only touches names matching the private ".goal-*.tmp"
-// convention; goal JSON and any other file is left untouched.
-func removeGoalTempFiles(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		n := e.Name()
-		if strings.HasPrefix(n, ".goal-") && strings.HasSuffix(n, ".tmp") {
-			_ = os.Remove(filepath.Join(dir, n))
-		}
-	}
 }
 
 // crashBeforeGoalRename is a TEST-ONLY fault seam (nil in production) that

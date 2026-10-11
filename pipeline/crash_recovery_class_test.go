@@ -15,7 +15,7 @@ import (
 
 func TestLeaseRecoveryClass_Whitelist(t *testing.T) {
 	readOnly := []string{
-		contract.IntentQuery, contract.IntentAsk, contract.IntentInfo,
+		contract.IntentInfo,
 		contract.IntentFileRead, contract.IntentFileList, contract.IntentTime,
 	}
 	for _, in := range readOnly {
@@ -28,9 +28,11 @@ func TestLeaseRecoveryClass_Whitelist(t *testing.T) {
 			t.Errorf("local intent %s classified %s, want %s", in, got, recoveryLocalNote)
 		}
 	}
-	// Everything that is unknown or can have side effects must be held.
+	// Everything that is unknown, can route to remote control, or can have side
+	// effects must be held.
 	held := []string{
-		contract.IntentUnknown, contract.IntentTest, contract.IntentBuildTest,
+		contract.IntentUnknown, contract.IntentQuery, contract.IntentAsk,
+		contract.IntentTest, contract.IntentBuildTest,
 		contract.IntentDebug, contract.IntentAppLaunch,
 		contract.IntentEmail, contract.IntentInstall, contract.IntentEdit,
 		contract.IntentDeploy, contract.IntentCommit, contract.IntentSequence,
@@ -38,7 +40,7 @@ func TestLeaseRecoveryClass_Whitelist(t *testing.T) {
 	}
 	for _, in := range held {
 		if got := leaseRecoveryClass(in); got != recoveryExternal {
-			t.Errorf("side-effecting/unknown intent %s classified %s, want %s (must hold, never auto-replay)",
+			t.Errorf("side-effecting/unknown/remote-capable intent %s classified %s, want %s (must hold, never auto-replay)",
 				in, got, recoveryExternal)
 		}
 	}
@@ -65,6 +67,8 @@ func TestCrashedSideEffectingIntents_Held(t *testing.T) {
 	conv := "default"
 	cases := map[string]string{
 		contract.IntentUnknown:   "随便帮我处理点事情",
+		contract.IntentQuery:     "帮我远程看一下电脑桌面",
+		contract.IntentAsk:       "问一下远程电脑现在什么状态",
 		contract.IntentTest:      "跑一下测试",
 		contract.IntentBuildTest: "从github下载代码编译测试",
 		contract.IntentDebug:     "调试一下这个程序",
@@ -108,8 +112,6 @@ func TestCrashedReadOnlyIntents_NotHeld(t *testing.T) {
 	ctx := context.Background()
 	conv := "default"
 	cases := map[string]string{
-		contract.IntentQuery:    "解释一下什么是闭包",
-		contract.IntentAsk:      "问一下这个概念是什么意思",
 		contract.IntentInfo:     "介绍一下这个东西",
 		contract.IntentFileRead: "读一下 README 文件",
 		contract.IntentFileList: "列一下当前目录",

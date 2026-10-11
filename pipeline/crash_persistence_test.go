@@ -3,9 +3,12 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"voicesign-harness/contract"
@@ -107,7 +110,10 @@ func TestGoalWriteCrashBeforeRename_KeepsPreviousIntact(t *testing.T) {
 		t.Fatalf("recentResumableGoal must ignore the orphan and return v1; got %+v", rg)
 	}
 
-	// A fresh, successful write (new process) yields a complete v3 and cleans up.
+	// A fresh, successful write (new process) yields a complete v3. It must NOT
+	// sweep the directory: the orphaned temp from the crashed write is left in
+	// place (a concurrent/other-conversation writer could own a live temp there)
+	// and simply ignored by every loader.
 	if err := saveGoalChecked(logDir, conv, &Goal{Objective: "v3 目标", Status: GoalActive, GoalID: "gv", Round: 2}); err != nil {
 		t.Fatalf("recovery write: %v", err)
 	}
@@ -118,8 +124,89 @@ func TestGoalWriteCrashBeforeRename_KeepsPreviousIntact(t *testing.T) {
 	if got3.Objective != "v3 目标" || got3.Round != 2 {
 		t.Fatalf("goal must be complete v3, got %+v", got3)
 	}
+	if n := goalTempFiles(t, logDir); len(n) != 1 {
+		t.Fatalf("a successful save must not delete another (crashed) writer's temp; want 1 surviving orphan, got %v", n)
+	}
+	if rg := recentResumableGoal(logDir); rg == nil || rg.Objective != "v3 目标" {
+		t.Fatalf("resume must read the complete v3 despite the surviving orphan; got %+v", rg)
+	}
+}
+
+// A save for one conversation must never delete another conversation's LIVE
+// temp file that is sitting in the shared context_slots directory waiting to be
+// renamed (the concurrency hazard a directory-wide sweep would introduce).
+func TestGoalSave_DoesNotDeleteOtherConversationTemp(t *testing.T) {
+	logDir := t.TempDir()
+	// Alice has a complete goal; Bob is mid-write (his temp exists, not renamed).
+	if err := saveGoalChecked(logDir, "alice", &Goal{Objective: "alice v1", Status: GoalActive, GoalID: "ga"}); err != nil {
+		t.Fatal(err)
+	}
+	bobLive := filepath.Join(logDir, "context_slots", ".goal-bob-live.tmp")
+	bobBytes := []byte(`{"Objective":"bob partial","GoalID":"gb"}`)
+	if err := os.WriteFile(bobLive, bobBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Alice saves again; Bob's live temp must survive untouched.
+	if err := saveGoalChecked(logDir, "alice",
+		&Goal{Objective: "alice v2", Status: GoalActive, GoalID: "ga", Round: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadGoalChecked(logDir, "alice")
+	if err != nil || got.Objective != "alice v2" {
+		t.Fatalf("alice must be complete v2; got %+v err=%v", got, err)
+	}
+	cur, err := os.ReadFile(bobLive)
+	if err != nil {
+		t.Fatalf("bob's live temp was wrongly deleted by alice's save: %v", err)
+	}
+	if !bytes.Equal(cur, bobBytes) {
+		t.Fatalf("bob's live temp content was altered: %q", cur)
+	}
+}
+
+// Concurrent saves across distinct conversations must each land a complete,
+// correct goal with no cross-talk and no leftover temp from successful writes.
+func TestGoalSave_ConcurrentConversations(t *testing.T) {
+	logDir := t.TempDir()
+	const nConv, nRounds = 8, 5
+	var wg sync.WaitGroup
+	errs := make(chan error, nConv*nRounds)
+	for c := 0; c < nConv; c++ {
+		wg.Add(1)
+		go func(c int) {
+			defer wg.Done()
+			conv := "conv-" + strconv.Itoa(c)
+			id := "g" + strconv.Itoa(c)
+			for r := 0; r < nRounds; r++ {
+				g := &Goal{Objective: "obj-" + conv, Status: GoalActive, GoalID: id,
+					Round: r, Queue: []string{"记一下 " + conv + " 步 " + strconv.Itoa(r)},
+					QueueIDs: []string{id + ".s0"}}
+				if err := saveGoalChecked(logDir, conv, g); err != nil {
+					errs <- fmt.Errorf("conv %s round %d: %w", conv, r, err)
+				}
+			}
+		}(c)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Fatalf("concurrent save error: %v", e)
+	}
+	for c := 0; c < nConv; c++ {
+		conv := "conv-" + strconv.Itoa(c)
+		id := "g" + strconv.Itoa(c)
+		g, err := loadGoalChecked(logDir, conv)
+		if err != nil || g == nil {
+			t.Fatalf("conv %s goal missing/corrupt: %+v err=%v", conv, g, err)
+		}
+		if g.GoalID != id || g.Objective != "obj-"+conv || g.Round != nRounds-1 {
+			t.Fatalf("conv %s cross-talk or torn write: %+v", conv, g)
+		}
+	}
+	// No fault was injected, so every successful write renamed its temp away; no
+	// leftover temps may remain (and none was deleted from another writer).
 	if n := goalTempFiles(t, logDir); len(n) != 0 {
-		t.Fatalf("orphan temp must be cleaned after a successful write, got %v", n)
+		t.Fatalf("successful concurrent writes must leave no temp files; found %v", n)
 	}
 }
 
