@@ -33,7 +33,7 @@ func TestNF5NonLoopbackIsRejected(t *testing.T) {
 	}
 
 	// ②  back  ⇒ **   403**
-	for _, addr := range []string{"192.168.8.129:54321", "10.0.0.7:1234", "[2001:db8::1]:9999"} {
+	for _, addr := range []string{"198.51.100.10:54321", "10.0.0.7:1234", "[2001:db8::1]:9999"} {
 		req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
 		req.RemoteAddr = addr
 		w := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestNF5NonLoopbackRejectedOnAllEndpoints(t *testing.T) {
 	h := s.Handler()
 	for _, p := range []string{"/v1/health", "/v1/process", "/v1/dictionary", "/v1/feedback", "/v1/lexicon"} {
 		req := httptest.NewRequest(http.MethodPost, p, strings.NewReader("{}"))
-		req.RemoteAddr = "192.168.8.129:55555"
+		req.RemoteAddr = "198.51.100.10:55555"
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code != http.StatusForbidden {

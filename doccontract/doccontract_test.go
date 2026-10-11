@@ -16,16 +16,18 @@ import (
 	"testing"
 )
 
-// normativeDocs is"      name" rule ity  ( tomoduleroot). 
+// normativeDocs is the set of normative, pinned contracts (paths relative to
+// the module root). They follow the ETCLOVG seven-layer taxonomy (Execution
+// environment, Tool interface, Context management, Lifecycle orchestration,
+// Observability, Verification, Governance).
 var normativeDocs = []string{
-	"docs/SPEC-v1-可执行规格书.md",
-	"docs/SPEC-v2-可执行规格书.md",
-	"docs/INTERFACE-FREEZE-M2.md",
-	"docs/SSE-v1-事件流契约.md",
-	"docs/VSL-v1-描述定义语言规范.md",
-	"docs/VSL-v2-判断语义层.md",
-	"docs/VSL-大域定义-Harness三域.md",
-	"docs/VSL-共识-未来开发规范五原则.md",
+	"docs/SPEC-v0.8-execution-environment.md",
+	"docs/SPEC-v0.8-tool-interface.md",
+	"docs/SPEC-v0.8-context-management.md",
+	"docs/SPEC-v0.8-lifecycle-orchestration.md",
+	"docs/SPEC-v0.8-observability.md",
+	"docs/SPEC-v0.8-verification.md",
+	"docs/SPEC-v0.8-governance.md",
 }
 
 var (

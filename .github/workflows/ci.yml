@@ -18,8 +18,8 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
-      - name: go test (public packages)
-        run: go test $(go list ./... | grep -vE '/(asr|doccontract)$')
+      - name: go test
+        run: go test ./...
 
   security-scan:
     name: Sensitive-info scan
@@ -31,7 +31,7 @@ jobs:
           set -e
           FILES=$(git ls-files | grep -E '\.(go|json|yaml|yml|md|sh)$' | grep -v '^\.github/' || true)
           grep -rnE 'sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' $FILES && { echo "SECRET_FOUND"; exit 1; } || echo "OK: no secrets"
-          grep -rnE 'peterzou|zouyongming|PeterZou|Mansour|meishu' $FILES && { echo "PERSONAL_IDENTIFIER_FOUND"; exit 1; } || echo "OK: no personal identifiers"
+          grep -rnEi 'peterzou|zouyongming|peter[ -]?zou|mansour|meishu|sofia|unifusion|sfda|medsupply|voxbuybot|192\.168\.|100\.64\.|49\.51\.135\.105|/Users/|冀总|周勇明|张大山|美墅' $FILES && { echo "PERSONAL_IDENTIFIER_FOUND"; exit 1; } || echo "OK: no personal or customer identifiers"
 
   dco-check:
     name: DCO check

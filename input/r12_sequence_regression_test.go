@@ -13,7 +13,7 @@ func TestR12MultiTaskRouting(t *testing.T) {
 	seq := []string{
 		"先装 codex 再处理邮件",
 		"先下载代码，然后编译测试",
-		"先看 SFDA 邮件，接着写回复",
+		"先看 客户邮件，接着写回复",
 		"同时处理邮件和安装 codex",
 		"帮我看看邮件，顺便翻译那个 PDF",
 		"先提交 A 再提交 B",
@@ -29,8 +29,8 @@ func TestR12MultiTaskRouting(t *testing.T) {
 		}
 	}
 	// single-action "先 X" without a follow-on stays the plain intent
-	if it := c.ClassifyTask("先看 SFDA 邮件"); it.Intent != contract.IntentEmail {
-		t.Errorf("单独「先看 SFDA 邮件」应保持 EMAIL，实际 %s", it.Intent)
+	if it := c.ClassifyTask("先看 客户邮件"); it.Intent != contract.IntentEmail {
+		t.Errorf("单独「先看 客户邮件」应保持 EMAIL，实际 %s", it.Intent)
 	}
 	// plan talk without actionable steps never becomes a chain
 	if it := c.ClassifyTask("先这样再那样"); it.Intent == contract.IntentSequence {
@@ -45,7 +45,7 @@ func TestR12MultiTaskRouting(t *testing.T) {
 
 func TestR12InterruptionThen(t *testing.T) {
 	c := NewTaskClassifier(0.6, nil)
-	for _, s := range []string{"先别管安装，先看邮件", "别管那个删除操作，先看看 SFDA 邮件"} {
+	for _, s := range []string{"先别管安装，先看邮件", "别管那个删除操作，先看看 客户邮件"} {
 		it := c.ClassifyTask(s)
 		if it.Intent != contract.IntentCancel {
 			t.Errorf("%q: 应判 CANCEL，实际 %s", s, it.Intent)

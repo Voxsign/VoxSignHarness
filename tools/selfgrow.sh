@@ -7,7 +7,7 @@
 #
 #   bash tools/selfgrow.sh [trace_dir]
 # Default trace_dir: ~/.voicesign/harness/context_slots (local) — pass
-# /opt/vhs-unifusion/logs/context_slots via the server for container data.
+# /opt/vhs/logs/context_slots via the server for container data.
 set -u
 DIR="${1:-$HOME/.voicesign/harness/context_slots}"
 LEDGER="$(cd "$(dirname "$0")/.." && pwd)/GROWING-ISSUES.md"

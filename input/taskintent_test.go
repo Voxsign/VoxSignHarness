@@ -7,10 +7,10 @@ import (
 	"voicesign-harness/contract"
 )
 
-// testSpaces    pipeline notein note emptytime  (VoxBuyBot      obj +      obj). 
+// testSpaces    pipeline notein note emptytime  (ShopDemo      obj +      obj). 
 var testSpaces = []SpaceHint{
-	{Name: "voxbuybot", Aliases: []string{"VoxBuyBot", "女装项目", "voxbuy"}},
-	{Name: "medsupply", Aliases: []string{"医疗耗材", "耗材"}},
+	{Name: "shopdemo", Aliases: []string{"ShopDemo", "网店项目", "shop"}},
+	{Name: "meddemo", Aliases: []string{"医疗耗材", "耗材"}},
 }
 
 func TestTaskClassifyNoteWithTimeAnchor(t *testing.T) {
@@ -35,16 +35,16 @@ func TestTaskClassifyNoteWithTimeAnchor(t *testing.T) {
 }
 
 func TestTaskClassifyEditWithSpace(t *testing.T) {
-	// SPEC v1 §2 showexample:   VoxBuyBot  pipeerror showmodifyin 
+	// SPEC v1 §2 showexample:   ShopDemo  pipeerror showmodifyin 
 	c := NewTaskClassifier(0.6, testSpaces)
-	got := c.ClassifyTask("在 voxbuybot 里把错误提示改成中文")
+	got := c.ClassifyTask("在 shopdemo 里把错误提示改成中文")
 	if got.Intent != contract.IntentEdit {
 		t.Fatalf("意图 = %q, 期望 EDIT", got.Intent)
 	}
-	if got.Space != "voxbuybot" {
-		t.Fatalf("空间 = %q, 期望 voxbuybot", got.Space)
+	if got.Space != "shopdemo" {
+		t.Fatalf("空间 = %q, 期望 shopdemo", got.Space)
 	}
-	if got.Target == nil || got.Target.Entity != "voxbuybot" || got.Target.RefType != "explicit" {
+	if got.Target == nil || got.Target.Entity != "shopdemo" || got.Target.RefType != "explicit" {
 		t.Fatalf("Target 未正确填充: %+v", got.Target)
 	}
 	if got.Params["action"] != "replace" || got.Params["object"] != "错误提示" || got.Params["value"] != "中文" {

@@ -27,7 +27,7 @@ type openaiClient struct {
 	responseFormat bool           // is  require json_object  form
 	timeoutMs      int            //   calluse  time( heavy )
 	params         map[string]any // endpoint    charseg(e.g. reasoning_effort)
-	userAgent      string         // per-provider param "user_agent": some on-prem gateways (e.g. UniFusion Strata) reject non-curl UAs with 403/conn-reset
+	userAgent      string         // per-provider param "user_agent": some on-prem gateways (e.g. an on-prem Strata gateway) reject non-curl UAs with 403/conn-reset
 	httpClient     *http.Client
 }
 

@@ -1770,7 +1770,7 @@ func segmentIsAction(s string) bool {
 	return false
 }
 
-// interruptionThen (R12): "先别管 X，先做 Y" / "别管那个删除操作，先看看 SFDA 邮件" —
+// interruptionThen (R12): "先别管 X，先做 Y" / "别管那个删除操作，先看看客户邮件" —
 // return the Y clause so the pipeline can cancel X then run Y. Only fires when a
 // cancel trigger and a following "先/现在/马上 + action" both exist.
 func interruptionThen(text string) (string, bool) {

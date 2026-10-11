@@ -2684,7 +2684,11 @@ func (o *Options) emailFetch(ctx context.Context, limit int) ([]emailItem, error
 	if base == "" {
 		base = "https://aiops.voxsign.ai"
 	}
-	u := fmt.Sprintf("%s/api/email/list?tenant_id=sfdapartner&limit=%d&include_body=1", base, limit)
+	tenant := os.Getenv("VHS_EMAIL_TENANT")
+	if tenant == "" {
+		tenant = "default"
+	}
+	u := fmt.Sprintf("%s/api/email/list?tenant_id=%s&limit=%d&include_body=1", base, tenant, limit)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -2736,19 +2740,19 @@ func (o *Options) emailFetch(ctx context.Context, limit int) ([]emailItem, error
 
 // emailReason calls the LOCAL on-LAN Strata Qwen — NOT the aiops gateway — to
 // analyze the inbox snapshot (user requirement: use the local Qwen, not the gateway).
-// OpenAI-compatible /v1/chat/completions; llama.cpp servers reject non-curl UAs,
+// OpenAI-compatible /v1/chat/completions; some local inference servers reject non-curl UAs,
 // so the request is sent with User-Agent: curl/8.7.1.
 func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
 	strata := strataBaseURL()
 	reqBody, _ := json.Marshal(map[string]any{
-		"model": "qwen3.8-flash-next-ista-iq3_xxs",
+		"model": strataModel(),
 		"messages": []contract.Message{
 			{Role: "system", Content: emailSystemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		"max_tokens":  1200,
 		"temperature": 0.2,
-		// llama.cpp/Qwen3: disable chain-of-thought so the content budget is not
+		// local models: disable chain-of-thought so the content budget is not
 		// consumed by reasoning_content (observed finish=length otherwise).
 		"chat_template_kwargs": map[string]any{"enable_thinking": false},
 	})
@@ -2759,7 +2763,7 @@ func (o *Options) emailReason(ctx context.Context, userPrompt string) string {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "curl/8.7.1")
-	// Strata (llama.cpp) gates with an API key; the server env carries it as
+	// Strata (the local inference gateway) gates with an API key; the server env carries it as
 	// STRATA_API_KEY (18 chars). Missing key -> the server replies 401.
 	if k := os.Getenv("STRATA_API_KEY"); k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
@@ -2815,12 +2819,22 @@ func strataBaseURL() string {
 	return "http://127.0.0.1:8080"
 }
 
+// strataModel resolves the local model id from VHS_STRATA_MODEL. The concrete
+// model/quantization tag is deployment-private and is never hardcoded in the
+// repo; the placeholder only keeps requests well-formed for CI/sandbox builds.
+func strataModel() string {
+	if m := strings.TrimSpace(os.Getenv("VHS_STRATA_MODEL")); m != "" {
+		return m
+	}
+	return "local-default"
+}
+
 // strataChatMessages is the multi-message local-Qwen gateway (the private on-LAN
 // Strata server, NOT the aiops.voxsign.ai gateway). It backs the self-improvement
 // model tiering (D7): read-only ReAct research/planning turns run on the cheap,
 // private on-LAN Qwen, while functional code edits escalate to the external
 // strong model.
-// OpenAI-compatible /v1/chat/completions; llama.cpp gates with STRATA_API_KEY and
+// OpenAI-compatible /v1/chat/completions; the local gateway gates with STRATA_API_KEY and
 // rejects non-curl User-Agents. It returns an error (never a silent empty string)
 // so callers can fall back to the external tier.
 func (o *Options) strataChatMessages(ctx context.Context, msgs []contract.Message, maxTokens int) (string, error) {
@@ -2831,9 +2845,9 @@ func (o *Options) strataChatMessages(ctx context.Context, msgs []contract.Messag
 	}
 	strata := strataBaseURL()
 	reqBody, _ := json.Marshal(map[string]any{
-		"model":    "qwen3.8-flash-next-ista-iq3_xxs",
+		"model":    strataModel(),
 		"messages": msgs,
-		// llama.cpp/Qwen3: disable CoT so reasoning_content cannot eat the budget.
+		// local models: disable CoT so reasoning_content cannot eat the budget.
 		"max_tokens":           maxTokens,
 		"temperature":          0.2,
 		"chat_template_kwargs": map[string]any{"enable_thinking": false},
@@ -2880,7 +2894,7 @@ func (o *Options) strataChatMessages(ctx context.Context, msgs []contract.Messag
 	if len(out.Choices) == 0 {
 		return "", fmt.Errorf("strata returned no choices")
 	}
-	// O cost field — llama.cpp returns usage.prompt/completion tokens.
+	// O cost field — local inference servers return usage.prompt/completion tokens.
 	o.turnTokens += out.Usage.PromptTokens + out.Usage.CompletionTokens
 	c := strings.TrimSpace(out.Choices[0].Message.Content)
 	if c == "" {
@@ -4966,7 +4980,7 @@ func (o *Options) llmIntentFallback(ctx context.Context, it contract.Intent, tex
 		Confidence float64 `json:"confidence"`
 	}
 	// 2026-10-08 (distillation, local on-prem model): response_format json_object is pathological
-	// on Strata (llama.cpp grammar ~1.4s/token), so local providers run with response_format off and
+	// on Strata (constrained local-inference grammar is slow per token), so local providers run with response_format off and
 	// the model may wrap the JSON in prose or code fences. Extract the first {...} object leniently.
 	content := strings.TrimSpace(resp.Content)
 	if !json.Valid([]byte(content)) {

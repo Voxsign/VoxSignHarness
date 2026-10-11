@@ -32,26 +32,26 @@ type sampleCase struct {
 }
 
 var twentySamples = []sampleCase{
-	// ① VoxBuyBot     
-	{1, "voxbuybot", "帮我把那个错误提示啊改成中文，就 voxbuybot 下单页那个", contract.IntentEdit, contract.IntentEdit, "voxbuybot", ""},
-	{2, "voxbuybot", "查一下 voxbuybot 昨天那个订单状态", contract.IntentQuery, contract.IntentQuery, "voxbuybot", ""},
-	{3, "voxbuybot", "记一下，VoxBuyBot 那个沙特客户喜欢周五下午发货", contract.IntentNote, contract.IntentNote, "voxbuybot", ""},
-	{4, "voxbuybot", "跑一下 voxbuybot 的测试", contract.IntentTest, contract.IntentTest, "voxbuybot", ""},
-	{5, "voxbuybot", "voxbuybot 下单页为什么报错啊", contract.IntentDebug, contract.IntentDebug, "voxbuybot", ""},
-	// ② consultant     
-	{6, "medsupply", "查一下医疗耗材那个透析器库存还有多少", contract.IntentQuery, contract.IntentQuery, "medsupply", ""},
-	{7, "medsupply", "记一下，网总那个厂房下周一出报价", contract.IntentNote, contract.IntentNote, "", "词典纠错 网总→王总"},
-	{8, "medsupply", "把医疗耗材的报价模板改成新的公司抬头", contract.IntentEdit, contract.IntentEdit, "medsupply", ""},
-	{9, "medsupply", "部署一下医疗耗材那个销售报表", contract.IntentDeploy, contract.IntentDeploy, "medsupply", ""},
-	{10, "medsupply", "医疗耗材进口沙特的政策你觉得要注意哪些", contract.IntentAsk, contract.IntentAsk, "medsupply", ""},
+	// ① ShopDemo     
+	{1, "shopdemo", "帮我把那个错误提示啊改成中文，就 shopdemo 下单页那个", contract.IntentEdit, contract.IntentEdit, "shopdemo", ""},
+	{2, "shopdemo", "查一下 shopdemo 昨天那个订单状态", contract.IntentQuery, contract.IntentQuery, "shopdemo", ""},
+	{3, "shopdemo", "记一下，ShopDemo 那个客户喜欢周五下午发货", contract.IntentNote, contract.IntentNote, "shopdemo", ""},
+	{4, "shopdemo", "跑一下 shopdemo 的测试", contract.IntentTest, contract.IntentTest, "shopdemo", ""},
+	{5, "shopdemo", "shopdemo 下单页为什么报错啊", contract.IntentDebug, contract.IntentDebug, "shopdemo", ""},
+	// ② meddemo     
+	{6, "meddemo", "查一下医疗耗材那个透析器库存还有多少", contract.IntentQuery, contract.IntentQuery, "meddemo", ""},
+	{7, "meddemo", "记一下，网总那个厂房下周一出报价", contract.IntentNote, contract.IntentNote, "", "词典纠错 网总→王总"},
+	{8, "meddemo", "把医疗耗材的报价模板改成新的公司抬头", contract.IntentEdit, contract.IntentEdit, "meddemo", ""},
+	{9, "meddemo", "部署一下医疗耗材那个销售报表", contract.IntentDeploy, contract.IntentDeploy, "meddemo", ""},
+	{10, "meddemo", "医疗耗材进口的政策你觉得要注意哪些", contract.IntentAsk, contract.IntentAsk, "meddemo", ""},
 	// ③  typein   
-	{11, "modelcenter", "查一下今天彼得周点com的访问日志", contract.IntentQuery, contract.IntentQuery, "", "词典纠错 彼得周点com→model.example.com"},
+	{11, "modelcenter", "查一下今天那个模型网关的访问日志", contract.IntentQuery, contract.IntentQuery, "", "时间锚点：今天"},
 	{12, "modelcenter", "修一下那个 API 超时的报错", contract.IntentDebug, contract.IntentDebug, "", ""},
 	{13, "modelcenter", "跑一下那个推理性能基准", contract.IntentTest, contract.IntentTest, "", "test_kind=bench"},
 	{14, "modelcenter", "部署最新的模型更新到服务器", contract.IntentDeploy, contract.IntentDeploy, "", ""},
 	{15, "modelcenter", "为什么凌晨三点那个告警一直响", contract.IntentAsk, contract.IntentAsk, "", ""},
 	// ④      
-	{16, "vaultnotes", "记一下这个想法：沙特女装可以做直播带货", contract.IntentNote, contract.IntentNote, "vaultnotes", "note_vs_deploy 仲裁正确"},
+	{16, "vaultnotes", "记一下这个想法：女装可以做直播带货", contract.IntentNote, contract.IntentNote, "vaultnotes", "note_vs_deploy 仲裁正确"},
 	// surfaced finding   (#17/#18/#20)alreadyby  erfix  input/taskintent.go: 
 	//   1)  inemptytimename/diffname "  /  "time ed thoughtWords   ("   "is bodyname); 
 	//   2) noteTriggers    " ", patch"   under/  "("  /  /  " again trigger NOTE). 
@@ -64,8 +64,8 @@ var twentySamples = []sampleCase{
 
 func twentyTestSpaces() []SpaceHint {
 	return []SpaceHint{
-		{Name: "voxbuybot", Aliases: []string{"VoxBuyBot", "女装项目", "voxbuy"}},
-		{Name: "medsupply", Aliases: []string{"医疗耗材", "耗材"}},
+		{Name: "shopdemo", Aliases: []string{"ShopDemo", "网店项目", "shop"}},
+		{Name: "meddemo", Aliases: []string{"医疗耗材", "耗材"}},
 		{Name: "modelcenter", Aliases: []string{"模型中心", "模型库"}},
 		{Name: "vaultnotes", Aliases: []string{"想法库", "想法"}},
 	}
@@ -128,7 +128,7 @@ func Test20SampleReceiptFields(t *testing.T) {
 func ReceiptViewStub() contract.ReceiptView {
 	return contract.ReceiptView{
 		Action: "EDIT/replace 错误提示",
-		Files:  "voxbuybot/**（stub：1 个文件）",
+		Files:  "shopdemo/**（stub：1 个文件）",
 		Result: "OK（轻确认后执行）",
 		Undo:   "备份 <log_dir>/backups/<ts>.bak（无 git 仓库）",
 	}

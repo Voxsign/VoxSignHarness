@@ -47,7 +47,7 @@ func TestSlotGateDoesNotFireOnInformativeText(t *testing.T) {
 		{"修一下这个 bug", contract.IntentDebug},
 		{"查一下 quotes 目录里有多少个文件", contract.IntentQuery},
 		{"把报价模块改成中文", contract.IntentEdit},
-		{"查一下 voxbuybot 昨天那个订单状态", contract.IntentQuery},
+		{"查一下 shopdemo 昨天那个订单状态", contract.IntentQuery},
 	}
 	for _, tc := range cases {
 		got := c.ClassifyTask(tc.text)

@@ -2,7 +2,7 @@
 //
 // pipe reflect.go    code   /classify/routeby/stopstop/writebefore   becomeconnect ; 
 // DefaultSystemOne useandnowhas  samevalue default now, Tick/Verify  as   change(32/32 disconnectlangsafety before ). 
-// P2   Qwen3-4B+LoRA:  has type out  AskNoul/AskChoice hasboundaryverify,   back basedefault now. 
+// P2   local-4B-model+LoRA:  has type out  AskNoul/AskChoice hasboundaryverify,   back basedefault now. 
 //
 // close   : Interval/MaxIdle/Threshold onlystore  (  DefaultSystemOne  ), 
 // Reflector  ed name in *DefaultSystemOne     (r.Interval == r.DefaultSystemOne.Interval), 

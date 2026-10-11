@@ -36,7 +36,7 @@ func ExtractEntity(text string) (canonical, desc string, aliases []string) {
 		if after == "" {
 			continue
 		}
-		// 如果 after 像英文名（Amber/Peter），canonical=after，alias=before
+		// 如果 after 像英文名（如 Alice/Bob），canonical=after，alias=before
 		if isASCII(after) {
 			return after, "", []string{beforeStr}
 		}

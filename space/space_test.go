@@ -255,7 +255,7 @@ func TestSampleManifestsParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load data/spaces: %v", err)
 	}
-	for _, name := range []string{"voicesign-harness", "voxbuybot", "vault-notes", "vault-creds"} {
+	for _, name := range []string{"voicesign-harness", "example-shop", "vault-notes", "vault-creds"} {
 		m, ok := r.Get(name)
 		if !ok {
 			t.Fatalf("样例域缺失: %s", name)
