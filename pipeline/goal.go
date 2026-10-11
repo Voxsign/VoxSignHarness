@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -112,24 +113,35 @@ type StepLease struct {
 
 // Recovery classes for a write-ahead step lease left behind by a crashed process.
 const (
-	recoveryLocalNote  = "local_note"          // local side effect, reconcilable from disk -> exactly-once
-	recoveryIdempotent = "idempotent_rerun"    // read-only / conversational, safe to run again
-	recoveryExternal   = "external_uncertain"  // irreversible external action: hold for operator decision
+	recoveryLocalNote  = "local_note"         // local side effect, reconcilable from disk -> exactly-once
+	recoveryIdempotent = "idempotent_rerun"   // PROVEN read-only: no state change, safe to run again
+	recoveryExternal   = "external_uncertain" // outcome unknown / any side-effecting action: hold for an operator decision
 )
 
 // leaseRecoveryClass decides how a crashed in-flight step is reconciled on the
-// next process. Unknown intents fail safe into external_uncertain and are never
-// auto-replayed (a duplicate email/deploy is far worse than asking once).
+// next process. Fail-safe by default: only intents whose contract is PROVABLY
+// read-only (no file writes, no process launch, no external state change) may be
+// re-run automatically, and only the locally-reconcilable NOTE/REMINDER steps
+// get exactly-once treatment from their stable token.
+//
+// IntentUnknown is NOT auto-replayed (its effect is unknown by definition), and
+// neither are Test/BuildTest/Debug/AppLaunch: "test"/"debug"/"launch" can build
+// artifacts, mutate the workspace, or start a process, so the intent label alone
+// cannot prove idempotence. They — together with email/shell/install/edit/
+// deploy/etc. — fall through to external_uncertain and are held for an explicit
+// redo (two-turn risk gate) or human accept. A duplicate action is far worse
+// than asking once.
 func leaseRecoveryClass(intent string) string {
 	switch intent {
 	case contract.IntentNote, contract.IntentReminder:
 		return recoveryLocalNote
-	case contract.IntentTest, contract.IntentBuildTest, contract.IntentDebug,
-		contract.IntentQuery, contract.IntentAsk, contract.IntentUnknown,
-		contract.IntentInfo, contract.IntentFileRead, contract.IntentFileList,
-		contract.IntentTime, contract.IntentAppLaunch:
+	case contract.IntentQuery, contract.IntentAsk, contract.IntentInfo,
+		contract.IntentFileRead, contract.IntentFileList, contract.IntentTime:
+		// Read-only / conversational: no state change, safe to run again.
 		return recoveryIdempotent
 	default:
+		// Includes IntentUnknown, Test, BuildTest, Debug, AppLaunch and every
+		// state-changing intent: hold, never auto-replay.
 		return recoveryExternal
 	}
 }
@@ -295,6 +307,9 @@ func recentResumableGoal(logDir string) *Goal {
 		}
 		var g Goal
 		if json.Unmarshal(b, &g) != nil {
+			// Corrupt goal file: skip it for cross-session resume but never delete or
+			// overwrite it — it may still carry a crash lease an execution path needs.
+			log.Printf("[recentResumableGoal] skipping unreadable/corrupt goal file %s (left intact for manual inspection)", name)
 			continue
 		}
 		if g.Status != GoalActive && g.Status != GoalPaused {
@@ -308,27 +323,57 @@ func recentResumableGoal(logDir string) *Goal {
 	return best
 }
 
-func loadGoal(logDir, convID string) *Goal {
-	b, err := os.ReadFile(goalPath(logDir, convID))
+// loadGoalChecked loads the durable goal and distinguishes "no goal yet"
+// (returns nil, nil) from "goal file exists but is unreadable/corrupt"
+// (returns nil, err). Execution and goal-creation paths MUST use this and fail
+// closed on error: a truncated/half-written goal must never be silently treated
+// as "no goal", which would let a fresh goal overwrite the file and drop the
+// surviving step lease (the protection against replaying an uncertain action).
+func loadGoalChecked(logDir, convID string) (*Goal, error) {
+	p := goalPath(logDir, convID)
+	b, err := os.ReadFile(p)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var g Goal
-	if json.Unmarshal(b, &g) != nil {
-		return nil
+	if uerr := json.Unmarshal(b, &g); uerr != nil {
+		return nil, fmt.Errorf("goal state is corrupt at %s: %w (refusing to overwrite or execute; manual inspection required)", p, uerr)
 	}
-	return &g
+	return &g, nil
+}
+
+// loadGoal is a best-effort, READ-ONLY convenience loader for display/guard
+// paths. It returns nil for both "missing" and "corrupt". Any path that creates
+// a goal, runs a side effect, or reconciles a crash lease must use
+// loadGoalChecked and handle the corrupt-state error instead.
+func loadGoal(logDir, convID string) *Goal {
+	g, _ := loadGoalChecked(logDir, convID)
+	return g
 }
 
 func saveGoal(logDir, convID string, g *Goal) {
 	_ = saveGoalChecked(logDir, convID, g)
 }
 
-// saveGoalChecked persists the goal and returns the write error instead of
-// swallowing it. The write-ahead drain must not run a side effect unless the
-// preceding lease write succeeded, and must not claim completion if the dequeue
-// write fails (P0 round 4: a swallowed persistence error causes false done /
-// duplicate actions after restart).
+// saveGoalChecked atomically persists the goal: it writes a temp file in the
+// SAME directory, fsyncs it, then renames it over the target. The destination
+// is therefore always either the previous complete JSON or the new complete
+// JSON — never a truncated/half-written file (a crash or disk-full mid-write
+// leaves only an orphaned temp file, which loaders ignore).
+//
+// Durability scope: the file fsync plus a best-effort directory fsync cover the
+// ordinary process-crash and power-loss cases on a journaling, same-filesystem
+// setup. They cannot guarantee media-level atomicity on a failing disk or a
+// cross-device rename (which is avoided by creating the temp file in place).
+//
+// The write-ahead drain must not run a side effect unless the preceding lease
+// write succeeded, and must not claim completion if the dequeue write fails
+// (P0 round 4: a swallowed persistence error causes false done / duplicate
+// actions after restart; round 5: a non-atomic overwrite could truncate the
+// only surviving lease).
 func saveGoalChecked(logDir, convID string, g *Goal) error {
 	if g == nil {
 		return nil
@@ -345,8 +390,73 @@ func saveGoalChecked(logDir, convID string, g *Goal) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(goalPath(logDir, convID), b, 0o644)
+	final := goalPath(logDir, convID)
+	tmp, err := os.CreateTemp(dir, ".goal-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpName) // no orphaned half-file on any error path
+		}
+	}()
+	if _, werr := tmp.Write(b); werr != nil {
+		_ = tmp.Close()
+		return werr
+	}
+	if ferr := tmp.Sync(); ferr != nil { // flush file contents (power durability)
+		_ = tmp.Close()
+		return ferr
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		return cerr
+	}
+	if merr := os.Chmod(tmpName, 0o644); merr != nil {
+		return merr
+	}
+	// TEST-ONLY seam: hard-exit after the temp file is written and synced but
+	// BEFORE the atomic rename, reproducing a crash/power loss in the write
+	// window. The previous complete target file must be left intact.
+	if crashBeforeGoalRename != nil && crashBeforeGoalRename() {
+		os.Exit(CrashExitCode)
+	}
+	// Atomic same-directory replacement: readers never observe a partial file.
+	if rerr := os.Rename(tmpName, final); rerr != nil {
+		return rerr
+	}
+	committed = true
+	// Remove any orphaned temp files left by a previous crashed write (naming
+	// convention ".goal-*.tmp" is private to this function). Best-effort.
+	removeGoalTempFiles(dir)
+	// Best-effort: fsync the directory entry so the rename itself is durable.
+	if d, oerr := os.Open(dir); oerr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
+
+// removeGoalTempFiles best-effort deletes orphaned atomic-write temp files for
+// goals in dir. It only touches names matching the private ".goal-*.tmp"
+// convention; goal JSON and any other file is left untouched.
+func removeGoalTempFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasPrefix(n, ".goal-") && strings.HasSuffix(n, ".tmp") {
+			_ = os.Remove(filepath.Join(dir, n))
+		}
+	}
+}
+
+// crashBeforeGoalRename is a TEST-ONLY fault seam (nil in production) that
+// hard-exits between temp-file sync and atomic rename.
+var crashBeforeGoalRename func() bool
 
 // saveGoalStage persists the goal at a labeled point, honoring the TEST-ONLY
 // FailGoalSave fault seam. stage is "lease" (pre-side-effect WAL), "commit"
@@ -360,24 +470,30 @@ func (o *Options) saveGoalStage(logDir, convID string, g *Goal, stage string) er
 
 // maybeCreateGoal establishes a durable goal for real-execution intents so a
 // later "继续/接着干" turn resumes the whole objective, not just the slot.
-func (o *Options) maybeCreateGoal(it contract.Intent) *Goal {
+// A corrupt existing goal is a hard fail-closed: it returns the error WITHOUT
+// creating or overwriting anything, so a surviving crash lease is never lost
+// under a freshly-created goal.
+func (o *Options) maybeCreateGoal(it contract.Intent) (*Goal, error) {
 	convID := strings.TrimSpace(o.ConvID)
 	if convID == "" {
 		convID = "default"
 	}
-	g := loadGoal(o.logDir(), convID)
+	g, gerr := loadGoalChecked(o.logDir(), convID)
+	if gerr != nil {
+		return nil, gerr
+	}
 	obj := strings.TrimSpace(it.CorrectedText)
 	if obj == "" {
 		obj = strings.TrimSpace(it.RawText)
 	}
 	if obj == "" {
-		return g
+		return g, nil
 	}
 	if g != nil && g.Status == GoalActive && g.Objective == obj {
-		return g // same objective, keep going
+		return g, nil // same objective, keep going
 	}
 	if g != nil && g.Status == GoalCompleted && g.Objective == obj {
-		return g
+		return g, nil
 	}
 	// New objective (or the old one was paused/blocked and the user re-asks):
 	// fresh active goal with a stable GoalID.
@@ -388,8 +504,12 @@ func (o *Options) maybeCreateGoal(it contract.Intent) *Goal {
 		Round:      0,
 	}
 	ng.ensureGoalID()
-	saveGoal(o.logDir(), convID, ng)
-	return ng
+	if serr := saveGoalChecked(o.logDir(), convID, ng); serr != nil {
+		// The goal is not durable: do not let the caller start executing work that
+		// could never be recovered after a restart.
+		return nil, serr
+	}
+	return ng, nil
 }
 
 // syncGoalFromTurn updates the goal after one executed turn:

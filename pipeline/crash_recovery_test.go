@@ -203,6 +203,22 @@ func TestCrashChild(t *testing.T) {
 			t.Fatalf("accept should dequeue the email step and run the tail note once; notes=%d", noteLines(t, logDir))
 		}
 
+	case "goalwrite-crash":
+		// Persist a complete v1 goal (with a live lease), then hard-exit in the
+		// atomic-write window while writing v2 (temp synced, rename not done).
+		v1 := &Goal{Objective: "v1 目标", Status: GoalActive, GoalID: "gv", StepCounter: 1,
+			Queue: []string{"记一下 v1 步"}, QueueIDs: []string{"gv.s1"},
+			HeadAttempt: 1, StepSeq: 1,
+			StepLease: &StepLease{GoalID: "gv", StepID: "gv.s1", Attempt: 1, Seq: 1,
+				Text: "记一下 v1 步", Intent: contract.IntentNote, StartedAt: "2026-10-11T00:00:00Z"}}
+		if err := saveGoalChecked(logDir, conv, v1); err != nil {
+			t.Fatalf("v1 write: %v", err)
+		}
+		crashBeforeGoalRename = func() bool { return true }
+		_ = saveGoalChecked(logDir, conv,
+			&Goal{Objective: "v2 目标", Status: GoalActive, GoalID: "gv", Round: 1})
+		t.Fatal("goalwrite-crash should have hard-exited before the rename")
+
 	default:
 		t.Fatalf("unknown child mode %q", mode)
 	}
