@@ -18,7 +18,10 @@ package pipeline
 //                (premature "done" is the #1 agent failure mode).
 
 import (
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,28 +61,49 @@ type Goal struct {
 	FailStreak    int      `json:"fail_streak"`
 	FirstRetryOK  bool     `json:"first_retry_ok"` // R9-D4: first-retry-success indicator
 	Queue         []string `json:"queue,omitempty"` // R12: pending multi-task steps to run automatically after the current one
-	CreatedAt     string   `json:"created_at"`
-	UpdatedAt     string   `json:"updated_at"`
+	// QueueIDs holds the stable step id for each Queue entry at the same index.
+	// A step id is assigned once when the step is enqueued and never reused for a
+	// different step, so recovery can correlate a landed side effect to exactly
+	// one (goal, step, attempt) instead of matching raw note text (P0 round 4).
+	QueueIDs    []string `json:"queue_ids,omitempty"`
+	GoalID      string   `json:"goal_id,omitempty"` // stable objective id, set at creation
+	StepCounter int      `json:"step_counter,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
 
-	// Crash-safety for the queued-step window (P0 round 3, 2026-10-11). The drain
-	// is write-ahead: StepLease for the head step is durably persisted BEFORE its
-	// side effect runs, and cleared only when the step is dequeued (completion
+	// Crash-safety for the queued-step window (P0 round 3/4, 2026-10-11). The
+	// drain is write-ahead: the head step's StepLease is durably persisted BEFORE
+	// its side effect runs, and cleared only when the step is dequeued (completion
 	// persisted in the same write). A lease still present on load means the prior
 	// process died while that step was in flight — after the side effect but
 	// before the dequeue landed (or while it ran). Recovery reconciles the lease
-	// instead of blindly replaying an irreversible action.
+	// via stable (GoalID, StepID, Attempt) evidence instead of replaying blindly.
 	StepSeq   int        `json:"step_seq,omitempty"`
 	StepLease *StepLease `json:"step_lease,omitempty"`
+	// HeadAttempt is the attempt count for the step currently at the queue head;
+	// it survives a lease clear so a redo/re-run gets a fresh attempt number and
+	// cannot be confused with the prior attempt's evidence. Reset on pop.
+	HeadAttempt int `json:"head_attempt,omitempty"`
 	// LeaseDecision is the operator's explicit resolution of an externally
-	// uncertain lease: "" pending, "redo" (re-run the head step), "accept"
-	// (treat the crashed step as done and continue). Consumed once on recovery.
+	// uncertain lease: "" pending; "redo_requested" (operator asked to re-send but
+	// has not yet passed the explicit risk confirmation); "redo_confirmed"
+	// (explicitly confirmed after the risk warning — one re-run is authorized);
+	// "accept" (operator attests the action already landed out-of-band).
 	LeaseDecision string `json:"lease_decision,omitempty"`
+	// LeaseManualAccept records an explicit human attestation for an accept
+	// decision (timestamp + wording); an accepted external step is never treated
+	// as system-proven success, only as human-verified.
+	LeaseManualAccept string `json:"lease_manual_accept,omitempty"`
 }
 
 // StepLease is the durable in-flight marker for one queued step (write-ahead log
-// row). Seq is the monotonic step identity within the goal; Text is the queued
-// instruction; Intent is its classified kind (drives the recovery class).
+// row). GoalID/StepID identify the exact step, Attempt the current execution
+// attempt; Text is the queued instruction and Intent its classified kind (drives
+// the recovery class).
 type StepLease struct {
+	GoalID    string `json:"goal_id"`
+	StepID    string `json:"step_id"`
+	Attempt   int    `json:"attempt"`
 	Seq       int    `json:"seq"`
 	Text      string `json:"text"`
 	Intent    string `json:"intent"`
@@ -110,15 +134,134 @@ func leaseRecoveryClass(intent string) string {
 	}
 }
 
-// noteSideEffectLanded checks the durable notes file for a crashed NOTE/REMINDER
-// step's text, proving the local side effect already hit disk before the crash so
-// recovery can dequeue it without re-appending.
-func noteSideEffectLanded(logDir, text string) bool {
+// Side-effect correlation token (P0 round 4). A local NOTE/REMINDER step appends
+// this marker on its own line so recovery can prove that EXACT (goal, step,
+// attempt) landed. Raw note text is never used as proof: an identical note from
+// an earlier legitimate task, a second identical step in the same goal, or an
+// identical note in a different goal must not count as this step's evidence.
+//
+//	- 2026-10-11 09:00 记一下 同步日志  {vhs g=g1a2 s=g1a2.s3 a=1}
+const vhsTokenOpen = "{vhs "
+const vhsTokenClose = "}"
+
+// attemptToken renders the correlation marker for one step attempt.
+func attemptToken(goalID, stepID string, attempt int) string {
+	return fmt.Sprintf("%sg=%s s=%s a=%d%s", vhsTokenOpen, goalID, stepID, attempt, vhsTokenClose)
+}
+
+// parseAttemptToken extracts (goal, step, attempt) from a line's marker, if any.
+func parseAttemptToken(line string) (goalID, stepID string, attempt int, ok bool) {
+	i := strings.Index(line, vhsTokenOpen)
+	if i < 0 {
+		return "", "", 0, false
+	}
+	rest := line[i+len(vhsTokenOpen):]
+	if j := strings.Index(rest, vhsTokenClose); j >= 0 {
+		rest = rest[:j]
+	}
+	for _, f := range strings.Fields(rest) {
+		kv := strings.SplitN(f, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		switch kv[0] {
+		case "g":
+			goalID = kv[1]
+		case "s":
+			stepID = kv[1]
+		case "a":
+			attempt, _ = strconv.Atoi(kv[1])
+		}
+	}
+	ok = goalID != "" && stepID != "" && attempt > 0
+	return goalID, stepID, attempt, ok
+}
+
+// noteAttemptLanded proves one specific step attempt's local side effect is on
+// disk by matching the exact (goal, step, attempt) marker. It never matches on
+// note text, so pre-existing identical notes cannot be mistaken for this step.
+func noteAttemptLanded(logDir, goalID, stepID string, attempt int) bool {
 	b, err := os.ReadFile(filepath.Join(logDir, "notes.md"))
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(b), strings.TrimSpace(text))
+	for _, line := range strings.Split(string(b), "\n") {
+		g, s, a, ok := parseAttemptToken(line)
+		if ok && g == goalID && s == stepID && a == attempt {
+			return true
+		}
+	}
+	return false
+}
+
+// newGoalID returns a process-unique stable goal id (time + crypto random, stdlib
+// only — the module has zero third-party dependencies).
+func newGoalID() string {
+	rb := make([]byte, 3)
+	_, _ = crand.Read(rb)
+	return "g" + strconv.FormatInt(time.Now().UnixNano(), 36) + hex.EncodeToString(rb)
+}
+
+// ensureGoalID assigns a stable GoalID once.
+func (g *Goal) ensureGoalID() {
+	if g.GoalID == "" {
+		g.GoalID = newGoalID()
+	}
+}
+
+// ensureQueueIDs fills a stable id for every queue entry, preserving any ids
+// already present. Legacy goals persisted without ids get deterministic ids so
+// the mapping stays stable across reloads.
+func (g *Goal) ensureQueueIDs() {
+	g.ensureGoalID()
+	if len(g.QueueIDs) == len(g.Queue) {
+		return
+	}
+	ids := make([]string, len(g.Queue))
+	for i := range g.Queue {
+		if i < len(g.QueueIDs) && g.QueueIDs[i] != "" {
+			ids[i] = g.QueueIDs[i]
+		} else {
+			ids[i] = fmt.Sprintf("%s.legacy%d", g.GoalID, i)
+		}
+	}
+	g.QueueIDs = ids
+}
+
+// headID returns the stable id of the queue head.
+func (g *Goal) headID() string {
+	g.ensureQueueIDs()
+	if len(g.QueueIDs) == 0 {
+		return ""
+	}
+	return g.QueueIDs[0]
+}
+
+// prependQueued assigns fresh stable ids and prepends steps ahead of the current
+// queue (execSequence enqueues later steps before older residual work).
+func (g *Goal) prependQueued(texts []string) {
+	g.ensureGoalID()
+	newTexts := make([]string, 0, len(texts))
+	newIDs := make([]string, 0, len(texts))
+	for _, t := range texts {
+		g.StepCounter++
+		newIDs = append(newIDs, fmt.Sprintf("%s.s%d", g.GoalID, g.StepCounter))
+		newTexts = append(newTexts, t)
+	}
+	g.ensureQueueIDs()
+	g.Queue = append(newTexts, g.Queue...)
+	g.QueueIDs = append(newIDs, g.QueueIDs...)
+}
+
+// popHead removes the queue head and its stable id together.
+func (g *Goal) popHead() {
+	if len(g.Queue) == 0 {
+		return
+	}
+	g.Queue = g.Queue[1:]
+	if len(g.QueueIDs) > 0 {
+		g.QueueIDs = g.QueueIDs[1:]
+	}
 }
 
 func goalPath(logDir, convID string) string {
@@ -178,8 +321,17 @@ func loadGoal(logDir, convID string) *Goal {
 }
 
 func saveGoal(logDir, convID string, g *Goal) {
+	_ = saveGoalChecked(logDir, convID, g)
+}
+
+// saveGoalChecked persists the goal and returns the write error instead of
+// swallowing it. The write-ahead drain must not run a side effect unless the
+// preceding lease write succeeded, and must not claim completion if the dequeue
+// write fails (P0 round 4: a swallowed persistence error causes false done /
+// duplicate actions after restart).
+func saveGoalChecked(logDir, convID string, g *Goal) error {
 	if g == nil {
-		return
+		return nil
 	}
 	g.UpdatedAt = time.Now().Format(time.RFC3339)
 	if g.CreatedAt == "" {
@@ -187,10 +339,23 @@ func saveGoal(logDir, convID string, g *Goal) {
 	}
 	dir := filepath.Join(logDir, "context_slots")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+		return err
 	}
-	b, _ := json.MarshalIndent(g, "", "  ")
-	_ = os.WriteFile(goalPath(logDir, convID), b, 0o644)
+	b, err := json.MarshalIndent(g, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(goalPath(logDir, convID), b, 0o644)
+}
+
+// saveGoalStage persists the goal at a labeled point, honoring the TEST-ONLY
+// FailGoalSave fault seam. stage is "lease" (pre-side-effect WAL), "commit"
+// (post-success dequeue/clear), or "reconcile" (crash recovery bookkeeping).
+func (o *Options) saveGoalStage(logDir, convID string, g *Goal, stage string) error {
+	if o != nil && o.FailGoalSave != nil && o.FailGoalSave(stage) {
+		return fmt.Errorf("injected goal persistence failure at stage %s", stage)
+	}
+	return saveGoalChecked(logDir, convID, g)
 }
 
 // maybeCreateGoal establishes a durable goal for real-execution intents so a
@@ -215,13 +380,14 @@ func (o *Options) maybeCreateGoal(it contract.Intent) *Goal {
 		return g
 	}
 	// New objective (or the old one was paused/blocked and the user re-asks):
-	// fresh active goal.
+	// fresh active goal with a stable GoalID.
 	ng := &Goal{
 		Objective:  obj,
 		IntentKind: it.Intent,
 		Status:     GoalActive,
 		Round:      0,
 	}
+	ng.ensureGoalID()
 	saveGoal(o.logDir(), convID, ng)
 	return ng
 }
