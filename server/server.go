@@ -41,7 +41,7 @@ import (
 )
 
 // version and main.go same (M3 INTERACT-v1 endpoint set). 
-const version = "0.2.0"
+const version = "0.6.1"
 
 // task state machinegetvalue(INTERACT-v1 § state transition + M2 compat). 
 const (
