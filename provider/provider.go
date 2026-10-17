@@ -8,6 +8,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"voicesign-harness/config"
 	"voicesign-harness/contract"
@@ -47,6 +48,47 @@ type Registry struct {
 	providers map[string]Provider
 	mockSet   map[string]bool // mock name  , provide IsMock   
 	order     []string        // note   , keep  Names()   ity out
+}
+
+// timingProvider wraps a Provider to observe every Chat call (Issue #30 Phase 0
+// instrumentation). It forwards all behavior unchanged; the callback is additive.
+type timingProvider struct {
+	inner  Provider
+	name   string
+	onCall func(name string, resp ChatResponse, ms int64)
+}
+
+func (t *timingProvider) Name() string { return t.inner.Name() }
+
+func (t *timingProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	start := time.Now()
+	resp, err := t.inner.Chat(ctx, req)
+	ms := time.Since(start).Milliseconds()
+	if t.onCall != nil {
+		t.onCall(t.name, resp, ms)
+	}
+	return resp, err
+}
+
+// Wrapped returns a NEW Registry whose providers are wrapped with a per-call
+// observer; the receiver is not mutated. Additive: used by pipeline.Run to time
+// every LLM call (fallback or direct) exactly once per task.
+func (r *Registry) Wrapped(onCall func(name string, resp ChatResponse, ms int64)) *Registry {
+	if onCall == nil {
+		return r
+	}
+	nr := &Registry{
+		providers: map[string]Provider{},
+		mockSet:   map[string]bool{},
+		order:     r.order,
+	}
+	for name, p := range r.providers {
+		nr.providers[name] = &timingProvider{inner: p, name: name, onCall: onCall}
+	}
+	for name := range r.mockSet {
+		nr.mockSet[name] = true
+	}
+	return nr
 }
 
 // NewRegistry      config invoice   provider: 
