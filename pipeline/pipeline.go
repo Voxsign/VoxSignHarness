@@ -147,6 +147,11 @@ type Options struct {
 	// copies it into Outcome.TurnTokens -> trace JSONL. Lock-guarded by Run's mu.
 	turnTokens int64
 
+	// Issue #30 Phase 0 (additive): per-task stage/LLM wall-clock collectors.
+	// Reset at the top of Run; assembled into Outcome.Timing at the end.
+	stageTimes []StageTiming
+	llmCalls   []LLMCallTiming
+
 	// R13 (2026-10-09): declarative governance constitution (G layer). Lazy-loaded
 	// once per Run from <logDir>/constitution.json with embedded defaults.
 	constitution *constitution
@@ -223,6 +228,9 @@ type Outcome struct {
 	BizReason     string `json:"biz_reason,omitempty"`
 	GoalStatus    string `json:"goal_status,omitempty"`
 	GoalQueueLeft int    `json:"goal_queue_left,omitempty"`
+
+	// Issue #30 Phase 0 (additive): per-task stage/LLM wall-clock timing.
+	Timing *TimingInfo `json:"timing,omitempty"`
 }
 
 // discussLogName is discuss-log filename(<log_dir>/discuss.jsonl).
@@ -285,6 +293,13 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 	o.RequestID = rid // write-back: basetask Options   inaftercontinue  (selfheal/llmSummarize day )  readtorule  rid
 	out = Outcome{RequestID: rid}
+	// Issue #30 Phase 0 (additive): reset per-task timing collectors and wrap
+	// the provider registry so every LLM call is timed exactly once for this Run.
+	o.stageTimes = nil
+	o.llmCalls = nil
+	if o.Providers != nil {
+		o.Providers = o.Providers.Wrapped(o.recordLLMCall)
+	}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "Empty command, did not catch that, please repeat"
 		out.View = contract.ReceiptView{
@@ -313,15 +328,19 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	var waitMs time.Duration
 
 	// ② clean
+	tClean := o.beginStage("clean")
 	cleaned := cleaner.Clean(text)
+	o.endStage("clean", tClean)
 	emit(trajectory.Entry{Kind: trajectory.KindInputClean, Content: cleaned})
 
 	// ③ dict correct
+	tCorrect := o.beginStage("correct")
 	corrected := cleaned
 	var corrections []contract.Correction
 	if o.Dict != nil {
 		corrected, corrections = o.Dict.Correct(cleaned)
 	}
+	o.endStage("correct", tCorrect)
 	emit(trajectory.Entry{Kind: trajectory.KindInputCorrec, Content: corrected})
 
 	// ③.5 day   ( line,   LLM): onlyneed lang "day "then connect  wttr.in returnback.
@@ -335,6 +354,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 
 	// ④ TaskClassifier.ClassifyTask(emptytime  get note domainlisttable)
+	tClassify := o.beginStage("classify")
 	classifier := input.NewTaskClassifier(confOf(o.Cfg), spaceHints(o.Spaces))
 	intent := classifier.ClassifyTask(corrected)
 	intent.RawText = text
@@ -342,6 +362,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 
 	// M7 ① intentclassify LLM back : rulelow-confidence/UNKNOWN and  howeverlanglang senttime -> fast provider patchclassify.
 	intent = o.llmIntentFallback(ctx, intent, corrected)
+	o.endStage("classify", tClassify)
 	// zhiji A1: input 进 STM；自我介绍类给高 importance，让 Reflector 能抽到 SelfItem
 	if o.Zhiji != nil {
 		imp := 3.0
@@ -410,6 +431,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	if convID == "" {
 		convID = "default"
 	}
+	tRefer := o.beginStage("refer")
 	recentEnts := loadRecentEntities(o.logDir(), convID)
 	if o.Refer != nil {
 		o.Refer.Recent = recentEnts
@@ -570,6 +592,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		emit(trajectory.Entry{Kind: trajectory.KindRefer, Intent: &intent})
 	}
 
+	o.endStage("refer", tRefer)
 	// clarificationexit: classify /coreference   needclarification ->    .
 	// M3 #37: clarificationis   " type/ needneedchange onunder "pt,   notein ground     .
 	if intent.NeedsClarification() {
@@ -585,6 +608,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		o.attachTiming(&out)
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: "—",
 			Result: "Not executed (need clarification: " + intent.Ask + ")", Undo: "- (not executed)",
@@ -607,6 +631,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 
 	// ⑥ space select + Check
+	tSpace := o.beginStage("space")
 	spaceID := defaultSpaceFor(intent)
 	intent.Space = spaceID
 	caps := planCaps(intent)
@@ -617,6 +642,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		// Contracts has   nil: B/C   andfrozensemantic by   name(file/git/read/…)    forbid;
 		//     cap   risk split   risk.Evaluate stage  ,    heavy   .
 	})
+	o.endStage("space", tSpace)
 	b, _ := json.Marshal(verdict)
 	emit(trajectory.Entry{Kind: trajectory.KindSpaceCheck, Content: string(b)})
 	out.Intent = intent
@@ -630,6 +656,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		o.attachTiming(&out)
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: "—",
 			Result: "BOUNDARY_VIOLATION: " + reasonText(verdict.Reason), Undo: "- (not executed)",
@@ -640,16 +667,19 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 
 	// ⑦ risk.Evaluate(  signal: fs citation stats + heat; no   objtimeget 0)
+	tRisk := o.beginStage("risk")
 	imp := o.mechanicalImpact(intent)
 	decision := risk.Evaluate(intent, imp)
 	intent.Confirm = decision.Level
 	out.Decision = decision
+	o.endStage("risk", tRisk)
 	db, _ := json.Marshal(decision)
 	emit(trajectory.Entry{Kind: trajectory.KindRisk, Content: string(db)})
 
 	// ⑧ confirm(by Decision split ; quad cache in= again )
 	// safesafetyinvariant(SPEC #40/#29): human= reversible,     ConfirmFn,
 	// fromquad cache Get and Set     --" reversible  be   ".
+	tConfirm := o.beginStage("confirm")
 	wait0 := time.Now()
 	approved := false
 	quad := quadKey(intent, decision.Level)
@@ -690,6 +720,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	waitMs += time.Since(wait0)
 	out.Confirmed = approved
 	emit(trajectory.Entry{Kind: trajectory.KindConfirm, Content: fmt.Sprintf("level=%s approved=%v", decision.Level, approved)})
+	o.endStage("confirm", tConfirm)
 	o.recordDecision(out.RequestID, intent, decision, approved)
 	if o.Cache != nil && approved && cacheable {
 		// human    writecache( reversible  human).
@@ -703,6 +734,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		o.writeAttribution(out.Attribution)
 		out.LoopMs = time.Since(start).Milliseconds()
 		out.NetMs = out.LoopMs - waitMs.Milliseconds()
+		o.attachTiming(&out)
 		out.View = contract.ReceiptView{
 			Action: shortAction(intent), Files: targetFiles(intent),
 			Result: "pending confirm (" + decision.Level + ", not approved)", Undo: "- (not executed)",
@@ -712,6 +744,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 
 	// ⑨ Exec(onlyalreadyed space_check + risk    )
+	tExec := o.beginStage("exec")
 	// distillation R5: BUILD_TEST without a resolvable URL must ask instead of failing,
 	// unless it is a resumed job whose slot carries the URL (execBuildTest handles the slot).
 	if intent.Intent == contract.IntentBuildTest && (intent.Params == nil || strings.TrimSpace(intent.Params["url"]) == "") {
@@ -818,7 +851,9 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		}
 	}
 
+	o.endStage("exec", tExec)
 	// ⑩ verify independent verification
+	tVerify := o.beginStage("verify")
 	spec := o.planVerify(intent, o.logDir())
 	if spec != nil && o.Verifier != nil {
 		res, err := o.Verifier.Run(*spec)
@@ -831,6 +866,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		out.Verify = verify.Result{Status: verify.StatusUnverifiable, Detail: "M2: no dedicated check defined for this intent"}
 	}
 	vb, _ := json.Marshal(out.Verify)
+	o.endStage("verify", tVerify)
 	emit(trajectory.Entry{Kind: trajectory.KindVerify, Content: string(vb)})
 
 	// ⑩-bis verify fail ->   tool:"verify"   disconnect (   heavy  verify, close provideattribution).
@@ -843,6 +879,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	}
 
 	// ⑪ attribution + trace(end = attributionwritedone)
+	tAttr := o.beginStage("attribution")
 	cls, detail, suggestion := classifyAttribution(intent, receipts, out.Verify, corrections)
 	// ⑪-bis:   classattributionand disconnect hasclose time, use disconnect suggestion    state  , detail  rootbecause;
 	// no disconnectclose  ->  state   char change.
@@ -853,11 +890,14 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 		}
 	}
 	out.Attribution = o.attribution(out.RequestID, cls, detail, evidenceOf(receipts, out.Verify), suggestion)
+	o.endStage("attribution", tAttr)
 	o.writeAttribution(out.Attribution)
 
 	// ⑫ cache:    already ⑧ Set; block/  path  o.attribution  noneed out  .
 	// ⑬ view
+	tView := o.beginStage("view")
 	out.View = renderView(intent, verdict, decision, receipts, out.Verify, approved)
+	o.endStage("view", tView)
 	// zhiji: 对对话类意图（UNKNOWN/QUERY/ASK），用 LLM + self-model baseline 生成自然回复，
 	// 不再只返回硬编码的"need clarification"。这样用户问"我叫什么"能真答出来。
 	if o.Providers != nil && !leaseHandled && (intent.Intent == contract.IntentUnknown || intent.Intent == contract.IntentQuery || intent.Intent == contract.IntentAsk || intent.Intent == contract.IntentNote) {
@@ -964,6 +1004,7 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 
 	out.LoopMs = time.Since(start).Milliseconds()
 	out.NetMs = out.LoopMs - waitMs.Milliseconds()
+	o.attachTiming(&out)
 
 	// ⑭ taskrefertgtintrace(#52  need   ): close ize JSON   .
 	o.writeTaskMetrics(intent, out, humanWait)
@@ -3346,13 +3387,16 @@ func (o *Options) strataChatMessages(ctx context.Context, msgs []contract.Messag
 		req.Header.Set("Authorization", "Bearer "+k)
 	}
 	client := &http.Client{Timeout: 90 * time.Second}
+	llmStart := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "strata", Model: strataModel(), Ms: time.Since(llmStart).Milliseconds(), Err: err.Error()})
 		return "", fmt.Errorf("strata call failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "strata", Model: strataModel(), Ms: time.Since(llmStart).Milliseconds(), Err: fmt.Sprintf("strata HTTP %d", resp.StatusCode)})
 		return "", fmt.Errorf("strata HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	var out struct {
@@ -3375,6 +3419,13 @@ func (o *Options) strataChatMessages(ctx context.Context, msgs []contract.Messag
 	}
 	// O cost field — local inference servers return usage.prompt/completion tokens.
 	o.turnTokens += out.Usage.PromptTokens + out.Usage.CompletionTokens
+	o.llmCalls = append(o.llmCalls, LLMCallTiming{
+		Provider: "strata", Model: strataModel(),
+		PromptTokens:     out.Usage.PromptTokens,
+		CompletionTokens: out.Usage.CompletionTokens,
+		FinishReason:     out.Choices[0].FinishReason,
+		Ms:               time.Since(llmStart).Milliseconds(),
+	})
 	c := strings.TrimSpace(out.Choices[0].Message.Content)
 	if c == "" {
 		return "", fmt.Errorf("strata empty content; finish=%s", out.Choices[0].FinishReason)
@@ -3417,8 +3468,10 @@ func (o *Options) aiopsChatFallback(ctx context.Context, sys, userMsg string) st
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AIops-Key", os.Getenv("AIOPS_KEY"))
+	fbStart := time.Now()
 	resp2, err := http.DefaultClient.Do(req)
 	if err != nil || resp2.StatusCode != 200 {
+		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds(), Err: fmt.Sprintf("status=%v err=%v", resp2.StatusCode, err)})
 		log.Printf("[llmNaturalReply] aiops fallback failed: status=%v err=%v", resp2.StatusCode, err)
 		return ""
 	}
@@ -3432,8 +3485,10 @@ func (o *Options) aiopsChatFallback(ctx context.Context, sys, userMsg string) st
 	}
 	json.NewDecoder(resp2.Body).Decode(&chatResp)
 	if len(chatResp.Choices) == 0 || strings.TrimSpace(chatResp.Choices[0].Message.Content) == "" {
+		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds(), Err: "empty choices"})
 		return ""
 	}
+	o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds()})
 	return strings.TrimSpace(chatResp.Choices[0].Message.Content)
 }
 
