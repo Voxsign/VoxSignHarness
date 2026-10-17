@@ -73,6 +73,27 @@ strata attempt that fails fast without STRATA_API_KEY) + ~18× llmIntentFallback
 when no local key, and route QUERY answers through the same fast tier the
 fallback already uses — fewer wasted calls and one consistent fast path.
 
+## 4. Phase 1 lever (a) — first cut (v0.9.0-alpha, 1 run vs 1 run)
+
+Change: `llmNaturalReply` now skips the strata attempt entirely when
+`STRATA_API_KEY` is unset (was: every natural reply first called the LAN
+strata host, which can only fail without a key).
+
+| metric | before | after |
+|---|---|---|
+| N1b first-terminal/ask p50 | 831 | 689 (-17%) |
+| N1b p90 | 3 335 | 3 129 (-6%) |
+| N2 qa p50 | 2 655 | 2 505 (-5.6%) |
+| aiops-fallback avg | 1 008 | 950 (-5.7%) |
+| N3 first-pass | 58% | 58% (unchanged) |
+| N4 clarify | 3% | 3% (unchanged) |
+| N5 dishonest done | 0 | 0 (unchanged) |
+
+Call count unchanged (18 fast + 19 fallback); this cut removes the wasted
+strata leg, it does not yet reduce the number of calls. Next lever: fewer /
+faster calls (streaming + fast tier for QUERY) — that is the S1 (Doubao
+reference) track, Phase 1b.
+
 ## 4. Files
 - `bench/tasks.json` — frozen task set T (40 tasks, 4 classes, M3/M7/M8 tags)
 - `bench/runner_test.go` — reproducible honest runner (skips without `AIOPS_KEY`)

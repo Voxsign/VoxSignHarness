@@ -5395,9 +5395,17 @@ func (o *Options) llmNaturalReply(ctx context.Context, text string, baselineCtx 
 	}
 	// 模型路由统一：本地 Strata 千问（the private on-LAN Strata host）为主；本地不可用
 	// （无 key / LAN 不可达 / 调用失败）时回退 aiops 网关，保证电话对话不空转。
-	out := o.strataChat(ctx, sys.Render(), userMsg, 300)
-	if out == "" {
+	// Phase 1 lever (a): when no local Strata key is configured, skip the strata
+	// attempt entirely and go straight to the fast gateway — the benchmark showed
+	// every natural reply first making a strata call that can only fail.
+	var out string
+	if os.Getenv("STRATA_API_KEY") == "" {
 		out = o.aiopsChatFallback(ctx, sys.Render(), userMsg)
+	} else {
+		out = o.strataChat(ctx, sys.Render(), userMsg, 300)
+		if out == "" {
+			out = o.aiopsChatFallback(ctx, sys.Render(), userMsg)
+		}
 	}
 	if out == "" {
 		return ""
