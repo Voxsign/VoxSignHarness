@@ -25,6 +25,10 @@ const (
 // by pipeline.writeTaskMetrics write, Summary by   . 
 const KindTaskMetrics = "task_metrics"
 
+// KindTiming is the additive per-task stage/LLM wall-clock event (Issue #30
+// Phase 0). Content is the JSON of pipeline.TimingInfo.
+const KindTiming = "timing"
+
 // Kinds issafety    kind  **unique value**(newadd kind       ). 
 var Kinds = map[string]bool{
 	KindTaskMetrics:  true,
@@ -46,6 +50,7 @@ var Kinds = map[string]bool{
 	KindConfirm:     true,
 	KindVerify:      true,
 	KindAttribution: true,
+	KindTiming:      true, // Issue #30 Phase 0 (additive)
 }
 
 // KnownKind    kind is already  . 
