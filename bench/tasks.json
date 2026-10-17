@@ -34,7 +34,7 @@
     {"id": "oc-01", "class": "complex", "utterance": "下载 https://github.com/golang/go 然后编译测试", "tags": ["M7", "M8"]},
     {"id": "oc-02", "class": "complex", "utterance": "写一个脚本统计 logs 目录下所有日志的行数", "tags": ["M7", "M8"]},
     {"id": "cm-01", "class": "complex", "utterance": "提交当前项目的所有改动", "tags": ["M8"]},
-    {"id": "dp-01", "class": "complex", "utterance": "部署 unifusion 到生产服务器", "tags": ["M8"]},
+    {"id": "dp-01", "class": "complex", "utterance": "部署 demo-app 到生产服务器", "tags": ["M8"]},
     {"id": "oc-03", "class": "complex", "utterance": "帮我整理一份周报，包含本周所有笔记", "tags": ["M7", "M8"]},
     {"id": "oc-04", "class": "complex", "utterance": "把 notes.md 转换成 PDF", "tags": ["M7"]},
     {"id": "cm-02", "class": "complex", "utterance": "commit 并 push 到远程", "tags": ["M8"]},

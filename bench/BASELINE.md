@@ -43,8 +43,10 @@ honesty surface intact on v0.8.1).
 | N5 dishonest done | 0 | 0 | ✅ met |
 
 **Corrected verdict: honesty is OK on v0.8.1 (N4 3%, N5 0). The real gaps are
-latency (Q&A P90 ~3.34 s vs ≤3 s, driven by ~19 fast-tier LLM calls at ~1.2 s
-each) and first-pass success (58% vs ≥90%).** This re-ranks Phase 1: lever (a)
+latency (Q&A P90 ~3.34 s vs ≤3 s) and first-pass success (58% vs ≥90%).**
+Across the whole 40-task run there are 19 natural-reply calls (~1.0 s each) and
+18 intent-fallback calls (~1.3 s each), i.e. roughly one call of each kind per
+Q&A task — not 19 calls per turn (see §3). This re-ranks Phase 1: lever (a)
 fast-tier routing / fewer LLM calls is the top cost item; N3 improvement via
 fewer clarification-worthy classify errors; levers d/e (error_class,
 finish_reason=length→failed) remain mandatory-but-defensive hardening.
@@ -77,5 +79,21 @@ fallback already uses — fewer wasted calls and one consistent fast path.
 - `bench/tasks.json` — frozen task set T (40 tasks, 4 classes, M3/M7/M8 tags)
 - `bench/runner_test.go` — reproducible honest runner (skips without `AIOPS_KEY`)
 - `pipeline/timing.go`, `pipeline/pipeline.go`, `provider/provider.go`,
-  `trajectory/kinds.go`, `server/server.go` — additive stage/LLM timing (PR)
-- `bench/FORK-INVENTORY.md` — fork-line B inventory (Phase 0′, 129 commits)
+  `trajectory/kinds.go`, `server/server.go` — additive stage/LLM timing
+  (`server.go`: additive `"timing"` field on both `done` emitters)
+- `bench/FORK-INVENTORY.md` — fork-line B inventory (Phase 0′,
+  `7cc735f..dd697db` = 140 commits: 135 regular + 5 merges)
+
+## 5. Instrumentation does not change behavior
+
+- **Deterministic check (mock provider, done):** all 40 tasks of T were run
+  through `pipeline.Run` on pure `7cc735f` and on this branch with an identical
+  mock-only registry. Per-task intent, ask, receipt result, attribution class
+  and confirm flag are identical on 40/40 (the only difference is the temp-dir
+  path inside two-line note receipts).
+- **Options reuse:** `pipeline.Run` now restores the caller's provider registry
+  on return, so REPL / eval loops that reuse one `Options` neither nest timing
+  wrappers nor double-count LLM calls (`TestTimingOptionsReuse`).
+- **Real model center (pending, needs `AIOPS_KEY`):** run T once on pure
+  `7cc735f` and once on this branch; the per-task terminal event
+  (`done/failed/ask/canceled`) must match on 40/40.

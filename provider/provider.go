@@ -55,7 +55,7 @@ type Registry struct {
 type timingProvider struct {
 	inner  Provider
 	name   string
-	onCall func(name string, resp ChatResponse, ms int64)
+	onCall func(name string, resp ChatResponse, ms int64, err error)
 }
 
 func (t *timingProvider) Name() string { return t.inner.Name() }
@@ -65,7 +65,7 @@ func (t *timingProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 	resp, err := t.inner.Chat(ctx, req)
 	ms := time.Since(start).Milliseconds()
 	if t.onCall != nil {
-		t.onCall(t.name, resp, ms)
+		t.onCall(t.name, resp, ms, err)
 	}
 	return resp, err
 }
@@ -73,7 +73,7 @@ func (t *timingProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 // Wrapped returns a NEW Registry whose providers are wrapped with a per-call
 // observer; the receiver is not mutated. Additive: used by pipeline.Run to time
 // every LLM call (fallback or direct) exactly once per task.
-func (r *Registry) Wrapped(onCall func(name string, resp ChatResponse, ms int64)) *Registry {
+func (r *Registry) Wrapped(onCall func(name string, resp ChatResponse, ms int64, err error)) *Registry {
 	if onCall == nil {
 		return r
 	}

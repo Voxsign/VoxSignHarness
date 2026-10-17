@@ -297,8 +297,11 @@ func Run(ctx context.Context, o *Options, text string) (out Outcome, err error) 
 	// the provider registry so every LLM call is timed exactly once for this Run.
 	o.stageTimes = nil
 	o.llmCalls = nil
-	if o.Providers != nil {
-		o.Providers = o.Providers.Wrapped(o.recordLLMCall)
+	// Restore the caller's registry on return: Options may be reused across Runs
+	// (REPL / eval loops), and re-wrapping would nest observers and double-count.
+	if base := o.Providers; base != nil {
+		o.Providers = base.Wrapped(o.recordLLMCall)
+		defer func() { o.Providers = base }()
 	}
 	if strings.TrimSpace(text) == "" {
 		out.Ask = "Empty command, did not catch that, please repeat"

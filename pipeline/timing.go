@@ -47,15 +47,19 @@ func (o *Options) endStage(name string, start time.Time) {
 
 // recordLLMCall is wired into provider.Registry.Wrapped so every Chat call
 // (fallback or direct) is timed exactly once per task.
-func (o *Options) recordLLMCall(name string, resp provider.ChatResponse, ms int64) {
-	o.llmCalls = append(o.llmCalls, LLMCallTiming{
+func (o *Options) recordLLMCall(name string, resp provider.ChatResponse, ms int64, err error) {
+	c := LLMCallTiming{
 		Provider:         name,
 		Model:            name,
 		PromptTokens:     int64(resp.Usage.PromptTokens),
 		CompletionTokens: int64(resp.Usage.CompletionTokens),
 		FinishReason:     resp.FinishReason,
 		Ms:               ms,
-	})
+	}
+	if err != nil {
+		c.Err = err.Error()
+	}
+	o.llmCalls = append(o.llmCalls, c)
 }
 
 // attachTiming assembles the collected stage/LLM timings into the Outcome and
