@@ -94,6 +94,23 @@ strata leg, it does not yet reduce the number of calls. Next lever: fewer /
 faster calls (streaming + fast tier for QUERY) — that is the S1 (Doubao
 reference) track, Phase 1b.
 
+## 5. Phase 1 second cut — S2 error_class + letter e (v0.9.0-alpha)
+
+- **S2 / Issue #30 letter d**: SSE `failed` event now carries `error_class`
+  ∈ {model_error, execution_error, network_error} (server.deriveErrorClass,
+  additive, 5 unit cases). Blocked goals keep `blocked=true` and classify as
+  execution_error.
+- **letter e**: aiopsChatFallback refuses `finish_reason=length` replies —
+  a truncated answer is never surfaced as complete; hard fallback takes over.
+- 1-run re-baseline after both: N3 58% / N4 3% / N5 0 unchanged (no
+  regression); per-run latency varies with cross-region gateway noise
+  (single-run N2 qa p50 2.7s; 3-run stable values in §2 remain the
+  authoritative baseline).
+
+Phase 1 state: lever (a) landed + d/e landed. Remaining for Phase 1:
+S5 env profiles; then Phase 1b = S1 streaming probe (model-center stream
+support) + fewer-call QUERY routing.
+
 ## 4. Files
 - `bench/tasks.json` — frozen task set T (40 tasks, 4 classes, M3/M7/M8 tags)
 - `bench/runner_test.go` — reproducible honest runner (skips without `AIOPS_KEY`)
