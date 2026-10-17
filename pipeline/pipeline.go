@@ -3481,11 +3481,20 @@ func (o *Options) aiopsChatFallback(ctx context.Context, sys, userMsg string) st
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	json.NewDecoder(resp2.Body).Decode(&chatResp)
 	if len(chatResp.Choices) == 0 || strings.TrimSpace(chatResp.Choices[0].Message.Content) == "" {
 		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds(), Err: "empty choices"})
+		return ""
+	}
+	// Issue #30 letter e / S2: a truncated (finish_reason=length) reply must not
+	// be surfaced as a complete answer — treat it as a model failure so the
+	// caller's hard fallback (never an empty or half-baked "done") takes over.
+	if chatResp.Choices[0].FinishReason == "length" {
+		o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds(), Err: "finish_reason=length"})
+		log.Printf("[llmNaturalReply] aiops fallback truncated (finish_reason=length); refusing half reply")
 		return ""
 	}
 	o.llmCalls = append(o.llmCalls, LLMCallTiming{Provider: "aiops-fallback", Model: "deepseek-flash", Ms: time.Since(fbStart).Milliseconds()})

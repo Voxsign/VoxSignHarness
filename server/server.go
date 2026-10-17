@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -1264,6 +1265,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				ts.Err = out.BizReason
 				s.emitEvent(ts, "failed", map[string]any{
 					"error":       out.BizReason,
+					"error_class": deriveErrorClass(&out), // S2 (Doubao reference): model/execution/network
 					"receipt":     contract.RenderReceipt(out.View),
 					"attribution": out.Attribution,
 					"blocked":     out.BizState == pipeline.BizBlocked,
@@ -1993,4 +1995,37 @@ func isCancelAnswer(answer string) bool {
 		return true
 	}
 	return false
+}
+
+// deriveErrorClass classifies a failed turn into the S2 (Doubao reference)
+// error taxonomy exposed on the SSE "failed" event: model_error /
+// execution_error / network_error. Additive only — never alters the existing
+// error/blocked fields. Network is checked first (outermost root cause);
+// a blocked goal keeps blocked=true and classifies as execution_error
+// (root cause is repeated action failure).
+func deriveErrorClass(out *pipeline.Outcome) string {
+	var netRe = regexp.MustCompile(`(?i)connection|timeout|超时|网络|no such host|EOF|broken pipe|unreachable|refused|reset by peer|无法连接|i/o timeout|http 5\d\d`)
+	var modelRe = regexp.MustCompile(`(?i)llm|模型|finish_reason|empty content|empty choices|provider|classif|deepseek|strata|qwen|completion|tokens?`)
+	if out == nil {
+		return "execution_error"
+	}
+	for _, r := range out.Receipts {
+		e := r.Err + " " + r.Blocked
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		if netRe.MatchString(e) {
+			return "network_error"
+		}
+		if modelRe.MatchString(e) {
+			return "model_error"
+		}
+	}
+	if netRe.MatchString(out.BizReason) {
+		return "network_error"
+	}
+	if modelRe.MatchString(out.BizReason) {
+		return "model_error"
+	}
+	return "execution_error"
 }
