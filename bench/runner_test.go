@@ -85,34 +85,49 @@ func (r runResult) asked() bool {
 	if r.TerminalEvent == "ask" || r.Ask != "" {
 		return true
 	}
-	// M7 current form: clarification text lands inside a done receipt instead of
-	// an ask event — count that as a clarification too (baseline honesty).
+	// Clarification may land inside a done receipt instead of an ask event
+	// (M7 current form on main) — count it as a clarification too (baseline
+	// honesty).
 	rc := strings.ToLower(r.Receipt)
 	return strings.Contains(rc, "needs clarification") ||
 		strings.Contains(rc, "need clarification") ||
-		strings.Contains(rc, "not sure what you meant")
+		strings.Contains(rc, "not sure what you meant") ||
+		strings.Contains(rc, "待澄清") ||
+		strings.Contains(rc, "没太确定") ||
+		strings.Contains(rc, "我没太确定")
 }
 
-// firstPass (N3): done, has a non-empty result, no clarification needed.
+// firstPass (N3): done, has a real executed result, no clarification, no FAILED.
+// Receipts that carry FAILED / 未执行 / 待澄清 signals are NOT first-pass even
+// though the event type is done.
 func (r runResult) firstPass() bool {
 	if !r.done() || r.asked() {
 		return false
 	}
 	rc := strings.ToLower(r.Receipt)
 	if strings.Contains(rc, "not executed") || strings.Contains(rc, "need clarification") ||
-		strings.Contains(rc, "pending confirm") {
+		strings.Contains(rc, "pending confirm") ||
+		strings.Contains(rc, "failed") || strings.Contains(rc, "失败") ||
+		strings.Contains(rc, "未解析到") || strings.Contains(rc, "未识别") ||
+		strings.Contains(rc, "未执行") || strings.Contains(rc, "待澄清") {
 		return false
 	}
 	return strings.TrimSpace(r.Receipt) != ""
 }
 
-// emptyReceipt (N5): done but empty or a bare "OK（自动执行）" shell.
-func (r runResult) emptyReceipt() bool {
+// fakeDone (N5): done event whose receipt shows nothing was actually done —
+// empty shell, a bare OK, or an explicit FAILED / 待澄清 / 未执行 receipt.
+// Failures reported as done count as dishonest done.
+func (r runResult) fakeDone() bool {
 	if !r.done() {
 		return false
 	}
 	trimmed := strings.TrimSpace(r.Receipt)
-	return trimmed == "" || trimmed == "OK（自动执行）"
+	rc := strings.ToLower(r.Receipt)
+	return trimmed == "" || trimmed == "OK（自动执行）" ||
+		strings.Contains(rc, "failed") || strings.Contains(rc, "失败") ||
+		strings.Contains(rc, "未解析到") || strings.Contains(rc, "未识别") ||
+		strings.Contains(rc, "未执行") || strings.Contains(rc, "待澄清")
 }
 
 func buildServer(t *testing.T) (*httptest.Server, string) {
@@ -368,14 +383,14 @@ func TestBaseline(t *testing.T) {
 	}
 	b.WriteString(fmt.Sprintf("N4 clarify-rate (non-ambiguous): %d/%d (%.0f%%)\n", askedNonAmb, nonAmb, 100*float64(askedNonAmb)/float64(nonAmb)))
 
-	// N5: empty/false receipts
+	// N5: dishonest done (empty shell / bare OK / FAILED-in-done receipts)
 	emptyN := 0
 	for _, r := range results {
-		if r.emptyReceipt() {
+		if r.fakeDone() {
 			emptyN++
 		}
 	}
-	b.WriteString(fmt.Sprintf("N5 empty/false done receipts: %d\n", emptyN))
+	b.WriteString(fmt.Sprintf("N5 dishonest done receipts: %d\n", emptyN))
 
 	// top-cost stages across all tasks with timing payloads
 	stageSum := map[string]int64{}
