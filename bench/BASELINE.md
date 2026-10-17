@@ -49,10 +49,29 @@ fast-tier routing / fewer LLM calls is the top cost item; N3 improvement via
 fewer clarification-worthy classify errors; levers d/e (error_class,
 finish_reason=length→failed) remain mandatory-but-defensive hardening.
 
-## 3. Where the time goes (timing payload, same 3 runs)
-- exec + classify dominate; Q&A tasks each spend ~1.2 s × 1 fast call at
-  `aiops.voxsign.ai` (deepseek-flash). Full per-stage table available in the
-  raw log (`/tmp/baseline_v081_honest.log`).
+## 3. Where the time goes (timing payload — 1 run instrumented, N metrics 3-run identical)
+
+> NOTE (2026-10-17 fix): the initial commits defined the timing collector but the
+> server `done` events never carried `out.Timing`, so the runner saw `timing:
+> null`. Fixed (additive `"timing"` field in both `done` emitters, server.go).
+> One instrumented run below; N1–N5 unchanged by the fix (identical to the
+> 3-run honest baseline).
+
+| LLM provider | sum ms | count | avg ms | role |
+|---|---|---|---|---|
+| fast | 22 959 | 18 | 1 275 | classify LLM fallback + intent patch (llmIntentFallback) |
+| aiops-fallback | 19 155 | 19 | 1 008 | QUERY natural reply (llmNaturalReply: strata→fallback chain) |
+
+| Stage | sum ms | n | note |
+|---|---|---|---|
+| exec | 19 169 | 22 | action exec + QUERY answers |
+| classify | 3 894 | 28 | rule classify + LLM patch |
+
+**Latency spine on v0.8.1** = ~19× llmNaturalReply (~1.0 s each, after a
+strata attempt that fails fast without STRATA_API_KEY) + ~18× llmIntentFallback
+(~1.3 s each). Phase 1 lever (a) targets this: skip the strata empty attempt
+when no local key, and route QUERY answers through the same fast tier the
+fallback already uses — fewer wasted calls and one consistent fast path.
 
 ## 4. Files
 - `bench/tasks.json` — frozen task set T (40 tasks, 4 classes, M3/M7/M8 tags)

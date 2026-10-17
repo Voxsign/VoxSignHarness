@@ -1211,6 +1211,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				s.emitEvent(ts, "done", map[string]any{
 					"receipt":     contract.RenderReceipt(out.View),
 					"attribution": out.Attribution,
+					"timing":      out.Timing, // Issue #30 Phase 0 (additive)
 				})
 				s.persist(ts)
 				return
@@ -1302,6 +1303,7 @@ func (s *Server) runPipeline(ts *taskState, ctx context.Context, text, spaceHint
 				"attribution": out.Attribution,
 				"reversible":  ts.Reversible,
 				"role":        ts.Role,
+				"timing":      out.Timing, // Issue #30 Phase 0 (additive)
 			})
 			s.persist(ts)
 		}
